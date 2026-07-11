@@ -28,11 +28,18 @@ struct SelInstance {
 struct Globals {
     viewport: [f32; 2],
     corner: f32,
-    _pad: f32,
+    /// DITHER MODE — see `shaders/selection.wgsl`'s `fs_main`: `0.0` is the
+    /// original soft alpha-blended fill (every non-one-bit consumer,
+    /// byte-identical to before this field existed); `> 0.0` is THE ONE
+    /// WAGTAIL HIGHLIGHT TEXTURE's density (e.g. `0.25`). Unused by an
+    /// `fs_invert`-built pipeline.
+    dither: f32,
 }
 
-/// The selection render pipeline: an instanced translucent quad draw with alpha
-/// blending over the cleared background, BEFORE the caret + text are drawn.
+/// The selection render pipeline: an instanced quad draw, BEFORE the caret +
+/// text are drawn (the ordinary alpha-blended fill / dither modes) OR, for a
+/// pipeline built via [`Self::new_invert`], AFTER text (the true
+/// inverse-video 1-bit selection — see that constructor's doc).
 pub struct SelectionPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
@@ -40,12 +47,99 @@ pub struct SelectionPipeline {
     instance_buf: wgpu::Buffer,
     instance_cap: usize,
     instance_count: u32,
-    /// Linear-space RGBA matching the requested sRGB selection color.
+    /// Linear-space RGBA matching the requested sRGB selection color. Ignored
+    /// (always pure white — see [`Self::new_invert`]'s doc) on an invert
+    /// pipeline.
     color: [f32; 4],
+    /// DITHER MODE density uploaded into `Globals::dither` each `prepare`
+    /// (`0.0` = off, the pre-round behavior). Meaningless on an invert
+    /// pipeline, where `fs_invert` never reads the field.
+    dither: f32,
+    /// Rounded-rect corner radius (px) uploaded into `Globals::corner`.
+    /// `CORNER_RADIUS` for the ordinary fill; `0.0` for an invert pipeline
+    /// (a hard rectangle — see `fs_invert`'s own doc for why AA/rounding
+    /// can't compose with its `OneMinusDst` blend trick).
+    corner: f32,
+}
+
+/// The ORIGINAL straight-alpha over-blend (`fs_main`'s non-dither path and
+/// dither path both use this blend state — the dither branch's own hard
+/// on/off is inside the shader, not the blend equation) so a translucent
+/// highlight composites softly onto the dark background.
+fn ordinary_blend() -> wgpu::BlendState {
+    wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::SrcAlpha,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+    }
+}
+
+/// TRUE INVERSE-VIDEO's blend state: per channel, `result = (1 - dst) * src`
+/// (color: `src_factor: OneMinusDst, dst_factor: Zero`) — combined with
+/// `fs_invert` always writing `src = (1,1,1)`, this computes an exact
+/// `result = 1 - dst`, the classic 1-bit "flip every channel" invert. The
+/// alpha channel is left untouched (`src_factor: Zero, dst_factor: One`) —
+/// the invert is a color-only operation; `OneMinusDst` is a standard wgpu
+/// `BlendFactor` (verified against the pinned `wgpu = "=29.0.3"`,
+/// `wgpu-types-29.0.3/src/render.rs`'s `BlendFactor` enum — `Dst = 6`,
+/// `OneMinusDst = 7` — and it maps to `GL_ONE_MINUS_DST_COLOR`, a factor
+/// WebGL2/OpenGL ES 3.0 have supported since core, so the wasm/WebGL2
+/// fallback build gets the identical blend math).
+fn invert_blend() -> wgpu::BlendState {
+    wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::OneMinusDst,
+            dst_factor: wgpu::BlendFactor::Zero,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        },
+    }
 }
 
 impl SelectionPipeline {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, srgba: [u8; 4]) -> Self {
+        Self::build(device, format, srgba, "fs_main", CORNER_RADIUS, ordinary_blend())
+    }
+
+    /// TRUE INVERSE-VIDEO SELECTION (one-bit worlds only — see
+    /// `worlds.rs::WAGTAIL`'s doc comment + THEMES.md's 1-bit section for the
+    /// full history of why this replaces the old "punch outline"
+    /// mechanism). Built with its OWN `wgpu::RenderPipeline` object (blend
+    /// state is baked in at construction, so this could not share the
+    /// ordinary pipeline) using a `OneMinusDst`/`Zero` color blend —
+    /// `shaders/selection.wgsl`'s `fs_invert` doc derives the exact math.
+    /// Always draws pure opaque white regardless of the active theme's
+    /// tokens (the blend trick needs `src == 1.0` exactly to compute a true
+    /// `1 - dst`) — `set_color`/`set_dither`/`prepare_pulsed` are meaningless
+    /// here and simply never called on an instance built this way.
+    pub fn new_invert(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self::build(device, format, [255, 255, 255, 255], "fs_invert", 0.0, invert_blend())
+    }
+
+    /// The shared pipeline-construction body: every field the two public
+    /// constructors differ on (fragment entry point, corner radius, blend
+    /// state) is a parameter here — everything else (bind group layout,
+    /// vertex buffer layout, instance buffer) is identical code, so the two
+    /// pipeline "flavors" cannot drift apart by construction.
+    fn build(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        srgba: [u8; 4],
+        entry_point: &str,
+        corner: f32,
+        blend: wgpu::BlendState,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("selection shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/selection.wgsl").into()),
@@ -124,23 +218,10 @@ impl SelectionPipeline {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(entry_point),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    // Straight-alpha over-blend so the translucent highlight
-                    // composites softly onto the dark background.
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
+                    blend: Some(blend),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -171,6 +252,8 @@ impl SelectionPipeline {
             instance_cap,
             instance_count: 0,
             color: srgba_u8_to_linear(srgba),
+            dither: 0.0,
+            corner,
         }
     }
 
@@ -180,12 +263,28 @@ impl SelectionPipeline {
         self.color = srgba_u8_to_linear(srgba);
     }
 
+    /// Switch DITHER MODE on/off (density `0.0` = off, the ordinary soft
+    /// fill — else THE ONE WAGTAIL HIGHLIGHT TEXTURE at that density). Called
+    /// from `sync_theme_colors` every theme switch (a switch FROM a one-bit
+    /// world must reset this back to `0.0`, not merely leave it stale).
+    pub fn set_dither(&mut self, density: f32) {
+        self.dither = density;
+    }
+
     /// How many quad instances the last `prepare` uploaded (0 = nothing drawn). A cheap
     /// headless assertion hook for "is this summoned rect present this frame?" (used by
     /// the render tests; no non-test caller in the shipping binary).
     #[allow(dead_code)]
     pub fn instance_count(&self) -> u32 {
         self.instance_count
+    }
+
+    /// The current DITHER MODE density (`0.0` = off — the ordinary alpha
+    /// fill). A cheap headless assertion hook, mirroring [`Self::instance_count`]
+    /// (used by the render tests; no non-test caller in the shipping binary).
+    #[allow(dead_code)]
+    pub fn dither(&self) -> f32 {
+        self.dither
     }
 
     /// Build instances from per-line rectangles (`[x, y, w, h]` top-left, px)
@@ -246,8 +345,8 @@ impl SelectionPipeline {
     ) {
         let globals = Globals {
             viewport: [width as f32, height as f32],
-            corner: CORNER_RADIUS,
-            _pad: 0.0,
+            corner: self.corner,
+            dither: self.dither,
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
 

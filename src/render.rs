@@ -25,6 +25,12 @@ use crate::theme;
 /// physics + mode + GPU pipelines live in [`crate::caret`] / [`crate::caret_glyph`].
 mod caret;
 
+/// ORDERED (BAYER) DITHER — the pure math mirror of `shaders/background.wgsl`'s
+/// banding-kill offset and `shaders/selection.wgsl`'s one-bit highlight/search
+/// stipple. See [`dither`]'s own module doc for the "why one matrix, two uses"
+/// shape and THEMES.md's 1-bit section for the product razor.
+mod dither;
+
 /// SPAN / ATTRS LAYERING — the pure free functions that assemble one buffer line's
 /// `AttrsList` from the base doc attrs plus the markdown / syntax / CJK / heading-
 /// size layers ([`spans::build_line_attrs`] and friends). Unlike [`caret`],
@@ -1743,17 +1749,19 @@ pub struct TextPipeline {
     /// The GPU quad pipeline that draws translucent search-match highlights
     /// (same SELECTION color; the current match is shown by the amber caret).
     pub match_pipeline: SelectionPipeline,
-    /// TRUE 1-BIT WORLDS ONLY (`Theme::is_one_bit`): a ground-colored "punch"
-    /// quad drawn directly on top of each selection/search-match rect, inset a
-    /// couple of pixels on every side — the SAME double-rect trick
-    /// `float_border`/`float_card` already use for elevation, reused here (no
-    /// new render primitive) to turn an opaque white selection quad into a
-    /// crisp white OUTLINE with a black interior, so selected text (drawn in
-    /// normal white ink afterward) stays fully legible instead of reading
-    /// white-on-white. Idle (zero instances) on every other world — a
-    /// non-Wagtail capture is byte-identical. See `worlds.rs::WAGTAIL`'s doc
-    /// comment for the full "why not real inversion" investigation.
-    pub selection_punch: SelectionPipeline,
+    /// TRUE 1-BIT WORLDS ONLY (`Theme::is_one_bit`): TRUE inverse-video
+    /// selection — a `SelectionPipeline` built via
+    /// [`crate::selection::SelectionPipeline::new_invert`] (its own
+    /// `OneMinusDst`-blended `RenderPipeline` object) drawn AFTER the
+    /// document text, so it inverts whatever is already composited beneath
+    /// it: black text flips white, white ground flips black, wherever a
+    /// selected rect covers. REPLACES the old "punch outline" mechanism
+    /// outright (a translucent-white-quad-plus-inset-black-punch fallback
+    /// this round upgrades away from — see `worlds.rs::WAGTAIL`'s doc comment
+    /// + THEMES.md's 1-bit section for the full history). Idle (zero
+    /// instances) on every other world — a non-Wagtail capture is
+    /// byte-identical.
+    pub selection_invert: SelectionPipeline,
     /// ORNAMENT renderer for the markdown section-break marks: one quiet, DIM,
     /// column-CENTERED glyph per thematic break (the theme's PER-SYNTAX
     /// [`theme::Ornaments`] set — `---`/`***`/`___` each draw a different glyph,
@@ -2481,8 +2489,13 @@ impl TextPipeline {
             SelectionPipeline::new(device, format, wash_rgba_bytes(crate::syntax::SynKind::Str));
         // MARKDOWN `==highlight==` wash: its OWN violet tint (`highlight_wash`),
         // decoupled from the comment wash so it POPS on the cool pale grounds.
-        let wash_highlight_pipeline =
+        // On a one-bit world this is instead THE ONE WAGTAIL HIGHLIGHT
+        // TEXTURE's dither mode (`set_dither`, below) — the color IS still
+        // `highlight_wash_rgba_bytes()` (pure white there), the dither
+        // density is what actually switches the render mode.
+        let mut wash_highlight_pipeline =
             SelectionPipeline::new(device, format, highlight_wash_rgba_bytes());
+        wash_highlight_pipeline.set_dither(wagtail_dither_density());
         // WYSIWYG value-step panel/pill: an OPAQUE `base_200` step (a literal
         // ground-lightness step, not a translucent hue wash like the two above).
         let fence_panel_pipeline =
@@ -2503,16 +2516,26 @@ impl TextPipeline {
             SelectionPipeline::new(device, format, theme::image_reveal_scrim().rgba_bytes());
         let image_placeholder_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
-        // Translucent selection highlight quads, drawn under the text.
+        // Translucent selection highlight quads, drawn under the text. On a
+        // one-bit world `prepare_selection_layer` uploads ZERO rects here
+        // (the true-inverse-video `selection_invert` pipeline takes over
+        // document selection entirely — see its own field doc), so this
+        // pipeline simply draws nothing there; its color still tracks
+        // `theme::selection()` for the other 14 worlds, unchanged.
         let selection_pipeline =
             SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
-        // Search-match highlights: same translucent selection color (the current
-        // match is distinguished only by the real accent caret on it).
-        let match_pipeline = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
-        // The 1-bit "punch" quad (see the field doc). Idle on every other
-        // world; color tracks the ground (`base_100`) each theme switch.
-        let selection_punch =
-            SelectionPipeline::new(device, format, theme::base_100().rgba_bytes());
+        // Search-match highlights: `theme::selection()` tint on every ordinary
+        // world (unchanged). On a one-bit world this instead becomes THE ONE
+        // WAGTAIL HIGHLIGHT TEXTURE — same dither mode + color as
+        // `wash_highlight_pipeline` (search matches and `==highlight==` spans
+        // deliberately share one texture, one meaning).
+        let mut match_pipeline =
+            SelectionPipeline::new(device, format, search_match_rgba_bytes());
+        match_pipeline.set_dither(wagtail_dither_density());
+        // TRUE INVERSE-VIDEO SELECTION (one-bit worlds only) — its own
+        // `OneMinusDst`-blended pipeline object, drawn AFTER text (see the
+        // field doc + `draw_document_layers`). Idle on every other world.
+        let selection_invert = SelectionPipeline::new_invert(device, format);
         // Markdown ORNAMENTS (section-break fleuron): a quiet DIM glyph renderer,
         // sharing the atlas + viewport. One single-glyph buffer per break, shaped
         // centered in the writing column. Empty / parked for a non-markdown buffer so
@@ -2678,7 +2701,7 @@ impl TextPipeline {
             code_pill_pipeline,
             selection_pipeline,
             match_pipeline,
-            selection_punch,
+            selection_invert,
             ornament_renderer,
             table_renderer,
             table_rule_pipeline,
@@ -2887,10 +2910,14 @@ impl TextPipeline {
             .set_color(theme::primary().rgb_bytes());
         self.selection_pipeline
             .set_color(theme::selection().rgba_bytes());
-        self.match_pipeline
-            .set_color(theme::selection().rgba_bytes());
-        self.selection_punch
-            .set_color(theme::base_100().rgba_bytes());
+        // Search matches: `theme::selection()` on an ordinary world, THE ONE
+        // WAGTAIL HIGHLIGHT TEXTURE's pure white + dither density on a
+        // one-bit world — see `search_match_rgba_bytes`/`wagtail_dither_density`.
+        // A switch AWAY from a one-bit world must reset the density back to
+        // `0.0`, not merely leave it stale, so both calls run unconditionally
+        // every re-tint.
+        self.match_pipeline.set_color(search_match_rgba_bytes());
+        self.match_pipeline.set_dither(wagtail_dither_density());
         // SYNTAX WASHES: re-tint from THE role style provider so the theme
         // picker's instant color preview recolors the bands for free (wash
         // GEOMETRY depends only on the text, so no reshape is needed).
@@ -2899,9 +2926,12 @@ impl TextPipeline {
         self.wash_string_pipeline
             .set_color(wash_rgba_bytes(crate::syntax::SynKind::Str));
         // MARKDOWN `==highlight==` wash: re-tint from its OWN violet derivation
-        // (the light/dark params flip with the world's mode).
+        // (the light/dark params flip with the world's mode) — pure white +
+        // dither density on a one-bit world, same reset reasoning as above.
         self.wash_highlight_pipeline
             .set_color(highlight_wash_rgba_bytes());
+        self.wash_highlight_pipeline
+            .set_dither(wagtail_dither_density());
         // WYSIWYG value-step panel/pill: re-tint from `base_200` (O(1) — geometry
         // is theme-independent, so a theme switch re-tints without rebuilding).
         self.fence_panel_pipeline
@@ -3733,14 +3763,15 @@ impl TextPipeline {
         // source text — so the caption reads over the image while a selection over it
         // still composites correctly. Parked empty unless an image line is revealed.
         self.image_scrim_pipeline.draw(pass);
+        // Ordinary document-selection quads (an ORDINARY world's translucent
+        // fill). On a one-bit world `prepare_selection_layer` uploads ZERO
+        // rects here — the true-inverse-video pipeline below takes over
+        // selection entirely — so this draws nothing there.
         self.selection_pipeline.draw(pass);
+        // Search-match quads: an ordinary world's translucent fill, OR (on a
+        // one-bit world) THE ONE WAGTAIL HIGHLIGHT TEXTURE's dither stipple —
+        // either way this stays a BEFORE-text wash/highlight layer.
         self.match_pipeline.draw(pass);
-        // 1-BIT WORLDS ONLY: the ground-colored punch, composited directly on
-        // top of the (now opaque white) selection/match quads it was built
-        // from — carving out a crisp white OUTLINE with a black interior so
-        // the text (drawn further below, in normal ink) stays legible. Idle
-        // (zero instances) on every other world.
-        self.selection_punch.draw(pass);
         self.spell_pipeline.draw(pass);
         self.nit_pipeline.draw(pass);
         self.caret_pipeline.draw(pass);
@@ -3748,6 +3779,11 @@ impl TextPipeline {
         self.renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon render failed: {e:?}"))?;
+        // TRUE 1-BIT WORLDS ONLY: the inverse-video selection, drawn strictly
+        // AFTER the document text above — the `OneMinusDst` blend trick needs
+        // the destination to already hold the composited text+ground pixels
+        // it's about to flip. Idle (zero instances) on every other world.
+        self.selection_invert.draw(pass);
         self.caret_glyph_pipeline.draw(pass);
         self.gutter_renderer
             .render(&self.atlas, &self.viewport, pass)

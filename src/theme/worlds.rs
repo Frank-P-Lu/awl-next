@@ -698,9 +698,9 @@ pub const MAGPIE: Theme = Theme {
 /// merely "a grey" — literally the identical token), and turns BOTH washes
 /// `Off`: a translucent wash quad of any alpha other than 0/255 would
 /// composite white-over-black into a forbidden grey, so "OFF" is the only
-/// 1-bit-legal answer (mirrored by `highlight_wash`'s new one-bit branch,
-/// `render/spans.rs`, which also goes fully transparent rather than deriving a
-/// grey-lightness wash). The role-distinguishability laws
+/// 1-bit-legal answer for a SYNTAX role wash specifically — see "THE DITHER
+/// ROUND" below for the markdown `==highlight==` wash's own different answer
+/// (a dithered stipple, not OFF). The role-distinguishability laws
 /// (`role_style_laws_hold_for_every_world`) gained a DECLARED EXEMPTION arm
 /// for `Theme::is_one_bit()`, replaced by a FLAT LAW (every role's effective fg
 /// is EXACTLY `base_content`, no role carries a wash) — never weakened for the
@@ -727,45 +727,76 @@ pub const MAGPIE: Theme = Theme {
 /// one-bit world — the row's own amber caret still marks the current
 /// position.
 ///
-/// **Selection — the loudest open call, logged here in full (flag it
-/// loudly, per the round's own instruction).** TRUE per-glyph inversion (the
-/// literal ask: white-background selection with the covered TEXT itself
-/// flipping to black) was investigated and found NOT reachable this round
-/// without new renderer machinery: `primary_content` — the token the original
-/// spec assumed the block caret already used for an ink flip — is, as of this
-/// investigation, DEAD CODE (grepped: declared per-world, read by exactly one
-/// accessor, called by nothing) — the block caret draws BELOW the glyph cell
-/// and never recolors it; only the MORPH caret's `CaretGlyphPipeline` recolors
-/// text, and it does so by sampling a per-glyph coverage MASK for exactly ONE
-/// glyph (the cursor's own letter) — generalizing that to an arbitrary
-/// multi-glyph SELECTION RANGE (rasterizing + compositing a mask per selected
-/// glyph, every frame, for a selection that can span the whole document) is
-/// real new pipeline-scale work, not a "cheap existing mechanism". A second
-/// path — a `OneMinusDst` invert-blend `RenderPipeline` drawn AFTER text — is
-/// mathematically real (the classic 1-bit "inverse video" trick) but requires
-/// its own new `wgpu::RenderPipeline` (blend state is baked in at pipeline
-/// construction) plus reordering the document draw list, which is equally a
-/// "renderer round", not a theme round.
+/// **Selection — ORIGINALLY the loudest open call; RESOLVED by the DITHER
+/// round.** The greyscale/1-bit rework's own investigation (preserved below
+/// for the history) found TRUE per-glyph inversion NOT reachable in THAT
+/// round without new renderer machinery: `primary_content` — the token the
+/// original spec assumed the block caret already used for an ink flip — was,
+/// as of that investigation, DEAD CODE (declared per-world, read by exactly
+/// one accessor, called by nothing) — the block caret draws BELOW the glyph
+/// cell and never recolors it; only the MORPH caret's `CaretGlyphPipeline`
+/// recolors text, by sampling a per-glyph coverage MASK for exactly ONE glyph
+/// (the cursor's own letter) — generalizing that to an arbitrary multi-glyph
+/// SELECTION RANGE is real pipeline-scale work. The OTHER path identified
+/// then — a `OneMinusDst` invert-blend `RenderPipeline` drawn AFTER text — was
+/// judged mathematically real but needing "a renderer round, not a theme
+/// round" to build its own `wgpu::RenderPipeline` (blend state is baked in at
+/// construction) and reorder the document draw list. **The DITHER round WAS
+/// that renderer round:** `TextPipeline::selection_invert`
+/// (`SelectionPipeline::new_invert`, `src/selection.rs`) is exactly that
+/// `OneMinusDst`/`Zero`-blended pipeline, sharing `shaders/selection.wgsl`'s
+/// geometry via a second fragment entry point (`fs_invert`) that always writes
+/// pure white — combined with the blend factors, this computes an exact
+/// `result = 1 - dst` per channel wherever the quad covers, drawn strictly
+/// AFTER the document text in `draw_document_layers` (the reorder the old
+/// investigation flagged as necessary). Black text flips white, white ground
+/// flips black — the LITERAL "inverted text" ask, not a fallback. The old
+/// "punch outline" mechanism (a translucent-white-quad-plus-inset-black-punch
+/// approximation, kept as WAGTAIL's shipped v1 answer for one round) is
+/// RETIRED outright: `selection_pipeline` uploads zero rects for a one-bit
+/// world (`prepare_selection_layer`), and `selection_punch`/`inset_rect` were
+/// deleted rather than kept as declared-dead code (no other world ever wanted
+/// an outline, so there was nothing to preserve behind a "some day" comment —
+/// same-behavior-same-code: a mechanism with zero remaining callers is a
+/// mechanism that should not exist). `selection` itself stays pure OPAQUE
+/// white (unchanged token) — it no longer drives the render directly; the
+/// invert pipeline always writes its own fixed white regardless of any
+/// theme's `selection` value, so the token's role today is closer to "the
+/// LEGACY value other worlds' translucent fill still reads" than an active
+/// one-bit control. AA edges under inversion: a glyph's antialiased ~50%-grey
+/// edge pixel inverts to `1 - 0.5 = 0.5`, i.e. stays ~50%-grey — the SAME
+/// AA-edge tolerance the one-bit pixel law already grants ordinary
+/// (non-inverted) text, not a new exception. See
+/// `render::tests::dither::invert_pipeline_flips_pure_black_and_pure_white_exactly`
+/// for the real-pixel proof of the blend math itself.
 ///
-/// **The v1 fallback actually shipped:** document text selection (+ the
-/// search-match highlight, which already shared the same `theme::selection`
-/// token) keeps its EXISTING mechanism — the SAME `selection_pipeline`/
-/// `match_pipeline` quads, unchanged code, still translucent-capable for the
-/// other 14 worlds — but for a one-bit world specifically, `selection` is
-/// authored pure OPAQUE white and a SECOND quad, `TextPipeline::selection_punch`
-/// (a plain, otherwise-idle `SelectionPipeline` instance — no new render
-/// primitive, the exact double-rect trick `float_border`/`float_card` already
-/// use for elevation), draws each selected rect INSET a couple of pixels in
-/// pure OPAQUE black, directly on top. The result reads as a crisp ~2px WHITE
-/// OUTLINE around the selected text with a BLACK interior — text stays fully
-/// legible (normal white ink over the black punch), the selection's extent is
-/// unambiguous, and every pixel is still exactly `#000000` or `#FFFFFF`. This
-/// is NOT the literal "inverted text" ask — it is the "least-bad 2-value
-/// selection" the round's own instructions sanctioned as the fallback when
-/// real inversion needs a renderer round. **Banked for a future renderer
-/// round:** either generalize `CaretGlyphPipeline` to N selected glyphs, or add
-/// the `OneMinusDst` invert-blend pipeline — either would deliver the literal
-/// "black text on white" ask.
+/// **THE DITHER ROUND's second half — THE ONE WAGTAIL HIGHLIGHT TEXTURE.**
+/// The user's razor: one kind of emphasis, one texture. `==highlight==` spans
+/// and search matches — previously TWO different one-bit answers (highlight:
+/// fully OFF/transparent; search match: the same solid-white/punch mechanism
+/// document selection used) — now SHARE one mechanism: an ordered (8x8 Bayer)
+/// dither stipple at a fixed ~25% density
+/// (`render::dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY`, a TASTE TUNABLE),
+/// where every drawn pixel is the pure quad color (opaque white) or fully
+/// transparent — never a fractional alpha, so the stipple is 1-bit-legal by
+/// construction rather than by staying invisible. Implemented as a MODE on
+/// the EXISTING `shaders/selection.wgsl` quad shader (`Globals::dither`, `>
+/// 0.0` switches `fs_main` from its ordinary soft alpha fill into the hard-
+/// edged Bayer-thresholded branch) rather than a new pipeline class — one
+/// shader, one owner, the SAME `SelectionPipeline` type every other quad
+/// (selection fill, syntax washes, WYSIWYG panel/pill) already uses.
+/// `wash_highlight_pipeline` (the `==highlight==` band) and `match_pipeline`
+/// (search matches) both flip into dither mode together
+/// (`render::spans::wagtail_dither_density`), so the two consumers can never
+/// drift to different densities. **The banding-kill half of the DITHER
+/// round (an ordered ±half-8-bit-step dither added to EVERY world's margin
+/// gradient before quantization) is an EXACT no-op for Wagtail specifically**
+/// — its `background` is the one `Gradient` variant with `from == to`, and
+/// the shader gates the dither offset on `from != to` for precisely this
+/// reason (see `render::dither`'s module doc + `shaders/background.wgsl`'s
+/// `fs_main`), so this round's banding fix introduces zero risk to the
+/// one-bit law even though it touches every world's gradient shader
+/// uniformly.
 ///
 /// **Frosted-blur backdrop (overlay takeover / held HUD / lifetime card /
 /// hold-peek) — disabled outright for a one-bit world.** The scrim mechanism
@@ -801,8 +832,11 @@ pub const MAGPIE: Theme = Theme {
 /// See `render::tests::syntax_roles::every_one_bit_world_renders_only_pure_black_or_white`
 /// (the NEW law this rework demands — supersedes `every_monochrome_world_
 /// renders_zero_saturation_everywhere`'s old "any grey" tolerance for whichever
-/// worlds are ALSO one-bit) and `render/tests/one_bit.rs` (the render-pipeline
-/// behavioral half: backdrop-blur disabled, the selection punch geometry).
+/// worlds are ALSO one-bit), `render/tests/one_bit.rs` (the render-pipeline
+/// instance-level half: backdrop-blur disabled, the invert pipeline's/dither
+/// mode's on-off gating), and `render/tests/dither.rs` (the DITHER round's
+/// REAL-PIXEL half: the invert blend math, the dither stipple's pixel purity,
+/// and the flat-gradient no-op, all verified against actual GPU output).
 pub const WAGTAIL: Theme = Theme {
     name: "Wagtail",
     dark: true,
@@ -821,8 +855,10 @@ pub const WAGTAIL: Theme = Theme {
     // Shape/inversion carries urgency now — no brighter-than-white rung exists.
     error: Srgb::rgb(0xFF, 0xFF, 0xFF),
     // Pure OPAQUE white — legibility over selected text is carried by the
-    // render-side "punch" quad (`TextPipeline::selection_punch`), NOT by this
-    // token's alpha. See the doc comment above for the full mechanism.
+    // TRUE inverse-video render-side mechanism (`TextPipeline::selection_invert`,
+    // the DITHER round), NOT by this token's alpha (the invert pipeline
+    // always writes its own fixed white regardless of this value). See the
+    // doc comment above for the full mechanism.
     selection: Srgb::rgba(0xFF, 0xFF, 0xFF, 0xFF),
     // A flat gradient with from == to: the one `Background` variant that is
     // mathematically guaranteed to introduce no interpolated grey.

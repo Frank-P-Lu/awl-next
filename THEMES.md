@@ -259,9 +259,10 @@ a world whose ground/ink/caret tokens are each EXACTLY `#000000` or
 `#FFFFFF`. Enforced by `render::tests::syntax_roles::
 every_one_bit_world_renders_only_pure_black_or_white` (the palette-literal
 half — supersedes the monochrome law's tolerance for whichever worlds are
-ALSO one-bit) plus `render/tests/one_bit.rs` (the render-PIPELINE half — does
-the renderer actually behave the way the palette promises, not just "is the
-literal correct").
+ALSO one-bit), `render/tests/one_bit.rs` (the render-PIPELINE instance-level
+half — does the renderer actually behave the way the palette promises, not
+just "is the literal correct"), and `render/tests/dither.rs` (the DITHER
+round's REAL-PIXEL half, added 2026-07 — see "THE DITHER ROUND" below).
 
 **The palette, in one breath:** ground `base_100`/`base_200`/`base_300` all
 pure black; ink `base_content`/`muted`/`faint` COLLAPSE to one pure-white
@@ -269,8 +270,9 @@ value (a true 1-bit world has nothing else to step through — "comments/
 strings undifferentiated" is deliberate, not a gap); `primary`(caret) pure
 white, `primary_content` pure black; `error` pure white (shape/inversion
 carries urgency, since there's no brighter-than-white rung to escalate to);
-`selection` pure OPAQUE white (see "the selection punch" below — a
-translucent selection was the greyscale-era mechanism and is retired here);
+`selection` pure OPAQUE white (see "THE DITHER ROUND" below — a translucent
+selection was the greyscale-era mechanism, retired since; the token today
+feeds a TRUE inverse-video pipeline, not a translucent fill);
 `background` a flat `Gradient` with `from == to` (the ONE `Background`
 variant guaranteed to introduce no interpolated grey — the four mark-tint
 variants were rejected for exactly that reason).
@@ -284,8 +286,11 @@ round's audit found had to become either fully OPAQUE (alpha 255, an
 authored solid) or fully OFF (alpha 0) for a one-bit world — there is no
 third option:
 - **Syntax role washes** (`role_overrides.comment_wash`/`str_wash` → `Off`)
-  and the **`==highlight==` wash** (`highlight_wash`'s new `is_one_bit`
-  branch → alpha 0) — the "flat, undifferentiated" statement made literal.
+  stay fully OFF — the "flat, undifferentiated" statement made literal. The
+  **`==highlight==` wash** ORIGINALLY took the same OFF answer
+  (`highlight_wash`'s one-bit branch → alpha 0); THE DITHER ROUND (below)
+  replaced that with a THIRD option alpha itself can't express — an ordered
+  DITHER, opaque-or-nothing per pixel, never fractional.
 - **The frosted-blur backdrop** (`TextPipeline::backdrop_blur`) — investigated
   and found structurally incompatible outright: a gaussian defocus of a pure
   black/white document mathematically smears every edge into grey, no tuning
@@ -315,33 +320,141 @@ would otherwise inherit `surface_selected`'s new pure-white border value and
 fill the WHOLE row white — hiding that row's own white text; the row's own
 caret still marks the current position.
 
-**The selection punch — the loudest open call, logged in full in
-`worlds.rs::WAGTAIL`'s doc comment.** TRUE per-glyph inversion (white
-background, the covered TEXT itself flipping black) was investigated and
-found NOT reachable this round without new renderer machinery: `primary_content`
-turned out to be dead code (declared, never read by any render call site —
-the block caret draws BELOW the glyph cell and never recolors it); the only
-existing text-recoloring mechanism, the Morph caret's `CaretGlyphPipeline`,
-recolors exactly ONE glyph via a per-glyph coverage mask, and generalizing it
-to an arbitrary multi-glyph selection range is real new pipeline-scale work;
-a `OneMinusDst` invert-blend pipeline (the classic 1-bit "inverse video"
-trick) is mathematically real but needs its OWN new `wgpu::RenderPipeline`
-(blend state is baked in at construction). Both are banked for a future
-renderer round. **The v1 fallback shipped instead:** `selection` stays the
-EXISTING `selection_pipeline`/`match_pipeline` mechanism (unchanged code,
-still translucent-capable for the other 14 worlds), now authored pure opaque
-white, PLUS a second, otherwise-idle pipeline — `TextPipeline::selection_punch`
-— draws each selected rect inset ~2px in pure opaque black directly on top
-(the SAME double-rect trick elevation already uses, reused, not a new
-primitive). The result: a crisp white OUTLINE with a black interior, text
-fully legible. NOT the literal "inverted text" ask — the "least-bad 2-value
-selection" the round's own instructions sanctioned as the documented
-fallback.
+**The selection punch (2026-07 greyscale round, RETIRED — see "THE DITHER
+ROUND" immediately below for what replaced it).** TRUE per-glyph inversion
+(white background, the covered TEXT itself flipping black) was investigated
+THAT round and found NOT reachable without new renderer machinery:
+`primary_content` turned out to be dead code (declared, never read by any
+render call site — the block caret draws BELOW the glyph cell and never
+recolors it); the only existing text-recoloring mechanism, the Morph caret's
+`CaretGlyphPipeline`, recolors exactly ONE glyph via a per-glyph coverage
+mask, and generalizing it to an arbitrary multi-glyph selection range is real
+new pipeline-scale work; a `OneMinusDst` invert-blend pipeline (the classic
+1-bit "inverse video" trick) was judged mathematically real but needing its
+OWN new `wgpu::RenderPipeline` (blend state is baked in at construction) — "a
+renderer round, not a theme round." **That round's shipped v1 fallback**
+(kept here for the history, since the code itself is now deleted): `selection`
+stayed the existing `selection_pipeline`/`match_pipeline` mechanism, authored
+pure opaque white, plus a second, otherwise-idle pipeline
+(`TextPipeline::selection_punch`, since removed) drawing each selected rect
+inset ~2px in pure opaque black on top — a crisp white OUTLINE with a black
+interior. NOT the literal "inverted text" ask, and logged as such.
 
 **WYSIWYG in 1-bit:** concealed markup stays invisible (unchanged); REVEALED
 markup renders full white — there is no `muted` rung to recede to
 (`muted == base_content` by construction) — structure-by-render, not by
 tone, accepted as this world's character.
+
+### THE DITHER ROUND (2026-07) — banding-kill everywhere, one highlight texture, true inversion
+
+Three shader-territory deliverables in one round: ONE fixes a display-quality
+issue on all 15 worlds (`shaders/background.wgsl`); the other TWO are the
+renderer round the greyscale rework's own investigation banked
+(`shaders/selection.wgsl`) — both now shipped, closing that round's two
+loudest open calls.
+
+**1. Banding kill (every world).** `background.wgsl`'s margin gradient gains
+an ORDERED (8x8 Bayer) dither — a deterministic, position-only function (no
+time, no random: `render::dither::bayer_threshold01`, mirrored in WGSL) that
+nudges the color by at most ±half an 8-bit sRGB step BEFORE the GPU quantizes
+it, applied in sRGB-ENCODED space (the space that's actually rounded to a
+byte — an earlier draft applied it in LINEAR space and blew the ≤1-LSB bound
+several times over near black, since the sRGB curve is steep there; see
+`background.wgsl::srgb_encode1`'s doc for the fix). Imperceptible as its own
+texture; kills the visible banding a smooth `mix()` produces across a wide
+gradient. **The one-bit interplay:** Wagtail's `background` is the ONE
+`Gradient` variant with `from == to` — the shader gates the WHOLE dither
+branch on `from != to`, so a flat gradient is an EXACT no-op, not merely
+small (proven at the real shader level,
+`render::tests::dither::flat_gradient_renders_byte_identical_pure_pixels_end_to_end`,
+and bounded/active on a real gradient by
+`real_gradient_dither_stays_within_one_lsb_of_the_naive_value_and_is_actually_active`).
+A byte-identical-except-the-margin capture is the expected diff for the other
+14 worlds; no test in this codebase pins a literal background pixel color
+(the sidecar reports semantic/geometric state, never raw pixel bytes — see
+CLAUDE.md's "prefer the sidecar over the PNG"), so nothing needed refreshing.
+
+**2. THE ONE WAGTAIL HIGHLIGHT TEXTURE — the razor: one kind of emphasis, one
+texture.** `==highlight==` spans and search matches were, before this round,
+TWO different one-bit answers (highlight: fully OFF/transparent; search
+match: the SAME solid-white/punch mechanism document selection used). They
+now share ONE mechanism: an ordered Bayer stipple at a fixed density
+(`render::dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY`, ~25%, a TASTE TUNABLE —
+NOT a density ladder, deliberately), where every drawn pixel is the pure quad
+color (opaque white) at FULL alpha or fully transparent — never a fractional
+alpha, so it is 1-bit-legal BY CONSTRUCTION rather than by staying invisible.
+Implemented as a MODE on the EXISTING `shaders/selection.wgsl` quad shader
+(`Globals::dither`, `> 0.0` switches `fs_main`'s ordinary soft alpha fill
+into a hard-edged Bayer-thresholded branch) — one shader, one owner, the SAME
+`SelectionPipeline` type every other quad already uses, not a new pipeline
+class. `wash_highlight_pipeline` (`==highlight==`) and `match_pipeline`
+(search matches) flip into dither mode together
+(`render::spans::wagtail_dither_density`), so the two consumers can never
+drift to different densities — this IS the razor, made structural, not just
+stated. `highlight_wash()`'s one-bit branch changed from "return alpha 0" to
+"return pure opaque white" (the dither's ONE color); the pixel-purity
+guarantee comes from the DITHER MECHANISM now, not from the token being
+transparent. Real-pixel proof (not just instance counts):
+`render::tests::dither::dither_mode_paints_only_pure_values_at_roughly_the_configured_density`.
+
+**3. TRUE INVERSE-VIDEO SELECTION — the loudest open call from the greyscale
+round, now RESOLVED, not merely re-fallback'd.** `TextPipeline::selection_invert`
+(`SelectionPipeline::new_invert`, `src/selection.rs`) is exactly the
+`OneMinusDst`/`Zero`-blended `wgpu::RenderPipeline` that round's own
+investigation named as the real answer — its own object (blend state is
+baked in at construction, confirmed against the pinned `wgpu = "=29.0.3"`:
+`OneMinusDst` is a standard `BlendFactor`, maps to `GL_ONE_MINUS_DST_COLOR`,
+core in WebGL2/GLES 3.0). It shares `shaders/selection.wgsl`'s geometry via a
+SECOND fragment entry point, `fs_invert`, which always writes pure white
+(`src = (1,1,1)`); combined with the blend factors this computes an exact
+`result = 1 - dst` per channel wherever the quad covers — drawn strictly
+AFTER the document text (`draw_document_layers`, the reorder the earlier
+investigation flagged as necessary), so it inverts the ALREADY-COMPOSITED
+text+ground pixels: black text flips white, white ground flips black. The
+LITERAL "inverted text" ask, not a fallback. The punch mechanism it replaces
+(`selection_punch`/`inset_rect`) is DELETED outright, not kept behind a
+"some day" comment — it had zero remaining callers once one-bit selection
+switched to real inversion, and no other world ever wanted an outline
+(same-behavior-same-code: a mechanism with no callers should not exist).
+`selection_pipeline` (the ordinary translucent fill) uploads ZERO rects for a
+one-bit world now — `selection`'s pure-white token no longer drives a render
+directly there; the invert pipeline always writes its own fixed white
+regardless of any theme's `selection` value. AA edges under inversion: a
+glyph's antialiased ~50%-grey edge pixel inverts to `1 - 0.5 = 0.5`, i.e.
+stays ~50%-grey — the SAME AA-edge tolerance the one-bit pixel law already
+grants ordinary (non-inverted) text, not a new exception; verified as REAL
+GPU output (not asserted from the math alone) by
+`render::tests::dither::invert_pipeline_flips_pure_black_and_pure_white_exactly`.
+
+**The composite proof.** `render::tests::dither::
+wagtail_pixel_law_holds_with_selection_highlight_and_search_all_active`
+renders a real Wagtail scene — page mode on, an active text selection, an
+`==highlighted==` span, AND an active search match, all through the actual
+`TextPipeline::render` path — and reads the real GPU output back: every pixel
+must be pure black or pure white except a small, scattered minority
+attributable to ordinary glyph anti-aliasing (bounded both by overall
+fraction AND by a "no single non-pure color fills a large contiguous
+bounding box" check, so a reintroduced translucent-wash bug — which would
+paint a solid rectangle — can't hide behind "well, SOME impurity is
+expected"). `gallery/wagtail/selection-highlight-search.png`
+(gitignored, regenerate via `cargo test --bin awl render::tests::dither::
+gallery_wagtail_selection_highlight_search -- --ignored --nocapture`) is the
+human eyeball-check: the flat black margin, the dithered stipple under both
+the highlight and the search match, and the crisp white-background/
+black-text inverted selection, all in one frame.
+
+**WebGL2 (wasm fallback) risk, addressed offline, not just asserted:**
+`render/tests/webgl_shader_validation.rs` runs the pinned `naga = "=29.0.3"`
+WGSL parser → validator → GLSL ES 300 (`is_webgl: true`) backend against
+BOTH shaders' every entry point (`background.wgsl`'s `vs_main`/`fs_main`;
+`selection.wgsl`'s `vs_main`/`fs_main`/the new `fs_invert`) with no live GPU
+— the same pipeline `wgpu`'s own GL backend runs internally. All five pass:
+the constructs this round added (a private `array<u32,64>`, multiple
+fragment entry points sharing one module, `discard`, the `OneMinusDst`/
+`Zero` blend factors) all translate cleanly. What this does NOT verify: the
+actual pixel output under a REAL browser WebGL2 context (framebuffer
+correctness, backend-specific driver quirks) — flagged for live web testing,
+not claimed verified.
 
 ### Per-script font resolution (i18n round — `FontId`; Chinese round — the zh-Hans/ko floors)
 

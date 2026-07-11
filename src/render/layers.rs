@@ -15,26 +15,6 @@
 
 use super::*;
 
-/// Inset (px) each side of a TRUE 1-BIT WORLD's selection "punch" quad relative
-/// to the outer opaque-white rect it's carved from — see
-/// `TextPipeline::selection_punch`'s field doc. Small enough to read as a
-/// crisp outline, not a slab eating the whole highlight.
-pub(super) const SELECTION_PUNCH_INSET: f32 = 2.0;
-
-/// Inset an `[x, y, w, h]` rect by `inset` px on every side, or `None` if the
-/// result would have non-positive width/height (a rect too small to punch —
-/// skipped rather than drawn inverted/negative). Pure; used only by the
-/// 1-bit selection punch (`prepare_selection_layer`). `pub(super)` so the
-/// render-tests sweep can unit-test it directly.
-pub(super) fn inset_rect(r: [f32; 4], inset: f32) -> Option<[f32; 4]> {
-    let (x, y, w, h) = (r[0], r[1], r[2], r[3]);
-    let (nw, nh) = (w - inset * 2.0, h - inset * 2.0);
-    if nw <= 0.0 || nh <= 0.0 {
-        return None;
-    }
-    Some([x + inset, y + inset, nw, nh])
-}
-
 /// The hanging BLOCKQUOTE pull-quote mark: a big DIM opening quotation mark (`“`)
 /// shaped in the WORLD'S OWN DISPLAY SERIF ([`theme::Theme::font`], NOT the ornament
 /// or symbol face) and hung in the LEFT MARGIN at each blockquote block's first line
@@ -434,30 +414,42 @@ impl TextPipeline {
         width: u32,
         height: u32,
     ) {
-        // Build the translucent selection highlight rectangles (one per visible
-        // line of the region) plus any IME preedit underline, and upload them via
-        // the same quad pipeline. Empty when there is no selection or preedit.
+        // Build the selection highlight rectangles (one per visible line of the
+        // region) plus any IME preedit underline. Empty when there is no
+        // selection or preedit.
+        let mut rects = self.selection_rects();
+        rects.extend(self.preedit_rects());
+        let one_bit = theme::active().is_one_bit();
+
+        // ORDINARY WORLDS: the translucent fill, unchanged.
         //
         // COPY PULSE: `prepare_pulsed` blends the stored base tint toward a
         // brighter peak by `(1.0 - copy_pulse_settle())` — settled (`1.0`, the
         // permanent value in every headless capture) is a byte-identical
         // short-circuit to the plain `prepare` this replaced, so a default
         // capture and every pre-existing selection render are unaffected.
-        let mut rects = self.selection_rects();
-        rects.extend(self.preedit_rects());
+        //
+        // TRUE 1-BIT WORLDS: this pipeline uploads ZERO rects — the
+        // `selection_invert` pipeline below takes over document selection
+        // entirely (see its field doc) — so `selection_pipeline` draws
+        // nothing there, never a stale white fill under the inverted text.
         let settle = self.copy_pulse_settle();
+        let fill_rects: &[[f32; 4]] = if one_bit { &[] } else { &rects };
         self.selection_pipeline.prepare_pulsed(
             device,
             queue,
             width,
             height,
-            &rects,
+            fill_rects,
             copy_pulse_peak_srgba(),
             settle,
         );
 
-        // Search-match highlights (separate instance/color). Empty when search is
-        // closed so no stale highlights linger.
+        // Search-match highlights (separate instance/color — an ordinary
+        // world's translucent fill, or THE ONE WAGTAIL HIGHLIGHT TEXTURE's
+        // dither stipple on a one-bit world, per `search_match_rgba_bytes`/
+        // `wagtail_dither_density`). Empty when search is closed so no stale
+        // highlights linger.
         let mrects = if self.search_active {
             self.search_match_rects()
         } else {
@@ -466,20 +458,13 @@ impl TextPipeline {
         self.match_pipeline
             .prepare(device, queue, width, height, &mrects);
 
-        // TRUE 1-BIT WORLDS ONLY: the ground-colored "punch" — see
-        // `TextPipeline::selection_punch`'s field doc. Every other world
-        // uploads zero instances here (parked, byte-identical).
-        let punch_rects: Vec<[f32; 4]> = if theme::active().is_one_bit() {
-            rects
-                .iter()
-                .chain(mrects.iter())
-                .filter_map(|r| inset_rect(*r, SELECTION_PUNCH_INSET))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        self.selection_punch
-            .prepare(device, queue, width, height, &punch_rects);
+        // TRUE 1-BIT WORLDS ONLY: the true inverse-video selection — see
+        // `TextPipeline::selection_invert`'s field doc. Drawn AFTER text in
+        // `draw_document_layers`; every other world uploads zero instances
+        // here (parked, byte-identical).
+        let invert_rects: &[[f32; 4]] = if one_bit { &rects } else { &[] };
+        self.selection_invert
+            .prepare(device, queue, width, height, invert_rects);
     }
 
     /// Shape + upload the markdown ORNAMENTS: the world's PER-SYNTAX break glyph
