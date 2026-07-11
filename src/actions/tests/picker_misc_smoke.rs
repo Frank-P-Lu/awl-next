@@ -499,6 +499,7 @@ fn every_catalog_command_dispatches_without_panicking() {
                     // Caret sits inside the fixture link, so a URL resolves.
                     Action::FollowLink => matches!(eff, Effect::FollowLink(_)),
                     Action::ReportProblem => eff == Effect::ReportProblem,
+                    Action::CheckForUpdates => eff == Effect::CheckForUpdates,
                     Action::DuplicateNote => eff == Effect::DuplicateNote,
                     other => panic!("{other:?} classified Deferred but has no effect check"),
                 };

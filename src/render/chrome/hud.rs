@@ -32,6 +32,23 @@ impl TextPipeline {
         self.hud_saved = state;
     }
 
+    /// CHECK FOR UPDATES round: push the About card's "checked … ago" figure
+    /// (the LOCAL "last checked" marker's `Never`/`CheckedAgo(secs)` state).
+    /// The live App calls this every `sync_view` (`App::sync_update_checked`);
+    /// the headless capture never calls it, so the line renders the fixed dash
+    /// placeholder — mirrors [`Self::set_hud_saved`] exactly.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_update_checked(&mut self, state: Option<crate::updates::UpdateChecked>) {
+        self.hud_update_checked = state;
+    }
+
+    /// Read back the pushed "last checked" state — the sidecar's own accessor
+    /// (`capture/sidecar.rs::about_json`), so the pixels and the JSON read the
+    /// SAME field, never a second copy.
+    pub fn hud_update_checked(&self) -> Option<crate::updates::UpdateChecked> {
+        self.hud_update_checked
+    }
+
     /// Push the HOLD-⌘ SHORTCUT PEEK's personalized rows (the live ledger's graduation
     /// candidates). The live App calls this every `sync_view` (`App::sync_discoverability`);
     /// the headless capture never does, so the field stays empty and the peek card renders
@@ -236,6 +253,16 @@ impl TextPipeline {
             // Author + license, calm faint captions under the version.
             owned.push(("by Frank Lu · GPL-3.0\n\n".to_string(), 0));
             owned.push((format!("{}\n", world.name), 0));
+            // CHECK FOR UPDATES round: a quiet "checked … ago" caption from the
+            // LOCAL "last checked" marker — `None` (a headless capture, which
+            // never calls `sync_update_checked`) renders the fixed dash
+            // placeholder; `Some(Never)` (live, no marker written yet) OMITS
+            // the line entirely (`updates::checked_line`, the ONE owner shared
+            // with the sidecar). Never a clock/fs read here — the figure is
+            // whatever the live App already pushed this frame.
+            if let Some(line) = crate::updates::checked_line(self.hud_update_checked) {
+                owned.push((format!("{line}\n"), 0));
+            }
             // Quiet pointer to the in-app Credits door (⌘P → Credits opens the
             // embedded CREDITS.md as a buffer) — TASTE-FLAGGED wording, see
             // CLAUDE.md's LICENSE + CREDITS round: matches the card's existing

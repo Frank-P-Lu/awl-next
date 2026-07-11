@@ -349,6 +349,12 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         self.sync_hud_saved();
 
+        // CHECK FOR UPDATES round: push the About card's "checked … ago" figure
+        // (the LOCAL marker's elapsed time) — live-only, mirroring
+        // `sync_hud_saved` exactly.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.sync_update_checked();
+
         // DISCOVERABILITY (phase 2): push the hold-⌘ peek's personalized rows + the
         // Keybindings footer's tips from the ledger (live-only; a capture never calls
         // `sync_view`, so the peek falls back to the starter six and the footer hides).

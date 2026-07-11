@@ -5,3 +5,8 @@
 .claude/orchestrator/
 .claude/worktrees/
 .playwright-mcp/
+
+# site/check.html's data file — generated fresh at each deploy
+# (.github/workflows/deploy-web.yml's "Write version.json" step), never
+# committed. See site/README.md's "Check for updates" section.
+/site/version.json

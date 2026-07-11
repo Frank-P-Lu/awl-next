@@ -106,6 +106,36 @@ bash site/serve.sh          # default port 8080
 file server works equally well; the only hard requirement is HTTP, not `file://`.
 Chrome is the recommended browser for the editor (WebGPU on by default).
 
+## Check for updates (`check.html` + `check.js` + `version.json`)
+
+The app's "Check for Updates" command (native only) never makes a network
+request itself — it opens `check.html?v=<installed version>` in the OS
+browser. This PAGE does the comparison, in the browser, against
+`version.json` (same-origin, fetched by `check.js`). Three states: current,
+a newer version available (+ a releases link), or unknown (no `?v=` param /
+the fetch failed / no tagged release exists yet) — see `check.js`'s own
+`checkState` doc comment.
+
+`version.json` is **GENERATED at deploy, never committed** (mirrors the
+`/editor/` wasm bundle above — no blobs, no generated artifacts in git;
+`.gitignore`'s `site/version.json` line keeps a stray local copy from ever
+being staged by accident). `.github/workflows/deploy-web.yml`'s "Write
+version.json" step is the source of truth; the same one-liner for a manual
+local deploy:
+
+```sh
+TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+VERSION="${TAG#v}"; [ -z "$VERSION" ] && VERSION="0.0.0"
+PRERELEASE="false"; [ -z "$TAG" ] && PRERELEASE="true"
+printf '{"version": "%s", "prerelease": %s}\n' "$VERSION" "$PRERELEASE" \
+  > /tmp/awl-site-deploy/version.json   # or wherever you're assembling the deploy dir
+```
+
+Test the comparison logic directly (no browser needed): `node
+site/check.test.js`. `site/check.js`'s pure functions (`parseVersion`,
+`compareVersions`, `checkState`) are the only thing under test — DOM wiring
+in `check.html` is a thin, untested-by-design shim over them.
+
 ## Privacy / network
 
 The **native awl binary stays zero-network** — no telemetry, no update check, no

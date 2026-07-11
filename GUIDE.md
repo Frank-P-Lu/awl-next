@@ -169,6 +169,7 @@ below, byte for byte).
 | Line endings… |  |  |
 | Align table |  |  |
 | Report a Problem |  |  |
+| Check for Updates |  |  |
 | Blockquote |  |  |
 | Bullet list |  |  |
 | Numbered list |  |  |

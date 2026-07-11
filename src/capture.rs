@@ -237,7 +237,13 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // default capture (HUD not held) still reports it (mirrors `eol`/`percent`'s
 // always-present shape), always the placeholder there since no live clock ever
 // reaches a capture.
-pub const SCHEMA_VERSION: u32 = 165;
+// `/166` — CHECK FOR UPDATES round: the `about` block gains `checked` — the
+// "checked … ago" line (`crate::updates::checked_line`). A headless capture
+// (About open) reports the fixed placeholder string `"checked —"` (mirrors
+// `hud.saved`'s own placeholder-string, not `null`, precedent); live with no
+// marker ever written it is JSON `null` (the card omits the line entirely);
+// live with a marker it's the phrased string. `about.open` is unaffected.
+pub const SCHEMA_VERSION: u32 = 166;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {
