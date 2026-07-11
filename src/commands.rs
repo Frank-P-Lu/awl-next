@@ -205,6 +205,12 @@ pub static COMMANDS: &[Command] = &[
     // IS its entry point (like Settings/About); a real `Action`, independently
     // rebindable via `[keys] credits`. See `credits.rs`.
     Command { name: "Credits",           action: Action::OpenCredits,     native: "",        emacs: ""        , native_only: false },
+    // GUIDE: opens the embedded GUIDE.md into the buffer — the Credits-opens-a-
+    // buffer pattern exactly (prose meant to be read/scrolled, not a stat panel
+    // or a picker). No default chord — the palette IS its entry point (like
+    // Settings/Credits/About); a real `Action`, independently rebindable via
+    // `[keys] guide`. See `guide.rs`.
+    Command { name: "Guide",             action: Action::OpenGuide,       native: "",        emacs: ""        , native_only: false },
     // LIFETIME STATS: the summoned personal ODOMETER card (characters, writing
     // time, files touched, caret travel, your world) — the LIFETIME figures split
     // out of the held stats HUD. No default chord — the palette IS its entry point
@@ -630,6 +636,33 @@ fn join_slots_truthful(c: &Command, convention: Convention, platform: Platform, 
     }
 }
 
+/// THE GUIDE'S GENERATED KEYS REFERENCE — the drift-proof source for the fenced
+/// table between `<!-- GENERATED:keys-reference:BEGIN -->` /
+/// `<!-- GENERATED:keys-reference:END -->` in `GUIDE.md`. Every catalog command,
+/// its resolved DEFAULT (config-free) chord label under EACH convention — mac
+/// glyphs on [`Convention::Mac`], Linux words on [`Convention::Linux`] — via the
+/// SAME [`join_slots_truthful`] the palette itself reads (`Platform::Native`
+/// throughout: both columns describe an OS convention, not the browser build, so
+/// the web-reserved tier never fires here; the Linux-displaced tier DOES, since
+/// that collision is a property of the dispatch table on ANY Linux build). The
+/// LAW TEST living beside `GUIDE_MD` (`guide::tests::generated_keys_reference_
+/// matches_catalog`) regenerates this and diffs it byte-for-byte against the
+/// checked-in section — a catalog change (new command, new default chord) fails
+/// that test until the doc is regenerated and pasted back in. Regenerate with:
+/// `cargo test --bin awl guide::tests::print_generated_keys_reference -- --ignored --nocapture`
+#[cfg(test)]
+pub(crate) fn generate_keys_reference_markdown() -> String {
+    let mut out = String::new();
+    out.push_str("| Command | macOS | Linux |\n");
+    out.push_str("|---|---|---|\n");
+    for c in COMMANDS {
+        let mac = join_slots_truthful(c, Convention::Mac, Platform::Native, &[]);
+        let linux = join_slots_truthful(c, Convention::Linux, Platform::Native, &[]);
+        out.push_str(&format!("| {} | {mac} | {linux} |\n", c.name));
+    }
+    out
+}
+
 /// The EFFECTIVE chord LIST for one command (NOT joined): a valid config override's
 /// chords (up to 2) when present, else the command's static native/emacs slots
 /// (empty slots dropped). The per-chord form [`effective_bindings`] joins for
@@ -985,6 +1018,7 @@ mod tests {
             "Reset page width",
             "About",
             "Credits",
+            "Guide",
             "Lifetime stats",
             "Line endings…",
             "Align table",

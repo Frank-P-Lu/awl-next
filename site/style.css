@@ -258,6 +258,16 @@ footer { border-top: 1px solid var(--border); padding: 3rem 0 4rem; }
 .credits-body .rule { margin: 2.4rem 0; }
 .credits-body em { color: var(--faint); font-style: italic; }
 
+/* ---- Guide page: the generated keys-reference table ---------------------- */
+/* Reuses .credits-body's prose column (/guide.html mirrors GUIDE.md the same
+   way /credits.html mirrors CREDITS.md — same accepted hand-duplication
+   tradeoff, see GUIDE.md's own module note). */
+.credits-body table { width: 100%; border-collapse: collapse; margin: 0 0 1.4rem; font-size: 0.9rem; }
+.credits-body th, .credits-body td { text-align: left; padding: 0.4rem 0.8rem 0.4rem 0; border-bottom: 1px solid var(--border); }
+.credits-body th { color: var(--faint); font-weight: 400; font-family: var(--mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.credits-body td { color: var(--muted); font-family: var(--mono); font-size: 0.85rem; }
+.credits-body td:first-child { color: var(--content); font-family: var(--sans, inherit); }
+
 /* ---- Small screens ------------------------------------------------------ */
 @media (max-width: 640px) {
   section { padding: 4rem 0; }

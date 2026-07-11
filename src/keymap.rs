@@ -360,6 +360,12 @@ pub enum Action {
     /// exactly (see `App::open_credits`, `app/files.rs`). No default chord (summon
     /// by name); see `credits.rs`.
     OpenCredits,
+    /// Guide (command palette): open the embedded `GUIDE.md` into the buffer —
+    /// the user guide (where your words live, the notes model, keys, looks, the
+    /// config file). Mirrors the Credits-opens-a-buffer door exactly (see
+    /// `App::open_guide`, `app/files.rs`). No default chord (summon by name);
+    /// see `guide.rs`.
+    OpenGuide,
     /// Cmd-Shift-H (Super+Shift+H): summon the HISTORY TIMELINE — a summoned,
     /// transient picker listing the current file's local-history VERSIONS
     /// newest-first (relative timestamps + a "+N −M lines" changed-count), where Enter

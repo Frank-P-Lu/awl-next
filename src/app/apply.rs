@@ -623,6 +623,9 @@ impl App {
             // Credits: open the embedded CREDITS.md into the buffer (refresh the
             // on-disk view first, then reuse the ordinary load_path door).
             actions::Effect::OpenCredits => self.open_credits(),
+            // Guide: open the embedded GUIDE.md into the buffer (refresh the
+            // on-disk view first, then reuse the ordinary load_path door).
+            actions::Effect::OpenGuide => self.open_guide(),
             // The overlay ACCEPTED (Enter): open the chosen file / switch project /
             // move the note. Browse emits its file picks as Goto, so Goto covers both.
             actions::Effect::OverlayAccept(kind, val) => match kind {
