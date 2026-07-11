@@ -197,7 +197,9 @@ fn outline_hides_below_the_narrow_margin_floor() {
     let gap = CHAR_WIDTH * chrome::MARGIN_COLUMN_GAP_CHARS;
     let label_char_w = CHAR_WIDTH * crate::markdown::type_scale::LABEL;
     let pref_px = rowlayout::OUTLINE_PREFERRED_CHARS as f32 * label_char_w;
-    let col_left = adaptive_column_left(window_w, CHAR_WIDTH, true, measure, true, pref_px, gap, TEXT_LEFT);
+    let min_px = rowlayout::OUTLINE_MIN_CHARS as f32 * label_char_w;
+    let col_left =
+        adaptive_column_left(window_w, CHAR_WIDTH, true, measure, true, pref_px, min_px, gap, TEXT_LEFT);
     let avail = col_left - gap - TEXT_LEFT;
     let avail_chars = (avail / label_char_w).floor().max(0.0) as usize;
     assert!(
@@ -252,6 +254,77 @@ fn outline_shifts_the_column_right_under_pressure_and_gets_its_rail() {
     assert!(
         p.outline_draw_report(800).is_some(),
         "the outline shows once the column has shifted to grant it a rail"
+    );
+
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}
+
+/// THE PAGE-RESET BUG (live-reported, confirmed + fixed this round): on a
+/// laptop-ish ~1100px-wide window, `--measure 80` seats the column at the
+/// plain symmetric position (no adaptive shift at all — the margin doesn't
+/// even clear the outline's preference). "Reset page width" snaps a prose
+/// buffer's measure to the 70-char default — WIDER total margin, so the OLD
+/// `adaptive_column_left` shifted the column right ANYWAY, even though the
+/// resulting rail still fell short of `OUTLINE_MIN_CHARS` and the outline
+/// stayed hidden regardless: a column visibly rail-shifted toward the right
+/// edge with nothing on the left to show for it — exactly the user's report
+/// ("the column takes up the entire right area"). The fixed `column_left()`
+/// must recognize the shift has no payoff and stay at the symmetric
+/// position, through the SAME seam every measure-change door (reset,
+/// widen/narrow, drag, config reload, buffer switch) shares — this test
+/// pins the exact reproducing numbers via the REAL `TextPipeline` method
+/// chain (`column_left`/`column_width`/`outline_draw_report`), not just the
+/// pure free function.
+#[test]
+fn page_reset_does_not_rail_shift_the_column_for_a_hidden_outline() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping page_reset_does_not_rail_shift_the_column_for_a_hidden_outline: no wgpu adapter");
+        return;
+    };
+    let _o = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    crate::outline::set_outline_on(true);
+    crate::page::set_page_on(true);
+    let window_w = 1100.0; // a laptop-ish canvas, narrower than the 1200px reference.
+    p.set_size(window_w, 700.0);
+    let text = "# Heading One\n\n## Heading Two\n\n### Heading Three\n";
+    p.set_view(&view_md(text, 0, 0));
+
+    // BEFORE: --measure 80 — the column sits at the plain symmetric position;
+    // the outline is not even close to fitting, so nothing shifts.
+    crate::page::set_measure(80);
+    let before_left = p.column_left();
+    let before_symmetric = column_left_for(window_w, CHAR_WIDTH, true, 80);
+    assert_eq!(before_left, before_symmetric, "measure 80: no shift, reads as centered");
+    assert!(p.outline_draw_report(700).is_none(), "measure 80: outline stays hidden (too little room)");
+
+    // AFTER "Reset page width" (prose default, 70): a WIDER total margin than
+    // before, yet still not enough to clear the outline's own minimum rail.
+    // The fix must land the column back at ITS OWN (now-wider) symmetric
+    // position — never a rail-shifted one with nothing to show for it.
+    crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+    let after_left = p.column_left();
+    let after_width = p.column_width();
+    let after_symmetric = column_left_for(window_w, CHAR_WIDTH, true, crate::page::DEFAULT_MEASURE);
+    assert_eq!(
+        after_left, after_symmetric,
+        "measure 70 (post-reset): still no payoff for a shift, so the column stays symmetric"
+    );
+    assert!(
+        after_left + after_width <= window_w + 1e-2,
+        "the column never overflows the window: left={after_left} width={after_width} window={window_w}"
+    );
+    let right_margin = window_w - (after_left + after_width);
+    let left_margin = after_left;
+    assert!(
+        (right_margin - left_margin).abs() < 1.0,
+        "symmetric: left and right margins match, no lopsided rail-shift — left={left_margin} right={right_margin}"
+    );
+    assert!(
+        p.outline_draw_report(700).is_none(),
+        "the outline is still genuinely too narrow to show — the column must not pay for a rail that never draws"
     );
 
     crate::outline::set_outline_on(false);
