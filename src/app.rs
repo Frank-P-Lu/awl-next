@@ -271,17 +271,18 @@ pub struct App {
     /// summoning modifier closes that gap. See `hud_release_on_mods`.
     hud_mods: ModifiersState,
     /// HOLD-⌘ SHORTCUT PEEK arm state (`crate::peek::PeekArm`): the pure hold/cancel
-    /// machine. Fed stimuli from the raw input handlers (`ModifiersChanged` → bare-⌘
-    /// alone/broken, a joined key press, a mouse press / blur) and the hold-timer
-    /// deadline; its result drives the process-global (`peek::set_open`) + the single
-    /// `WaitUntil` in `about_to_wait`. LIVE-ONLY — a headless capture never constructs an
-    /// `App`, so the peek is summoned there only by the `--peek` flag.
+    /// machine. Fed stimuli from the raw input handlers (`ModifiersChanged` → the
+    /// convention's bare arming modifier alone/broken — `peek::is_bare_arming_modifier`,
+    /// ⌘ on Mac, Ctrl on Linux — a joined key press, a mouse press / blur) and the
+    /// hold-timer deadline; its result drives the process-global (`peek::set_open`) +
+    /// the single `WaitUntil` in `about_to_wait`. LIVE-ONLY — a headless capture never
+    /// constructs an `App`, so the peek is summoned there only by the `--peek` flag.
     peek_arm: crate::peek::PeekArm,
-    /// When BARE ⌘ went down alone (the `Idle → Pending` edge), or `None` when not
-    /// pending — the single `WaitUntil` deadline base: the peek opens once
-    /// `peek_armed_at + HOLD_PEEK_MS` elapses with the hold unbroken. Armed only while
-    /// `peek_arm == Pending`, so the app idles at 0% CPU once it resolves (the which-key
-    /// pause pattern).
+    /// When the convention's bare arming modifier went down alone (the `Idle → Pending`
+    /// edge), or `None` when not pending — the single `WaitUntil` deadline base: the
+    /// peek opens once `peek_armed_at + HOLD_PEEK_MS` elapses with the hold unbroken.
+    /// Armed only while `peek_arm == Pending`, so the app idles at 0% CPU once it
+    /// resolves (the which-key pause pattern).
     peek_armed_at: Option<Instant>,
     /// Current zoom factor. Single source of truth for the LIVE app; pushed into the
     /// pipeline via the view snapshot. Launches at [`INITIAL_ZOOM`] (the natural 1.0
@@ -1286,8 +1287,8 @@ impl ApplicationHandler<AwlEvent> for App {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
             }
         }
-        // HOLD-⌘ SHORTCUT PEEK: while a bare-⌘ hold is PENDING, summon the card once
-        // ~600ms elapses with the hold unbroken. The timer is ARMED ONLY while
+        // HOLD-⌘ SHORTCUT PEEK: while a bare-arming-modifier hold is PENDING, summon the
+        // card once ~600ms elapses with the hold unbroken. The timer is ARMED ONLY while
         // `peek_armed_at` is `Some` (the `PeekArm::Pending` state) — a single `WaitUntil`
         // deadline, no perpetual tick; feeding `Elapsed` opens the card and clears the
         // stamp, so nothing re-arms and the app idles at 0% CPU (the which-key pattern).
@@ -1417,14 +1418,6 @@ fn scroll_zoom_intent(mods: ModifiersState) -> bool {
 /// (a superset) does not break it. Pure, so it's unit-testable without a window.
 fn hud_mods_broken(summon: ModifiersState, now: ModifiersState) -> bool {
     !now.contains(summon)
-}
-
-/// Is `mods` EXACTLY bare ⌘ (Super alone, no other modifier)? The ONLY state that arms
-/// the hold-⌘ shortcut peek — ⌘+Shift / ⌘+Ctrl / a released ⌘ are all the start of a
-/// real chord (or the end of the hold), never an idle "what were the shortcuts?" pause.
-/// Pure, so the arm predicate is unit-testable without a window.
-fn peek_is_bare_super(mods: ModifiersState) -> bool {
-    mods == ModifiersState::SUPER
 }
 
 /// Does a held Shift on this action signal SELECT-INTENT (Shift+motion extends
@@ -1615,20 +1608,6 @@ mod tests {
         // that hold is dismissed by the key-UP path (`on_key_release`) instead.
         assert!(!hud_mods_broken(ModifiersState::empty(), ModifiersState::empty()));
         assert!(!hud_mods_broken(ModifiersState::empty(), ModifiersState::SUPER));
-    }
-
-    #[test]
-    fn peek_arms_only_on_bare_super() {
-        // The hold-⌘ peek arms ONLY on ⌘ EXACTLY alone — the bare-hold gesture. Any other
-        // modifier state is the start of a real chord (or no ⌘ at all), so it never arms.
-        assert!(peek_is_bare_super(ModifiersState::SUPER), "bare ⌘ alone arms");
-        // ⌘+another modifier is a forming chord (⌘⇧P, ⌘⌥…) — never a bare hold.
-        assert!(!peek_is_bare_super(ModifiersState::SUPER | ModifiersState::SHIFT));
-        assert!(!peek_is_bare_super(ModifiersState::SUPER | ModifiersState::CONTROL));
-        // No ⌘ at all (idle typing, a bare Shift/Ctrl) never arms.
-        assert!(!peek_is_bare_super(ModifiersState::empty()));
-        assert!(!peek_is_bare_super(ModifiersState::SHIFT));
-        assert!(!peek_is_bare_super(ModifiersState::CONTROL));
     }
 
     #[test]

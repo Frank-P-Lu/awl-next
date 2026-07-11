@@ -64,8 +64,9 @@ impl App {
         self.peek_arm = after;
         use crate::peek::PeekArm::*;
         match after {
-            // Idle → Pending: bare ⌘ went down alone — start the hold timer (consumed by
-            // the single `WaitUntil` in `about_to_wait`; no card yet).
+            // Idle → Pending: the convention's bare arming modifier went down alone —
+            // start the hold timer (consumed by the single `WaitUntil` in
+            // `about_to_wait`; no card yet).
             Pending => self.peek_armed_at = Some(Instant::now()),
             // Pending → Open: the hold completed — summon the card + redraw.
             Open => {
@@ -511,14 +512,19 @@ impl App {
     pub(in crate::app) fn on_modifiers_changed(&mut self, m: Modifiers) {
         self.mods = m;
         self.hud_release_on_mods(m.state());
-        // HOLD-⌘ SHORTCUT PEEK: bare ⌘ ALONE arms the hold; any other modifier state
-        // (⌘+Shift, a released ⌘, …) breaks it — so a pending peek cancels and an open
-        // one closes. Feeding `SuperBroken` while Idle is inert, so ordinary typing
-        // (no ⌘) never churns.
-        let stim = if peek_is_bare_super(m.state()) {
-            crate::peek::PeekStimulus::SuperAlone
+        // HOLD-⌘ SHORTCUT PEEK: the ACTIVE CONVENTION's bare arming modifier ALONE
+        // arms the hold (`peek::is_bare_arming_modifier` / `peek::arming_modifier` — ⌘
+        // on Mac, Ctrl on Linux, the ONE convention→modifier owner); any other modifier
+        // state (that modifier plus another, a release, or the OTHER platform's
+        // modifier — bare Super is now inert under Linux convention, since the
+        // compositor owns it) breaks it — so a pending peek cancels and an open one
+        // closes. Feeding `ArmBroken` while Idle is inert, so ordinary typing (no
+        // arming modifier) never churns.
+        let convention = crate::convention::Convention::current();
+        let stim = if crate::peek::is_bare_arming_modifier(m.state(), convention) {
+            crate::peek::PeekStimulus::ArmAlone
         } else {
-            crate::peek::PeekStimulus::SuperBroken
+            crate::peek::PeekStimulus::ArmBroken
         };
         self.feed_peek(stim);
     }
@@ -578,9 +584,11 @@ impl App {
             crate::menubar::set_open(None);
         }
         // HOLD-⌘ SHORTCUT PEEK: a real (non-modifier) key press means a chord is forming
-        // (⌘S, ⌘⇧P's letter, Cmd-I, …), so cancel a pending peek / close an open one
-        // BEFORE it can flicker — THE CRUX of the cancellation contract. Inert unless a
-        // peek is actually pending/open, so an ordinary keystroke is a no-op here.
+        // (⌘S, ⌘⇧P's letter, Cmd-I, … on Mac; C-f, C-s, … on Linux, where the SAME
+        // arming modifier also carries the emacs nav layer), so cancel a pending peek /
+        // close an open one BEFORE it can flicker — THE CRUX of the cancellation
+        // contract. Inert unless a peek is actually pending/open, so an ordinary
+        // keystroke is a no-op here.
         self.feed_peek(crate::peek::PeekStimulus::KeyJoined);
         // DEBUG key→px: stamp the dispatch receipt of a real key press —
         // every path from here (search keys, rebind capture, the keymap
