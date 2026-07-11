@@ -59,30 +59,36 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # displaced chord — e.g. `search_forward = \"C-s\"` gets Ctrl-S back for Search
 # forward, which then in turn takes it away from Save's own native slot; there is
 # only one physical chord to hand out per collision, whichever command you rebind
-# onto it).
+# onto it). ONE exception to \"native always wins\": Ctrl-K stays kill-line by
+# default on Linux, in EITHER keymap flavor below — Insert link… (Cmd-K on Mac)
+# has NO effective Linux binding out of the box, since kill-line is too
+# load-bearing for emacs hands to lose by default. Want the Cmd-K trade anyway?
+# One `[keys]` line reclaims it, same as any other chord:
+#     [keys]
+#     insert_link = \"C-k\"
 #
-# linux_keep_emacs : a shorter Linux-only door to the SAME fix — list the bare
-#   chords you want to KEEP their emacs meaning, and ONLY that chord's native
-#   collision is suppressed (its native command stays reachable by palette/menu/
-#   its other chord). On Mac this key is simply ignored. Example, an emacs-hands
-#   setup that wants back the whole bare-control nav cluster:
+# linux_keep_emacs : a shorter Linux-only door to the SAME collision fix above —
+#   list the bare chords you want to KEEP their emacs meaning, and ONLY that
+#   chord's native collision is suppressed (its native command stays reachable
+#   by palette/menu/its other chord). On Mac this key is simply ignored.
+#   Example, an emacs-hands setup that wants back the whole bare-control nav
+#   cluster:
 #     linux_keep_emacs = [\"C-f\", \"C-b\", \"C-n\", \"C-p\", \"C-a\", \"C-e\"]
 #   The trade: those letters' NATIVE meanings on Linux (Find/Bold/New note/
 #   Command palette/Select all/Inline code) fall back to the palette or their
 #   other chord instead of a bare Ctrl-letter.
-#
+
 # keymap : \"native\" (default) or \"emacs\" — a WHOLE-CATALOG preset over the
 #   SAME per-chord door as linux_keep_emacs above, for a Linux emacs hand who
 #   wants EVERY displaced bare-control chord back at once rather than naming
 #   them one by one: keymap = \"emacs\" keeps every letter the native-wins
 #   collision would otherwise claim (Find/Bold/New note/Command palette/Select
 #   all/Inline code/Finish file/Replace/Backward char/Search backward/Copy/Cut/
-#   Paste), reachable instead by palette/menu/their other chord. On Mac this
-#   key is inert (no collisions exist there to keep). A [keys] rebind ALWAYS
-#   wins over the preset for that one chord — the carve-out an Omarchy/Hyprland
-#   user needs, since that compositor forwards Super+C/X/V as Ctrl+C/X/V (the
-#   system clipboard), so Copy/Cut/Paste must stay native even under the emacs
-#   preset:
+#   Paste), reachable instead by palette/menu/their other chord. On Mac this key
+#   is inert (no collisions exist there to keep). A [keys] rebind ALWAYS wins
+#   over the preset for that one chord — the carve-out an Omarchy/Hyprland user
+#   needs, since that compositor forwards Super+C/X/V as Ctrl+C/X/V (the system
+#   clipboard), so Copy/Cut/Paste must stay native even under the emacs preset:
 #     keymap = \"emacs\"
 #     [keys]
 #     copy = \"C-c\"

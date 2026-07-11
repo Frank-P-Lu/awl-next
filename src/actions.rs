@@ -24,12 +24,14 @@ use crate::search::{Direction, SearchState};
 mod edit; // the markdown smart-Enter edit (smart_newline + its pure decision)
 mod flinch; // the caret-feedback triggers (impact_for / recoil_for)
 mod format; // the markdown formatting-command toggles (block + inline)
+mod link; // LINKS V2 — Cmd-K insert/edit-link (plan + commit, mirrors format.rs)
 mod motion; // the oracle-aware caret motions + page scroll + search open
 mod overlay_nav; // the modal overlay intercept + browse-path helpers + live preview
 mod rebind; // the game-style rebind-menu key handling
 use edit::*;
 use flinch::*;
 use format::*;
+use link::*;
 use motion::*;
 use overlay_nav::*;
 use rebind::*;
@@ -785,6 +787,11 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::InlineCode => apply_inline_format(ctx, format::InlineKind::InlineCode),
         Action::Highlight => apply_inline_format(ctx, format::InlineKind::Highlight),
         Action::Strikethrough => apply_inline_format(ctx, format::InlineKind::Strikethrough),
+        // LINKS V2 — Cmd-K: summon the URL minibuffer (`link::open_insert_link`
+        // decides WRAP / EDIT / INSERT from buffer state — see `Action::InsertLink`'s
+        // own doc). Markdown-only, calm no-op elsewhere. The actual edit lands on
+        // Enter, inside the modal intercept (`overlay_nav::overlay_intercept`).
+        Action::InsertLink => open_insert_link(ctx),
         // Summon the navigation overlay. The caller's `make_overlay` builds the
         // candidate list (file index for Goto, workspace children for Project);
         // if it returns None (no active project), the open is a quiet no-op.

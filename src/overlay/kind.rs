@@ -125,6 +125,14 @@ pub enum OverlayKind {
     /// core closes the overlay), Esc cancels. There is no list to browse — the
     /// corpus always holds exactly the one editable row.
     Rename,
+    /// LINKS V2: the Cmd-K minibuffer (Insert link…) — a single-row URL prompt,
+    /// mirroring [`OverlayKind::Rename`]'s exact shape: every keystroke mutates
+    /// `corpus[0]` directly (the live-typed URL IS the row's primary cell), Enter
+    /// commits (the whole edit is applied to the buffer INSIDE the core — no
+    /// `Effect`, since it never needs the filesystem), Esc cancels. Pre-filled
+    /// empty / from the clipboard-if-URL / from an existing link's current URL,
+    /// per `Action::InsertLink`'s own doc. No list to browse.
+    InsertLink,
 }
 
 /// How a picker's ACCEPT (Enter on a committed item) disposes of the breadcrumb
@@ -166,7 +174,7 @@ impl OverlayKind {
     /// `rowlayout` — are the real compile-time guards; this is iteration
     /// convenience, kept in lockstep by hand like `CaretMode::ALL`).
     #[allow(dead_code)] // consumed only by the `facets`/law tests today.
-    pub const ALL: [OverlayKind; 15] = [
+    pub const ALL: [OverlayKind; 16] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -182,6 +190,7 @@ impl OverlayKind {
         OverlayKind::Settings,
         OverlayKind::Assets,
         OverlayKind::Rename,
+        OverlayKind::InsertLink,
     ];
 
     /// The short mode string used in the capture sidecar.
@@ -202,6 +211,7 @@ impl OverlayKind {
             OverlayKind::Settings => "settings",
             OverlayKind::Assets => "assets",
             OverlayKind::Rename => "rename",
+            OverlayKind::InsertLink => "insert_link",
         }
     }
 
@@ -242,6 +252,13 @@ impl OverlayKind {
             // Rename accept — declared here anyway so the law test's no-wildcard
             // sweep can't silently forget this kind.)
             OverlayKind::Rename => Navigate,
+            // LINKS V2: a commit LANDS the edit in the buffer (a real result), so
+            // it closes the whole stack — same class as Rename. (In practice the
+            // `link_edit` modal intercept closes the overlay itself the instant
+            // Enter commits, before this classification is ever consulted —
+            // declared here anyway so the law test's no-wildcard sweep can't
+            // silently forget this kind.)
+            OverlayKind::InsertLink => Navigate,
         }
     }
 
@@ -397,6 +414,10 @@ impl OverlayKind {
             // actually applies; declared minimal rather than omitted, so every kind
             // stays under the no-wildcard sweep.
             OverlayKind::Rename => vec![enter("rename"), key("esc", "cancel")],
+            // LINKS V2: no list nav either (a single editable row) — its own
+            // `link_edit` prompt (via `foot_hint`) teaches Enter/Esc, mirroring
+            // Rename exactly.
+            OverlayKind::InsertLink => vec![enter("insert link"), key("esc", "cancel")],
         }
     }
 
@@ -435,6 +456,9 @@ impl OverlayKind {
             // this arm is structurally unreachable, but every kind still needs one
             // under the no-wildcard sweep.
             OverlayKind::Rename => "no matches",
+            // LINKS V2 always summons with exactly one row (the editable URL) —
+            // this arm is structurally unreachable, mirroring Rename.
+            OverlayKind::InsertLink => "no matches",
         }
     }
 

@@ -126,7 +126,7 @@ fn char_to_line_col(lines: &[String], idx: usize) -> (usize, usize) {
 
 /// The selection as `(start, end, has_selection)` char indices (ordered). No mark, or
 /// a mark exactly at the cursor, is a bare caret (`start == end`, `has == false`).
-fn sel_range(anchor: Option<usize>, cursor: usize) -> (usize, usize, bool) {
+pub(super) fn sel_range(anchor: Option<usize>, cursor: usize) -> (usize, usize, bool) {
     match anchor {
         Some(a) if a != cursor => (a.min(cursor), a.max(cursor), true),
         _ => (cursor, cursor, false),

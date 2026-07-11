@@ -62,6 +62,44 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             _ => return Effect::None,
         }
     }
+    // LINKS V2 — Cmd-K MINIBUFFER: while the InsertLink overlay's typed-URL
+    // sub-state is active (armed the instant the overlay is BUILT — see
+    // `link::open_insert_link` / `OverlayState::new_link_edit`), it OWNS every key
+    // modally: ANY printable char extends the typed URL (no `/`-rejection, unlike
+    // Rename — a URL legitimately contains `/`), Backspace deletes, Enter COMMITS
+    // the edit DIRECTLY into the buffer (`link::commit` — this is a pure text
+    // build + `Buffer::apply_format`, no filesystem, so unlike Rename it needs no
+    // deferred `Effect` at all) and closes the overlay, Esc CANCELS (closes with no
+    // buffer change). Checked alongside the Rename block above — the two are never
+    // open together.
+    if ctx.overlay.as_ref().unwrap().link_edit.is_some() {
+        match action {
+            Action::InsertChar(c) => {
+                ctx.overlay.as_mut().unwrap().link_edit_push(*c);
+                return Effect::None;
+            }
+            Action::DeleteBackward | Action::DeleteWordBackward => {
+                ctx.overlay.as_mut().unwrap().link_edit_pop();
+                return Effect::None;
+            }
+            Action::Newline => {
+                let target = ctx.overlay.as_ref().unwrap().link_edit_target();
+                *ctx.overlay = None;
+                if let Some((url, mode)) = target {
+                    let text = ctx.buffer.text();
+                    let r = crate::actions::link::commit(&text, &mode, &url);
+                    ctx.buffer.apply_format(&r.text, r.anchor, r.cursor);
+                }
+                return Effect::None;
+            }
+            Action::Cancel => {
+                *ctx.overlay = None;
+                return Effect::None;
+            }
+            // Every other key is swallowed (the edit is modal to the one row).
+            _ => return Effect::None,
+        }
+    }
     // SETTINGS VALUE EDIT: while an inline numeric edit is active (Enter landed on a
     // page-width / zoom row), the Settings menu OWNS every key modally — digits (plus
     // `.`/`%` for zoom) build the value in the row's own cell, Backspace deletes, Enter

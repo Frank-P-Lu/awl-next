@@ -177,6 +177,12 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
         // needs only the buffer's own path, no caller-gathered context — so this
         // generic builder never constructs one. This arm exists for exhaustiveness.
         OverlayKind::Rename => None,
+        // LINKS V2: the InsertLink minibuffer is built directly at its
+        // `Action::InsertLink` apply_core arm (`link::open_insert_link` →
+        // `OverlayState::new_link_edit`) — it needs only the buffer's own
+        // selection/cursor/text, no caller-gathered context — so this generic
+        // builder never constructs one. This arm exists for exhaustiveness.
+        OverlayKind::InsertLink => None,
     }
 }
 

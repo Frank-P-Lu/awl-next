@@ -159,8 +159,9 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         // The asset cleaner is a flat list — no lens strip.
         | OverlayKind::Assets
         // The RENAME minibuffer is a single editable row — no lens strip, nothing
-        // to facet.
-        | OverlayKind::Rename => None,
+        // to facet. LINKS V2's InsertLink minibuffer is the same shape.
+        | OverlayKind::Rename
+        | OverlayKind::InsertLink => None,
         // v1 note: the Settings menu FACETS (see the arm above); no None case here.
     }
 }

@@ -1327,11 +1327,31 @@ fn keymap_flavor_garbage_value_falls_back_to_native_never_a_crash() {
     });
 }
 
+/// THE INSERT-LINK-YIELDS-TO-KILL-LINE ROUND: `effective_linux_keep` is NEVER
+/// truly empty anymore — even a totally absent/default config carries the
+/// built-in floor (`keymap::LINUX_BUILTIN_KEEP`, currently just `"C-k"`), on
+/// EITHER keymap flavor. Supersedes the old "absent config = empty keep list"
+/// assumption the pre-floor tests below this one were written against.
 #[test]
-fn effective_linux_keep_under_native_is_the_raw_list_unchanged() {
+fn effective_linux_keep_absent_config_is_the_builtin_floor_not_empty() {
+    let eff = Config::empty().effective_linux_keep();
+    assert_eq!(eff.len(), crate::keymap::LINUX_BUILTIN_KEEP.len());
+    for b in crate::keymap::LINUX_BUILTIN_KEEP {
+        assert!(eff.iter().any(|e| e == b), "built-in floor chord {b:?} missing from effective_linux_keep");
+    }
+}
+
+#[test]
+fn effective_linux_keep_under_native_is_the_builtin_floor_plus_the_raw_list() {
     let mut cfg = Config::empty();
     cfg.linux_keep_emacs = vec!["C-f".to_string()];
-    assert_eq!(cfg.effective_linux_keep(), vec!["C-f".to_string()]);
+    let eff = cfg.effective_linux_keep();
+    assert!(eff.contains(&"C-f".to_string()));
+    for b in crate::keymap::LINUX_BUILTIN_KEEP {
+        assert!(eff.iter().any(|e| e == b), "built-in floor chord {b:?} missing from effective_linux_keep");
+    }
+    // The floor plus exactly the one raw entry — no preset (native flavor).
+    assert_eq!(eff.len(), crate::keymap::LINUX_BUILTIN_KEEP.len() + 1);
 }
 
 #[test]
@@ -1341,11 +1361,16 @@ fn effective_linux_keep_under_emacs_widens_to_the_whole_displaced_preset() {
     let eff = cfg.effective_linux_keep();
     // Every letter `LINUX_DISPLACED_LETTERS` names is present as a plain "C-<letter>"
     // chord — the whole-catalog preset, derived from the SAME table the dispatch
-    // collision uses (never hand-copied).
+    // collision uses (never hand-copied) — PLUS the built-in floor, which the
+    // preset itself deliberately never names (`C-k` is unconditional, not
+    // flavor-gated; see `LINUX_BUILTIN_KEEP`'s own doc).
     for letter in crate::keymap::linux_emacs_preset_keep() {
         assert!(eff.contains(&letter), "preset chord {letter:?} missing from effective_linux_keep");
     }
-    assert_eq!(eff.len(), crate::keymap::linux_emacs_preset_keep().len());
+    for b in crate::keymap::LINUX_BUILTIN_KEEP {
+        assert!(eff.iter().any(|e| e == b), "built-in floor chord {b:?} missing from effective_linux_keep");
+    }
+    assert_eq!(eff.len(), crate::keymap::linux_emacs_preset_keep().len() + crate::keymap::LINUX_BUILTIN_KEEP.len());
 }
 
 #[test]
@@ -1357,7 +1382,10 @@ fn effective_linux_keep_under_emacs_unions_with_an_explicit_extra_keep() {
     cfg.linux_keep_emacs = vec!["C-y".to_string()];
     let eff = cfg.effective_linux_keep();
     assert!(eff.contains(&"C-y".to_string()));
-    assert_eq!(eff.len(), crate::keymap::linux_emacs_preset_keep().len() + 1);
+    assert_eq!(
+        eff.len(),
+        crate::keymap::linux_emacs_preset_keep().len() + crate::keymap::LINUX_BUILTIN_KEEP.len() + 1
+    );
 }
 
 #[test]
@@ -1368,5 +1396,16 @@ fn effective_linux_keep_under_emacs_a_duplicate_explicit_entry_does_not_double_c
     cfg.keymap = Some("emacs".to_string());
     cfg.linux_keep_emacs = vec!["Ctrl-f".to_string()]; // == "C-f", already in the preset
     let eff = cfg.effective_linux_keep();
-    assert_eq!(eff.len(), crate::keymap::linux_emacs_preset_keep().len());
+    assert_eq!(eff.len(), crate::keymap::linux_emacs_preset_keep().len() + crate::keymap::LINUX_BUILTIN_KEEP.len());
+}
+
+/// The same "a duplicate contributes nothing extra" law, but for an explicit
+/// `linux_keep_emacs` entry that collides with the BUILT-IN floor rather than
+/// the emacs preset — e.g. a user who (redundantly) names `C-k` themselves.
+#[test]
+fn effective_linux_keep_a_duplicate_of_the_builtin_floor_does_not_double_count() {
+    let mut cfg = Config::empty();
+    cfg.linux_keep_emacs = vec!["Ctrl-k".to_string()]; // == "C-k", already the built-in floor
+    let eff = cfg.effective_linux_keep();
+    assert_eq!(eff.len(), crate::keymap::LINUX_BUILTIN_KEEP.len());
 }

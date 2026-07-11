@@ -308,25 +308,40 @@ impl Config {
 
     /// The EFFECTIVE `linux_keep_emacs` list — THE ONE COMPOSITION OWNER every
     /// keymap-construction / reload / label call site routes through instead of
-    /// reading `linux_keep_emacs` directly, so the keymap-flavor preset can
-    /// never drift from the per-chord door it's built from. Under
-    /// [`crate::keymap::KeymapFlavor::Native`] (the default) this is exactly
-    /// `linux_keep_emacs`, unchanged — today's behavior, byte-identical. Under
-    /// [`crate::keymap::KeymapFlavor::Emacs`] it's the WHOLE emacs-hands-on-
-    /// Linux collision-table preset ([`crate::keymap::linux_emacs_preset_keep`])
-    /// UNIONED with the user's own explicit `linux_keep_emacs` entries (a
-    /// duplicate — canonical-compare, via [`crate::keymap::linux_keeps_chord`] —
-    /// contributes nothing extra). `keymap.rs`'s dispatch + `commands.rs`'s
-    /// label-truth owner both consult exactly this list (never the raw
-    /// `linux_keep_emacs` field), so the preset can never lie about what
-    /// actually fires. Structurally inert on `Convention::Mac`, same as the
-    /// raw field — `KeymapState::linux_keeps` gates on convention regardless of
-    /// what this returns.
+    /// reading `linux_keep_emacs` directly, so the keymap-flavor preset (and,
+    /// as of the insert-link-yields-to-kill-line round, the built-in floor
+    /// below) can never drift from the per-chord doors they're built from.
+    /// ALWAYS seeded with [`crate::keymap::LINUX_BUILTIN_KEEP`] first (a chord
+    /// kept unconditionally, on EITHER flavor — currently just `C-k`, so
+    /// Insert link's native Ctrl-K never displaces kill-line by default; the
+    /// user's own call, logged on `LINUX_BUILTIN_KEEP`'s own doc). On top of
+    /// that floor: under [`crate::keymap::KeymapFlavor::Native`] (the default)
+    /// this is the built-in floor UNIONED with `linux_keep_emacs` — for a
+    /// config with an EMPTY `linux_keep_emacs`, that's just the floor itself,
+    /// no longer a bare empty list (the one behavior change from the pre-floor
+    /// shape: this function is never truly empty anymore). Under
+    /// [`crate::keymap::KeymapFlavor::Emacs`] it's the floor UNIONED with the
+    /// WHOLE emacs-hands-on-Linux collision-table preset
+    /// ([`crate::keymap::linux_emacs_preset_keep`]) UNIONED with the user's own
+    /// explicit `linux_keep_emacs` entries (a duplicate anywhere in this chain
+    /// — canonical-compare, via [`crate::keymap::linux_keeps_chord`] —
+    /// contributes nothing extra; the preset itself never names `C-k`, since
+    /// the floor already covers it unconditionally). `keymap.rs`'s dispatch +
+    /// `commands.rs`'s label-truth owner both consult exactly this list (never
+    /// the raw `linux_keep_emacs` field), so neither the preset nor the floor
+    /// can ever lie about what actually fires. Structurally inert on
+    /// `Convention::Mac`, same as the raw field — `KeymapState::linux_keeps`
+    /// gates on convention regardless of what this returns.
     pub fn effective_linux_keep(&self) -> Vec<String> {
-        if self.keymap_flavor() != crate::keymap::KeymapFlavor::Emacs {
-            return self.linux_keep_emacs.clone();
+        let mut keep: Vec<String> =
+            crate::keymap::LINUX_BUILTIN_KEEP.iter().map(|s| s.to_string()).collect();
+        if self.keymap_flavor() == crate::keymap::KeymapFlavor::Emacs {
+            for p in crate::keymap::linux_emacs_preset_keep() {
+                if !crate::keymap::linux_keeps_chord(&keep, &p) {
+                    keep.push(p);
+                }
+            }
         }
-        let mut keep = crate::keymap::linux_emacs_preset_keep();
         for k in &self.linux_keep_emacs {
             if !crate::keymap::linux_keeps_chord(&keep, k) {
                 keep.push(k.clone());

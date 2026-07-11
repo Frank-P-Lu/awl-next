@@ -1897,9 +1897,20 @@ mod tests {
         // already proves is sufficient to flip dispatch).
         let effective = app.config.effective_linux_keep();
         let preset = crate::keymap::linux_emacs_preset_keep();
-        assert_eq!(effective.len(), preset.len(), "the live rebuild's keep-list is the whole preset");
+        // The insert-link-yields-to-kill-line round's built-in floor
+        // (`keymap::LINUX_BUILTIN_KEEP`) rides ALONG with the preset — it is
+        // NOT flavor-gated, so it's present under emacs too, just not part of
+        // `preset` itself (see `LINUX_BUILTIN_KEEP`'s own doc).
+        assert_eq!(
+            effective.len(),
+            preset.len() + crate::keymap::LINUX_BUILTIN_KEEP.len(),
+            "the live rebuild's keep-list is the whole preset plus the built-in floor"
+        );
         for chord in &preset {
             assert!(effective.contains(chord), "{chord:?} missing from the live rebuild's keep-list");
+        }
+        for chord in crate::keymap::LINUX_BUILTIN_KEEP {
+            assert!(effective.iter().any(|c| c == chord), "{chord:?} missing from the live rebuild's keep-list");
         }
 
         // Enter #2: emacs -> native (round-trips cleanly, doesn't accumulate).
@@ -1907,7 +1918,13 @@ mod tests {
         assert_eq!(app.config.keymap_flavor(), crate::keymap::KeymapFlavor::Native, "flips back");
         let written2 = mem.read_to_string(std::path::Path::new("/cfg/config.toml")).unwrap();
         assert!(written2.contains("keymap = \"native\""), "the second toggle persists too: {written2:?}");
-        assert!(app.config.effective_linux_keep().is_empty(), "native flavor: no preset widening");
+        // Native flavor: no preset widening, but the built-in floor is still
+        // there (it's unconditional, not flavor-gated) — never truly empty.
+        assert_eq!(
+            app.config.effective_linux_keep().len(),
+            crate::keymap::LINUX_BUILTIN_KEEP.len(),
+            "native flavor: no preset widening, just the built-in floor"
+        );
     }
 
     /// LAW TEST (the "settings toggle rows dispatch live" round): EVERY row

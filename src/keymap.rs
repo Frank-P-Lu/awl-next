@@ -425,6 +425,18 @@ pub enum Action {
     /// Headless replay never opens a browser (the effect is live-App-only). Also a
     /// palette command ("Follow link"), rebindable via `[keys]`.
     FollowLink,
+    /// LINKS V2 — Cmd-K, the chord the keybinding-idiom audit reserved for exactly
+    /// this (W1): summon a minibuffer URL prompt and, on commit, apply ONE undoable
+    /// markdown-link edit. Markdown buffers only (a `.rs`/`.txt` buffer is a calm
+    /// no-op, matching the formatting toggles' own availability honesty). Three
+    /// modes, chosen purely from buffer state at press time (`actions/link.rs`):
+    /// an ACTIVE SELECTION wraps as `[selection](url)`; the CARET INSIDE AN
+    /// EXISTING LINK (`markdown::link_at_full`) re-prompts with that link's current
+    /// URL and REWRITES it in place; otherwise inserts empty `[](url)` markup with
+    /// the caret landing between the brackets, ready to type the link text. The
+    /// prompt is prefilled from the kill/clipboard head when it looks like a URL
+    /// ([`crate::buffer::is_url`]), else empty. See `overlay::LinkEdit`.
+    InsertLink,
     // Prefix: C-x was pressed; we are waiting for the next key.
     BeginPrefix,
     /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
@@ -534,13 +546,17 @@ pub struct KeymapState {
     /// Convention::Linux` (so a Mac keymap can carry a non-empty set — e.g. a test
     /// exercising `apply_linux_keep` before switching convention — and it is still
     /// STRUCTURALLY inert there, matching "Mac convention ignores the key
-    /// entirely"). Empty by default, so an absent config keeps today's dispatch.
+    /// entirely"). NEVER truly empty by construction — [`Self::apply_linux_keep`]
+    /// always seeds [`LINUX_BUILTIN_KEEP`] first (the insert-link-yields-to-
+    /// kill-line floor), so an absent config keeps today's dispatch PLUS that one
+    /// unconditional floor chord; every OTHER letter still needs an explicit
+    /// `linux_keep_emacs`/`keymap = "emacs"` opt-in, unchanged.
     linux_keep: std::collections::HashSet<(Key, ModifiersState)>,
 }
 
 impl Default for KeymapState {
     fn default() -> Self {
-        Self {
+        let mut km = Self {
             convention: Convention::current(),
             in_c_x: false,
             in_c_c: false,
@@ -548,7 +564,13 @@ impl Default for KeymapState {
             c_x: HashMap::new(),
             c_c: HashMap::new(),
             linux_keep: std::collections::HashSet::new(),
-        }
+        };
+        // Seed the unconditional built-in keep floor (see `apply_linux_keep`'s
+        // doc) — so even a `KeymapState` that never has `apply_linux_keep`
+        // called on it (a bare `new`/`new_with_convention`, the shape most of
+        // this module's own unit tests use) still carries the floor.
+        km.apply_linux_keep(&[]);
+        km
     }
 }
 
@@ -667,14 +689,22 @@ impl KeymapState {
     /// collision only ever touches single Ctrl-letter chords); a bad/unparseable
     /// entry, or one that isn't a single chord, is reported to stderr and
     /// SKIPPED (never a crash), mirroring [`Self::apply_overrides`]'s leniency.
-    /// Clears any prior keep-set first, so a reload reflects exactly the current
-    /// file. On [`Convention::Mac`] the list is parsed but the set stays
+    /// On [`Convention::Mac`] the list is parsed but the set stays
     /// consultable-yet-inert — [`Self::linux_keeps`] gates on convention too, so
     /// even a stray non-empty set can never fire there (belt + suspenders with
     /// the convention check at the call site in [`Self::resolve`]).
+    ///
+    /// THE INSERT-LINK-YIELDS-TO-KILL-LINE ROUND: clears any prior keep-set
+    /// first (so a reload reflects exactly the current file), then ALWAYS
+    /// re-seeds [`LINUX_BUILTIN_KEEP`] before layering `keep` on top — the
+    /// built-in floor is UNREMOVABLE by this function, whether called with the
+    /// full `Config::effective_linux_keep()` composition, a hand-rolled test
+    /// list, or an empty one. This is what makes the floor real even for a
+    /// caller (a bare unit test, `linux_emacs_preset_keep()` applied on its
+    /// own) that never threads it through `Config` at all.
     pub fn apply_linux_keep(&mut self, keep: &[String]) {
         self.linux_keep.clear();
-        for chord in keep {
+        for chord in LINUX_BUILTIN_KEEP.iter().copied().chain(keep.iter().map(String::as_str)) {
             match parse_binding(chord) {
                 Ok(Chord::Single(k, m)) => {
                     self.linux_keep.insert((k, m));
@@ -878,10 +908,11 @@ impl KeymapState {
         // analogue to "close the document" — save, notify any daemon `--wait`
         // client, switch to the previous file; non-destructive under stray
         // muscle memory), Cmd-, = SETTINGS (the preferences chord since Mac OS X
-        // 10.1; P1). 'o'/'n'/'t'/'q'/'w'/',' are all free under Super. Placed
-        // AFTER the Cmd-Shift-O arm so a shifted 'O' resolves to the outline,
-        // not go-to. Case-folded; `!alt` so an Option-composed char still
-        // self-inserts.
+        // 10.1; P1), Cmd-K = INSERT LINK (LINKS V2 — the chord the keybinding-idiom
+        // audit reserved for this exact command; see `Action::InsertLink`'s own doc).
+        // 'o'/'n'/'t'/'q'/'w'/','/'k' are all free under Super. Placed AFTER the
+        // Cmd-Shift-O arm so a shifted 'O' resolves to the outline, not go-to.
+        // Case-folded; `!alt` so an Option-composed char still self-inserts.
         if native && !alt {
             if let Key::Character(s) = logical {
                 match s.chars().next() {
@@ -891,6 +922,7 @@ impl KeymapState {
                     Some('q') | Some('Q') => return Action::Quit,
                     Some('w') | Some('W') => return Action::FinishBuffer,
                     Some(',') => return Action::OpenSettingsMenu,
+                    Some('k') | Some('K') => return Action::InsertLink,
                     _ => {}
                 }
             }
@@ -1250,12 +1282,12 @@ impl KeymapState {
         // affected — it already fell through the `ctrl && !alt` match above with
         // its own `Ignore` default.
         //
-        // ⌘K IS DELIBERATELY RESERVED (unbound, falling into this guard): the
+        // ⌘K WAS RESERVED here (unbound, falling into this guard) since the
         // keybinding-idiom audit's W1 — Bear/Craft/Notion/Things/Ulysses/Slack all
         // spend Cmd-K on insert/edit-link, the single strongest writer-cluster
-        // chord awl doesn't yet claim. awl has no link-insert command today
-        // (Links v2 is banked); do not bind Cmd-K to anything else in the
-        // meantime — leave it here, inert, for that future command.
+        // chord awl didn't yet claim. LINKS V2 spent it: Cmd-K now resolves to
+        // `Action::InsertLink` in the native-doors block above, so it no longer
+        // reaches this guard.
         if sup {
             return Action::Ignore;
         }
@@ -1331,11 +1363,23 @@ impl KeymapState {
 //     (C-g fully retired as Cancel's chord on Linux); Escape and the native
 //     Cmd-.-turned-Ctrl-. arm both still cancel.
 //
-// NOT displaced, despite appearing in illustrative examples elsewhere: Ctrl-K
-// (Kill line) and Ctrl-D (Delete forward) — NEITHER letter is claimed by any
-// native chord (Cmd-K is deliberately reserved/swallowed for a future Links v2
-// command, per the keybinding-idiom audit's W1; no command ever bound Cmd-D per
-// its own A1 refusal), so both keep their emacs meaning UNCHANGED on Linux too.
+// NOT displaced, despite appearing in illustrative examples elsewhere: Ctrl-D
+// (Delete forward) — no command ever bound Cmd-D per its own A1 refusal, so it
+// keeps its emacs meaning UNCHANGED on Linux too.
+//
+// Ctrl-K (Insert link) is a THIRD, DELIBERATELY DIFFERENT case from either of
+// those two — LINKS V2 (see `Action::InsertLink`'s doc) spent Cmd-K, which
+// WOULD have put `k` on the displaced-letters list above exactly like every
+// other native-doors chord, but the user rejected that trade outright: kill-
+// line is too load-bearing for emacs hands to lose by default. So `k` is NOT
+// in `LINUX_DISPLACED_LETTERS` — instead `LINUX_BUILTIN_KEEP` (below) names it
+// as an UNCONDITIONAL keep, seeded on every `KeymapState::apply_linux_keep`
+// call regardless of `linux_keep_emacs`/the `keymap` flavor. The practical
+// upshot: Ctrl-K stays kill-line out of the box on Linux, in BOTH keymap
+// flavors, with NO config needed — Insert link simply has no effective Linux
+// binding by default (still one `[keys] insert_link = "C-k"` line away for a
+// Linux hand who explicitly wants the trade; see `commands.rs`'s catalog
+// entry).
 
 /// The LETTERS the table above displaces (every `Ctrl-<letter>` whose native
 /// meaning wins on [`Convention::Linux`]) — the ONE data owner both
@@ -1343,9 +1387,36 @@ impl KeymapState {
 /// still separately pins EACH letter's resolved `Action`) and
 /// [`linux_displaces_emacs_default`] (the LABEL-TRUTH half — is a static emacs
 /// default worth SHOWING under this convention) read, so the dispatch table and
-/// the label truth can never silently drift apart.
+/// the label truth can never silently drift apart. `k` is deliberately NOT
+/// here — see [`LINUX_BUILTIN_KEEP`]'s doc for why Insert link's Ctrl-K is a
+/// third, unconditionally-kept case rather than an ordinary displaced letter.
 pub(crate) const LINUX_DISPLACED_LETTERS: &[char] =
     &['s', 'p', 'n', 'w', 'f', 'e', 'a', 'g', 'r', 'b', 'c', 'x', 'v'];
+
+/// THE INSERT-LINK-YIELDS-TO-KILL-LINE ROUND (settled — the user's own call:
+/// "kill-line is too load-bearing for emacs hands to lose by default") — chords
+/// that keep their EMACS meaning on [`Convention::Linux`] UNCONDITIONALLY,
+/// independent of `linux_keep_emacs`/the `keymap` flavor preset. Currently just
+/// `C-k` (Kill line survives Links v2's Cmd-K spend): unlike every letter in
+/// [`LINUX_DISPLACED_LETTERS`] (which a user must opt BACK into via
+/// `linux_keep_emacs`/`keymap = "emacs"` to keep), `C-k` never displaces at
+/// all out of the box, on EITHER keymap flavor — the native Insert-link chord
+/// simply has NO effective Linux binding by default (still one `[keys]
+/// insert_link = "C-k"` line away for a Linux hand who explicitly wants the
+/// trade — a `[keys]` override is consulted before this floor, same as every
+/// other override).
+///
+/// Consumed from TWO structurally separate places that must agree (mirroring
+/// how [`LINUX_DISPLACED_LETTERS`] itself already feeds both the dispatch
+/// table and the label-truth functions): [`KeymapState::apply_linux_keep`]
+/// seeds it UNCONDITIONALLY on every call (the dispatch half — a reload can
+/// never clear it away) and [`crate::config::Config::effective_linux_keep`]
+/// seeds it into the composed keep-list it returns (the label half —
+/// `commands::join_slots_truthful` never touches `KeymapState` directly, so
+/// it needs its own copy of the same guarantee). `Convention::Mac` never
+/// consults `linux_keep` at all, so this is structurally inert there — Cmd-K
+/// stays Insert link on Mac, unconditionally.
+pub(crate) const LINUX_BUILTIN_KEEP: &[&str] = &["C-k"];
 
 /// THE WEB CHORD SANITY ROUND, Tier 3 — is `emacs` (a command's static slot-2
 /// text, e.g. `"C-s"` or the `"C-c C-o"` prefix sequence) quietly DISPLACED under
@@ -1445,7 +1516,10 @@ impl KeymapFlavor {
 /// Derived FROM the displaced-letters table itself — NEVER hand-copied — so a
 /// future change to the collision table flows into the preset automatically
 /// (the no-drift law this round's tests pin: the preset always equals the
-/// displaced set, letter for letter).
+/// displaced set, letter for letter). Deliberately does NOT include `C-k` —
+/// [`LINUX_BUILTIN_KEEP`] covers it unconditionally, on EITHER flavor, so it
+/// has no business in a flavor-gated preset; `Config::effective_linux_keep`
+/// unions both in regardless of which flavor is active.
 pub fn linux_emacs_preset_keep() -> Vec<String> {
     LINUX_DISPLACED_LETTERS.iter().map(|c| format!("C-{c}")).collect()
 }
@@ -1810,6 +1884,18 @@ mod tests {
     }
 
     #[test]
+    fn cmd_k_opens_insert_link() {
+        // LINKS V2 — the chord the keybinding-idiom audit reserved for exactly
+        // this. Case-folded; plain 'k' (no Super) still self-inserts.
+        let mut km = KeymapState::new();
+        assert_eq!(km.resolve(&ch("k"), &sup()), Action::InsertLink);
+        assert_eq!(km.resolve(&ch("K"), &sup()), Action::InsertLink);
+        assert_eq!(km.resolve(&ch("k"), &none()), Action::InsertChar('k'));
+        assert!(!Action::InsertLink.is_motion());
+        assert!(!Action::InsertLink.is_edit());
+    }
+
+    #[test]
     fn cmd_g_aliases_search_forward_and_backward() {
         // P2: Cmd-G / Cmd-Shift-G are literal aliases of Cmd-F / Cmd-Shift-F's
         // own actions (SearchForward/SearchBackward) — the deeper macOS
@@ -1903,14 +1989,13 @@ mod tests {
         // THE UNBOUND-SUPER SWALLOW GUARD (keybinding audit, 2026-07-09): on macOS
         // an unhandled Cmd combo is inert (at most a beep) — it never types its
         // letter into the document. Every letter/symbol with no default Cmd
-        // binding must resolve to Ignore, never InsertChar. 'k' is DELIBERATELY
-        // still on this list — Cmd-K is RESERVED (unbound) for a future
-        // insert/edit-link command (Links v2, W1 of the keybinding audit); do not
-        // bind it to anything else in the meantime. 'l' likewise stays unbound
-        // PLAIN (only Cmd-Shift-L, task list, is bound — see
-        // `cmd_shift_l_toggles_task_list`).
+        // binding must resolve to Ignore, never InsertChar. 'k' is NO LONGER on
+        // this list — LINKS V2 spent Cmd-K on `Action::InsertLink` (see
+        // `cmd_k_opens_insert_link`); it is proven bound elsewhere, not unbound
+        // here. 'l' likewise stays unbound PLAIN (only Cmd-Shift-L, task list, is
+        // bound — see `cmd_shift_l_toggles_task_list`).
         let mut km = KeymapState::new();
-        for c in ['k', 'd', 'j', 'l', 'u', 'm', 'h'] {
+        for c in ['d', 'j', 'l', 'u', 'm', 'h'] {
             assert_eq!(
                 km.resolve(&ch(&c.to_string()), &sup()),
                 Action::Ignore,
@@ -2477,7 +2562,12 @@ mod tests {
         assert_eq!(kx.resolve(&ch("x"), &ctrl()), Action::KillRegion);
 
         // NOT displaced (no native chord claims these letters on Linux either):
-        // Ctrl-K and Ctrl-D keep their ordinary emacs meaning, unchanged.
+        // Ctrl-K and Ctrl-D keep their ordinary emacs meaning, unchanged — Ctrl-K
+        // via `LINUX_BUILTIN_KEEP`'s unconditional floor (Links v2 spent Cmd-K,
+        // which would otherwise have claimed it exactly like every other
+        // native-doors letter; the user's own call kept kill-line by default
+        // instead — see the collision-table doc above), Ctrl-D because no command
+        // ever bound Cmd-D at all.
         let mut kk = KeymapState::new_with_convention(Convention::Linux);
         assert_eq!(kk.resolve(&ch("k"), &ctrl()), Action::KillLine);
         let mut kd = KeymapState::new_with_convention(Convention::Linux);
@@ -2530,7 +2620,11 @@ mod tests {
         // NOT displaced: a modified chord outside the bare-Ctrl-letter shape...
         assert!(!linux_displaces_emacs_default("C-/", &[])); // Undo's emacs slot
         assert!(!linux_displaces_emacs_default("C-y", &[])); // Paste's emacs slot — 'y' is not claimed
-        // ...a bare Ctrl letter NOT in the displaced set...
+        // ...a bare Ctrl letter NOT in the displaced set — Ctrl-D (never claimed)
+        // and Ctrl-K (Links v2 spent Cmd-K, but `LINUX_BUILTIN_KEEP` keeps kill-
+        // line unconditionally, so it's not on `LINUX_DISPLACED_LETTERS` at all;
+        // see the collision-table doc above `zoom_for_super`)...
+        assert!(!linux_displaces_emacs_default("C-d", &[]));
         assert!(!linux_displaces_emacs_default("C-k", &[]));
         // ...and an empty/unparsable slot.
         assert!(!linux_displaces_emacs_default("", &[]));
@@ -2693,9 +2787,14 @@ mod tests {
         let _ = km; // exercised above; keep the earlier binding for readability
     }
 
-    /// A chord OUTSIDE the displaced set (never claimed by any native command) is
-    /// UNCHANGED by the emacs flavor preset — it was never displaced to begin
-    /// with, so keeping it is a no-op, not a second policy layer.
+    /// A chord OUTSIDE the displaced set is UNCHANGED by the emacs flavor
+    /// preset — it was never displaced to begin with, so keeping it is a
+    /// no-op, not a second policy layer. 'd'/'y' are never claimed by any
+    /// native command at all; 'k' is a DIFFERENT flavor of "outside the
+    /// preset" — it IS native-claimed (Links v2's Cmd-K), but
+    /// `LINUX_BUILTIN_KEEP`'s unconditional floor already keeps it before the
+    /// preset ever gets applied, so applying (or not applying) the preset
+    /// makes no observable difference to it either.
     #[test]
     fn keymap_flavor_emacs_preset_is_a_no_op_for_non_displaced_chords() {
         let preset = linux_emacs_preset_keep();
@@ -2728,6 +2827,53 @@ mod tests {
         // Copy is EXPLICITLY rebound to C-c via `[keys]` — that wins outright,
         // even though the emacs preset ALSO keeps C-c (its bare-prefix meaning).
         assert_eq!(km.resolve(&ch("c"), &ctrl()), Action::CopyRegion, "[keys] override wins over the preset");
+    }
+
+    // ── THE INSERT-LINK-YIELDS-TO-KILL-LINE ROUND ───────────────────────────
+
+    /// HARD LAW (a): with an EMPTY user config, Ctrl-K resolves to Kill line on
+    /// Linux under BOTH keymap flavors — the user's decided outcome ("kill-line
+    /// is too load-bearing for emacs hands to lose by default"). Driven through
+    /// the REAL composition owner, `Config::effective_linux_keep`, exactly like
+    /// `App::new`/headless replay construct their keymap — not a bare
+    /// `KeymapState` with a hand-rolled list, so this is honestly "a real Linux
+    /// keymap with empty config", not just the primitive's own mechanics.
+    #[test]
+    fn out_of_the_box_linux_ctrl_k_is_kill_line_under_both_keymap_flavors() {
+        for flavor in ["native", "emacs"] {
+            let mut cfg = crate::config::Config::empty();
+            cfg.keymap = Some(flavor.to_string());
+            let keep = cfg.effective_linux_keep();
+            let mut km = KeymapState::new_with_convention(Convention::Linux);
+            km.apply_linux_keep(&keep);
+            assert_eq!(
+                km.resolve(&ch("k"), &ctrl()),
+                Action::KillLine,
+                "Ctrl-K must stay kill-line out of the box under keymap={flavor:?}"
+            );
+        }
+    }
+
+    /// HARD LAW (c): an explicit `[keys] insert_link = "C-k"` override on Linux
+    /// STILL dispatches Insert link — the override-before-static/keep seam
+    /// (`self.single`, consulted at the very top of `resolve`, before any
+    /// native/static/keep arm) wins over `LINUX_BUILTIN_KEEP`'s floor exactly
+    /// like it already wins over any other static or kept chord. The control
+    /// (no override, same keep list) confirms kill-line still wins otherwise —
+    /// so the override is genuinely doing the work, not some other accident.
+    #[test]
+    fn keys_override_reclaims_ctrl_k_for_insert_link_on_linux_over_the_builtin_keep() {
+        let keep = crate::config::Config::empty().effective_linux_keep();
+        let mut km = KeymapState::with_overrides_and_convention(
+            &[("insert_link".to_string(), vec!["C-k".to_string()])],
+            Convention::Linux,
+        );
+        km.apply_linux_keep(&keep);
+        assert_eq!(km.resolve(&ch("k"), &ctrl()), Action::InsertLink, "[keys] override wins over the built-in keep");
+
+        let mut plain = KeymapState::new_with_convention(Convention::Linux);
+        plain.apply_linux_keep(&keep);
+        assert_eq!(plain.resolve(&ch("k"), &ctrl()), Action::KillLine, "control: without the override, kill-line wins");
     }
 
     /// Every OTHER native chord (no letter collision) still fires under Linux, on

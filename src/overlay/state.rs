@@ -4,7 +4,7 @@
 //! item's path is unchanged (`overlay::OverlayState`) -- only the file it
 //! lives in moved.
 
-use super::{Capture, OverlayKind, RenameEdit, ValueEdit, PIN_TAG};
+use super::{Capture, LinkEdit, OverlayKind, RenameEdit, ValueEdit, PIN_TAG};
 
 /// Live overlay state. `corpus` is the full candidate list (the RAW accept
 /// values — root-relative paths for Goto, child names for Project, entry names
@@ -168,6 +168,11 @@ pub struct OverlayState {
     /// since Rename has nothing to browse before typing starts). `None` for every
     /// other kind.
     pub rename_edit: Option<RenameEdit>,
+    /// LINKS V2: the Cmd-K minibuffer's live typed-URL sub-state (`Some` only for
+    /// `OverlayKind::InsertLink`, armed the instant the overlay is built by
+    /// [`Self::new_link_edit`] — mirrors `rename_edit`'s shape exactly). `None`
+    /// for every other kind.
+    pub link_edit: Option<LinkEdit>,
 }
 
 impl OverlayState {
@@ -235,6 +240,8 @@ impl OverlayState {
             show_hidden: false,
             // No rename edit on a fresh summon; `new_rename` arms it right after.
             rename_edit: None,
+            // No link edit on a fresh summon; `new_link_edit` arms it right after.
+            link_edit: None,
         };
         s.refilter();
         s
@@ -516,6 +523,9 @@ impl OverlayState {
     pub fn foot_hint(&self) -> String {
         if let Some(re) = &self.rename_edit {
             return re.prompt();
+        }
+        if let Some(le) = &self.link_edit {
+            return le.prompt();
         }
         if let Some(cap) = &self.capture {
             return cap.prompt();

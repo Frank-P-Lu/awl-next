@@ -381,10 +381,16 @@ mod tests {
                 vec!["a-rather-long-note-title-being-renamed.md".into()],
                 None,
             ),
+            // LINKS V2: the InsertLink minibuffer's single editable row — a URL,
+            // no secondary column, same shape as Rename.
+            OverlayKind::InsertLink => (
+                vec!["https://example.com/a/rather-long/path/to/something".into()],
+                None,
+            ),
         }
     }
 
-    const ALL_KINDS: [OverlayKind; 15] = [
+    const ALL_KINDS: [OverlayKind; 16] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -400,6 +406,7 @@ mod tests {
         OverlayKind::Settings,
         OverlayKind::Assets,
         OverlayKind::Rename,
+        OverlayKind::InsertLink,
     ];
 
     /// The min-window / default-canvas char budgets the flat pickers see at
