@@ -240,11 +240,11 @@ echo "==> creating Awl.dmg"
 # Stage BOTH the DMG source-folder copy AND hdiutil's own scratch/temp work
 # under $OUT_DIR — a directory the caller controls (in CI, a workspace-
 # relative path, e.g. `dist-mac`) — instead of the system `mktemp -d`/
-# $TMPDIR default. On GitHub mac runners the system temp volume has been
-# observed nearly out of space while the workspace volume has headroom.
-# `TMPDIR` is the documented lever for redirecting hdiutil's OWN scratch work
-# (there is no `-tmpdir` flag), so it's exported workspace-local only around
-# the `hdiutil create` call below.
+# $TMPDIR default. `TMPDIR` is the documented lever for redirecting hdiutil's
+# OWN scratch work (there is no `-tmpdir` flag), so it's exported
+# workspace-local only around the `hdiutil create` call below. Cheap
+# precautionary hardening either way, kept even though it turned out NOT to
+# be this round's actual root cause (see below) — it can only help.
 DMG_WORK="$OUT_DIR/.dmg-work"
 rm -rf "$DMG_WORK"
 mkdir -p "$DMG_WORK/staging" "$DMG_WORK/tmp"
@@ -262,5 +262,33 @@ done
 echo "==> disk space before hdiutil (self-diagnostic for the 'No space left on device' failure class):"
 df -h
 
-TMPDIR="$DMG_WORK/tmp" hdiutil create -volname "Awl" -srcfolder "$DMG_STAGING" -ov -format UDZO "$OUT_DIR/Awl.dmg"
+# THE ACTUAL ROOT CAUSE (found live, this round): the two prior CI failures
+# were NOT genuine disk exhaustion — a `df -h` added right before this exact
+# hdiutil call on the failing runner showed 96 GiB free on EVERY volume, and
+# the failure text ("could not access .../MacOS/awl - No space left on
+# device") names the bundled BINARY specifically. `hdiutil create -srcfolder`
+# (no `-size`) auto-estimates its scratch image's size and can undersize it
+# in ways that have nothing to do with real host disk pressure — reproduced
+# LOCALLY with a synthetic sparse file (`truncate -s 500m` over a 4 KiB real
+# payload: tiny on-disk allocation, huge apparent size), which hit the exact
+# same failure text on a machine with hundreds of GB free (a `lipo`-produced
+# universal binary CAN be sparse on APFS from inter-slice alignment padding —
+# the originally-suspected trigger; CHECKED against this app's OWN real
+# `lipo -create` output, though, and it was NOT measurably sparse — apparent
+# size and on-disk allocation agreed to within one block). So the exact
+# trigger inside GitHub's virtualized macOS runner is unconfirmed, but the
+# SYMPTOM (auto-size undershoot despite ample real free space) is real and
+# reproducible, and matches the standard community workaround reported
+# across multiple `actions/runner-images` hdiutil issues: pass an explicit
+# `-size` and sidestep hdiutil's own estimate entirely, whatever throws it
+# off. Sized off the staging folder's APPARENT bytes (`stat -f%z`, NOT `du`,
+# which would repeat the same kind of undercount if the source ever IS
+# sparse) with a generous 2x + 64 MiB margin — cheap insurance, since the
+# image is compressed down to real content size in the FINAL (UDZO) output
+# regardless; the margin only costs a briefly-larger temp scratch file.
+APPARENT_BYTES="$(find "$DMG_STAGING" -type f -exec stat -f%z {} + | awk '{sum+=$1} END{print sum+0}')"
+DMG_SIZE_MB=$(( (APPARENT_BYTES * 2 / 1024 / 1024) + 64 ))
+echo "==> sizing DMG scratch image: ${DMG_SIZE_MB}m (from ${APPARENT_BYTES} apparent bytes staged)"
+
+TMPDIR="$DMG_WORK/tmp" hdiutil create -volname "Awl" -srcfolder "$DMG_STAGING" -size "${DMG_SIZE_MB}m" -ov -format UDZO "$OUT_DIR/Awl.dmg"
 echo "==> $OUT_DIR/Awl.dmg created"

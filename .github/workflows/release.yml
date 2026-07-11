@@ -169,10 +169,15 @@ jobs:
         if: steps.signing.outputs.available == 'true' && needs.plan.outputs.is_release == 'true'
         run: |
           df -h
-          # Same workspace-staging fix as package-macos.sh's own DMG step
-          # (see its module doc): stage under dist-mac/ (workspace-relative)
-          # rather than the system mktemp -d/$TMPDIR default, and point
-          # hdiutil's own scratch work at a workspace-local TMPDIR too.
+          # Same hardening as package-macos.sh's own DMG step (see its
+          # module doc for the full story): stage under dist-mac/
+          # (workspace-relative) rather than the system mktemp -d/$TMPDIR
+          # default, point hdiutil's own scratch work at a workspace-local
+          # TMPDIR, and — the confirmed actual fix — pass an explicit
+          # `-size` computed from the staged folder's APPARENT byte size
+          # (`stat -f%z`, not `du`) so hdiutil's own sparse-aware auto-size
+          # estimate can never undersize the scratch image against a
+          # `lipo`-produced (potentially sparse) universal binary.
           AWL_SKIP_DMG=0 bash -c '
             rm -f dist-mac/Awl.dmg
             WORK="dist-mac/.dmg-restage"
@@ -180,7 +185,10 @@ jobs:
             mkdir -p "$WORK/staging" "$WORK/tmp"
             cp -R dist-mac/Awl.app "$WORK/staging/"
             ln -s /Applications "$WORK/staging/Applications"
-            TMPDIR="$PWD/$WORK/tmp" hdiutil create -volname "Awl" -srcfolder "$WORK/staging" -ov -format UDZO dist-mac/Awl.dmg
+            APPARENT_BYTES="$(find "$WORK/staging" -type f -exec stat -f%z {} + | awk "{sum+=\$1} END{print sum+0}")"
+            DMG_SIZE_MB=$(( (APPARENT_BYTES * 2 / 1024 / 1024) + 64 ))
+            echo "==> sizing DMG scratch image: ${DMG_SIZE_MB}m (from ${APPARENT_BYTES} apparent bytes staged)"
+            TMPDIR="$PWD/$WORK/tmp" hdiutil create -volname "Awl" -srcfolder "$WORK/staging" -size "${DMG_SIZE_MB}m" -ov -format UDZO dist-mac/Awl.dmg
             rm -rf "$WORK"
           '
 
