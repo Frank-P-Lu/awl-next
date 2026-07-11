@@ -373,6 +373,16 @@ impl TextPipeline {
             // `caret_pipeline` draws NOTHING this frame (`prepare_empty`):
             // an opaque quad here would hand the invert pass a uniform-white
             // destination with nothing left to flip into a visible glyph.
+            //
+            // THE ROUNDED-SILHOUETTE FIX: `ccorner` here is the EXACT SAME
+            // already-zoom/settle/squash-animated radius `caret_geometry` +
+            // `pop_scaled` computed above — the ONE Rust-side owner an
+            // ORDINARY world's `caret_pipeline.prepare_directed` call below
+            // draws with too. Uploading it into `caret_invert` via
+            // `set_corner` (consumed by `fs_invert`'s SDF discard — see that
+            // shader entry point's doc) makes the 1-bit caret's silhouette
+            // round the SAME way, rather than falling back to a hard square.
+            self.caret_invert.set_corner(ccorner);
             let rect = [cx - cw * 0.5, cy - ch * 0.5, cw, ch];
             self.caret_invert.prepare(device, queue, width, height, &[rect]);
             self.caret_pipeline.prepare_empty();

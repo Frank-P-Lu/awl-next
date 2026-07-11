@@ -56,9 +56,13 @@ pub struct SelectionPipeline {
     /// pipeline, where `fs_invert` never reads the field.
     dither: f32,
     /// Rounded-rect corner radius (px) uploaded into `Globals::corner`.
-    /// `CORNER_RADIUS` for the ordinary fill; `0.0` for an invert pipeline
-    /// (a hard rectangle — see `fs_invert`'s own doc for why AA/rounding
-    /// can't compose with its `OneMinusDst` blend trick).
+    /// `CORNER_RADIUS` for the ordinary fill. An invert pipeline
+    /// (`new_invert`) starts at `0.0` — a hard RECTANGLE, the right shape
+    /// for a selection range — but [`Self::set_corner`] lets a CARET invert
+    /// instance raise it per frame to its own animated radius: `fs_invert`
+    /// still can't blend a soft AA edge (see that entry point's own doc),
+    /// but it CAN hard-discard outside a rounded-rect SDF, so the caret
+    /// keeps a rounded (if aliased) silhouette instead of a hard square.
     corner: f32,
 }
 
@@ -122,7 +126,11 @@ impl SelectionPipeline {
     /// Always draws pure opaque white regardless of the active theme's
     /// tokens (the blend trick needs `src == 1.0` exactly to compute a true
     /// `1 - dst`) — `set_color`/`set_dither`/`prepare_pulsed` are meaningless
-    /// here and simply never called on an instance built this way.
+    /// here and simply never called on an instance built this way. Starts
+    /// with `corner = 0.0` (a hard rectangle — the right shape for a
+    /// SELECTION range); a CARET-flavored instance calls [`Self::set_corner`]
+    /// each frame to draw a rounded (if aliased) silhouette instead — see
+    /// `shaders/selection.wgsl`'s `fs_invert` doc for the mechanism.
     pub fn new_invert(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         Self::build(device, format, [255, 255, 255, 255], "fs_invert", 0.0, invert_blend())
     }
@@ -269,6 +277,22 @@ impl SelectionPipeline {
     /// world must reset this back to `0.0`, not merely leave it stale).
     pub fn set_dither(&mut self, density: f32) {
         self.dither = density;
+    }
+
+    /// Override the rounded-rect corner radius (px) the NEXT `prepare` call
+    /// uploads into `Globals::corner`. Meaningless (never called) on the
+    /// ORDINARY fill pipeline (its `CORNER_RADIUS` is fixed at construction
+    /// and never needs to move) or on `selection_invert` (a selection range
+    /// is a rectangle, not a rounded-rect — leaving `corner` at its `0.0`
+    /// construction default IS the "stay rectangular" contract). The ONE
+    /// real caller is the 1-BIT CARET ROUND's `caret_invert`
+    /// (`render/layers.rs::prepare_caret_block`), which passes in the SAME
+    /// already-computed, already-zoom/squash-animated radius the ORDINARY
+    /// (non-one-bit) caret pipeline draws with — one Rust-side owner for the
+    /// number, never a second constant; see `shaders/selection.wgsl`'s
+    /// `fs_invert` doc for how the shader spends it.
+    pub fn set_corner(&mut self, corner: f32) {
+        self.corner = corner;
     }
 
     /// How many quad instances the last `prepare` uploaded (0 = nothing drawn). A cheap

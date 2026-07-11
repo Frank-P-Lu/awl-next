@@ -18,12 +18,18 @@
 //     matches on a one-bit world. Every drawn dither pixel is the pure quad
 //     color at FULL alpha or fully transparent — never a fractional alpha —
 //     so no blend step can introduce a forbidden intermediate grey.
-//   * `fs_invert` — TRUE INVERSE-VIDEO selection (one-bit worlds only): a
-//     hard-edged (no AA — see its own doc below) rectangle, drawn with its
-//     OWN `wgpu::RenderPipeline` object built with a `OneMinusDst` blend
-//     state (blend state is baked in at pipeline construction, so this MUST
-//     be a separate pipeline — see `src/selection.rs::SelectionPipeline::
-//     new_invert`).
+//   * `fs_invert` — TRUE INVERSE-VIDEO (one-bit worlds only), for BOTH the
+//     selection AND the caret: a hard-edged (no AA — see its own doc below)
+//     ROUNDED-RECT SILHOUETTE (the same `sd_round_rect` SDF + clamp `fs_main`
+//     uses, reading the SAME `g.corner` uniform), drawn with its OWN
+//     `wgpu::RenderPipeline` object built with a `OneMinusDst` blend state
+//     (blend state is baked in at pipeline construction, so this MUST be a
+//     separate pipeline — see `src/selection.rs::SelectionPipeline::
+//     new_invert`). A SELECTION instance leaves `g.corner` at its
+//     construction default `0.0` (a plain rectangle — selection ranges are
+//     rectangles, never rounded); a CARET instance uploads its own animated
+//     radius via `SelectionPipeline::set_corner` each frame, so the 1-bit
+//     caret keeps the same rounded silhouette every other world's caret has.
 
 struct Globals {
     // Framebuffer size in physical pixels.
@@ -152,27 +158,39 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(in.color.rgb, a);
 }
 
-// TRUE INVERSE-VIDEO SELECTION (one-bit worlds only): this entry point is
-// used ONLY by a `RenderPipeline` built with a `OneMinusDst` color blend
-// factor (`src_factor: OneMinusDst, dst_factor: Zero` — see
+// TRUE INVERSE-VIDEO (one-bit worlds only): this entry point is used ONLY by
+// a `RenderPipeline` built with a `OneMinusDst` color blend factor
+// (`src_factor: OneMinusDst, dst_factor: Zero` — see
 // `SelectionPipeline::new_invert`), which computes, per channel,
 // `result = (1 - dst) * src`. Writing `src = (1,1,1)` here makes that exactly
 // `result = 1 - dst` — a true "flip every channel" invert: black text
 // becomes white, white ground becomes black, wherever this quad covers.
 //
-// HARD edges, deliberately (no smoothstep/AA, no corner rounding): the
-// `OneMinusDst`/`Zero` blend factors don't reference the fragment's alpha at
-// all, so there is no way to fade this quad's edge through the blend
-// equation the way the ordinary alpha-blended fill above does — a soft edge
-// here would need a genuinely different (unsupported) blend trick. A crisp
-// rectangular cutoff is also the correct classic 1-bit "inverse video" look
-// (this is not a compromise, it's the aesthetic). Text glyphs drawn UNDER
-// this quad keep their own pre-existing antialiased edges — inverting a
-// ~50%-grey AA pixel still yields ~50%-grey, the SAME AA tolerance the
-// one-bit pixel law already grants ordinary (non-inverted) text edges.
+// HARD discard, deliberately (no smoothstep/AA): the `OneMinusDst`/`Zero`
+// blend factors don't reference the fragment's alpha at all, so there is no
+// way to FADE this quad's edge through the blend equation the way the
+// ordinary alpha-blended fill above does — a soft-feathered edge here would
+// need a genuinely different (unsupported) blend trick. But a hard EDGE
+// doesn't mean a hard RECTANGLE: `fs_invert` still evaluates the identical
+// `sd_round_rect` SDF (+ the identical `min(g.corner, min(hsize))` clamp)
+// `fs_main` above does — ONE owner for the silhouette shape, never a second
+// radius/geometry formula — and simply DISCARDS any fragment outside it
+// rather than blending toward it. Every SURVIVING pixel is still an exact
+// `1 - dst` inversion (the one-bit pixel law holds by construction, only the
+// corners end up aliased rather than antialiased — the accepted 1-bit
+// tradeoff). `g.corner` is `0.0` for a SELECTION invert instance (no
+// `set_corner` call — selection ranges are rectangles, not rounded-rects, so
+// this degenerates to the original hard rectangle) and a CARET invert
+// instance's own live-animated radius otherwise (`SelectionPipeline::
+// set_corner`, mirroring `caret.wgsl`'s per-instance `corner` field). Text
+// glyphs drawn UNDER a surviving (inverted) fragment keep their own
+// pre-existing antialiased edges — inverting a ~50%-grey AA pixel still
+// yields ~50%-grey, the SAME AA tolerance the one-bit pixel law already
+// grants ordinary (non-inverted) text edges.
 @fragment
 fn fs_invert(in: VsOut) -> @location(0) vec4<f32> {
-    let d = sd_round_rect(in.local, in.hsize, 0.0);
+    let r = min(g.corner, min(in.hsize.x, in.hsize.y));
+    let d = sd_round_rect(in.local, in.hsize, r);
     if (d > 0.0) {
         discard;
     }
