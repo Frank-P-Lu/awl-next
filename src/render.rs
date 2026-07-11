@@ -1782,7 +1782,15 @@ pub struct TextPipeline {
     /// glyph-shaped invert mask would be real new pipeline work for a mode
     /// whose whole point (a colored accent letter) doesn't exist in a
     /// two-value world. Ibeam is UNCHANGED (its thin bar sits BETWEEN glyph
-    /// cells, never over one, so it never needed inverting).
+    /// cells, never over one, so it never needed inverting). KEEPS ITS
+    /// ROUNDED SILHOUETTE: every `prepare_caret_block` call also uploads the
+    /// frame's already zoom/settle/squash-animated corner radius via
+    /// `SelectionPipeline::set_corner`, so `fs_invert`'s hard-discard SDF
+    /// (`shaders/selection.wgsl`) still traces the same rounded shape
+    /// `caret_pipeline` draws on an ordinary world — aliased at the corners
+    /// (no AA survives the `OneMinusDst` blend trick), never a hard square.
+    /// `selection_invert` never calls `set_corner` and so stays a plain
+    /// rectangle, exactly right for a selection range.
     pub caret_invert: SelectionPipeline,
     /// ORNAMENT renderer for the markdown section-break marks: one quiet, DIM,
     /// column-CENTERED glyph per thematic break (the theme's PER-SYNTAX

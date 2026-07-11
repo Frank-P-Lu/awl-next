@@ -371,6 +371,140 @@ fn invert_pipeline_flips_pure_black_and_pure_white_exactly() {
     }
 }
 
+/// Draw ONE `new_invert` instance — `set_corner(corner)` first when `corner`
+/// is `Some` (mirroring `caret_invert`'s per-frame call), left at the
+/// construction default `0.0` when `None` (mirroring `selection_invert`,
+/// which never calls `set_corner` at all) — over a pure-black clear, and read
+/// the result back. Shared by the two silhouette-law tests below.
+fn draw_invert_rect(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    w: u32,
+    h: u32,
+    rect: [f32; 4],
+    corner: Option<f32>,
+) -> Vec<[u8; 4]> {
+    let mut invert = crate::selection::SelectionPipeline::new_invert(device, FMT);
+    if let Some(c) = corner {
+        invert.set_corner(c);
+    }
+    invert.prepare(device, queue, w, h, &[rect]);
+
+    let (texture, tview) = offscreen(device, w, h);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl invert-silhouette-test encoder"),
+    });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("awl invert-silhouette-test pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &tview,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        invert.draw(&mut pass);
+    }
+    queue.submit(Some(encoder.finish()));
+    read_pixels(device, queue, &texture, w, h)
+}
+
+/// THE ROUNDED-SILHOUETTE LAW, at the REAL-PIXEL level (the fix this round
+/// lands): a `caret_invert`-flavored instance (`set_corner` called, mirroring
+/// `prepare_caret_block`'s per-frame upload) drawn over a pure-black clear —
+/// its own exact geometric CORNER pixel (well outside the rounded-rect SDF at
+/// this radius, worked out by hand against `sd_round_rect`) must stay pure
+/// BLACK (the hard discard skipped it, so the untouched ground shows through
+/// unflipped), while the rect's CENTER and an EDGE MIDPOINT (inside the
+/// silhouette, away from any corner) both invert to pure WHITE. This is the
+/// literal shape the "hard square" bug this round fixes would have failed:
+/// pre-fix, `fs_invert` always used `radius = 0.0`, so the corner pixel would
+/// ALSO have inverted to white.
+#[test]
+fn caret_invert_corner_radius_hard_discards_outside_the_rounded_silhouette() {
+    let Some((device, queue)) = headless_dq() else {
+        eprintln!("skipping caret_invert_corner_radius_hard_discards_outside_the_rounded_silhouette: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    // A 60x60 rect at (15,15) on a 90x90 canvas, corner radius 20 (well under
+    // the half-extent of 30, so the clamp in `fs_invert` is a no-op and the
+    // full 20px radius applies) — chosen so hand-computed sample points land
+    // cleanly inside/outside the rounded silhouette (see the SDF arithmetic
+    // in this round's own commit message / CLAUDE.md notes).
+    let (w, h) = (90u32, 90u32);
+    let rect = [15.0f32, 15.0, 60.0, 60.0];
+    let pixels = draw_invert_rect(&device, &queue, w, h, rect, Some(20.0));
+    let idx = |x: u32, y: u32| (y * w + x) as usize;
+
+    // The rect's own exact top-left / bottom-right geometric corners: outside
+    // the rounded silhouette at this radius, so the discard must skip them —
+    // pure BLACK, the untouched clear color.
+    for (x, y) in [(15u32, 15u32), (74, 74), (74, 15), (15, 74)] {
+        let p = pixels[idx(x, y)];
+        assert_eq!(
+            &p[..3],
+            &[0u8, 0, 0],
+            "corner pixel ({x},{y}) must stay pure black (outside the rounded silhouette, \
+             hard-discarded) — got {p:?}; a hard SQUARE (the pre-fix bug) would have inverted \
+             this pixel to white instead"
+        );
+    }
+    // The rect's CENTER: deep inside the silhouette regardless of rounding —
+    // must invert to pure white.
+    let center = pixels[idx(45, 45)];
+    assert_eq!(&center[..3], &[255u8, 255, 255], "center pixel must invert to pure white — got {center:?}");
+    // An EDGE MIDPOINT (top edge, x = rect center, y = rect top) — inside the
+    // rounded silhouette (the corner rounding only eats the actual corners,
+    // not the straight edge run between them) — must ALSO invert to white,
+    // proving the silhouette is a rounded RECTANGLE, not merely a shrunk one.
+    let edge_mid = pixels[idx(45, 15)];
+    assert_eq!(
+        &edge_mid[..3],
+        &[255u8, 255, 255],
+        "edge-midpoint pixel must invert to pure white (inside the rounded silhouette, away \
+         from a corner) — got {edge_mid:?}"
+    );
+}
+
+/// THE COMPANION LAW: a `selection_invert`-flavored instance (no `set_corner`
+/// call at all — exactly how `render/layers.rs`'s selection draw uses it)
+/// stays a PLAIN RECTANGLE — its own exact geometric corner pixel, which the
+/// PREVIOUS test proves a rounded instance leaves un-inverted, inverts to
+/// pure white here instead. Same rect, same canvas, same sample point; the
+/// only variable is whether `set_corner` was ever called — proving the two
+/// invert "flavors" (rounded caret vs. rectangular selection) are cleanly
+/// distinguished per-pipeline-instance, not by some shared global.
+#[test]
+fn selection_invert_never_rounds_corners_stay_rectangular() {
+    let Some((device, queue)) = headless_dq() else {
+        eprintln!("skipping selection_invert_never_rounds_corners_stay_rectangular: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let (w, h) = (90u32, 90u32);
+    let rect = [15.0f32, 15.0, 60.0, 60.0];
+    let pixels = draw_invert_rect(&device, &queue, w, h, rect, None);
+    let idx = |x: u32, y: u32| (y * w + x) as usize;
+
+    for (x, y) in [(15u32, 15u32), (74, 74), (74, 15), (15, 74)] {
+        let p = pixels[idx(x, y)];
+        assert_eq!(
+            &p[..3],
+            &[255u8, 255, 255],
+            "corner pixel ({x},{y}) of a selection-flavored invert instance must invert to \
+             pure white — a rectangle covers its own corners fully; got {p:?}"
+        );
+    }
+}
+
 /// THE 1-BIT CARET ROUND'S READABILITY LAW, at the REAL-PIXEL level — the
 /// exact bug the user photographed, now unrepresentable: a block caret
 /// sitting ON a heading's `#` glyph in Wagtail. Renders the REAL
