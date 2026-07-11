@@ -158,6 +158,11 @@ pub enum Effect {
     /// colliding with the scratch stash — see `App::open_credits`). The caller owns
     /// the filesystem write; the core only flips the flag.
     OpenCredits,
+    /// Guide: open the embedded `GUIDE.md` into the buffer (create/refresh the
+    /// on-disk view first, so it behaves as an ordinary pathed buffer rather than
+    /// colliding with the scratch stash — see `App::open_guide`). The caller owns
+    /// the filesystem write; the core only flips the flag.
+    OpenGuide,
     /// The COMMAND PALETTE accepted (Enter on a command). The palette CLOSED itself
     /// first; the caller re-dispatches this catalog `Action` through its NORMAL
     /// apply path AFTER the close — so an overlay-opening command (Go to file) opens
@@ -939,6 +944,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // OpenSettings, the core only flips the flag.
         Action::OpenCredits => {
             effect = Effect::OpenCredits;
+        }
+        // Guide: signal the caller to open the embedded GUIDE.md into the
+        // buffer (it owns the on-disk refresh + filesystem write). Like
+        // OpenCredits, the core only flips the flag.
+        Action::OpenGuide => {
+            effect = Effect::OpenGuide;
         }
         // Settings menu: summon the faceted settings overlay (the friendly default).
         // Built by `make_overlay` from the settings corpus + the gathered value

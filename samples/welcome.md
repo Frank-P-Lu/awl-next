@@ -10,6 +10,8 @@ line, so the markup is always one keystroke away.
 - ⌘T   switch theme — fourteen worlds, each its own type
 - ⌘,   settings — the config, as a text file you edit here
 
+(⌘P → "Guide" opens the full user guide as a page, any time.)
+
 ## Write
 Type to insert. ⌘Z undo, ⌘X / ⌘C / ⌘V cut, copy, paste.
 ⌘B bold, ⌘I italic, ⌘E inline code — the rest of the

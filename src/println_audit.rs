@@ -48,14 +48,16 @@ const EXPECTED: &[(&str, usize)] = &[
     // (C-c C-o). Flagged as a future notice-routing candidate, not fixed
     // this round (out of the reported bug's scope).
     ("app/apply.rs", 1),
-    // Best-effort background bookkeeping failures (config/credits write,
-    // a sticky-pref/rebind write, the recent-files/projects MRU save, a
-    // dictionary switch, the autosave/scratch-stash engine) — all rare,
-    // all non-fatal by design ("never disrupt the edit/save"). Flagged as
-    // future notice-routing candidates; not fixed this round to keep the
-    // round's own diff focused on the reported bug (manual Save + the
-    // toggle-chatter class it named explicitly).
-    ("app/files.rs", 12),
+    // Best-effort background bookkeeping failures (config/credits/guide
+    // write, a sticky-pref/rebind write, the recent-files/projects MRU
+    // save, a dictionary switch, the autosave/scratch-stash engine) — all
+    // rare, all non-fatal by design ("never disrupt the edit/save").
+    // Flagged as future notice-routing candidates; not fixed this round to
+    // keep the round's own diff focused on the reported bug (manual Save +
+    // the toggle-chatter class it named explicitly). The USER GUIDE round
+    // added ONE more (`open_guide`'s on-disk-refresh failure), mirroring
+    // `open_credits`'s existing one verbatim.
+    ("app/files.rs", 13),
     // GPU/render-pipeline errors (`prepare`/`render`/surface validation) —
     // there is no frame to paint a notice INTO when these fire.
     ("app/gpu.rs", 3),

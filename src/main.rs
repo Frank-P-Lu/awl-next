@@ -52,6 +52,7 @@ mod facets;
 mod frontmatter;
 mod fs;
 mod fuzzy;
+mod guide;
 mod history;
 mod hud;
 mod image_pipeline;

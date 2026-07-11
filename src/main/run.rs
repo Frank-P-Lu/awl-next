@@ -329,6 +329,11 @@ fn replay_keys(
             actions::Effect::OpenCredits => {
                 *buffer = Buffer::from_str(crate::credits::CREDITS_MD);
             }
+            // Guide: load the embedded GUIDE.md text directly into the buffer —
+            // mirrors OpenCredits exactly, same side-effect-light reasoning.
+            actions::Effect::OpenGuide => {
+                *buffer = Buffer::from_str(crate::guide::GUIDE_MD);
+            }
             // An overlay accepted (Goto file / Project / MoveDest / Theme): remember
             // the chosen value for the caller to load before capturing. Persists
             // across keys like the old out-param (later accepts overwrite).
@@ -1059,6 +1064,23 @@ mod tests {
             Some(crate::overlay::OverlayKind::Goto),
             "palette Enter on 'Go to file' chains into the Goto overlay",
         );
+    }
+
+    #[test]
+    fn replay_keys_drives_palette_guide_and_opens_the_guide_buffer() {
+        // Cmd-P → "guide" filters to "Guide" → Enter runs Action::OpenGuide,
+        // which (headlessly, no filesystem write — see Effect::OpenGuide above)
+        // loads the embedded GUIDE.md text straight into the buffer. Mirrors the
+        // palette-chain shape `replay_keys_runs_palette_chain_into_overlay` uses
+        // for an overlay-opening command, but for a buffer-opening one instead —
+        // so the palette door is verified all the way to its settled content.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p g u i d e RET").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "the palette closed itself on accept, no overlay left open");
+        assert_eq!(buffer.text(), crate::guide::GUIDE_MD, "the buffer now holds the embedded guide text");
+        assert!(buffer.path().is_none(), "headless replay never writes/loads a real on-disk guide.md");
     }
 
     #[test]

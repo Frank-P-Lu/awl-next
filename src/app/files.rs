@@ -151,6 +151,23 @@ impl App {
         self.load_path(path);
     }
 
+    /// Guide command: open the embedded `GUIDE.md` into the buffer, exactly like
+    /// Credits opens `CREDITS.md` (same on-disk-refresh-then-load pattern, same
+    /// reasoning for why it is NOT left path-less — see `open_credits`'s doc
+    /// above and `guide.rs`'s module doc).
+    pub(super) fn open_guide(&mut self) {
+        let path = crate::fs::data_root().join("guide.md");
+        let fs = crate::fs::active();
+        if let Some(parent) = path.parent() {
+            let _ = fs.create_dir_all(parent);
+        }
+        if let Err(e) = crate::fs::write_atomic(&path, crate::guide::GUIDE_MD.as_bytes()) {
+            eprintln!("could not write guide view {}: {e}", path.display());
+            return;
+        }
+        self.load_path(path);
+    }
+
     /// WRITE-ON-CHANGE for a STICKY PREFERENCE (theme/zoom/page_mode/caret_mode):
     /// persist the settled value to config.toml format-preservingly (reusing the
     /// rebind menu's surgical [`Config::write_pref`] — comments + `[keys]` + the
