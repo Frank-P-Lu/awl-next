@@ -187,6 +187,58 @@ fn wagtail_selection_uses_the_invert_pipeline_other_worlds_use_the_ordinary_fill
     theme::set_active(theme::DEFAULT_THEME);
 }
 
+/// THE ROUND'S OWN "vertical selection reads invisible" report, at the
+/// INSTANCE-COUNT seam: a 3-line selection whose MIDDLE line is EMPTY still
+/// yields one rect per selected row (the text row, the empty row's own
+/// newline-pad stub, the next text row — see `range_rects`'s doc for why an
+/// empty line still emits a non-degenerate rect) and EVERY one of those rects
+/// reaches `selection_invert` on Wagtail — never silently dropped by a gate
+/// that only recognizes non-empty/text-bearing rows. This is the sibling
+/// proof to `wagtail_selection_uses_the_invert_pipeline_other_worlds_use_the_
+/// ordinary_fill` above (which already covers a real multi-line span but with
+/// no empty line in it) and to `dither.rs`'s `wagtail_multiline_selection_
+/// shows_inverted_text_and_solid_white_on_empty_line`, which proves the SAME
+/// fixture's shape at the real-pixel level (solid white on the empty
+/// stretch, legible black-on-white text on the other two rows).
+#[test]
+fn wagtail_multiline_selection_with_empty_line_reaches_invert_pipeline_entirely() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping wagtail_multiline_selection_with_empty_line_reaches_invert_pipeline_entirely: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let text = "first\n\nthird\nfourth";
+    let mut v = view(text, 2, 5);
+    v.selection = Some(((0, 0), (2, 5)));
+
+    theme::set_active_by_name("Wagtail").unwrap();
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let sel_rects = p.selection_rects();
+    assert_eq!(
+        sel_rects.len(),
+        3,
+        "one rect per selected row -- text, EMPTY, text -- the empty middle line must not be dropped"
+    );
+    assert_eq!(
+        p.selection_invert.instance_count() as usize,
+        sel_rects.len(),
+        "Wagtail (one-bit): every rect -- text row, EMPTY row, text row -- reaches the invert \
+         pipeline; none of the three geometry sources (text-row run, empty-line stub, the row \
+         that reaches the newline tail) is routed anywhere else"
+    );
+    assert_eq!(
+        p.selection_pipeline.instance_count(),
+        0,
+        "Wagtail (one-bit): the ordinary translucent fill stays empty even with an empty line \
+         in the middle of the selection"
+    );
+
+    // Restore the default world so other tests see a clean global.
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 /// THE 1-BIT CARET ROUND: on Wagtail, a BLOCK-mode caret routes through the
 /// NEW `caret_invert` pipeline (true inverse-video, same mechanism as
 /// `selection_invert` above) instead of the ordinary `caret_pipeline` — the

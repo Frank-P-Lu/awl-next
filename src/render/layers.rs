@@ -460,6 +460,24 @@ impl TextPipeline {
 
     /// Build + upload the selection / preedit, search-match, and horizontal-rule
     /// quads (each empty — so nothing lingers — when its feature is inactive).
+    ///
+    /// **THE ONE SWITCH POINT (routing intent, named for the future
+    /// capabilities-as-data refactor):** `selection_rects()` (-> `range_rects`)
+    /// is the SOLE geometry builder for a selection — every source (per-glyph
+    /// runs within a line, full-width bands for a multi-line selection's
+    /// middle lines, an empty-line's own stub, the trailing newline pad) is
+    /// already folded into the ONE `rects` vector below, BEFORE the `one_bit`
+    /// branch ever reads it. That branch is the single place a selection's
+    /// geometry is handed to a per-world PAINT MECHANISM (the ordinary
+    /// translucent `selection_pipeline` fill, or `selection_invert`'s true
+    /// inverse-video) — a plain `if`/`else` today because there are only two
+    /// mechanisms, but structured so a later `Theme::selection_style` (or
+    /// similar capabilities-as-data field replacing `is_one_bit()`'s ad hoc
+    /// read) only ever has to change what THIS branch reads, never how the
+    /// rects themselves are built. Never duplicate `rects` per-mechanism —
+    /// that is exactly the "different builder per bucket" shape that would
+    /// let one geometry source quietly diverge (and disappear) on a future
+    /// world.
     pub(super) fn prepare_selection_layer(
         &mut self,
         device: &wgpu::Device,

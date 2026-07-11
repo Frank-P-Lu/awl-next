@@ -612,6 +612,165 @@ fn wagtail_pixel_law_holds_with_selection_highlight_and_search_all_active() {
     crate::page::set_measure(was_measure);
 }
 
+/// THE ROUND'S OWN MOTIVATING BUG REPORT, AT REAL PIXELS: "up/down
+/// (multi-line/vertical) selection is invisible in Wagtail" — reproduced
+/// headlessly (`--theme Wagtail --keys "C-Space C-n C-n C-e"` over a
+/// multi-line fixture) before this test was written, and found to already
+/// render correctly: `prepare_selection_layer` builds exactly ONE `rects`
+/// vector (`selection_rects()` -> `range_rects`, see that fn's doc) for
+/// EVERY geometry source — per-glyph runs within a line, full-width bands
+/// for a multi-line selection's middle lines, an empty line's own stub, the
+/// newline tail — and hands that SAME vector to `selection_invert` on a
+/// one-bit world, so there was structurally no separate "vertical" bucket
+/// left to silently drop. What WAS missing is a REAL-PIXEL regression guard
+/// at this shape: `wagtail_pixel_law_holds_with_selection_highlight_and_
+/// search_all_active` above only ever exercises a SINGLE-LINE selection, and
+/// `one_bit.rs`'s instance-count tests never read a pixel back. This test
+/// closes that gap directly — a 3-line selection (text row, an EMPTY middle
+/// row, another text row) plus an UNSELECTED fourth row as the boundary
+/// control — and asserts, at the real GPU-rendered pixel level:
+/// - each selected TEXT row shows a white-ground-dominant band with a REAL
+///   (not merely AA-scattered) amount of black glyph ink legible inside it
+///   (mirrors `wagtail_caret_on_a_heading_glyph_keeps_the_glyph_legible_
+///   inside_the_block`'s own readability contract, for the selection's rows);
+/// - the EMPTY selected row is SOLID white — zero black pixels, never a
+///   partial/dithered value (nothing was drawn there to invert, so the
+///   ground alone must show through);
+/// - the UNSELECTED control row stays black-ground-dominant, proving the
+///   invert quad never leaks past the selection's own bottom edge.
+#[test]
+fn wagtail_multiline_selection_shows_inverted_text_and_solid_white_on_empty_line() {
+    let got = pollster::block_on(async {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor { label: Some("awl multiline-selection device"), ..Default::default() })
+            .await
+            .ok()?;
+        let cache = Cache::new(&device);
+        let mut p = TextPipeline::new(&device, &queue, &cache, FMT);
+        p.set_size(500.0, 260.0);
+        Some((device, queue, p))
+    });
+    let Some((device, queue, mut p)) = got else {
+        eprintln!("skipping wagtail_multiline_selection_shows_inverted_text_and_solid_white_on_empty_line: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    // Four lines: a text line, an EMPTY line, another text line (all three
+    // selected), then a FOURTH text line left deliberately OUTSIDE the
+    // selection — the control that proves the invert quad's bottom edge is
+    // exact.
+    let text = "first line here\n\nthird line here\nfourth line here\n";
+    let mut v = view(text, 2, 15);
+    v.selection = Some(((0, 0), (2, 999)));
+
+    theme::set_active_by_name("Wagtail").unwrap();
+    p.sync_theme();
+    p.set_view(&v);
+    p.prepare(&device, &queue, 500, 260).unwrap();
+
+    // The SAME geometry the frame just drew from — one rect per selected
+    // visual row (line 0 text, line 1 empty, line 2 text), in document order.
+    let sel_rects = p.selection_rects();
+    assert_eq!(
+        sel_rects.len(),
+        3,
+        "a 3-line selection incl. one empty line must yield exactly 3 row rects"
+    );
+    // Line 3 ("fourth line here") is deliberately NOT selected — reuse the
+    // SAME range-geometry builder purely to know where to sample it (this
+    // never touches `self.selection`, so line 3 stays unselected).
+    let unselected_rects = p.range_rects((3, 0), (3, 999));
+    assert_eq!(
+        unselected_rects.len(),
+        1,
+        "the unselected control line must still yield its own row rect (for sampling only)"
+    );
+
+    let (texture, tview) = offscreen(&device, 500, 260);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl multiline-selection encoder"),
+    });
+    p.render(&mut encoder, &tview).unwrap();
+    queue.submit(Some(encoder.finish()));
+    let pixels = read_pixels(&device, &queue, &texture, 500, 260);
+
+    // Sample the STRICT INTERIOR of a rect, not its `floor`/`ceil`-expanded
+    // bounding box: `fs_invert` is a deliberately HARD, non-AA edge (see its
+    // own doc in `shaders/selection.wgsl`) that resolves each pixel by its
+    // CENTER against the quad's exact float boundary — a pixel whose center
+    // sits a hair outside that boundary is correctly left un-inverted (the
+    // original ground shows through), even though `ceil`ing the rect's right
+    // edge outward would have counted that same pixel column as "inside".
+    // Shrinking inward (`ceil`/`floor`, the reverse of the naive
+    // `floor`/`ceil` expansion) keeps every sampled pixel provably covered by
+    // the quad, so a `black == 0` assertion on an all-ground rect can't trip
+    // on this sub-pixel rounding artifact rather than a real regression.
+    let count_colors = |rect: [f32; 4]| -> (usize, usize) {
+        let (x0, y0, w, h) = (rect[0], rect[1], rect[2], rect[3]);
+        let left = x0.ceil().max(0.0) as i32;
+        let right = (x0 + w).floor().min(500.0) as i32;
+        let top = y0.ceil().max(0.0) as i32;
+        let bottom = (y0 + h).floor().min(260.0) as i32;
+        let mut white = 0usize;
+        let mut black = 0usize;
+        for y in top..bottom {
+            for x in left..right {
+                let px = pixels[(y * 500 + x) as usize];
+                match (px[0], px[1], px[2]) {
+                    (255, 255, 255) => white += 1,
+                    (0, 0, 0) => black += 1,
+                    _ => {}
+                }
+            }
+        }
+        (white, black)
+    };
+
+    // Text rows (line 0, line 2): selected -> inverted -> a WHITE band with
+    // BLACK text ink legible inside it.
+    for (idx, rect) in [(0usize, sel_rects[0]), (2, sel_rects[2])] {
+        let (white, black) = count_colors(rect);
+        assert!(white > 0, "selected text row {idx}: must show white (the inverted ground)");
+        assert!(
+            black > 10,
+            "selected text row {idx}: must show a REAL amount of black (the flipped glyph \
+             ink), not just stray AA -- got {black} black pixels"
+        );
+        assert!(
+            white > black,
+            "selected text row {idx}: the inverted GROUND must dominate over glyph ink \
+             (white {white} vs black {black})"
+        );
+    }
+
+    // The EMPTY middle line (line 1): nothing to invert but the ground
+    // itself -- "solid white on empty stretches", never a partial value.
+    let (white, black) = count_colors(sel_rects[1]);
+    assert!(white > 0, "the empty selected line must show white (the inverted ground)");
+    assert_eq!(
+        black, 0,
+        "the empty selected line must be SOLID white -- no black pixels at all (there was no \
+         glyph there to invert); got {black} black pixels"
+    );
+
+    // The CONTROL row (line 3, outside the selection): must stay the
+    // ORDINARY Wagtail rendering -- black ground dominant, sparse white
+    // text -- never accidentally swept into the invert quad below the
+    // selection's own real bottom edge.
+    let (white, black) = count_colors(unselected_rects[0]);
+    assert!(
+        black > white,
+        "the UNSELECTED control row must stay black-ground-dominant (black {black} vs white \
+         {white}) -- a white-dominant result would mean the invert quad leaked past the \
+         selection's own bottom edge"
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 /// GALLERY GENERATOR, not a correctness test — `#[ignore]`d by default (mirrors
 /// the `AWL_CJK_FORCE` A/B gallery mechanism's "dev-only, no CLI flag" spirit,
 /// just via a test runner instead of an env var). Renders the SAME real
@@ -741,5 +900,63 @@ fn gallery_wagtail_caret() {
     eprintln!("wrote gallery/wagtail/caret.png");
 
     crate::caret::set_mode(CaretMode::Block);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// GALLERY GENERATOR, not a correctness test — `#[ignore]`d by default, this
+/// round's own shot: a genuine multi-line/VERTICAL selection (three rows,
+/// the middle one EMPTY) rendered end to end, for a human to eyeball the
+/// same claim `wagtail_multiline_selection_shows_inverted_text_and_solid_
+/// white_on_empty_line` proves by pixel-sampling — the white band carries
+/// down through every selected row, including the empty one, and stops
+/// exactly at the selection's own bottom edge. Regenerate with:
+/// `cargo test --bin awl render::tests::dither::gallery_wagtail_multiline_selection -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn gallery_wagtail_multiline_selection() {
+    let (w, h) = (700u32, 320u32);
+    let got = pollster::block_on(async {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor { label: Some("awl multiline gallery device"), ..Default::default() })
+            .await
+            .ok()?;
+        let cache = Cache::new(&device);
+        let mut p = TextPipeline::new(&device, &queue, &cache, FMT);
+        p.set_size(w as f32, h as f32);
+        Some((device, queue, p))
+    });
+    let Some((device, queue, mut p)) = got else {
+        eprintln!("skipping gallery_wagtail_multiline_selection: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let text = "first line of the selection\n\nthird line, after an empty middle line\nfourth line stays unselected";
+    let mut v = view(text, 2, 10);
+    v.selection = Some(((0, 0), (2, 999)));
+
+    theme::set_active_by_name("Wagtail").unwrap();
+    p.sync_theme();
+    p.set_view(&v);
+    p.prepare(&device, &queue, w, h).unwrap();
+
+    let (texture, tview) = offscreen(&device, w, h);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl multiline gallery encoder"),
+    });
+    p.render(&mut encoder, &tview).unwrap();
+    queue.submit(Some(encoder.finish()));
+    let pixels = read_pixels(&device, &queue, &texture, w, h);
+
+    std::fs::create_dir_all("gallery/wagtail").ok();
+    let mut img = image::RgbaImage::new(w, h);
+    for (i, px) in pixels.iter().enumerate() {
+        img.put_pixel((i as u32) % w, (i as u32) / w, image::Rgba(*px));
+    }
+    img.save("gallery/wagtail/multiline-selection.png").unwrap();
+    eprintln!("wrote gallery/wagtail/multiline-selection.png");
+
     theme::set_active(theme::DEFAULT_THEME);
 }
