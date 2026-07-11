@@ -1860,6 +1860,77 @@ mod tests {
         assert!(app.config.effective_linux_keep().is_empty(), "native flavor: no preset widening");
     }
 
+    /// LAW TEST (the "settings toggle rows dispatch live" round): EVERY row
+    /// the corpus marks `SettingKind::Toggle` — enumerated straight off
+    /// `settings::visible_rows()`, never hand-copied — round-trips through
+    /// the REAL live door, `App::setting_toggle(key)` (exactly what
+    /// `Effect::SettingToggle` resolves to at the `app/apply.rs` seam, see
+    /// `App::apply`'s `Effect::SettingToggle { key } => self.setting_toggle(&key)`
+    /// arm): the value readout VISIBLY CHANGES after one toggle, and
+    /// round-trips back to its exact starting value after a second — so a
+    /// toggle that silently no-ops (the Keymap-row bug: wired in
+    /// `settings::toggle_key` and in `settings_accept`, but never driven
+    /// through `App::setting_toggle` itself by any prior test — the prior
+    /// `settings_keymap_toggle_flips_persists_and_live_reapplies` test called
+    /// `app.toggle_keymap_flavor()` directly, skipping the string-keyed
+    /// dispatch a live Enter/click actually goes through) fails here instead
+    /// of shipping quietly. Companion:
+    /// `actions::tests::overlay_drive::every_settings_toggle_row_signals_its_own_setting_toggle_key`
+    /// (the pure `apply_core`-level half: Enter on the row signals the RIGHT
+    /// key in the first place). Each toggle is undone immediately after
+    /// asserting it, so every process-global this sweep touches (page /
+    /// typewriter / wysiwyg / inline images / ligatures / spellcheck /
+    /// writing nits / outline / menu bar / reduce motion) is back to its
+    /// pre-test value by the time the lock releases — no leak into a sibling
+    /// test, mirroring the `page::measure()` save/restore convention used
+    /// elsewhere in this file.
+    #[test]
+    fn every_settings_toggle_row_dispatches_live_and_flips_its_value() {
+        use crate::fs::InMemoryFs;
+        let _g2 = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
+        let _g = crate::testlock::serial();
+
+        let cfg = Config { path: PathBuf::from("/cfg/config.toml"), ..Config::empty() };
+        let mut app = app_on(None, "/proj", cfg);
+
+        let toggle_rows: Vec<crate::settings::SettingRow> = crate::settings::visible_rows()
+            .into_iter()
+            .filter(|r| r.kind == crate::settings::SettingKind::Toggle)
+            .copied()
+            .collect();
+        assert_eq!(
+            toggle_rows.len(),
+            14,
+            "the toggle roster changed size — update this sweep deliberately"
+        );
+
+        for row in &toggle_rows {
+            let key = crate::settings::toggle_key(row.name).expect("a Toggle row always has a key");
+            let values0 = crate::settings::SettingsValues::gather(&app.config, &app.root, app.zoom);
+            let before = crate::settings::value_for(row, &values0);
+
+            app.setting_toggle(key);
+            let values1 = crate::settings::SettingsValues::gather(&app.config, &app.root, app.zoom);
+            let after = crate::settings::value_for(row, &values1);
+            assert_ne!(
+                before, after,
+                "row {:?} (key {:?}) did not visibly flip its value readout — the live dispatch is a silent no-op",
+                row.name, key
+            );
+
+            // Toggle back — restores the global/config AND proves the flip is
+            // a clean round-trip, not a one-way ratchet.
+            app.setting_toggle(key);
+            let values2 = crate::settings::SettingsValues::gather(&app.config, &app.root, app.zoom);
+            let restored = crate::settings::value_for(row, &values2);
+            assert_eq!(
+                restored, before,
+                "row {:?} (key {:?}) did not round-trip back to its starting value",
+                row.name, key
+            );
+        }
+    }
+
     /// The corpus GREW to carry the row: "Keymap" is a real, visible settings
     /// row (mirrors `settings::tests::settings_table_names_are_unique`'s own
     /// count law, exercised here through the App's own config/root — a

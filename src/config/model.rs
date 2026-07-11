@@ -274,22 +274,26 @@ impl Config {
         self.stats.unwrap_or(true)
     }
 
-    /// Whether the persistent MARGIN OUTLINE is enabled (the STORED pref, used to
-    /// seed the `outline::OUTLINE_ON` global at launch + read by the settings menu).
-    /// Absent = the built-in default (ON, like the other sticky toggles — flipped
-    /// 2026-07-09, see `outline.rs`'s module doc). The renderer/sidecar read the
-    /// live global (`crate::outline::outline_on`), which this seeds and the
-    /// toggles keep in step.
+    /// Whether the persistent MARGIN OUTLINE is enabled (the STORED pref's
+    /// leniency law: absent = the built-in default ON, like the other sticky
+    /// toggles — flipped 2026-07-09, see `outline.rs`'s module doc). TEST-ONLY
+    /// since the every-toggle-dispatches sweep: production reads the live global
+    /// (`crate::outline::outline_on`) everywhere — the renderer, the sidecar,
+    /// AND the settings readout — while `apply_sticky_globals` seeds that global
+    /// from the raw `self.outline` field directly; this derived form survives
+    /// only for the leniency law test in `config/tests.rs`.
+    #[cfg(test)]
     pub fn outline_on(&self) -> bool {
         self.outline.unwrap_or(true)
     }
 
-    /// Whether the awl-RENDERED menu bar is enabled (the STORED pref, used to seed the
-    /// `menubar::MENU_BAR_ON` global at launch + read by the settings menu). Absent =
-    /// the PLATFORM default: ON for web/Linux, OFF for macOS (native NSMenu bar is the
-    /// door — matching `menubar::MENU_BAR_ON`'s own `cfg`-derived default). The
-    /// renderer/sidecar read the live global (`crate::menubar::menu_bar_on`), which
-    /// this seeds and the toggles keep in step.
+    /// Whether the awl-RENDERED menu bar is enabled (the STORED pref's leniency
+    /// law: absent = the PLATFORM default — ON for web/Linux, OFF for macOS,
+    /// matching `menubar::MENU_BAR_ON`'s own `cfg`-derived default). TEST-ONLY
+    /// since the every-toggle-dispatches sweep, exactly like [`Self::outline_on`]
+    /// above: production reads the live global (`crate::menubar::menu_bar_on`)
+    /// everywhere, and `apply_sticky_globals` seeds it from the raw field.
+    #[cfg(test)]
     pub fn menu_bar_on(&self) -> bool {
         self.menu_bar.unwrap_or(cfg!(not(target_os = "macos")))
     }
