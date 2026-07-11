@@ -105,6 +105,11 @@ hermetic setup for automated input-state testing.
   part of the first-load seed set anymore, but the checker itself runs on
   any misspelling you type into a seeded page).
 - **Persistence** — edits are written to `localStorage` and survive a page reload.
+- **Config persistence** — theme/page-mode/caret-mode/`[keys]` rebinds/`notes_root`/
+  `workspace`/etc. write to a real `config.toml` over `localStorage`
+  (`fs::web_config_path()`) and survive a page reload, exactly like native's
+  `~/.config/awl/config.toml`. Cmd-P → "Keybindings…" (the game-style rebind
+  menu) and Settings → Advanced → "Edit config as text" both work on web now.
 
 ## What's stubbed / simplified
 
@@ -186,9 +191,10 @@ hermetic setup for automated input-state testing.
     slot 2 today, so both go summon-by-name-only on the web (Cmd-P → "New
     note" / "Switch theme…" still work — this is a LABEL fix, not a
     reachability regression). **v1 does NOT invent a replacement chord for
-    either** — a deliberate, logged v2 taste call, not an oversight; the web
-    build also has no config file yet (see the next bullet) to persist a
-    replacement into even if one were picked. Dispatch itself needs no new
+    either** — a deliberate, logged v2 taste call, not an oversight (a web
+    `config.toml` now exists — see the "Config on the web" bullet below — so a
+    user CAN pick their own `[keys] new_note`/`switch_theme` replacement today;
+    v1 just doesn't ship a built-in default one). Dispatch itself needs no new
     code: a reserved chord's `keydown` never reaches the canvas at all in a
     real browser, so the keymap arm simply never fires — this tier is
     honestly ONLY verifiable with a real (non-automated) browser + OS chrome —
@@ -221,12 +227,32 @@ hermetic setup for automated input-state testing.
     provable headlessly (no browser needed) — see
     `commands::tests::label_truth_law_holds_across_the_whole_catalog` (a
     no-wildcard sweep over the WHOLE catalog × every convention × platform).
-- **No config file on the web.** `wasm_start` hard-codes `Config::empty()` — there
-  is no `$XDG_CONFIG_HOME/awl/config.toml` in a browser sandbox, so keybinding
-  overrides / `notes_root` / `workspace` from a config are unreachable on web
-  today (the Settings command still opens a buffer, but it has nowhere durable to
-  live). A `localStorage`-backed config (mirroring `WebFs`'s storage story) is
-  banked as the natural follow-up, not yet built.
+- **Config on the web (RESOLVED — the web-config round).** `wasm_start` loads a
+  real `config.toml` at `fs::web_config_path()` (`/awl/config.toml`, a
+  `localStorage` key beside the scratch stash) through the SAME `Config::load`
+  leniency the native path uses — an absent file loads as pure defaults, so a
+  first-ever visit is unaffected. Every existing config write door (sticky-pref
+  writes, `[keys]` rebinds, the Settings "Edit config as text" buffer) already
+  routed through `crate::fs::active()` + `crate::fs::write_atomic`, so they work
+  over `WebFs` with no code change beyond the load-time path — a theme switch,
+  a keybinding rebind, or a hand-edited `notes_root`/`workspace` now survives a
+  page reload, exactly like a native relaunch reads its `~/.config/awl/config.toml`.
+  Sticky preferences (theme / page mode / caret mode / page-width measure) are
+  now APPLIED at web launch too (`Config::apply_sticky_globals`, previously
+  reached only from the native CLI path) — a config `theme = "..."` line now
+  takes effect on the web build's first frame. "Keybindings…" (the rebind menu)
+  and the Settings "Edit config as text" row are both un-hidden on web
+  accordingly (see `commands.rs`/`settings.rs`) — their earlier hiding existed
+  only because there was nowhere to persist into; there is now.
+  `localStorage`'s ~5 MB quota is not a real concern for a config file this
+  small (a few hundred bytes even heavily customized); a write that DOES throw
+  (private-mode lockdown, an exhausted quota) degrades the same way every other
+  `WebFs` write already does — a benign `io::Error`, logged, never a panic
+  (`write_atomic`'s `js_err` path, unchanged by this round).
+  **What's still session-only:** the browser tab itself has no discrete
+  "quit, then relaunch a new OS process" — the daemon and native session-restore
+  (window frame / reopened file set) stay native-only by design (see their own
+  sections above), so a reload picks up config + the scratch stash, not those.
 - **No OS clipboard** (verified still current): `arboard` doesn't compile for
   wasm and the browser clipboard API is async + permission-gated, so cut/copy/
   paste stay on awl's internal kill-ring only — no system-clipboard interop.

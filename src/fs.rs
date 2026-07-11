@@ -755,6 +755,22 @@ pub fn scratch_stash_path() -> PathBuf {
     data_root().join("scratch.md")
 }
 
+/// THE WEB CONFIG PATH — where `config.toml` lives inside the virtual `WebFs`
+/// root (a `localStorage` key, `awlfs:F:/awl/config.toml`), closing WEB.md's
+/// former "no config file on the web" gap. Beside the scratch stash under
+/// [`data_root`] (the SAME `/awl` virtual-root convention `scratch.md` already
+/// uses for machine-owned state), deliberately NOT under the seeded content
+/// root `/` (which holds the user's own documents). `main::wasm_start` is the
+/// ONE caller (native's `config::config_path` resolves an OS path instead and
+/// is never reached on wasm); every `Config` write door (`write_pref`/
+/// `write_binding`/`write_default`) already routes through
+/// `crate::fs::active()` + [`write_atomic`], so a `Config` loaded from THIS
+/// path just works over `WebFs` with zero further plumbing.
+#[cfg(target_arch = "wasm32")]
+pub fn web_config_path() -> PathBuf {
+    data_root().join("config.toml")
+}
+
 // --- The process-global active backend ------------------------------------
 
 /// The app-wide filesystem. DEFAULT is [`NativeFs`] (the real disk); tests swap in

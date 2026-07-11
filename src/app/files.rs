@@ -357,21 +357,19 @@ impl App {
     /// exactly like hand-editing `keymap = "emacs"` into the config buffer and
     /// saving it.
     ///
-    /// Deliberately NOT `self.reload_config()` (a re-READ from disk): that
-    /// would silently DISCARD the flip on a path-less config — the web build
-    /// hard-codes `Config::empty()` with an empty `path`, and BOTH
-    /// `reload_config`'s fresh `Config::load` AND `persist_pref`'s own disk
-    /// write bail out early there, so relying on either to carry the new value
-    /// forward would strand the toggle at its old state. Instead the in-memory
-    /// mirror is set HERE, unconditionally, before attempting the (best-effort,
-    /// possibly-no-op) disk write, and the keymap is rebuilt straight from that
-    /// mirror.
+    /// Deliberately NOT `self.reload_config()` (a re-READ from disk): a config
+    /// with a genuinely EMPTY `path` (a bare `Config::empty()`, used by native
+    /// test scaffolding — the web build now always resolves a real
+    /// `fs::web_config_path()`, so this is no longer the web build's own case)
+    /// would silently DISCARD the flip, since both `reload_config`'s fresh
+    /// `Config::load` and `persist_pref`'s own disk write bail out early on an
+    /// empty path. Instead the in-memory mirror is set HERE, unconditionally,
+    /// before attempting the disk write, and the keymap is rebuilt straight
+    /// from that mirror.
     ///
-    /// WEB (documented no-op DISK write, mirrors the config-write gap
-    /// elsewhere — e.g. "Edit config as text" hiding outright on web): the
-    /// flavor still takes effect immediately and is a real, working
-    /// SESSION-ONLY preference there — it lasts until the tab reloads, but is
-    /// never remembered across one (no config file to remember it in).
+    /// WEB: the disk write now genuinely persists (`fs::web_config_path` over
+    /// `WebFs`/`localStorage` — see the web-config round), so a keymap-flavor
+    /// flip survives a page reload exactly like on native.
     pub(super) fn toggle_keymap_flavor(&mut self) {
         let next = match self.config.keymap_flavor() {
             crate::keymap::KeymapFlavor::Native => crate::keymap::KeymapFlavor::Emacs,

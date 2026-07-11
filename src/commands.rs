@@ -52,12 +52,14 @@ pub struct Command {
     /// process — a real OS shell (Quit), a filesystem/version-history feature backed by
     /// a real disk (Version history…/Keep version/Clean unused assets…), the
     /// multi-instance daemon handoff (Finish file), a project-history MRU that's
-    /// native-only state (Recent projects…), the personal odometer (Lifetime stats,
-    /// which reads native-only lifetime stats storage), or the rebind menu (Keybindings…,
-    /// which writes a native config file the web build has none of — see WEB.md's "No
-    /// config file on the web"). `false` (the default for nearly every command) means it
-    /// is available on every compiled platform. This is the ONE piece of availability
-    /// DATA the catalog carries; every predicate below (`available_on`, `visible`) is a
+    /// native-only state (Recent projects…), or the personal odometer (Lifetime
+    /// stats, which reads native-only lifetime stats storage). The rebind menu
+    /// (Keybindings…) is NOT in this set — the web-config round gave it a real
+    /// `config.toml` to persist into (`fs::web_config_path`, over `WebFs`), so it
+    /// is available on both platforms like almost everything else. `false` (the
+    /// default for nearly every command) means it is available on every compiled
+    /// platform. This is the ONE piece of availability DATA the catalog carries;
+    /// every predicate below (`available_on`, `visible`) is a
     /// pure function of it — see [`commands::visible`] for the filtered view every
     /// user-facing surface (palette / rebind menu / menu bar / which-key) routes through.
     pub native_only: bool,
@@ -323,7 +325,7 @@ pub static COMMANDS: &[Command] = &[
     // Keybindings has NO default chord either — summon it by name (Cmd-P) like
     // Settings; it is the GAME-STYLE rebind menu (capture a key per command). It is
     // itself rebindable via `[keys] keybindings = "..."`.
-    Command { name: "Keybindings…",      action: Action::OpenKeybindings, native: "",        emacs: ""        , native_only: true },
+    Command { name: "Keybindings…",      action: Action::OpenKeybindings, native: "",        emacs: ""        , native_only: false },
 ];
 
 /// Join a command's two binding slots into ONE dim palette label, e.g.
@@ -1767,7 +1769,6 @@ mod tests {
         "Lifetime stats",
         "Clean unused assets…",
         "Recent projects…",
-        "Keybindings…",
     ];
 
     #[test]
@@ -1878,8 +1879,10 @@ mod tests {
         assert!(!action_available(&Action::Quit, Platform::Web));
         assert!(action_available(&Action::Quit, Platform::Native));
         assert!(!action_available(&Action::FinishBuffer, Platform::Web));
-        assert!(!action_available(&Action::OpenKeybindings, Platform::Web));
-        // A non-hidden catalog action: available on both.
+        // A non-hidden catalog action: available on both. Keybindings… lost its
+        // web-hide flag once a web `config.toml` existed to rebind INTO (the web
+        // config round) — the rebind menu is reachable + writes persist there now.
+        assert!(action_available(&Action::OpenKeybindings, Platform::Web));
         assert!(action_available(&Action::Save, Platform::Web));
         assert!(action_available(&Action::Save, Platform::Native));
         // A non-catalog action (motion / self-insert) always fires — nothing to hide.

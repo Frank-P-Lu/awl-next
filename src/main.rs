@@ -157,17 +157,30 @@ pub fn wasm_start() {
 
     // The sandbox has no CLI / cwd, so the virtual project root is "/" (where the
     // samples are seeded), notes + workspace folders are "/" too (so C-x n / C-x p
-    // operate within the seeded fs), and config is empty. Open the seeded welcome
-    // note so there is content + markdown styling from the first frame. `app::run`
-    // returns immediately on wasm (`spawn_app` hands off to requestAnimationFrame).
+    // operate within the seeded fs). Open the seeded welcome note so there is
+    // content + markdown styling from the first frame. `app::run` returns
+    // immediately on wasm (`spawn_app` hands off to requestAnimationFrame).
     let root = PathBuf::from("/");
     let welcome = Some(PathBuf::from("/welcome.md"));
+
+    // WEB CONFIG: load `config.toml` from its virtual-fs path (`fs::web_config_path`,
+    // `/awl/config.toml` over `localStorage` — installed above via `install_web_fs`,
+    // so this read already runs against `WebFs`). An absent file loads as pure
+    // defaults (`Config::load`'s existing leniency) — a first-ever visit is
+    // unaffected. STICKY PREFERENCES (theme/page/caret/measure) are then applied
+    // onto the same process-globals the native `main::args` path seeds — this call
+    // was previously ONLY reached natively, so a web `config.toml` theme/page-mode/
+    // caret_mode line took no effect at all; it now does, mirroring native exactly.
+    let config = Config::load(fs::web_config_path());
+    let initial_page_class = page::PageClass::of_path(welcome.as_deref());
+    config.apply_sticky_globals(false, false, false, false, initial_page_class);
+
     if let Err(e) = app::run(
         welcome,
         root,
         Some(PathBuf::from("/")),
         Some(PathBuf::from("/")),
-        Config::empty(),
+        config,
         false, // --wait is a native-only, single-instance-daemon concern
     ) {
         log::error!("awl failed to start: {e}");
