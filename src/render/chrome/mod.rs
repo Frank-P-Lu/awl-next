@@ -37,9 +37,15 @@ pub(in crate::render) const MARGIN_COLUMN_GAP_CHARS: f32 = 1.5;
 /// Upload the three FLOAT-PANEL elevation quads (drop `shadow` -> raised `border` ->
 /// opaque `card`) for `rect`, or PARK all three empty when `rect` is `None`. Shared by
 /// the reusable [`TextPipeline::prepare_float_panel`] (the caret-preview / spell
-/// panels) AND the which-key panel — each passes ITS OWN three pipelines, so the two
-/// summoned micro-panels never race the same quads. `card` is drawn last (on top of
-/// its shadow + border), matching the painter's-order draw in `render.rs`.
+/// panels), the which-key panel, and the centered-overlay card (`overlay.rs`) — each
+/// passes ITS OWN three pipelines, so summoned micro-panels never race the same
+/// quads. `card` is drawn last (on top of its shadow + border), matching the
+/// painter's-order draw in `render.rs`. `elevated = false` still draws the CARD at
+/// `rect` (the fill always shows) but parks the shadow + border empty — the shape a
+/// caller uses when its OWN backdrop (blur/scrim) already carries the card's
+/// contrast, so only a TRUE 1-BIT world (where that backdrop is disabled outright)
+/// needs the crisp white border to read at all. Every EXISTING caller passes
+/// `elevated: true` (unconditional elevation, its pre-existing behaviour).
 #[allow(clippy::too_many_arguments)]
 fn set_float_quads(
     shadow: &mut SelectionPipeline,
@@ -50,15 +56,22 @@ fn set_float_quads(
     width: u32,
     height: u32,
     rect: Option<[f32; 4]>,
+    elevated: bool,
 ) {
     match rect {
         Some([x, y, w, h]) => {
-            // Drop SHADOW: offset DOWN + a touch wider, translucent ink, so the card
-            // reads as risen a step above the document (depth by value, DESIGN §8).
-            shadow.prepare(device, queue, width, height, &[[x - 2.0, y + 4.0, w + 4.0, h + 6.0]]);
-            // Crisp raised BORDER edge: a slightly larger surface-step rect whose 1px
-            // rim peeks past the card, giving the box a clean, present edge.
-            border.prepare(device, queue, width, height, &[[x - 1.0, y - 1.0, w + 2.0, h + 2.0]]);
+            if elevated {
+                // Drop SHADOW: offset DOWN + a touch wider, translucent ink, so the
+                // card reads as risen a step above the document (depth by value,
+                // DESIGN §8).
+                shadow.prepare(device, queue, width, height, &[[x - 2.0, y + 4.0, w + 4.0, h + 6.0]]);
+                // Crisp raised BORDER edge: a slightly larger surface-step rect whose
+                // 1px rim peeks past the card, giving the box a clean, present edge.
+                border.prepare(device, queue, width, height, &[[x - 1.0, y - 1.0, w + 2.0, h + 2.0]]);
+            } else {
+                shadow.prepare(device, queue, width, height, &[]);
+                border.prepare(device, queue, width, height, &[]);
+            }
             card.prepare(device, queue, width, height, &[[x, y, w, h]]);
         }
         None => {
@@ -233,6 +246,42 @@ impl TextPipeline {
             width,
             height,
             rect,
+            true, // this primitive's every use wants unconditional elevation
+        );
+    }
+
+    /// The CENTERED-OVERLAY family's card elevation (go-to / command / theme /
+    /// keybindings / settings / … — every [`crate::overlay::OverlayKind`] except the
+    /// contextual [`Spell`](crate::overlay::OverlayKind::Spell) popup, which rides
+    /// [`Self::prepare_float_panel`] instead): the SAME shadow/border shape drawn on
+    /// its OWN dedicated `panel_shadow`/`panel_border` pipelines (never the shared
+    /// `float_*` trio — those already belong to the caret-style preview panel, which
+    /// can be summoned the SAME frame). `elevated` is `true` ONLY on a true 1-bit
+    /// world (`Theme::is_one_bit`): every other world keeps the exact pre-existing
+    /// flat `panel_card` fill with the border/shadow parked empty, so an ordinary
+    /// world's capture is byte-identical to before this fn existed. See the
+    /// `panel_shadow`/`panel_border` field doc (`render.rs`) for the "why" — the
+    /// blur/scrim backdrop these cards used to lean on for contrast is disabled
+    /// outright on a one-bit world, collapsing `base_300 == base_100`.
+    pub(super) fn prepare_panel_card_elevation(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        rect: Option<[f32; 4]>,
+    ) {
+        let elevated = rect.is_some() && theme::active().is_one_bit();
+        set_float_quads(
+            &mut self.panel_shadow,
+            &mut self.panel_border,
+            &mut self.panel_card,
+            device,
+            queue,
+            width,
+            height,
+            rect,
+            elevated,
         );
     }
 }

@@ -1813,8 +1813,31 @@ pub struct TextPipeline {
     /// [`SelectionPipeline`] tinted `muted`, drawn on the ground before text like
     /// the fence panel. Empty (no instances) whenever the grid parks.
     pub table_rule_pipeline: SelectionPipeline,
-    /// The OPAQUE BASE_300 card behind the top-right search panel.
+    /// The OPAQUE BASE_300 card behind the top-right search panel; ALSO the flat
+    /// centered-overlay card (go-to / command palette / theme / keybindings / …),
+    /// paired with `panel_shadow`/`panel_border` below.
     pub panel_card: SelectionPipeline,
+    /// CENTERED-OVERLAY elevation companions to `panel_card` — the SAME
+    /// shadow/raised-border shape [`set_float_quads`] draws for every other
+    /// summoned card (search / spell / caret-preview / HUD / which-key / menu
+    /// dropdown), but drawn ONLY on a TRUE 1-BIT world (`Theme::is_one_bit`).
+    /// Every OTHER world's centered overlay stays the exact pre-existing flat
+    /// `panel_card` fill with these two parked empty — byte-identical to before
+    /// this pair existed. On a one-bit world the blur/scrim backdrop that used to
+    /// give the flat card its contrast is disabled outright (`backdrop_blur`'s
+    /// one-bit short-circuit), collapsing `base_300 == base_100`, so the card
+    /// would otherwise be a literally invisible black rect on black — the crisp
+    /// white BORDER (`theme::surface_selected()`'s one-bit override) is the
+    /// documented answer (`theme::worlds::WAGTAIL`'s "Elevation" note), the SAME
+    /// mechanism the menu-bar dropdown already carries; this closes the gap for
+    /// every other summoned card (`OverlayKind`'s whole family). Kept as
+    /// DEDICATED pipeline instances (never the shared `float_*` trio) because
+    /// those are already spoken for by the caret-style preview panel / spell
+    /// popup, which can be summoned in the SAME frame as a centered overlay
+    /// (the caret-style picker's own demo preview sits below its picker card) —
+    /// sharing an instance would let one clobber the other's rect.
+    pub panel_shadow: SelectionPipeline,
+    pub panel_border: SelectionPipeline,
     /// FROSTED-BACKDROP blur behind a full-takeover overlay (the REPLACEMENT for the
     /// old neutral grey scrim). When a blur-eligible overlay opens, the document is
     /// rendered ONCE to this module's offscreen texture, blurred at quarter-res, and
@@ -2588,6 +2611,12 @@ impl TextPipeline {
         // The opaque base-300 panel card (alpha == 0xFF -> overwrites the doc text
         // it covers). Reuses the rounded-quad selection pipeline at full alpha.
         let panel_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        // Centered-overlay elevation companions (see the field doc): the SAME
+        // shadow/border tokens the shared float-panel primitive uses, drawn only
+        // on a one-bit world.
+        let panel_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
+        let panel_border =
+            SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
         // The FROSTED-BACKDROP blur behind a full-takeover overlay (replacing the old
         // neutral grey scrim). Pipelines + sampler now; the offscreen textures are
         // sized lazily on the first overlay-open `prepare` (see `blur::BlurBackdrop`).
@@ -2743,6 +2772,8 @@ impl TextPipeline {
             table_renderer,
             table_rule_pipeline,
             panel_card,
+            panel_shadow,
+            panel_border,
             blur,
             blur_recompute: false,
             blur_sig: None,
@@ -2991,6 +3022,11 @@ impl TextPipeline {
         self.table_rule_pipeline
             .set_color(theme::muted().rgba_bytes());
         self.panel_card.set_color(theme::base_300().rgba_bytes());
+        // Centered-overlay elevation companions: same shadow/border tokens as
+        // every other summoned card (re-tinted for free on a theme-picker preview).
+        self.panel_shadow.set_color(float_shadow_srgba());
+        self.panel_border
+            .set_color(theme::surface_selected().rgba_bytes());
         // The frosted blur backdrop re-reads `base_100` for its dim each `prepare`
         // (via `blur.ensure`), so no color is cached here — and the held HUD now recedes
         // the doc behind that same frost, so there is no grey scrim to re-tint.
@@ -3869,7 +3905,12 @@ impl TextPipeline {
     /// micro-panels that ride the same three quads: the SPELL contextual panel (the
     /// panel IS this floating card — `panel_card` is empty then) and the caret-style
     /// preview panel that hangs BELOW the picker (it doesn't overlap the picker card,
-    /// so drawing its elevation first is harmless). Then: the opaque picker card ->
+    /// so drawing its elevation first is harmless). NEXT: `panel_shadow`/
+    /// `panel_border` — the SAME shadow/border shape, over `panel_card`'s own rect,
+    /// non-empty ONLY on a true 1-bit world (`overlay_draw_card`'s prepare-time
+    /// gate) — so the flat picker card gets a crisp white border exactly where the
+    /// now-disabled blur/scrim used to carry its contrast; parked empty (byte-
+    /// identical to before) on every other world. Then: the opaque picker card ->
     /// selected-row value band -> amber query caret -> overlay text, and last the
     /// caret-style preview's demo caret + sample line ON its (already-drawn) card.
     /// Every float / preview quad parks empty unless one of those two panels is open.
@@ -3877,6 +3918,8 @@ impl TextPipeline {
         self.float_shadow.draw(pass);
         self.float_border.draw(pass);
         self.float_card.draw(pass);
+        self.panel_shadow.draw(pass);
+        self.panel_border.draw(pass);
         self.panel_card.draw(pass);
         self.overlay_rows.draw(pass);
         // THEME PICKER: the active-lens hairline under the strip (content ink), UNDER
