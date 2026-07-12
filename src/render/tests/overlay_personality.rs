@@ -8,6 +8,15 @@
 //! own "if the machinery makes it reachable" instruction, answered here
 //! rather than in `distinguishability.rs` itself, since reaching a placard
 //! at all needs the `cfg(test)` override hook this file owns).
+//!
+//! THE PLACARD-FACETS FIX ROUND added the missing case the original round's
+//! fixtures never exercised: every fixture above used a FLAT (non-faceted)
+//! picker, so the guard bug in `overlay_shape_placard` (it also bailed on
+//! ANY picker with `overlay_lens` set — the Cmd-P palette and Settings menu
+//! included, not just the literal Theme kind) had no test surface to fail
+//! against. See `forced_placard_composes_with_a_faceted_picker_lens_strip_set`,
+//! `forced_placard_composes_with_the_literal_theme_picker_too`, and the
+//! faceted sibling of the real-pixel distinguishability test, below.
 
 use super::super::*;
 use super::pixeldiff::{self, DistinguishFloor, Region};
@@ -199,14 +208,17 @@ fn forced_placard_shapes_a_wordmark_inside_the_card() {
     set_title_style_test_override(None); // leave no override behind for later tests
 }
 
-/// A forced `Placard` on the SPELL popup (no title, no query line) or the
-/// THEME picker (its own separate shaper) draws nothing — `overlay_title`
-/// is empty in the first case, the theme-picker path never reaches the
-/// generic shaper in the second.
+/// A forced `Placard` on the SPELL popup draws nothing — it has no title
+/// line at all (`header_rows == 0`, no query line to prefix), so there is
+/// nothing for `overlay_shape_placard`'s own `header_rows == 0` guard to do
+/// but bail. This is the ONE genuinely kind-shaped exclusion left in the
+/// guard (see `THE PLACARD-FACETS FIX ROUND` below for the other guard arm
+/// this round REMOVED — a faceted picker used to be excluded here too, which
+/// was the actual bug).
 #[test]
-fn forced_placard_is_inert_on_kinds_with_no_title_line() {
+fn forced_placard_is_inert_on_the_spell_popup_no_title_line() {
     let Some(mut p) = headless_pipeline() else {
-        eprintln!("skipping forced_placard_is_inert_on_kinds_with_no_title_line: no wgpu adapter");
+        eprintln!("skipping forced_placard_is_inert_on_the_spell_popup_no_title_line: no wgpu adapter");
         return;
     };
     let _g = crate::testlock::serial();
@@ -216,30 +228,143 @@ fn forced_placard_is_inert_on_kinds_with_no_title_line() {
         ink: theme::PlacardInk::Faint,
     }));
 
-    // Theme picker: `overlay_lens` non-empty routes `overlay_geometry` into the
-    // faceted shaper, whose `OverlayGeom::theme` is `true` (private field —
-    // the behavior this asserts IS that the placard shaper's own `geom.theme`
-    // check makes it a no-op, so there is nothing further to inspect).
+    let mut sv = view("hello\n", 0, 0);
+    sv.overlay_active = true;
+    sv.overlay_spell = Some((0, 0, 3));
+    sv.overlay_items = vec!["hello".into(), "cello".into()];
+    p.set_view(&sv);
+    let sgeom = p.overlay_geometry(1200);
+    assert_eq!(
+        p.overlay_shape_placard(&sgeom),
+        None,
+        "the header-less spell popup draws no placard (no title line to prefix)"
+    );
+
+    set_title_style_test_override(None);
+}
+
+// --- THE PLACARD-FACETS FIX ROUND: composes with a lens-strip card too ---
+//
+// THE BUG (root-caused, see `overlay_shape.rs::overlay_shape_placard`'s own
+// updated doc for the fix's reasoning): `overlay_geometry` routes ANY picker
+// with a non-empty `overlay_lens` — not just the literal Theme kind, but
+// every faceting picker `crate::facets::scheme` names (Theme, Goto, Browse,
+// Project, Command, History, Settings) — through `theme_overlay_geometry`,
+// which sets `OverlayGeom::theme = true`. The placard guard used to read
+// that flag as "this IS the theme picker" and bail unconditionally, so a
+// FORCED placard silently drew nothing on the Cmd-P command palette or the
+// Settings menu the instant either had a non-trivial lens strip — the two
+// surfaces a probe/gallery run would actually want to see it on. The fix
+// dropped that `geom.theme` check entirely: the placard renderer never
+// needed it (it only reads `geom.card_x/_y/_w/_h`, identical shape on both
+// branches), so a faceted card composes with a placard exactly like a flat
+// one, no new wiring.
+
+/// A forced `Placard` on a FACETED picker (a non-empty lens strip, e.g. the
+/// command palette's own facet scheme) now shapes a wordmark — the bug this
+/// round fixes. Mirrors `forced_placard_shapes_a_wordmark_inside_the_card`'s
+/// flat-picker assertions exactly, over a fixture with `overlay_lens` set (so
+/// `overlay_geometry` takes the SAME `theme_overlay_geometry` branch the real
+/// Cmd-P palette / Settings menu take once either shows more than one lens).
+#[test]
+fn forced_placard_composes_with_a_faceted_picker_lens_strip_set() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping forced_placard_composes_with_a_faceted_picker_lens_strip_set: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_title_style_test_override(Some(theme::TitleStyle::Placard {
+        corner: theme::PlacardCorner::BL,
+        scale: 2.0,
+        ink: theme::PlacardInk::Ghost,
+    }));
+
+    // A Command-palette-shaped fixture with its lens strip populated (mirrors
+    // `commands::COMMAND_FACETS`' own "All / File / Edit / View" shape closely
+    // enough to exercise the same geometry branch without depending on the
+    // full command-catalog machinery).
+    let mut cv = view("hello\n", 0, 0);
+    cv.overlay_active = true;
+    cv.overlay_title = "commands";
+    cv.overlay_lens = vec![
+        ("All".to_string(), true),
+        ("File".to_string(), false),
+        ("Edit".to_string(), false),
+    ];
+    cv.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+    p.set_view(&cv);
+    let cgeom = p.overlay_geometry(1200);
+    let placard = p.overlay_shape_placard(&cgeom);
+    assert!(
+        placard.is_some(),
+        "a forced Placard style must shape a wordmark on a faceted (lens-strip) card too"
+    );
+    let (x, y, w, h) = placard.unwrap();
+    assert!(w > 0.0 && h > 0.0, "the wordmark must have real extent");
+    let [card_x, card_y, _card_w, card_h] =
+        p.overlay_card_rect().expect("the overlay must be open");
+    assert!(x >= card_x, "wordmark must not start left of the card");
+    assert!(
+        y >= card_y && y <= card_y + card_h,
+        "wordmark top must sit within the card's vertical span"
+    );
+
+    set_title_style_test_override(None);
+}
+
+/// THE LITERAL THEME PICKER decision, made explicit: it is now treated
+/// exactly like every other faceting picker (Command / Settings / Goto /
+/// …) rather than a special-cased exclusion. Nothing in `theme_picker.rs`
+/// depends on the card being placard-free — `overlay_shape_theme` fills the
+/// same `panel_buffer` a flat picker's `shape_overlay_names` does, and both
+/// are uploaded through the same `overlay_upload_text`, which always draws
+/// the placard FIRST (behind). Singling the Theme kind back out post-fix
+/// would just reintroduce an inconsistent special case for no reason the
+/// mechanism gives; this test pins the (justified) decision to include it.
+#[test]
+fn forced_placard_composes_with_the_literal_theme_picker_too() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping forced_placard_composes_with_the_literal_theme_picker_too: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_title_style_test_override(Some(theme::TitleStyle::Placard {
+        corner: theme::PlacardCorner::TR,
+        scale: 2.0,
+        ink: theme::PlacardInk::Faint,
+    }));
+
     let mut tv = view("hello\n", 0, 0);
     tv.overlay_active = true;
     tv.overlay_title = "themes";
     tv.overlay_lens = vec![("All".to_string(), true)];
-    tv.overlay_items = vec!["Tawny".into()];
+    tv.overlay_items = vec!["Tawny".into(), "Mopoke".into()];
     p.set_view(&tv);
     let tgeom = p.overlay_geometry(1200);
-    assert_eq!(p.overlay_shape_placard(&tgeom), None, "the theme picker draws no placard (own shaper)");
+    let placard = p.overlay_shape_placard(&tgeom);
+    assert!(
+        placard.is_some(),
+        "the literal Theme picker now composes with a forced placard too, like any other faceted kind"
+    );
+    let (_x, _y, w, h) = placard.unwrap();
+    assert!(w > 0.0 && h > 0.0, "the wordmark must have real extent");
 
     set_title_style_test_override(None);
 }
 
 // --- THE DISTINGUISHABILITY SWEEP'S "if the machinery makes it reachable" case --
 
-fn overlay_row_region(p: &TextPipeline, row: usize) -> Region {
+/// `header_rows` mirrors the private `OverlayGeom::header_rows` this test file
+/// cannot read directly (see `forced_placard_is_inert_on_the_spell_popup_no_title_line`'s
+/// own note on field privacy) — `1` for a flat/nav picker's `› query` line alone,
+/// `2` for a faceted picker's query + lens-strip lines (`theme_overlay_geometry`'s
+/// own documented shape).
+fn overlay_row_region(p: &TextPipeline, header_rows: usize, row: usize) -> Region {
     let [card_x, card_y, card_w, _] =
         p.overlay_card_rect().expect("the overlay card must be open");
     let lh = p.overlay_lh();
     let text_top = card_y + 12.0; // pad
-    let row_top = text_top + lh * (1.0 + row as f32); // +1 header row (the query line)
+    let row_top = text_top + lh * (header_rows as f32 + row as f32);
     Region::new(card_x, row_top, card_w, lh)
 }
 
@@ -279,7 +404,7 @@ fn selected_row_stays_distinguishable_with_a_forced_placard_behind_it() {
     v.overlay_selected = 0;
     p.set_view(&v);
     p.prepare(&device, &queue, 1200, 800).unwrap();
-    let region = overlay_row_region(&p, 0);
+    let region = overlay_row_region(&p, 1, 0);
     let a = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
 
     v.overlay_selected = 1;
@@ -295,6 +420,62 @@ fn selected_row_stays_distinguishable_with_a_forced_placard_behind_it() {
         region,
         DistinguishFloor::DEFAULT,
         "PickerSelectedRow under a forced Placard{ink: Ghost} (row 0 selected vs row 1 selected)",
+    );
+
+    set_title_style_test_override(None);
+}
+
+/// The SAME real-pixel distinguishability proof, over the FACETED geometry
+/// branch (`overlay_lens` set, `header_rows == 2` for the query + lens-strip
+/// lines) — the branch this round's fix actually re-enabled the placard on.
+/// Reachable cheaply from this file's own `cfg(test)` override, exactly like
+/// its flat-picker sibling above; without it, the placard-facets fix would
+/// ship with only a geometry-shape assertion (`w > 0.0 && h > 0.0`) and no
+/// proof the selected-row band still composites legibly over the wordmark on
+/// the ONE branch that motivated the fix.
+#[test]
+fn selected_row_stays_distinguishable_with_a_forced_placard_behind_it_on_a_faceted_picker() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping selected_row_stays_distinguishable_with_a_forced_placard_behind_it_on_a_faceted_picker: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_title_style_test_override(Some(theme::TitleStyle::Placard {
+        corner: theme::PlacardCorner::TL,
+        scale: 3.0,
+        ink: theme::PlacardInk::Ghost,
+    }));
+
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "commands";
+    v.overlay_lens = vec![
+        ("All".to_string(), true),
+        ("File".to_string(), false),
+        ("Edit".to_string(), false),
+    ];
+    v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+    v.overlay_selected = 0;
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let region = overlay_row_region(&p, 2, 0);
+    let a = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    v.overlay_selected = 1;
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let b = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    pixeldiff::assert_perceptibly_different(
+        &a,
+        &b,
+        1200,
+        800,
+        region,
+        DistinguishFloor::DEFAULT,
+        "PickerSelectedRow (faceted) under a forced Placard{ink: Ghost} (row 0 selected vs row 1 selected)",
     );
 
     set_title_style_test_override(None);

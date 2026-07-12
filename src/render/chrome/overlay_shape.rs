@@ -54,19 +54,39 @@ impl TextPipeline {
     /// when this frame draws no placard: the active [`theme::TitleStyle`]
     /// (probe-forced or the active world's own, see
     /// `render::effective_title_style`) is `InlinePrefix` (every world
-    /// today), the picker is the theme picker (its own separate shaper,
-    /// `theme_picker.rs`) or the header-less spell popup (no title line at
-    /// all), or the kind draws no title (Rename/InsertLink — `overlay_title`
-    /// is already empty for those). The CALLER clips the upload to the
-    /// CARD's rect regardless of this fn's returned `w`/`h` — CLIPPED TO THE
-    /// CARD, never bleeding into the scrim (a deliberate, logged deviation
-    /// from Persona 3 Reload's own bleed: the card is the ONE region every
-    /// other overlay element already reasons about, so a placard that could
-    /// paint over the document/scrim would need its own separate clip/z-order
-    /// story for no gain a calm dim wordmark behind the rows doesn't already
-    /// deliver — rows/text always composite OVER it, legibility first).
+    /// today), the picker is the header-less spell popup (no title line at
+    /// all — `header_rows == 0`), or the kind draws no title (Rename/
+    /// InsertLink — `overlay_title` is already empty for those). The CALLER
+    /// clips the upload to the CARD's rect regardless of this fn's returned
+    /// `w`/`h` — CLIPPED TO THE CARD, never bleeding into the scrim (a
+    /// deliberate, logged deviation from Persona 3 Reload's own bleed: the
+    /// card is the ONE region every other overlay element already reasons
+    /// about, so a placard that could paint over the document/scrim would
+    /// need its own separate clip/z-order story for no gain a calm dim
+    /// wordmark behind the rows doesn't already deliver — rows/text always
+    /// composite OVER it, legibility first).
+    ///
+    /// COMPOSES WITH THE FACETED LAYOUT (fixed post-launch — a prior round's
+    /// guard also bailed on `geom.theme`, blanking the placard on every
+    /// picker [`crate::facets::scheme`] facets — the Cmd-P palette and the
+    /// Settings menu included, the two surfaces that matter most): there is
+    /// nothing kind-specific about this fn's OWN work — it reads only
+    /// `geom.card_x/_y/_w/_h` (identical fields on both `overlay_geometry`'s
+    /// flat branch and `theme_overlay_geometry`'s faceted branch) and
+    /// `self.overlay_title`/`self.placard_buffer`. The faceted shaper
+    /// (`theme_picker.rs::overlay_shape_theme`) fills the SAME
+    /// `panel_buffer` the flat shaper does, and both are uploaded through the
+    /// SAME `overlay_upload_text` (`overlay.rs`) which always pushes the
+    /// placard's `TextArea` FIRST (drawn behind) — so a faceted card's lens
+    /// strip + section-grouped rows composite OVER the wordmark exactly like
+    /// a flat card's query line + rows do, no new wiring needed. This
+    /// includes the LITERAL Theme kind itself: nothing in `theme_picker.rs`
+    /// depends on the card being placard-free (no state it reads or writes
+    /// changes), so excluding it once the mechanism composes for free would
+    /// just be an inconsistent special case — the exact smell
+    /// `CLAUDE.md`'s "merge, don't align" principle warns against.
     pub(in crate::render) fn overlay_shape_placard(&mut self, geom: &OverlayGeom) -> Option<(f32, f32, f32, f32)> {
-        if geom.theme || geom.header_rows == 0 || self.overlay_title.is_empty() {
+        if geom.header_rows == 0 || self.overlay_title.is_empty() {
             return None;
         }
         let (corner, scale, ink) = match crate::render::effective_title_style() {
