@@ -84,6 +84,20 @@ Read `OUT.json` (schema `awl-capture/N`, documented in CAPTURE.md) for state:
 ## What the harness can and can't verify
 - **CAN:** state, geometry, layout, colors, and deterministic single-frame *trajectories* (via `--screenshot-motion`).
 - **CANNOT (today):** timing/feel over real time, and subjective taste. A frozen frame can't show a glide's *speed* or a fade's *progression*. Flag those for **live human confirmation** — do not claim them "verified."
+- **The sidecar is a STATE oracle, not an APPEARANCE oracle.** It truthfully reported `selected_index: 2` while the selected row rendered fully invisible (the 2026-07 Wagtail picker bug — six surfaces, zero pixels of highlight, every state assertion green). Appearance-class properties ("visible", "distinct", "legible") MUST be asserted over the PNG's pixels — arithmetic over the bytes, never inferred from state.
+
+## Spot-check audits (standing verification policy, user-set 2026-07-13)
+Born from the Wagtail invisible-picker-row bug: six surfaces shipped broken across three rounds because the test asserted the MECHANISM (`instance_count == 1` — a fully transparent band passes) instead of the OUTCOME, and no screenshot of an open picker ever existed for any eye to catch. The policy:
+- **Model rule: spot-check audit agents run on SONNET** — the probe is enumerate-capture-measure, not deep design; spend the strong model elsewhere.
+- **TRIGGERS (spawn an audit agent when one fires — never as a constant background hum; the standing load belongs to the law suite):**
+  1. **A new axis value lands** (a world, a platform, a convention, a capability field) → probe it against the FULL surface roster (pickers, menus, search, selection, caret, gutter — rosters are the code's own no-wildcard enums, e.g. `OverlayKind`).
+  2. **An identity-gated refactor lands** → byte-identity gates preserve pre-existing bugs by design; follow with an OUTCOME audit (properties, not bytes) of the refactored area.
+  3. **The user reports one bug in an area** → audit the NEIGHBORHOOD, not just the symptom — bugs cluster (the vertical-selection fix should have prompted "what else is invisible on Wagtail?"; the picker rows sat one seam over).
+  4. **A degradation/fallback arm ships** (any "in this case draw nothing / skip / fall back") → aim a probe at exactly the degraded state. A degradation is only permissible if its compensating mechanism is NAMED and LAW-TESTED — a comment claiming another subsystem covers it ("the row's own caret still marks the position") earns a test or doesn't earn the exception.
+  5. **Pre-tag** → one full journey sweep: drive the product headlessly end-to-end (open, type, search, select, palette, theme-switch, resize) across several worlds, checking every step.
+- **Probe form:** enumerate state × surface × world/platform, SAMPLED along the changed axis (never the full cross-product); assert the outcome property per cell (visible / distinct / legible / in-bounds) with pixel/sidecar ARITHMETIC — model vision never renders the verdict; report PASS/DEFECT with numbers.
+- **The vision-smoke tier (cheap, every render-touching round's verifier):** LOOK at ~5 gallery shots drawn from the interaction checklist (palette open + moved selection, search active, selection + caret, the changed feature in each state) and answer AFFORDANCE-LOCATING questions — "which row is selected? where is the caret? is any text clipped?" — never "does this look fine?" (the agreeable-model trap). Failure to locate an affordance is a defect signal. Vision notices hypothesis-free; arithmetic proves hypothesis-driven; the user's eye owns taste.
+- **The rule that compounds:** every audit that finds something ENDS by writing the missing law test. Scouts find the hole; laws close it permanently.
 
 ## Config (`config/`) — settings as a text file you edit IN awl
 awl loads a TOML config at `$XDG_CONFIG_HOME/awl/config.toml` (else `~/.config/awl/config.toml`) at startup. **Absent config = current defaults** (purely additive).
