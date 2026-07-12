@@ -23,6 +23,18 @@
 //! panel ON and fed a live EMA each frame. `set_view` is timed separately
 //! because the live loop does NOT run it per frame — `sync_view` runs per
 //! input EVENT; `RedrawRequested` never calls it.
+//!
+//! RESCUE ROUND (2026-07): the "wash layer (cull + upload)" stage
+//! (`prepare_wash_layer`) was added here — it previously ran live every frame
+//! (`TextPipeline::prepare`) but was never called AT ALL in this replayed
+//! sequence, so its cost was simply missing from the printed table rather than
+//! folded into a neighbor's number. Fixing that exposed a SEPARATE, pre-existing
+//! bug this round also fixed: `prepare_table_grid`'s own mark (added by an
+//! earlier tables round) had no matching `STAGE_NAMES` entry at all, so
+//! `assert_eq!(marks.i, STAGE_NAMES.len(), ..)` below panicked on a plain
+//! `--bench-frame` run on an UNMODIFIED base commit — this bench was broken
+//! before this round touched it, just never caught (a manual CLI flag, not
+//! under `cargo test`). Both stages are now named.
 
 use anyhow::Context as _;
 use glyphon::{Cache, Resolution};
@@ -49,15 +61,17 @@ const DT: f32 = 1.0 / 60.0;
 /// [`profile_doc`] — i.e. the order [`TextPipeline::prepare`] makes its
 /// sub-calls, then the encode/submit/trim tail `Gpu::redraw` runs. Keep this
 /// list and the marks in lockstep (asserted per frame).
-const STAGE_NAMES: [&str; 22] = [
+const STAGE_NAMES: [&str; 24] = [
     "advance (spring step)",
     "sync_wrap_width",
     "viewport.update (uniforms)",
     "background layer",
+    "wash layer (cull + upload)",
     "text layer (glyphon prepare)",
     "caret layer (geom + upload)",
     "selection/search rects",
     "ornaments (rules + bullets)",
+    "table grid (grid geometry)",
     "chrome: caret-preview panel",
     "chrome: overlay/panel park",
     "chrome: gutter",
@@ -166,6 +180,113 @@ async fn run_async() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Run ONE frame of the exact live `RedrawRequested` sequence, marking each
+/// stage boundary in lockstep with [`STAGE_NAMES`], and return the frame's
+/// total elapsed nanoseconds. The SOLE owner of this sequence — [`profile_doc`]'s
+/// loop and `framebench::tests::wash_layer_and_table_grid_stages_stay_in_lockstep`
+/// both call this SAME function, so the two can never drift apart the way
+/// `STAGE_NAMES` and the mark count once silently did (the table-grid stage this
+/// rescue round found had no name at all — see the module doc above).
+fn run_one_frame(
+    p: &mut TextPipeline,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target_view: &wgpu::TextureView,
+    marks: &mut Marks,
+    frame: usize,
+    ema: Option<f32>,
+) -> anyhow::Result<u128> {
+    let ft0 = Instant::now();
+
+    // ---- the live RedrawRequested body --------------------------------
+    p.advance(DT);
+    // The live loop feeds the perf lines each drawn frame (previous frame's
+    // cost + worst, latency, redraw count, interacting form, 60 Hz budget) —
+    // a changing line 1 per frame, exactly the worst-case panel reshape.
+    p.set_debug_perf(
+        ema.map(|e| (e, e)),
+        None,
+        Some(frame as u64),
+        false,
+        Some(1000.0 / 60.0),
+    );
+    marks.mark();
+
+    // ---- TextPipeline::prepare, sub-call by sub-call (same order) -----
+    p.sync_wrap_width();
+    marks.mark();
+    p.viewport.update(queue, Resolution { width: WIDTH, height: HEIGHT });
+    marks.mark();
+    p.prepare_background_layer(queue, WIDTH, HEIGHT);
+    marks.mark();
+    // The comment/string wash quads (syntax + markdown-fence washes) — in the
+    // live prepare() this sits exactly here, right after background. Was
+    // previously UNTIMED (not called at all in this replayed sequence), which
+    // hid it entirely rather than folding it into a neighbor's number; both
+    // real fixtures below carry fenced code (sh/toml) with comments + string
+    // literals, so this stage measures genuine, nonzero cull+upload work — see
+    // `framebench::tests::wash_layer_and_table_grid_stages_stay_in_lockstep`.
+    p.prepare_wash_layer(device, queue, WIDTH, HEIGHT);
+    marks.mark();
+    p.prepare_text_layer(device, queue, WIDTH, HEIGHT)?;
+    marks.mark();
+    p.prepare_caret_layer(device, queue, WIDTH, HEIGHT);
+    marks.mark();
+    p.prepare_selection_layer(device, queue, WIDTH, HEIGHT);
+    marks.mark();
+    p.prepare_ornaments(device, queue, WIDTH, HEIGHT)?;
+    marks.mark();
+    p.prepare_table_grid(device, queue, WIDTH, HEIGHT)?;
+    marks.mark();
+    // prepare_chrome_layer, split into its five sub-preparations:
+    p.prepare_caret_preview_panel(device, queue, WIDTH, HEIGHT)?;
+    marks.mark();
+    // no overlay + no search -> the park branch (nothing lingers)
+    p.panel_card.prepare(device, queue, WIDTH, HEIGHT, &[]);
+    p.panel_shadow.prepare(device, queue, WIDTH, HEIGHT, &[]);
+    p.panel_border.prepare(device, queue, WIDTH, HEIGHT, &[]);
+    p.overlay_rows.prepare(device, queue, WIDTH, HEIGHT, &[]);
+    marks.mark();
+    p.prepare_gutter(device, queue, WIDTH, HEIGHT)?;
+    marks.mark();
+    p.prepare_debug(device, queue, WIDTH, HEIGHT)?;
+    marks.mark();
+    p.prepare_hud(device, queue, WIDTH, HEIGHT)?;
+    marks.mark();
+    p.prepare_whichkey(device, queue, WIDTH, HEIGHT)?;
+    marks.mark();
+    // prepare_spell_layer, split: rect building vs GPU upload
+    let squiggles = p.spell_squiggles();
+    marks.mark();
+    p.spell_pipeline.prepare(device, queue, WIDTH, HEIGHT, &squiggles);
+    marks.mark();
+    // prepare_nit_layer, split the same way
+    let nits = p.nit_underlines();
+    marks.mark();
+    p.nit_pipeline.prepare(device, queue, WIDTH, HEIGHT, &nits);
+    marks.mark();
+    p.prepare_blur(device, queue, WIDTH, HEIGHT);
+    marks.mark();
+
+    // ---- Gpu::redraw's tail: encode -> submit (+poll) -> trim ---------
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl frame bench encoder"),
+    });
+    p.render(&mut encoder, target_view)?;
+    let cmd = encoder.finish();
+    marks.mark();
+    queue.submit(Some(cmd));
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .context("device poll failed")?;
+    marks.mark();
+    p.atlas.trim();
+    marks.mark();
+
+    assert_eq!(marks.i, STAGE_NAMES.len(), "stage marks out of lockstep");
+    Ok(ft0.elapsed().as_nanos())
+}
+
 /// Profile one document: build the live-shaped view (real misspellings), run
 /// the warmup + timed frames of the exact redraw sequence, and print the
 /// stage | median ms | % table plus the stage-sum sanity check and the two
@@ -211,87 +332,8 @@ fn profile_doc(
 
     for frame in 0..(WARMUP + FRAMES) {
         let timed = frame >= WARMUP;
-        let ft0 = Instant::now();
         marks.begin(timed);
-
-        // ---- the live RedrawRequested body --------------------------------
-        p.advance(DT);
-        // The live loop feeds the perf lines each drawn frame (previous frame's
-        // cost + worst, latency, redraw count, interacting form, 60 Hz budget) —
-        // a changing line 1 per frame, exactly the worst-case panel reshape.
-        p.set_debug_perf(
-            ema.map(|e| (e, e)),
-            None,
-            Some(frame as u64),
-            false,
-            Some(1000.0 / 60.0),
-        );
-        marks.mark();
-
-        // ---- TextPipeline::prepare, sub-call by sub-call (same order) -----
-        p.sync_wrap_width();
-        marks.mark();
-        p.viewport.update(queue, Resolution { width: WIDTH, height: HEIGHT });
-        marks.mark();
-        p.prepare_background_layer(queue, WIDTH, HEIGHT);
-        marks.mark();
-        p.prepare_text_layer(device, queue, WIDTH, HEIGHT)?;
-        marks.mark();
-        p.prepare_caret_layer(device, queue, WIDTH, HEIGHT);
-        marks.mark();
-        p.prepare_selection_layer(device, queue, WIDTH, HEIGHT);
-        marks.mark();
-        p.prepare_ornaments(device, queue, WIDTH, HEIGHT)?;
-        marks.mark();
-        p.prepare_table_grid(device, queue, WIDTH, HEIGHT)?;
-        marks.mark();
-        // prepare_chrome_layer, split into its five sub-preparations:
-        p.prepare_caret_preview_panel(device, queue, WIDTH, HEIGHT)?;
-        marks.mark();
-        // no overlay + no search -> the park branch (nothing lingers)
-        p.panel_card.prepare(device, queue, WIDTH, HEIGHT, &[]);
-        p.panel_shadow.prepare(device, queue, WIDTH, HEIGHT, &[]);
-        p.panel_border.prepare(device, queue, WIDTH, HEIGHT, &[]);
-        p.overlay_rows.prepare(device, queue, WIDTH, HEIGHT, &[]);
-        marks.mark();
-        p.prepare_gutter(device, queue, WIDTH, HEIGHT)?;
-        marks.mark();
-        p.prepare_debug(device, queue, WIDTH, HEIGHT)?;
-        marks.mark();
-        p.prepare_hud(device, queue, WIDTH, HEIGHT)?;
-        marks.mark();
-        p.prepare_whichkey(device, queue, WIDTH, HEIGHT)?;
-        marks.mark();
-        // prepare_spell_layer, split: rect building vs GPU upload
-        let squiggles = p.spell_squiggles();
-        marks.mark();
-        p.spell_pipeline.prepare(device, queue, WIDTH, HEIGHT, &squiggles);
-        marks.mark();
-        // prepare_nit_layer, split the same way
-        let nits = p.nit_underlines();
-        marks.mark();
-        p.nit_pipeline.prepare(device, queue, WIDTH, HEIGHT, &nits);
-        marks.mark();
-        p.prepare_blur(device, queue, WIDTH, HEIGHT);
-        marks.mark();
-
-        // ---- Gpu::redraw's tail: encode -> submit (+poll) -> trim ---------
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("awl frame bench encoder"),
-        });
-        p.render(&mut encoder, &target_view)?;
-        let cmd = encoder.finish();
-        marks.mark();
-        queue.submit(Some(cmd));
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .context("device poll failed")?;
-        marks.mark();
-        p.atlas.trim();
-        marks.mark();
-
-        assert_eq!(marks.i, STAGE_NAMES.len(), "stage marks out of lockstep");
-        let ns = ft0.elapsed().as_nanos();
+        let ns = run_one_frame(&mut p, device, queue, &target_view, &mut marks, frame, ema)?;
         if timed {
             totals.push(ns);
         }
@@ -676,4 +718,135 @@ fn burst_frame(
         gpu: gpu_ms,
         total: total_ms,
     })
+}
+
+// ============================================================================
+// BENCH-MUST-WITNESS-THE-WORK (CLAUDE.md's own rule): the "wash layer (cull +
+// upload)" stage added this round used to be entirely UNCALLED in this bench's
+// replayed sequence — not folded into a neighbor's number, just skipped, so a
+// reader of the printed table would never know the cost was missing. This
+// confirms, on the same class of content the real fixtures (`CAPTURE.md` /
+// `CLAUDE.md`) carry — a fenced code block with a prose comment + a string
+// literal, inheriting the wash through the markdown seam (see
+// `render::tests::washes::markdown_fence_inherits_washes`) — that the stage now
+// does REAL, nonzero cull+upload work rather than timing an empty prepare call.
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Headless (device, queue, pipeline), sized like the bench canvas — the
+    /// same construction `run_async` uses, kept local since the sibling
+    /// `render::tests` helpers (`headless_pipeline`) don't expose the device +
+    /// queue this witness needs to call `prepare_wash_layer` directly.
+    fn headless_dqp() -> Option<(wgpu::Device, wgpu::Queue, TextPipeline)> {
+        pollster::block_on(async {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .ok()?;
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("awl framebench test device"),
+                    ..Default::default()
+                })
+                .await
+                .ok()?;
+            let cache = Cache::new(&device);
+            let mut p = TextPipeline::new(&device, &queue, &cache, FORMAT);
+            p.set_size(WIDTH as f32, HEIGHT as f32);
+            p.set_dpi(DPI);
+            Some((device, queue, p))
+        })
+    }
+
+    /// A cheap, no-GPU-needed sanity check: both stages this rescue round named
+    /// (the new wash stage, and the pre-existing table-grid stage that turned
+    /// out to have NO name at all — see the module doc above) are present.
+    /// Holds even on a machine with no wgpu adapter, where the GPU-backed test
+    /// below skips.
+    #[test]
+    fn stage_names_include_wash_and_table_grid() {
+        assert!(
+            STAGE_NAMES.contains(&"wash layer (cull + upload)"),
+            "the wash-layer stage must be named in STAGE_NAMES: {STAGE_NAMES:?}"
+        );
+        assert!(
+            STAGE_NAMES.contains(&"table grid (grid geometry)"),
+            "the table-grid stage must be named in STAGE_NAMES: {STAGE_NAMES:?}"
+        );
+    }
+
+    /// Runs the EXACT frame sequence `profile_doc` uses (`run_one_frame`, the
+    /// one shared owner) over a wash-bearing fixture and witnesses TWO things:
+    /// (1) `marks.i == STAGE_NAMES.len()` — the lockstep invariant that a plain
+    /// `--bench-frame` run on the unmodified base commit was ALREADY violating
+    /// (the table-grid stage had a mark but no name; this test is the
+    /// regression guard for that bug, not just for the wash stage this round
+    /// added) — and (2) the wash pipelines actually uploaded a nonzero instance
+    /// count, so the new stage measures real work rather than an empty prepare
+    /// call. A markdown buffer with a fenced `sh` block carrying a `#` comment
+    /// AND a double-quoted string mirrors the two ingredients CLAUDE.md's own
+    /// ```sh```/```toml``` fences carry — why this is genuine work on the
+    /// bench's real fixtures, not a synthetic-only fixture.
+    #[test]
+    fn wash_layer_and_table_grid_stages_stay_in_lockstep() {
+        let _g = crate::testlock::serial();
+        let Some((device, queue, mut p)) = headless_dqp() else {
+            eprintln!("skipping wash_layer_and_table_grid_stages_stay_in_lockstep: no wgpu adapter");
+            return;
+        };
+        // Pin a DARK world explicitly — the STRING wash bucket only uploads on
+        // dark worlds (`role_style_for`'s documented rule; light worlds carry
+        // string identity in the fg tint alone), and the process-global active
+        // theme's own default (`theme::DEFAULT_THEME` = Saltpan, a LIGHT world)
+        // would otherwise make this test's outcome depend on whichever OTHER
+        // test happened to run first in the process and leave a dark world
+        // active — exactly the kind of order-dependent flake this codebase's
+        // `testlock::serial()` discipline exists to rule out.
+        crate::theme::set_active_by_name("Tawny").unwrap();
+        let text = "prose before\n```sh\n# a comment\nexport PATH=\"/usr/bin\"\n```\nprose after\n";
+        let view = ViewState { text: text.to_string(), is_markdown: true, ..ViewState::base() };
+        p.set_view(&view);
+
+        // Pure geometry sanity: `prepare_wash_layer` reads through
+        // `wash_rects()`, so it must have real quads to cull + upload.
+        let (comments, strings, _highlights) = p.wash_rects();
+        assert!(!comments.is_empty(), "the fenced comment must produce wash geometry: {comments:?}");
+        assert!(!strings.is_empty(), "the fenced string literal must produce wash geometry: {strings:?}");
+
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("awl framebench test target"),
+            size: wgpu::Extent3d { width: WIDTH, height: HEIGHT, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut marks = Marks::new(STAGE_NAMES.len());
+        marks.begin(true);
+        run_one_frame(&mut p, &device, &queue, &target_view, &mut marks, 0, None)
+            .expect("one bench frame must run cleanly");
+        assert_eq!(
+            marks.i,
+            STAGE_NAMES.len(),
+            "stage marks must stay in lockstep with STAGE_NAMES"
+        );
+
+        assert!(
+            p.wash_comment_pipeline.instance_count() > 0,
+            "prepare_wash_layer must upload the comment wash instances it built"
+        );
+        assert!(
+            p.wash_string_pipeline.instance_count() > 0,
+            "prepare_wash_layer must upload the string wash instances it built"
+        );
+    }
 }
