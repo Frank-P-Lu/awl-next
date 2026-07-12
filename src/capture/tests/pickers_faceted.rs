@@ -40,6 +40,7 @@ fn theme_picker_faceted_lens_renders_and_reports() {
     opts.overlay = Some(OverlayInfo {
         active: true,
         mode: ov.kind.as_str(),
+        title: ov.kind.title(),
         query: ov.query.clone(),
         items: ov.item_strings(),
         bindings: ov.item_bindings(),
@@ -121,6 +122,7 @@ fn overlay_empty_state_renders_and_reports() {
     let fold = |ov: &crate::overlay::OverlayState| OverlayInfo {
         active: true,
         mode: ov.kind.as_str(),
+        title: ov.kind.title(),
         query: ov.query.clone(),
         items: ov.item_strings(),
         bindings: ov.item_bindings(),
@@ -203,6 +205,7 @@ fn file_pickers_faceted_lens_render_and_report() {
         opts.overlay = Some(OverlayInfo {
             active: true,
             mode: ov.kind.as_str(),
+            title: ov.kind.title(),
             query: ov.query.clone(),
             items: ov.item_strings(),
             bindings: ov.item_bindings(),
@@ -307,6 +310,7 @@ fn faceted_grouped_window_is_bounded_and_scrolls_to_selection() {
         opts.overlay = Some(OverlayInfo {
             active: true,
             mode: ov.kind.as_str(),
+            title: ov.kind.title(),
             query: ov.query.clone(),
             items: ov.item_strings(),
             bindings: ov.item_bindings(),
@@ -433,6 +437,7 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
         opts.overlay = Some(OverlayInfo {
             active: true,
             mode: ov.kind.as_str(),
+            title: ov.kind.title(),
             query: ov.query.clone(),
             items: ov.item_strings(),
             bindings: ov.item_bindings(),
@@ -695,6 +700,7 @@ fn history_preview_folds_text_and_reports_preview_id() {
     opts.overlay = Some(OverlayInfo {
         active: true,
         mode: "history",
+        title: "version history",
         query: String::new(),
         items: vec!["2 hr ago · edited \"Old\"".into()],
         bindings: vec!["+2 −1".into()],

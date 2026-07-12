@@ -294,6 +294,21 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 if ov.kind == crate::overlay::OverlayKind::Settings {
                     return settings_accept(ctx);
                 }
+                // THE UNION ROUND: a settings row reached via the COMMAND PALETTE
+                // dispatches through the SAME owner Enter uses inside the Settings
+                // menu (`dispatch_settings_row`) — with the breadcrumb set to `Command`
+                // (so a Picker/Submenu/Path row it opens pops back to the palette on
+                // Esc, mirroring how running "Switch theme…" from the palette behaves)
+                // and `close_on_toggle: true` (activating a Toggle/Action CLOSES the
+                // palette, the palette's own "running a row closes it" convention — the
+                // Settings menu's OWN accept, just above, stays open instead). An
+                // ordinary command row (not a setting) falls through to the RunAction
+                // path below.
+                if ov.kind == crate::overlay::OverlayKind::Command {
+                    if let Some(row) = ov.selected_setting_row() {
+                        return dispatch_settings_row(ctx, row, crate::overlay::OverlayKind::Command, true);
+                    }
+                }
             }
             let ov = ctx.overlay.as_ref().unwrap();
             if ov.kind == crate::overlay::OverlayKind::Browse {
@@ -680,21 +695,47 @@ fn settings_accept(ctx: &mut ActionCtx) -> Effect {
         return Effect::None;
     };
     let row = *crate::settings::visible_rows()[ci];
+    dispatch_settings_row(ctx, row, crate::overlay::OverlayKind::Settings, false)
+}
+
+/// THE UNION ROUND: the SHARED settings-row dispatcher — the ONE owner both
+/// [`settings_accept`] (Enter inside the Settings menu itself) AND the Command
+/// palette's own settings-row accept (see the `OverlayKind::Command` arm below) call,
+/// so the two can never drift (dispatch parity BY CONSTRUCTION, never a second copy).
+/// `breadcrumb` is the overlay a Picker/Submenu/Path row's sub-picker pops back to on
+/// Esc (`Settings` from the Settings menu itself; `Command` from the palette, so
+/// canceling a theme-pick reached via the palette returns to the palette, mirroring
+/// how running "Switch theme…" from the palette itself behaves via `stamp_return_to`).
+/// `close_on_toggle` additionally CLOSES the overlay outright after a Toggle/Action —
+/// `false` for the Settings menu (a persistent surface you keep configuring), `true`
+/// for the palette (its own "activation closes it" convention, matching how running an
+/// ordinary command row closes it).
+fn dispatch_settings_row(
+    ctx: &mut ActionCtx,
+    row: crate::settings::SettingRow,
+    breadcrumb: crate::overlay::OverlayKind,
+    close_on_toggle: bool,
+) -> Effect {
     match row.kind {
-        // Flip IN PLACE: leave the menu open, signal the caller to toggle + persist +
-        // refresh the value cell. A row with no key (shouldn't happen for a Toggle) is
-        // a calm no-op rather than a signal.
+        // Flip IN PLACE: signal the caller to toggle + persist + refresh the value
+        // cell. A row with no key (shouldn't happen for a Toggle) is a calm no-op
+        // rather than a signal.
         crate::settings::SettingKind::Toggle => match crate::settings::toggle_key(row.name) {
-            Some(key) => Effect::SettingToggle { key: key.to_string() },
+            Some(key) => {
+                if close_on_toggle {
+                    *ctx.overlay = None;
+                }
+                Effect::SettingToggle { key: key.to_string() }
+            }
             None => Effect::None,
         },
-        // Open the sub-picker with a breadcrumb back to Settings. `make_overlay` builds
-        // it from the live globals (theme/caret/dictionary/keybindings), so a commit
-        // reflects in the value cell when `close_overlay` re-summons Settings.
+        // Open the sub-picker with a breadcrumb back to `breadcrumb`. `make_overlay`
+        // builds it from the live globals (theme/caret/dictionary/keybindings), so a
+        // commit reflects in the value cell when the breadcrumb re-summons.
         crate::settings::SettingKind::Picker | crate::settings::SettingKind::Submenu => {
             if let Some(target) = crate::settings::sub_overlay(row.name) {
                 if let Some(mut next) = (ctx.make_overlay)(target) {
-                    next.return_to = Some(crate::overlay::OverlayKind::Settings);
+                    next.return_to = Some(breadcrumb);
                     *ctx.overlay = Some(next);
                 }
             }
@@ -707,8 +748,9 @@ fn settings_accept(ctx: &mut ActionCtx) -> Effect {
             Effect::OpenSettings
         }
         // VALUE (page widths / zoom): arm the inline numeric edit sub-state, seeded
-        // from the row's current cell. The menu stays open; the modal intercept above
-        // then owns the keys until Enter commits / Esc cancels.
+        // from the row's current cell. The overlay stays open (the value edit is its
+        // own modal intercept, checked above); the caller then owns the keys until
+        // Enter commits / Esc cancels.
         crate::settings::SettingKind::Value => {
             if let Some(key) = crate::settings::value_key(row.name) {
                 ctx.overlay
@@ -720,12 +762,12 @@ fn settings_accept(ctx: &mut ActionCtx) -> Effect {
         }
         // PATH (notes_root / workspace / project_root): open the folder NAVIGATOR (the
         // Project picker, which roams the filesystem by absolute path) with a
-        // `return_to = Settings` breadcrumb + the config key stamped, so its accept
-        // writes THAT key and returns here rather than switching the project blindly.
+        // `return_to = breadcrumb` + the config key stamped, so its accept writes THAT
+        // key and returns rather than switching the project blindly.
         crate::settings::SettingKind::Path => {
             if let Some(key) = crate::settings::path_key(row.name) {
                 if let Some(mut nav) = (ctx.browse_to)(crate::overlay::OverlayKind::Project, None) {
-                    nav.return_to = Some(crate::overlay::OverlayKind::Settings);
+                    nav.return_to = Some(breadcrumb);
                     nav.setting_path_key = Some(key.to_string());
                     *ctx.overlay = Some(nav);
                 }

@@ -246,6 +246,16 @@ async fn capture_async(
         .map(|o| o.mode == "theme" || o.mode == "caret" || o.mode == "history")
         .unwrap_or(false);
     vstate.overlay_query = opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default();
+    // Rename/InsertLink already orient via their own modal prompt (`foot_hint`), so
+    // the render path skips the title prefix for them (mirrors `App::sync_view`'s
+    // `draws_title_prefix` gate); the sidecar's own `overlay.title` field, built in
+    // `main/run.rs`, still reports every kind's title unconditionally.
+    vstate.overlay_title = opts
+        .overlay
+        .as_ref()
+        .filter(|o| o.mode != "rename" && o.mode != "insert_link")
+        .map(|o| o.title)
+        .unwrap_or("");
     vstate.overlay_items = opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default();
     vstate.overlay_empty = opts.overlay.as_ref().and_then(|o| o.empty.clone());
     vstate.overlay_bindings = opts.overlay.as_ref().map(|o| o.bindings.clone()).unwrap_or_default();

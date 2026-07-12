@@ -162,6 +162,12 @@ impl App {
                 .as_ref()
                 .map(|o| o.query.clone())
                 .unwrap_or_default(),
+            overlay_title: self
+                .overlay
+                .as_ref()
+                .filter(|o| o.kind.draws_title_prefix())
+                .map(|o| o.kind.title())
+                .unwrap_or(""),
             overlay_items: self
                 .overlay
                 .as_ref()

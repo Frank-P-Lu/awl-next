@@ -243,7 +243,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // `hud.saved`'s own placeholder-string, not `null`, precedent); live with no
 // marker ever written it is JSON `null` (the card omits the line entirely);
 // live with a marker it's the phrased string. `about.open` is unaffected.
-pub const SCHEMA_VERSION: u32 = 166;
+// `/167` — THE PALETTE-SETTINGS-UNION + OVERLAY-TITLES round: the `overlay`
+// block gains `title` — the picker's short self-announcement
+// (`crate::overlay::OverlayKind::title`), the same text the render path draws
+// as a quiet prefix on the input line. `null` when no overlay is open, a
+// nonempty lowercase string for every kind otherwise. Settings rows joining
+// the Cmd-P palette adds no field of its own — a settings row appears as an
+// ordinary `overlay.items` entry (its `"§ "`-prefixed display text), and its
+// current value rides the EXISTING `overlay.bindings` column.
+pub const SCHEMA_VERSION: u32 = 167;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

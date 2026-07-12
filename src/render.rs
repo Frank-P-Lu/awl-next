@@ -974,6 +974,11 @@ pub struct ViewState {
     /// The overlay's live query string (shown on the query line, with the amber
     /// caret at its end). Empty when no overlay.
     pub overlay_query: String,
+    /// THE OVERLAY-TITLES ROUND: this picker's short self-announcement
+    /// ([`crate::overlay::OverlayKind::title`]), drawn as a quiet MUTED prefix
+    /// ("<title> › ") before the query text on the picker's own input line. Empty
+    /// when no overlay is open.
+    pub overlay_title: &'static str,
     /// The overlay's filtered + ranked candidate strings, top-to-bottom.
     pub overlay_items: Vec<String>,
     /// EMPTY STATE: `Some(message)` when the overlay has NO candidate rows (an empty
@@ -1130,6 +1135,7 @@ impl ViewState {
             overlay_active: false,
             overlay_crisp: false,
             overlay_query: String::new(),
+            overlay_title: "",
             overlay_items: Vec::new(),
             overlay_empty: None,
             overlay_bindings: Vec::new(),
@@ -2338,6 +2344,8 @@ pub struct TextPipeline {
     /// crisp (no blur backdrop). Drives both the render path and [`Self::dims_doc`].
     overlay_crisp: bool,
     overlay_query: String,
+    /// Mirror of [`ViewState::overlay_title`]: this picker's quiet input-line prefix.
+    overlay_title: &'static str,
     overlay_items: Vec<String>,
     /// Mirror of [`ViewState::overlay_empty`]: the shared empty-state message drawn
     /// when the overlay has no candidate rows, or `None` when it has rows.
@@ -2924,6 +2932,7 @@ impl TextPipeline {
             overlay_active: false,
             overlay_crisp: false,
             overlay_query: String::new(),
+            overlay_title: "",
             overlay_items: Vec::new(),
             overlay_empty: None,
             overlay_bindings: Vec::new(),
@@ -3367,6 +3376,7 @@ impl TextPipeline {
         self.overlay_active = view.overlay_active;
         self.overlay_crisp = view.overlay_crisp;
         self.overlay_query = view.overlay_query.clone();
+        self.overlay_title = view.overlay_title;
         self.overlay_items = view.overlay_items.clone();
         self.overlay_empty = view.overlay_empty.clone();
         self.overlay_bindings = view.overlay_bindings.clone();

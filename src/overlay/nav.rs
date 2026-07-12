@@ -291,6 +291,13 @@ impl OverlayState {
             let rel = &self.corpus[i];
             return rel.rsplit('/').next().unwrap_or(rel).to_string();
         }
+        // THE UNION ROUND: a settings row (appended to the Command palette's
+        // corpus by `attach_settings_rows`) draws the `§ ` marker glyph before its
+        // name — `crate::overlay::row_split` recognizes the SAME prefix constant
+        // and mutes it, exactly like a file row's directory prefix.
+        if self.kind == OverlayKind::Command && self.is_setting.get(i).copied().unwrap_or(false) {
+            return format!("{}{}", OverlayKind::SETTINGS_MARKER_PREFIX, self.corpus[i]);
+        }
         let mut s = self.corpus[i].clone();
         if self.is_dir.get(i).copied().unwrap_or(false) {
             s.push('/');

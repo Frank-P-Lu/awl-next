@@ -173,6 +173,14 @@ pub struct OverlayState {
     /// [`Self::new_link_edit`] — mirrors `rename_edit`'s shape exactly). `None`
     /// for every other kind.
     pub link_edit: Option<LinkEdit>,
+    /// THE UNION ROUND: Command palette only — parallel to `corpus`, `true` for the
+    /// appended SETTINGS rows (mirrors Go-to's `heading` flag exactly), `false` for
+    /// the ordinary command rows. Drives the marker glyph ([`Self::display_of`]) and
+    /// the accept dispatch ([`Self::selected_setting_row`]: a settings row routes
+    /// through the SAME `dispatch_settings_row` owner Enter uses inside the Settings
+    /// menu itself, never a second copy). EMPTY for every other kind and for a
+    /// Command palette with no settings attached (`attach_settings_rows` never called).
+    pub is_setting: Vec<bool>,
 }
 
 impl OverlayState {
@@ -242,6 +250,9 @@ impl OverlayState {
             rename_edit: None,
             // No link edit on a fresh summon; `new_link_edit` arms it right after.
             link_edit: None,
+            // No settings rows attached on a fresh summon; `attach_settings_rows`
+            // (Command palette only) arms it right after.
+            is_setting: Vec::new(),
         };
         s.refilter();
         s
@@ -564,6 +575,55 @@ impl OverlayState {
             self.lines.push(line);
         }
         self.refilter();
+    }
+
+    /// THE UNION ROUND: attach the SETTINGS corpus to a freshly-built Command
+    /// palette overlay — appended AFTER the command rows (mirrors
+    /// [`Self::attach_headings`]'s file-rows-first convention), so the flat `All`
+    /// facet lens intermixes commands + settings by fuzzy rank while the File/Edit/
+    /// View/Recent lenses (which bucket by `menu_section`/`recent`, neither of which
+    /// any setting name matches) naturally exclude them — no bucket code needed.
+    /// `names`/`values` are [`crate::settings::visible_names`]/
+    /// [`crate::settings::visible_value_cells`] (platform-filtered, parallel), the
+    /// SAME corpus the Settings menu itself opens with, so a setting reached via the
+    /// palette shows the identical current-value secondary cell — riding the
+    /// EXISTING `bindings` right column (a command shows its chord there, a setting
+    /// its value; never both on the same row). `is_setting` records which rows are
+    /// which, read by [`Self::selected_setting_row`] (the accept dispatch) and
+    /// [`Self::display_of`] (the marker glyph). A no-op when `names` is empty.
+    pub fn attach_settings_rows(&mut self, names: Vec<String>, values: Vec<String>) {
+        if names.is_empty() {
+            return;
+        }
+        let n = self.corpus.len();
+        self.is_setting = vec![false; n];
+        for (name, value) in names.into_iter().zip(values) {
+            self.corpus.push(name);
+            self.git.push(false);
+            self.is_dir.push(false);
+            self.is_setting.push(true);
+            self.bindings.push(value);
+        }
+        self.refilter();
+    }
+
+    /// THE UNION ROUND: the highlighted row's [`crate::settings::SettingRow`], when
+    /// the Command palette's selection is one of the APPENDED settings rows
+    /// ([`Self::attach_settings_rows`]) — `None` for an ordinary command row, every
+    /// other kind, and a settings row somehow absent from the live
+    /// [`crate::settings::visible_rows`] (never happens in practice; the corpus text
+    /// IS a `visible_rows` name by construction). Looked up by NAME rather than a
+    /// tracked offset, so it can never mis-map regardless of how many commands
+    /// precede the settings block.
+    pub fn selected_setting_row(&self) -> Option<crate::settings::SettingRow> {
+        let ci = self.selected_corpus_index()?;
+        if !self.is_setting.get(ci).copied().unwrap_or(false) {
+            return None;
+        }
+        crate::settings::visible_rows()
+            .into_iter()
+            .find(|r| r.name == self.corpus[ci])
+            .copied()
     }
 
     /// Build the SPELL-SUGGESTION picker: `suggestions` is the spellchecker's

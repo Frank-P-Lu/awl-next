@@ -1117,6 +1117,32 @@ fn every_kind_declares_an_accept_disposition() {
     }
 }
 
+/// THE OVERLAY-TITLES ROUND: every kind names itself with a nonempty, lowercase
+/// title (`OverlayKind::title`) — the no-wildcard law a future kind must satisfy
+/// before it compiles. Titles are also pairwise DISTINCT (so a sidecar `overlay.
+/// title` read unambiguously identifies which picker is open).
+#[test]
+fn every_kind_names_itself_with_a_nonempty_distinct_title() {
+    use std::collections::HashSet;
+    let mut titles: HashSet<&'static str> = HashSet::new();
+    for k in OverlayKind::ALL {
+        let t = k.title();
+        assert!(!t.is_empty(), "{k:?} has no title");
+        assert_eq!(t, t.to_lowercase(), "{k:?}'s title {t:?} must be lowercase");
+        assert!(titles.insert(t), "{k:?}'s title {t:?} collides with another kind's");
+    }
+    // Rename/InsertLink are the RENDER exceptions (their own modal prompt already
+    // orients) — every other kind draws its title prefix.
+    for k in [OverlayKind::Rename, OverlayKind::InsertLink] {
+        assert!(!k.draws_title_prefix(), "{k:?} should not draw the title prefix");
+    }
+    for k in OverlayKind::ALL {
+        if !matches!(k, OverlayKind::Rename | OverlayKind::InsertLink) {
+            assert!(k.draws_title_prefix(), "{k:?} should draw the title prefix");
+        }
+    }
+}
+
 /// BREADCRUMB KINDS ARE VALUE-BASED, never positional. A `return_to` breadcrumb
 /// stores an [`OverlayKind`] by VALUE and re-summons it by that value
 /// ([`make_overlay`](crate::actions::ActionCtx) is keyed on the kind, not an

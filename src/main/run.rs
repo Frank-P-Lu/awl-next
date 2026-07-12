@@ -703,6 +703,7 @@ fn capture_screenshot(
                     lens: ov.active_facet_id(),
                     lens_strip: ov.lens_strip(),
                     sections: ov.item_sections(),
+                    title: ov.kind.title(),
                 });
             }
             // If a selection is requested (or one came from --keys), move the
@@ -1180,6 +1181,45 @@ mod tests {
         assert_eq!(buffer.text(), expected, "the buffer now holds the token-rendered guide text");
         assert!(!buffer.text().contains("{{key:"), "no raw chord token survives in the opened guide");
         assert!(buffer.path().is_none(), "headless replay never writes/loads a real on-disk guide.md");
+    }
+
+    #[test]
+    fn replay_keys_palette_filter_surfaces_the_marked_settings_row() {
+        // Cmd-P → "keymap" (no Enter): the palette stays open with the union corpus
+        // filtered down to the settings row, its display text carrying the `§ `
+        // marker glyph — assertable straight from `res.overlay.items` (and, via the
+        // sidecar, `overlay.items`).
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e y m a p").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("the palette is still open");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::Command);
+        assert!(
+            ov.item_strings().iter().any(|s| s == "§ Keymap"),
+            "the union corpus surfaces the marked settings row: {:?}",
+            ov.item_strings()
+        );
+    }
+
+    #[test]
+    fn replay_keys_palette_filters_to_a_settings_row_and_toggles_it() {
+        // THE UNION ROUND: Cmd-P → "keymap" filters to the SETTINGS row "Keymap"
+        // (the union palette's marked settings corpus, `§ Keymap`) → Enter signals
+        // the SAME `Effect::SettingToggle{key:"keymap"}` the Settings menu's own
+        // accept would, and CLOSES the palette (the palette's "activation closes
+        // it" convention). Note the honest scope boundary: `Effect::SettingToggle`
+        // is a documented headless no-op (see the `Effect` match above) — flipping
+        // + persisting the live keymap flavor is the live App's job
+        // (`App::toggle_keymap_flavor`, unit-tested there); this replay proves the
+        // dispatch reaches the toggle EFFECT end-to-end through the real keymap +
+        // fuzzy filter + accept seam, not that the flavor value itself flips in a
+        // capture (which the architecture never claims for any settings toggle).
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e y m a p RET").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "activating a settings row closes the palette");
     }
 
     #[test]
