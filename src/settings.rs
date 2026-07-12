@@ -428,6 +428,97 @@ pub fn visible_rows() -> Vec<&'static SettingRow> {
     visible_rows_on(crate::commands::Platform::current())
 }
 
+// ── ONE PALETTE DOOR PER DESTINATION (the union-round follow-up fix) ───────────
+//
+// The palette-settings union (see `overlay::build`'s `OverlayKind::Command` arm)
+// made a settings row fuzzy-findable straight from Cmd-P — but several rows share
+// their EXACT destination with an existing catalog command ("Theme" the Picker row
+// and "Switch theme…" the command both open `OverlayKind::Theme`; "Page mode" the
+// Toggle row and "Toggle page mode" the command both flip `page::PAGE_ON`), so
+// typing "theme" showed both with no way to tell them apart — the user-reported
+// bug this table fixes. A settings row named in [`COVERED_BY`] is EXCLUDED from
+// the palette union whenever its covering command is available on the current
+// platform (the command is the one advertised door — chords, menu presence); the
+// row stays FULLY FUNCTIONAL inside the Settings menu itself ([`visible_rows`] is
+// untouched — this only trims the PALETTE corpus). If a covering command is
+// platform-hidden (none of today's ten are, but a future one could be), the row
+// REAPPEARS in the palette rather than the door vanishing outright.
+
+/// Settings row name → its covering catalog command name, for every row that
+/// shares its exact destination with an existing command (the same `OverlayKind`
+/// via [`sub_overlay`], or the same process-global via [`toggle_key`]). A row
+/// absent from this table has no command twin and stays palette-visible
+/// unconditionally (Reduce motion, Autosave, the page widths, the folders, …).
+/// Both directions are law-tested: every entry names a real row and a real
+/// command ([`crate::settings::tests`]), and the two genuinely share a
+/// destination (`covered_by_picker_rows_open_the_same_overlay_as_their_command`,
+/// `covered_by_toggle_rows_flip_the_same_global_as_their_command`).
+pub static COVERED_BY: &[(&str, &str)] = &[
+    ("Theme", "Switch theme…"),
+    ("Caret style", "Caret style…"),
+    ("Dictionary", "Dictionary…"),
+    ("Keybindings", "Keybindings…"),
+    ("Page mode", "Toggle page mode"),
+    ("Typewriter scroll", "Toggle typewriter scroll"),
+    ("Outline", "Toggle outline"),
+    ("Menu bar", "Toggle menu bar"),
+    ("Spellcheck", "Toggle spellcheck"),
+    ("Writing nits", "Toggle writing nits"),
+];
+
+/// The covering command name for setting `name`, or `None` if it has no command
+/// twin.
+pub fn covered_by(name: &str) -> Option<&'static str> {
+    COVERED_BY.iter().find(|(row, _)| *row == name).map(|(_, cmd)| *cmd)
+}
+
+/// The pure decision the palette filter rests on: is a row visible in the Cmd-P
+/// palette union given its covering command name (`None` = uncovered) and
+/// `platform`? Covered + the command is available there → HIDDEN (the command IS
+/// the door); covered but the command is platform-hidden → VISIBLE (the door must
+/// not be lost); uncovered → always visible. Exposed standalone (rather than
+/// folded directly into [`palette_rows_on`]) so the platform-hidden REAPPEARANCE
+/// behavior is directly testable against a hypothetical covering command, without
+/// needing a real platform-scoped entry in [`COVERED_BY`] today (none of the ten
+/// current covering commands are `native_only`/`web_only`).
+pub fn row_visible_in_palette(covering: Option<&str>, platform: crate::commands::Platform) -> bool {
+    match covering {
+        Some(cmd) => !crate::commands::available_by_name(cmd, platform),
+        None => true,
+    }
+}
+
+/// The settings rows that belong in the Cmd-P PALETTE union on `platform` —
+/// [`visible_rows_on`] minus every row whose covering command
+/// ([`covered_by`]) is available there.
+fn palette_rows_on(platform: crate::commands::Platform) -> Vec<&'static SettingRow> {
+    visible_rows_on(platform)
+        .into_iter()
+        .filter(|r| row_visible_in_palette(covered_by(r.name), platform))
+        .collect()
+}
+
+/// The settings rows that belong in the Cmd-P PALETTE union on THIS COMPILED
+/// PLATFORM — replaces a bare [`visible_rows`] at the palette's
+/// `attach_settings_rows` call site ([`crate::overlay::build`]'s `Command` arm).
+/// The Settings MENU itself keeps reading [`visible_rows`] unfiltered — a covered
+/// row stays fully reachable there.
+pub fn palette_rows() -> Vec<&'static SettingRow> {
+    palette_rows_on(crate::commands::Platform::current())
+}
+
+/// The display NAMES for [`palette_rows`], parallel — replaces a bare
+/// [`visible_names`] at the palette's `attach_settings_rows` call site.
+pub fn palette_names() -> Vec<String> {
+    palette_rows().iter().map(|r| r.name.to_string()).collect()
+}
+
+/// The VALUE cells for [`palette_rows`], parallel — replaces a bare
+/// [`visible_value_cells`] at the palette's `attach_settings_rows` call site.
+pub fn palette_value_cells(values: &SettingsValues) -> Vec<String> {
+    palette_rows().iter().map(|r| value_for(r, values)).collect()
+}
+
 /// The display NAMES for [`visible_rows`], in corpus order — replaces a bare
 /// [`names`] at the Settings overlay's build site.
 pub fn visible_names() -> Vec<String> {
@@ -713,6 +804,189 @@ mod tests {
         assert_eq!(cells.len(), rows.len());
         for (i, r) in rows.iter().enumerate() {
             assert_eq!(names[i], r.name);
+        }
+    }
+
+    // ── ONE PALETTE DOOR PER DESTINATION ────────────────────────────────────────
+
+    /// Both directions of the table law: every `COVERED_BY` entry names a REAL
+    /// settings row and a REAL catalog command — a typo'd/renamed name on either
+    /// side fails here instead of silently building a dead exclusion.
+    #[test]
+    fn every_covered_by_pair_names_a_real_row_and_a_real_command() {
+        for (row_name, cmd_name) in COVERED_BY {
+            assert!(
+                SETTINGS.iter().any(|r| r.name == *row_name),
+                "COVERED_BY names no real settings row: {row_name:?}"
+            );
+            assert!(
+                crate::commands::COMMANDS.iter().any(|c| c.name == *cmd_name),
+                "COVERED_BY names no real catalog command: {cmd_name:?}"
+            );
+        }
+    }
+
+    /// Every `COVERED_BY` entry pairing a Picker/Submenu row genuinely shares its
+    /// destination with its command: both open the identical `OverlayKind`.
+    #[test]
+    fn covered_by_picker_rows_open_the_same_overlay_as_their_command() {
+        use crate::keymap::Action;
+        use crate::overlay::OverlayKind;
+        for (row_name, cmd_name) in COVERED_BY {
+            let row = *SETTINGS.iter().find(|r| r.name == *row_name).unwrap();
+            if !matches!(row.kind, SettingKind::Picker | SettingKind::Submenu) {
+                continue;
+            }
+            let cmd = crate::commands::COMMANDS.iter().find(|c| c.name == *cmd_name).unwrap();
+            let expected = match &cmd.action {
+                Action::OpenThemeMenu => OverlayKind::Theme,
+                Action::OpenCaretMenu => OverlayKind::Caret,
+                Action::OpenDictionaryMenu => OverlayKind::Dictionary,
+                Action::OpenKeybindings => OverlayKind::Keybindings,
+                other => panic!("{cmd_name:?} covers {row_name:?} but its action {other:?} \
+                                  isn't a known overlay-opening arm — add it here"),
+            };
+            assert_eq!(
+                sub_overlay(row.name),
+                Some(expected),
+                "{row_name:?} and {cmd_name:?} must open the same overlay"
+            );
+        }
+    }
+
+    /// Every `COVERED_BY` entry pairing a Toggle row genuinely shares its
+    /// destination with its command: firing the command's real toggle flips the
+    /// EXACT global the row's `value_for` reads back.
+    #[test]
+    fn covered_by_toggle_rows_flip_the_same_global_as_their_command() {
+        use crate::keymap::Action;
+        let _g = crate::testlock::serial();
+        let values = SettingsValues::default();
+        for (row_name, cmd_name) in COVERED_BY {
+            let row = *SETTINGS.iter().find(|r| r.name == *row_name).unwrap();
+            if row.kind != SettingKind::Toggle {
+                continue;
+            }
+            let cmd = crate::commands::COMMANDS.iter().find(|c| c.name == *cmd_name).unwrap();
+            let flip = || match &cmd.action {
+                Action::TogglePageMode => crate::page::toggle(),
+                Action::ToggleTypewriter => crate::typewriter::toggle(),
+                Action::ToggleOutline => crate::outline::toggle(),
+                Action::ToggleMenuBar => crate::menubar::toggle(),
+                Action::ToggleSpellcheck => crate::spell::toggle(),
+                Action::ToggleWritingNits => crate::nits::toggle(),
+                other => panic!("{cmd_name:?} covers {row_name:?} but its action {other:?} \
+                                  isn't a known global-flipping arm — add it here"),
+            };
+            let before = value_for(&row, &values);
+            flip();
+            let after = value_for(&row, &values);
+            assert_ne!(before, after, "{row_name:?}'s value must flip when {cmd_name:?} fires");
+            flip(); // restore, so this test never leaks state to another.
+            assert_eq!(value_for(&row, &values), before, "flip must be a true toggle");
+        }
+    }
+
+    /// THE DEDUPE LAW: on both platforms, no covered row's name appears in the
+    /// palette union AT ALL when its covering command is available there — the
+    /// literal fix for the reported bug (typing "theme" showed both "Theme" and
+    /// "Switch theme…", with no way to tell them apart).
+    #[test]
+    fn covered_rows_are_excluded_from_the_palette_on_both_platforms() {
+        use crate::commands::Platform;
+        for platform in [Platform::Native, Platform::Web] {
+            let palette = palette_rows_on(platform);
+            for (row_name, cmd_name) in COVERED_BY {
+                if crate::commands::available_by_name(cmd_name, platform) {
+                    assert!(
+                        !palette.iter().any(|r| r.name == *row_name),
+                        "{row_name:?} must not appear in the {platform:?} palette union \
+                         while {cmd_name:?} covers it there"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A covered row stays FULLY FUNCTIONAL inside the Settings menu itself —
+    /// this fix only trims the PALETTE corpus, never `visible_rows`.
+    #[test]
+    fn covered_rows_stay_in_the_settings_menu_unaffected() {
+        for (row_name, _) in COVERED_BY {
+            assert!(
+                visible_rows().iter().any(|r| r.name == *row_name),
+                "{row_name:?} must remain reachable from the Settings menu"
+            );
+        }
+    }
+
+    /// THE REAPPEARANCE CASE (a covered row whose covering command is
+    /// PLATFORM-HIDDEN): tested against the pure decision fn directly with a real
+    /// `native_only` command standing in for a hypothetical covering command,
+    /// since none of today's ten real `COVERED_BY` commands happen to be
+    /// platform-scoped. `Native` (where the stand-in command IS available) hides
+    /// the row exactly like a real covered pair; `Web` (where it's hidden) lets
+    /// the row REAPPEAR — the door is never entirely lost.
+    #[test]
+    fn covered_row_reappears_in_the_palette_if_its_command_is_platform_hidden() {
+        use crate::commands::Platform;
+        // "Version history…" is native_only: true — a real, currently-uncovered
+        // command that happens to be exactly what this case needs: available on
+        // Native, unavailable on Web.
+        let stand_in = "Version history…";
+        assert!(crate::commands::available_by_name(stand_in, Platform::Native));
+        assert!(!crate::commands::available_by_name(stand_in, Platform::Web));
+
+        assert!(
+            !row_visible_in_palette(Some(stand_in), Platform::Native),
+            "covered + command available -> hidden"
+        );
+        assert!(
+            row_visible_in_palette(Some(stand_in), Platform::Web),
+            "covered + command platform-hidden -> the row REAPPEARS, door never lost"
+        );
+        // An uncovered row is unconditionally visible on both.
+        assert!(row_visible_in_palette(None, Platform::Native));
+        assert!(row_visible_in_palette(None, Platform::Web));
+    }
+
+    /// STRONGER DEDUPE LAW: for every sub-overlay kind a settings Picker/Submenu
+    /// row can ever open ([`sub_overlay`]'s own closed range), the palette union
+    /// has EXACTLY ONE door to it — either the uncovered settings row, or the
+    /// covering command (never both, and — since every such kind names a real
+    /// row today — never neither). A future settings row sharing a destination
+    /// with an existing command fails this test until it's added to
+    /// [`COVERED_BY`].
+    #[test]
+    fn no_two_palette_doors_open_the_same_settings_sub_overlay() {
+        use crate::keymap::Action;
+        use crate::overlay::OverlayKind;
+        let kinds = [
+            OverlayKind::Caret,
+            OverlayKind::Theme,
+            OverlayKind::Dictionary,
+            OverlayKind::CjkLang,
+            OverlayKind::Keybindings,
+        ];
+        let command_opens = |a: &Action| match a {
+            Action::OpenCaretMenu => Some(OverlayKind::Caret),
+            Action::OpenThemeMenu => Some(OverlayKind::Theme),
+            Action::OpenDictionaryMenu => Some(OverlayKind::Dictionary),
+            Action::OpenKeybindings => Some(OverlayKind::Keybindings),
+            _ => None,
+        };
+        let palette = palette_rows();
+        for kind in kinds {
+            let command_doors = crate::commands::visible()
+                .into_iter()
+                .filter(|c| command_opens(&c.action) == Some(kind))
+                .count();
+            let row_doors = palette.iter().filter(|r| sub_overlay(r.name) == Some(kind)).count();
+            assert_eq!(
+                command_doors + row_doors,
+                1,
+                "{kind:?} must have exactly one palette door (commands={command_doors}, rows={row_doors})"
+            );
         }
     }
 }

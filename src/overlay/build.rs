@@ -135,12 +135,22 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
             // flat All lens fuzzy-ranks commands + settings together while the File/
             // Edit/View/Recent lenses (which bucket by `menu_section`/`recent`, neither
             // of which any setting name matches) naturally exclude them, no bucket code
-            // needed. Same platform-filtered corpus + value readout the Settings menu
-            // itself opens with, so a setting reached via the palette shows the
-            // identical current-value secondary cell.
+            // needed. Same platform-filtered value readout the Settings menu itself
+            // opens with, so a setting reached via the palette shows the identical
+            // current-value secondary cell.
+            //
+            // ONE PALETTE DOOR PER DESTINATION (the union round's own follow-up fix):
+            // `palette_names`/`palette_value_cells` are `visible_names`/
+            // `visible_value_cells` MINUS every row whose covering command
+            // (`settings::COVERED_BY`) is available on this platform — e.g. "Theme" is
+            // excluded here because "Switch theme…" already opens the identical
+            // `OverlayKind::Theme`, the exact door-duplication the user reported
+            // ("what's the difference between the new theme option and the switch
+            // theme option???"). A covered row stays fully reachable from the Settings
+            // menu itself, which reads `visible_names`/`visible_value_cells` unfiltered.
             ov.attach_settings_rows(
-                crate::settings::visible_names(),
-                crate::settings::visible_value_cells(&ctx.settings_values),
+                crate::settings::palette_names(),
+                crate::settings::palette_value_cells(&ctx.settings_values),
             );
             Some(ov)
         }

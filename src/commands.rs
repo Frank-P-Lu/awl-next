@@ -113,6 +113,18 @@ impl Command {
     }
 }
 
+/// Is the catalog command named `name` available on `platform`? Looks it up by
+/// NAME (not corpus index) in the full, unfiltered catalog — the seam
+/// [`crate::settings::COVERED_BY`] uses to decide whether a covered settings
+/// row's covering command is actually reachable on this platform (so a settings
+/// row can REAPPEAR in the palette union if its covering command is
+/// platform-hidden, rather than the door being lost entirely). `false` for an
+/// unknown name — never happens for a real `COVERED_BY` entry, guarded by
+/// `settings::tests::every_covered_by_pair_names_a_real_row_and_a_real_command`.
+pub fn available_by_name(name: &str, platform: Platform) -> bool {
+    COMMANDS.iter().find(|c| c.name == name).is_some_and(|c| c.available_on(platform))
+}
+
 /// The command catalog, in stable display order. The fuzzy corpus is the NAMES
 /// in this order, so a selected row index indexes straight back into this slice.
 /// Each row carries its two binding slots — native (Cmd) and emacs.
