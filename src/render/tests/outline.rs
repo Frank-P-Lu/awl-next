@@ -332,6 +332,150 @@ fn page_reset_does_not_rail_shift_the_column_for_a_hidden_outline() {
     crate::page::set_measure(80);
 }
 
+/// THE RESIZE-JITTER REPRODUCTION (user-reported live bug, 2026-07-12): "there
+/// seems to be some jitter... even when the center panel is not supposed to be
+/// moving... i wonder if it is because we are not locking the width for the
+/// left gutter." A 1px-at-a-time horizontal sweep across all three placement
+/// regimes (WIDE / rail-pinned NARROW / NARROWEST) via the REAL `TextPipeline`
+/// (sequential `set_size` calls, mirroring a live resize drag), asserting the
+/// stability contract this round's fix is built around: (a) `column_left` is
+/// piecewise MONOTONE in width (no direction reversal except at a documented
+/// regime boundary), (b) `column_width` (the measure in px) never changes at
+/// all across the WHOLE sweep — only placement may move, per the section's own
+/// law, (c) growing back over the same widths reproduces the EXACT same left
+/// values (no hysteresis-shaped path dependence), and (d) once genuinely
+/// PINNED to the outline's full preferred rail, `column_left` is byte-constant
+/// across every width in that sub-range.
+#[test]
+fn column_left_is_pixel_stable_across_a_one_px_resize_sweep() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping column_left_is_pixel_stable_across_a_one_px_resize_sweep: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    crate::outline::set_outline_on(true);
+    crate::page::set_page_on(true);
+    let measure = crate::page::DEFAULT_MEASURE; // 70, the standard prose column.
+    crate::page::set_measure(measure);
+    let text = "# Title\n\n## Section\n\nsome prose under the section heading.\n";
+    p.set_view(&view_md(text, 0, 0));
+
+    // Sweep 1000..=1400px, 1px at a time — spans NARROWEST, the rail-pinned
+    // NARROW regime, and WIDE for the default 70-char measure (below ~1040px
+    // the measure itself no longer fits and the column genuinely shrinks with
+    // the window — that's the documented NARROWEST-collapse regime, not the
+    // jitter bug, so the sweep starts just above it).
+    let widths: Vec<u32> = (1000..=1400).collect();
+
+    let mut shrink_lefts = Vec::with_capacity(widths.len());
+    let mut shrink_widths = Vec::with_capacity(widths.len());
+    for &w in widths.iter().rev() {
+        p.set_size(w as f32, 800.0);
+        p.set_view(&view_md(text, 0, 0));
+        shrink_lefts.push(p.column_left());
+        shrink_widths.push(p.column_width());
+    }
+    shrink_lefts.reverse();
+    shrink_widths.reverse();
+
+    // (b) column WIDTH never changes ONCE the measure actually fits the
+    // window (`window_w >= measure_px + 2*PAGE_MIN_PAD` — below that, the
+    // NARROWEST regime's OWN documented law is that the column shrinks WITH
+    // the window, `column_width_for`'s own collapse-to-edge-to-edge
+    // behavior, unrelated to the adaptive-placement jitter this test hunts).
+    // Above the threshold: only PLACEMENT may move, never the measure.
+    let measure_px = CHAR_WIDTH * measure as f32;
+    let fits_threshold = measure_px + 2.0 * PAGE_MIN_PAD;
+    let fits_idx = widths.iter().position(|&w| w as f32 >= fits_threshold);
+    if let Some(start) = fits_idx {
+        let w0 = shrink_widths[start];
+        for (i, &w) in shrink_widths.iter().enumerate().skip(start) {
+            assert!(
+                (w - w0).abs() < 1e-2,
+                "column width must be constant once the measure fits: width={width}px got {w} expected {w0} (baseline {w0})",
+                width = widths[i],
+            );
+        }
+    }
+
+    // (a) piecewise monotone: column_left must be non-decreasing as width
+    // grows (never oscillate). Report the first violation with real numbers.
+    //
+    // Also bounds the PER-PIXEL step itself: the pre-fix bug was exactly a
+    // single 1px width change producing a 46px column jump (confirmed via
+    // this same sweep on unfixed code, right at the outline's no-payoff-guard
+    // boundary, w=1130->1131). The fix's entry ramp spreads that jump over
+    // `RIGHT_MARGIN_BREATH` (16) widths, so the steepest single-pixel step is
+    // bounded by roughly `(min_left - symmetric_left) / RIGHT_MARGIN_BREATH`
+    // — comfortably under 10px/px for this fixture. A generous 20px bound
+    // catches any reintroduced snap without being a fragile exact-pixel pin.
+    const MAX_SINGLE_STEP_PX: f32 = 20.0;
+    for i in 1..shrink_lefts.len() {
+        let prev = shrink_lefts[i - 1];
+        let cur = shrink_lefts[i];
+        assert!(
+            cur >= prev - 1e-3,
+            "column_left oscillated: width {}px -> left {prev}, width {}px -> left {cur} (a DECREASE as the window grew)",
+            widths[i - 1],
+            widths[i],
+        );
+        assert!(
+            cur - prev <= MAX_SINGLE_STEP_PX,
+            "column_left jumped {}px in a single pixel of resize (width {}px -> {}px, left {prev} -> {cur}) — the jitter bug",
+            cur - prev,
+            widths[i - 1],
+            widths[i],
+        );
+    }
+
+    // (c) grow direction reproduces the exact same values (no hysteresis).
+    let mut grow_lefts = Vec::with_capacity(widths.len());
+    for &w in widths.iter() {
+        p.set_size(w as f32, 800.0);
+        p.set_view(&view_md(text, 0, 0));
+        grow_lefts.push(p.column_left());
+    }
+    for (i, &w) in widths.iter().enumerate() {
+        assert!(
+            (grow_lefts[i] - shrink_lefts[i]).abs() < 1e-2,
+            "hysteresis: width={w}px shrink-direction left={} grow-direction left={}",
+            shrink_lefts[i],
+            grow_lefts[i],
+        );
+    }
+
+    // (d) once pinned to the outline's FULL preferred rail, column_left is
+    // byte-constant across every width in that sub-range — the user's own
+    // "lock the width for the left gutter" hypothesis, tested directly.
+    let pref = rowlayout::OUTLINE_PREFERRED_CHARS as f32
+        * CHAR_WIDTH
+        * crate::markdown::type_scale::LABEL;
+    let gap = CHAR_WIDTH * crate::render::chrome::MARGIN_COLUMN_GAP_CHARS;
+    let full_rail_left = pref + gap + TEXT_LEFT;
+    let pinned: Vec<(u32, f32)> = widths
+        .iter()
+        .copied()
+        .zip(shrink_lefts.iter().copied())
+        .filter(|&(_, left)| (left - full_rail_left).abs() < 0.5)
+        .collect();
+    assert!(
+        pinned.len() > 50,
+        "sweep must actually reach the full-rail-pinned regime for this to be a meaningful test, got {} widths",
+        pinned.len()
+    );
+    let pinned_left0 = pinned[0].1;
+    for &(w, left) in &pinned {
+        assert!(
+            (left - pinned_left0).abs() < 1e-3,
+            "pinned-regime column_left must be byte-constant: width={w}px got {left} expected {pinned_left0}"
+        );
+    }
+
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}
+
 /// LONG-DOC FOLLOW (the chosen default): when the headings outnumber the rows the
 /// margin can hold, the visible window SLIDES to keep the CURRENT heading on screen —
 /// the section you are in never scrolls off. Uses a SHORT canvas height so only a

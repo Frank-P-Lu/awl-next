@@ -238,6 +238,19 @@ pub fn column_left_for(window_w: f32, char_width: f32, page_on: bool, measure: u
 /// re-centers, exactly like the pre-existing NARROWEST tier, rather than
 /// paying an asymmetric margin for a rail that will never draw.
 ///
+/// **The ENTRY RAMP (resize-jitter fix, 2026-07-12 — user-reported live
+/// bug):** the no-payoff guard above is a window-independent constant
+/// (`min_left`) meeting a window-dependent one (`symmetric_left`) at its own
+/// boundary, so a bare binary guard is discontinuous there BY CONSTRUCTION —
+/// confirmed via a 1px resize sweep at the default 70-char measure: a SINGLE
+/// pixel of window width flipped `left` from 61 to 107 (a 46px jump) the
+/// instant `max_left` first cleared `min_left`. The last [`RIGHT_MARGIN_BREATH`]
+/// px of approach (reusing the existing breathing-room constant, not a new
+/// magic number) now LERPs from `symmetric_left` up to `min_left` instead of
+/// snapping, so the column glides into the rail regime — see the guard's own
+/// implementation comment for the exact band math. Well outside the ramp
+/// band the guard is unchanged (a bare recenter, no wasted shift).
+///
 /// `outline_wants` is the outline's WIDTH-INDEPENDENT gate (feature on, page
 /// mode on, a markdown buffer with at least one heading —
 /// `TextPipeline::outline_wants_rail`) — everything BUT the horizontal-room
@@ -284,8 +297,40 @@ pub fn adaptive_column_left(
     // own MINIMUM rail — shifting here would only shrink the right margin for
     // a rail that stays hidden regardless, so re-center instead (the same
     // outcome the NARROWEST tier already falls back to).
+    //
+    // **THE ENTRY RAMP (resize-jitter fix, 2026-07-12 — user-reported live
+    // bug: the writing column visibly jumped mid-drag).** A bare `if max_left
+    // < min_left { return symmetric_left }` is only continuous with the
+    // shifted branch (`min(max_left, desired_left).max(symmetric_left)`,
+    // which equals `max_left` right at this boundary) in the limit — the
+    // instant `max_left` crosses `min_left`, the OLD code snapped straight
+    // from `symmetric_left` up to `max_left` (≈ `min_left`) in a single
+    // pixel of window resize, a real discontinuity (confirmed via a 1px
+    // sweep: a single-pixel width change producing a 46px column jump at the
+    // default 70-char measure / 1200px-class window). `min_left` is a
+    // WINDOW-INDEPENDENT constant (`outline_min_px` + `gap` + `left_pad`
+    // never read `window_w`), while `symmetric_left` keeps sliding
+    // continuously with the window on both sides of the crossing — so the
+    // two branches meeting at genuinely different values is structural, not
+    // a rounding artifact. RAMPING the last [`RIGHT_MARGIN_BREATH`] px of
+    // approach (reusing the existing breathing-room constant rather than a
+    // new parallel magic number) turns that snap into a short, monotone,
+    // window-width-only (no directional memory — grow and shrink retrace the
+    // identical curve) LERP from `symmetric_left` up to `min_left`, so the
+    // column glides into the rail regime instead of jumping into it. Far
+    // below the ramp band (`max_left <= min_left - RIGHT_MARGIN_BREATH`) —
+    // the confirmed `page_reset_does_not_rail_shift_the_column_for_a_hidden_
+    // outline` regression's own numbers sit ~31px short of the threshold,
+    // outside this ≤16px band — the no-payoff guard is UNCHANGED: a plain
+    // `symmetric_left`, no wasted shift for an outline nowhere close to
+    // showing.
     if max_left < min_left {
-        return symmetric_left;
+        let ramp_lo = min_left - RIGHT_MARGIN_BREATH;
+        if max_left <= ramp_lo {
+            return symmetric_left;
+        }
+        let t = ((max_left - ramp_lo) / RIGHT_MARGIN_BREATH).clamp(0.0, 1.0);
+        return (symmetric_left + t * (min_left - symmetric_left)).max(symmetric_left);
     }
     desired_left.min(max_left).max(symmetric_left)
 }
@@ -1900,6 +1945,55 @@ mod tests {
                 "shifted column must still fit the window (win={win} measure={measure}): left={left} width={width}"
             );
         }
+    }
+
+    #[test]
+    fn adaptive_entry_ramp_is_continuous_no_more_46px_jump() {
+        // THE RESIZE-JITTER FIX (user-reported live bug, 2026-07-12): on
+        // unfixed code, a 1px sweep at CHAR_WIDTH/measure=70 found `left`
+        // jumping from 61 to 107 (46px) between window widths 1130 and 1131
+        // — the exact instant `max_left` first cleared `min_left`, the
+        // no-payoff guard's bare `return symmetric_left` meeting the shifted
+        // branch's `max_left` (≈ `min_left`) at genuinely different values.
+        // Pin the fixed formula's behavior directly at (and around) that
+        // exact reproducing boundary: no step may exceed the documented ramp
+        // slope, and it must be monotone.
+        let pref = outline_pref_px();
+        let min = outline_min_px();
+        let gap = margin_gap();
+        let mut prev: Option<f32> = None;
+        for w in 1090..=1170 {
+            let left = adaptive_column_left(
+                w as f32, CW, true, 70, true, pref, min, gap, ADAPTIVE_LEFT_PAD,
+            );
+            if let Some(p) = prev {
+                let step = left - p;
+                assert!(step >= -1e-3, "width {w}px: column_left decreased ({p} -> {left})");
+                assert!(
+                    step <= 20.0,
+                    "width {w}px: column_left jumped {step}px in a single pixel of resize ({p} -> {left}) — the jitter bug"
+                );
+            }
+            prev = Some(left);
+        }
+    }
+
+    #[test]
+    fn adaptive_ramp_still_recenters_well_outside_the_ramp_band() {
+        // The confirmed `adaptive_no_payoff_shift_recenters_instead_of_
+        // shifting_for_a_hidden_outline` regression fixture (win=1100,
+        // measure=70) sits ~31px short of `min_left` — outside the
+        // `RIGHT_MARGIN_BREATH`-wide (16px) entry ramp — so the ramp must
+        // NOT resurrect the old wasted-shift bug there: this must still be a
+        // bare, unramped `symmetric_left`.
+        let win = 1100.0;
+        let measure = 70usize;
+        let symmetric = column_left_for(win, CW, true, measure);
+        let left = adaptive_column_left(
+            win, CW, true, measure, true, outline_pref_px(), outline_min_px(), margin_gap(),
+            ADAPTIVE_LEFT_PAD,
+        );
+        assert_eq!(left, symmetric, "well outside the ramp band: still a bare recenter, no partial shift");
     }
 
     // === ZOOM DECOUPLING (the bug fix) =====================================
