@@ -840,6 +840,33 @@ Checklist:
    CLASS (Wagtail's monochrome one) may also need its own new law, per §2/§3's
    "name the test that enforces it" rule — see "The monochrome law" above.
 7. Capture the eyeball set (§6) before calling it done.
+8. **Capture the SUMMONED-SURFACE gallery.** The motivating note for this
+   step: the Wagtail gallery that shipped alongside its original round
+   contained zero open pickers — every shot was a plain document, no
+   overlay, no menu, no search panel — and that is exactly how six
+   interactive-state surfaces (the picker's selected row, the menu bar's
+   open title, the search-match highlight, document selection, the caret,
+   …) shipped fully invisible across three separate rounds before anyone's
+   eye ever landed on one open. A new world's eyeball set is INCOMPLETE
+   without at least these four states, each captured and actually LOOKED at
+   (not just sidecar-asserted — see CAPTURE.md's "state oracle, not an
+   appearance oracle" caveat):
+   - **Palette open, selection moved** — `--keys "Cmd-p C-n"` (or the
+     world's native chord) over any sample, so the selected row's own
+     highlight band is on screen, not row 0's default position.
+   - **Search active** — `--keys "Cmd-f findme Return"` over a sample that
+     contains the query, so the match highlight actually paints.
+   - **A real selection, plus the caret** — `--keys "C-Space C-e"` (or
+     equivalent) so document selection and the caret both render at once.
+   - **Menu bar open** (worlds where the bar renders — web/Linux convention,
+     or `--convention linux`/web build) — the open title's own band.
+   Run `render::tests::distinguishability::interactive_states_are_visible_
+   in_every_world_real_pixels` (LAW ROUND, 2026-07) as the automated half of
+   this check — it already samples every world carrying non-default
+   `RenderCaps` plus one control world; a brand-new world only needs adding
+   to this manual gallery step if it, too, deviates from `RenderCaps::DEFAULT`
+   (an ordinary default-caps world is already covered by the automated
+   color-math tier over all fifteen worlds).
 
 ---
 

@@ -699,11 +699,15 @@ impl TextPipeline {
         // black, so the selection reads as loudly as anywhere else in the
         // app, never invisible. `overlay_rows` itself is parked empty on
         // this branch; `overlay_rows_invert` stays parked empty on every
-        // other (Fill) world.
-        let invert_row = theme::active().render_caps.selection_style
-            == theme::SelectionStyle::InverseVideo;
-        self.overlay_rows
-            .set_color(theme::surface_selected().rgba_bytes());
+        // other (Fill) world. Routed through `RenderCaps::highlight_treatment`
+        // — the LAW ROUND's no-absent-variant enum — so "prepare neither
+        // pipeline" is structurally unreachable (see that fn's own doc for
+        // the bug history this closes).
+        let treatment =
+            theme::active().render_caps.highlight_treatment(theme::surface_selected());
+        if let theme::HighlightTreatment::ValueBand(color) = treatment {
+            self.overlay_rows.set_color(color.rgba_bytes());
+        }
         let sel_rects: Vec<[f32; 4]> = if geom.n_items == 0 {
             Vec::new()
         } else if geom.theme {
@@ -728,15 +732,18 @@ impl TextPipeline {
                 overlay_row_top(geom.text_top, geom.header_rows, sel_row, lh);
             vec![[geom.card_x, row_top, geom.card_w, lh]]
         };
-        if invert_row {
-            self.overlay_rows.prepare(device, queue, width, height, &[]);
-            self.overlay_rows_invert
-                .prepare(device, queue, width, height, &sel_rects);
-        } else {
-            self.overlay_rows
-                .prepare(device, queue, width, height, &sel_rects);
-            self.overlay_rows_invert
-                .prepare(device, queue, width, height, &[]);
+        match treatment {
+            theme::HighlightTreatment::Invert => {
+                self.overlay_rows.prepare(device, queue, width, height, &[]);
+                self.overlay_rows_invert
+                    .prepare(device, queue, width, height, &sel_rects);
+            }
+            theme::HighlightTreatment::ValueBand(_) => {
+                self.overlay_rows
+                    .prepare(device, queue, width, height, &sel_rects);
+                self.overlay_rows_invert
+                    .prepare(device, queue, width, height, &[]);
+            }
         }
         // THEME PICKER active-lens underline: the rect the shaper recorded; a non-theme
         // card parks it empty (so a stale rect from a prior theme picker never lingers).

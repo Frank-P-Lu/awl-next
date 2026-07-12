@@ -732,3 +732,37 @@ fn at_least_six_distinct_faces() {
     // Home (Tawny) renders in the bundled mono so it looks exactly like home.
     assert_eq!(TAWNY.font, "IBM Plex Mono");
 }
+
+/// THE LAW ROUND's `RenderCaps::highlight_treatment` — a NO-ABSENT-VARIANT
+/// enum consumed by `render/chrome/overlay.rs`'s picker-row highlight and
+/// `render/chrome/menubar.rs`'s open-title band, replacing the former
+/// hand-rolled `if selection_style == InverseVideo { .. } else { .. }` at
+/// each of those two sites. This pins the STRUCTURAL half of the contract
+/// (every world resolves to EXACTLY the treatment its `selection_style`
+/// names, with no third "neither" outcome reachable) across all fifteen
+/// worlds; the REAL-PIXEL half — does the renderer actually honor it — lives
+/// in `render::tests::distinguishability`.
+#[test]
+fn highlight_treatment_matches_selection_style_on_every_world_no_absent_case() {
+    for t in THEMES.iter() {
+        let band = crate::theme::Srgb::rgb(0x11, 0x22, 0x33);
+        let treatment = t.render_caps.highlight_treatment(band);
+        match (t.render_caps.selection_style, treatment) {
+            (
+                crate::theme::SelectionStyle::Fill,
+                crate::theme::HighlightTreatment::ValueBand(c),
+            ) => {
+                assert_eq!(c, band, "{}: ValueBand must carry the caller's own band color", t.name);
+            }
+            (
+                crate::theme::SelectionStyle::InverseVideo,
+                crate::theme::HighlightTreatment::Invert,
+            ) => {}
+            (style, treatment) => panic!(
+                "{}: selection_style {style:?} produced the WRONG treatment {treatment:?} — \
+                 the enum's whole point is that this pairing is supposed to be unreachable",
+                t.name
+            ),
+        }
+    }
+}
