@@ -1,0 +1,120 @@
+# awl KEYMAP DEFAULTS — embedded at build time, never read from disk.
+#
+# THE ONE PLACE a command's DEFAULT chord(s) live (the "keymap defaults as
+# data" round, CLAUDE.md). Keyed by the SAME slug `commands::slug()` derives
+# from a catalog command's palette name (lower-case, spaces -> underscores,
+# a trailing "…" stripped) — so this file and `commands::COMMANDS` can never
+# name a command two different ways.
+#
+# Each entry under [commands] is a 2-element array: [native, emacs].
+#   - slot 1 (native) is the MAC-LITERAL form ("Cmd-S") — the macOS Cmd chord.
+#     On LINUX it is translated Cmd -> Ctrl at resolve time
+#     (`commands::resolved_native`, `keyspec::translate_native_for_linux`),
+#     with a short override table for the handful of commands where a naive
+#     swap would be wrong (`commands::LINUX_NATIVE_OVERRIDE` — e.g. "Line
+#     start"/"Line end" resolve to plain Home/End on every convention, not a
+#     Ctrl-Left/Right that would collide with word motion).
+#   - slot 2 (emacs) is OS-agnostic terse text ("C-s") and is NOT translated by
+#     convention; on Linux it may still be quietly displaced by the native-wins
+#     collision table (`keymap::LINUX_DISPLACED_LETTERS`, policy code, not data
+#     — see keymap.rs's module doc) unless kept via `linux_keep_emacs`/
+#     `keymap = "emacs"`.
+# An empty string means that slot has no default; a command entirely absent
+# from this table has NO default binding at all (unbound out of the box) — it
+# is still Cmd-P/rebind-menu addressable and independently rebindable via the
+# user-facing `config.toml`'s `[keys]` table, which overlays on top of
+# whatever this file resolves to, unchanged by this round.
+#
+# THIS FILE IS NOT `[keys]`. It is not read from `$XDG_CONFIG_HOME`, never
+# hand-edited by a user, and carries no format-freeze promise beyond matching
+# `commands::COMMANDS`' catalog order/slugs (law-tested — see
+# `commands::tests::keymap_defaults_toml_*`).
+
+# THE BUILT-IN LINUX KEEP FLOOR (formerly `keymap::LINUX_BUILTIN_KEEP`, a Rust
+# const): chords that keep their EMACS meaning on Convention::Linux
+# UNCONDITIONALLY, on every keymap flavor, overriding the native-wins
+# collision table for exactly these chords (never removable by a user, only
+# ADDED to via config `linux_keep_emacs`/`keymap = "emacs"`). Currently just
+# kill-line: Links v2 spent Cmd-K (-> Ctrl-K on Linux) on Insert link, but
+# kill-line is too load-bearing for emacs hands to lose by default.
+linux_builtin_keep = ["C-k"]
+
+[commands]
+go_to_file = ["Cmd-O", ""]
+switch_project = ["Cmd-S-p", ""]
+recent_projects = ["", ""]
+browse_files = ["", ""]
+go_to_heading = ["", ""]
+spell_suggestions = ["Cmd-;", ""]
+version_history = ["Cmd-S-h", ""]
+clean_unused_assets = ["", ""]
+keep_version = ["", ""]
+last_file = ["C-Tab", ""]
+new_note = ["Cmd-N", ""]
+move_note = ["", ""]
+rename_note = ["", ""]
+duplicate_note = ["", ""]
+finish_file = ["Cmd-W", ""]
+follow_link = ["", "C-c C-o"]
+switch_theme = ["Cmd-T", ""]
+caret_style = ["", ""]
+dictionary = ["", ""]
+toggle_spellcheck = ["", ""]
+toggle_hidden_files = ["Cmd-S-.", ""]
+toggle_caret_style = ["", ""]
+toggle_page_mode = ["", ""]
+toggle_writing_nits = ["", ""]
+widen_page = ["", ""]
+narrow_page = ["", ""]
+reset_page_width = ["", ""]
+toggle_debug = ["", ""]
+toggle_outline = ["Cmd-S-o", ""]
+toggle_typewriter_scroll = ["", ""]
+toggle_menu_bar = ["", ""]
+about = ["", ""]
+credits = ["", ""]
+guide = ["", ""]
+lifetime_stats = ["", ""]
+line_endings = ["", ""]
+align_table = ["", ""]
+report_a_problem = ["", ""]
+download_file = ["", ""]
+check_for_updates = ["", ""]
+blockquote = ["", ""]
+bullet_list = ["", ""]
+numbered_list = ["", ""]
+task_list = ["Cmd-S-l", ""]
+heading = ["", ""]
+code_block = ["", ""]
+bold = ["Cmd-B", ""]
+italic = ["Cmd-I", ""]
+inline_code = ["Cmd-E", ""]
+highlight = ["", ""]
+strikethrough = ["", ""]
+insert_link = ["Cmd-K", ""]
+save = ["Cmd-S", ""]
+quit = ["Cmd-Q", ""]
+search_forward = ["Cmd-F", "C-s"]
+search_backward = ["Cmd-S-f", "C-r"]
+find_and_replace = ["Cmd-R", ""]
+undo = ["Cmd-Z", "C-/"]
+redo = ["Cmd-S-z", ""]
+copy = ["Cmd-C", ""]
+cut = ["Cmd-X", "C-w"]
+paste = ["Cmd-V", "C-y"]
+select_all = ["Cmd-A", ""]
+zoom_in = ["Cmd-=", ""]
+zoom_out = ["Cmd--", ""]
+reset_zoom = ["Cmd-0", ""]
+forward_word = ["M-Right", ""]
+backward_word = ["M-Left", ""]
+line_start = ["Cmd-Left", "C-a"]
+line_end = ["Cmd-Right", "C-e"]
+document_start = ["Cmd-Up", ""]
+document_end = ["Cmd-Down", ""]
+forward_char = ["", "C-f"]
+backward_char = ["", "C-b"]
+next_line = ["", "C-n"]
+previous_line = ["", "C-p"]
+settings = ["Cmd-,", ""]
+keybindings = ["", ""]

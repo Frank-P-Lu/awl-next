@@ -58,6 +58,7 @@ mod hud;
 mod image_pipeline;
 mod index;
 mod keymap;
+mod keymap_defaults;
 mod keyspec;
 mod keytoken;
 mod lifetime;

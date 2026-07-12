@@ -311,10 +311,10 @@ impl Config {
     /// reading `linux_keep_emacs` directly, so the keymap-flavor preset (and,
     /// as of the insert-link-yields-to-kill-line round, the built-in floor
     /// below) can never drift from the per-chord doors they're built from.
-    /// ALWAYS seeded with [`crate::keymap::LINUX_BUILTIN_KEEP`] first (a chord
+    /// ALWAYS seeded with `crate::keymap::linux_builtin_keep()` first (a chord
     /// kept unconditionally, on EITHER flavor — currently just `C-k`, so
     /// Insert link's native Ctrl-K never displaces kill-line by default; the
-    /// user's own call, logged on `LINUX_BUILTIN_KEEP`'s own doc). On top of
+    /// user's own call, logged on `linux_builtin_keep()`'s own doc). On top of
     /// that floor: under [`crate::keymap::KeymapFlavor::Native`] (the default)
     /// this is the built-in floor UNIONED with `linux_keep_emacs` — for a
     /// config with an EMPTY `linux_keep_emacs`, that's just the floor itself,
@@ -334,7 +334,7 @@ impl Config {
     /// gates on convention regardless of what this returns.
     pub fn effective_linux_keep(&self) -> Vec<String> {
         let mut keep: Vec<String> =
-            crate::keymap::LINUX_BUILTIN_KEEP.iter().map(|s| s.to_string()).collect();
+            crate::keymap::linux_builtin_keep().iter().map(|s| s.to_string()).collect();
         if self.keymap_flavor() == crate::keymap::KeymapFlavor::Emacs {
             for p in crate::keymap::linux_emacs_preset_keep() {
                 if !crate::keymap::linux_keeps_chord(&keep, &p) {

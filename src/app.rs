@@ -1898,18 +1898,18 @@ mod tests {
         let effective = app.config.effective_linux_keep();
         let preset = crate::keymap::linux_emacs_preset_keep();
         // The insert-link-yields-to-kill-line round's built-in floor
-        // (`keymap::LINUX_BUILTIN_KEEP`) rides ALONG with the preset — it is
+        // (`keymap::linux_builtin_keep()`) rides ALONG with the preset — it is
         // NOT flavor-gated, so it's present under emacs too, just not part of
-        // `preset` itself (see `LINUX_BUILTIN_KEEP`'s own doc).
+        // `preset` itself (see `linux_builtin_keep()`'s own doc).
         assert_eq!(
             effective.len(),
-            preset.len() + crate::keymap::LINUX_BUILTIN_KEEP.len(),
+            preset.len() + crate::keymap::linux_builtin_keep().len(),
             "the live rebuild's keep-list is the whole preset plus the built-in floor"
         );
         for chord in &preset {
             assert!(effective.contains(chord), "{chord:?} missing from the live rebuild's keep-list");
         }
-        for chord in crate::keymap::LINUX_BUILTIN_KEEP {
+        for chord in crate::keymap::linux_builtin_keep() {
             assert!(effective.iter().any(|c| c == chord), "{chord:?} missing from the live rebuild's keep-list");
         }
 
@@ -1922,7 +1922,7 @@ mod tests {
         // there (it's unconditional, not flavor-gated) — never truly empty.
         assert_eq!(
             app.config.effective_linux_keep().len(),
-            crate::keymap::LINUX_BUILTIN_KEEP.len(),
+            crate::keymap::linux_builtin_keep().len(),
             "native flavor: no preset widening, just the built-in floor"
         );
     }

@@ -116,9 +116,9 @@ impl Command {
 /// The command catalog, in stable display order. The fuzzy corpus is the NAMES
 /// in this order, so a selected row index indexes straight back into this slice.
 /// Each row carries its two binding slots — native (Cmd) and emacs.
-pub static COMMANDS: &[Command] = &[
-    Command { name: "Go to file…",       action: Action::OpenGoto,        native: "Cmd-O",   emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Switch project…",   action: Action::OpenProject,     native: "Cmd-S-p", emacs: ""        , native_only: false, web_only: false },
+static COMMAND_SEED: &[Command] = &[
+    Command { name: "Go to file…",       action: Action::OpenGoto,        native: "",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Switch project…",   action: Action::OpenProject,     native: "", emacs: ""        , native_only: false, web_only: false },
     // RECENT PROJECTS: opens the SWITCH-PROJECT navigator pre-lensed onto its Recent
     // lens (the fold that retired the standalone RecentProjects picker; recents are a
     // lens now, see `crate::recents`). No default chord — the palette + File menu ARE
@@ -131,10 +131,10 @@ pub static COMMANDS: &[Command] = &[
     // toggles the persistent margin outline); still fully reachable + rebindable.
     // Named "Go to heading…" to say what it does, paralleling "Go to file…".
     Command { name: "Go to heading…",    action: Action::OpenOutline,     native: "",        emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Spell suggestions…", action: Action::OpenSpellSuggest, native: "Cmd-;", emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Spell suggestions…", action: Action::OpenSpellSuggest, native: "", emacs: ""        , native_only: false, web_only: false },
     // VERSION HISTORY (the local-history timeline): renamed from "History" so it no
     // longer shadows the "Local history" setting; says it is the version timeline.
-    Command { name: "Version history…",  action: Action::OpenHistory,     native: "Cmd-S-h", emacs: ""        , native_only: true, web_only: false },
+    Command { name: "Version history…",  action: Action::OpenHistory,     native: "", emacs: ""        , native_only: true, web_only: false },
     // CLEAN UNUSED ASSETS: summon the Asset Cleaner — a picker of the ORPHAN image
     // files under the active project (an `assets/` image no document references,
     // `crate::assets`). Enter moves the row's file to the macOS Trash (recoverable).
@@ -147,8 +147,8 @@ pub static COMMANDS: &[Command] = &[
     // chord — the palette IS its entry point, like Settings/About; a real `Action`,
     // independently rebindable via `[keys] keep_version`.
     Command { name: "Keep version",      action: Action::KeepVersion,     native: "",        emacs: ""        , native_only: true, web_only: false },
-    Command { name: "Last file",         action: Action::LastBuffer,      native: "C-Tab",   emacs: ""        , native_only: false, web_only: false },
-    Command { name: "New note",          action: Action::NewNote,         native: "Cmd-N",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Last file",         action: Action::LastBuffer,      native: "",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "New note",          action: Action::NewNote,         native: "",   emacs: ""        , native_only: false, web_only: false },
     Command { name: "Move note…",        action: Action::MoveNote,        native: "",        emacs: ""        , native_only: false, web_only: false },
     // NOTES VERBS round: familiar Save-As-shaped jobs as calm notes-native verbs.
     // Both are palette-only (no default chord, like Move note…) and WebFs-capable
@@ -165,13 +165,13 @@ pub static COMMANDS: &[Command] = &[
     // destructive under stray muscle memory, since it saves rather than closes
     // anything). NATIVE-ONLY: the daemon handoff it notifies has no web analog.
     // See `crate::daemon`. (Action stays `FinishBuffer`.)
-    Command { name: "Finish file",       action: Action::FinishBuffer,    native: "Cmd-W",   emacs: ""        , native_only: true, web_only: false },
+    Command { name: "Finish file",       action: Action::FinishBuffer,    native: "",   emacs: ""        , native_only: true, web_only: false },
     // FOLLOW LINK: open the markdown link under the caret in the OS default browser
     // (a user-initiated handoff, not an app network fetch). Emacs slot `C-c C-o`
     // (org-mode's open-link-at-point); native slot left empty (no universal macOS
     // convention). A caret outside a link is a calm no-op. Rebindable via `[keys]`.
-    Command { name: "Follow link",       action: Action::FollowLink,      native: "",        emacs: "C-c C-o" , native_only: false, web_only: false },
-    Command { name: "Switch theme…",     action: Action::OpenThemeMenu,   native: "Cmd-T",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Follow link",       action: Action::FollowLink,      native: "",        emacs: "" , native_only: false, web_only: false },
+    Command { name: "Switch theme…",     action: Action::OpenThemeMenu,   native: "",   emacs: ""        , native_only: false, web_only: false },
     Command { name: "Caret style…",      action: Action::OpenCaretMenu,   native: "",        emacs: ""        , native_only: false, web_only: false },
     Command { name: "Dictionary…",       action: Action::OpenDictionaryMenu, native: "",     emacs: ""        , native_only: false, web_only: false },
     // TOGGLE SPELLCHECK: the global on/off escape hatch (default ON). No default
@@ -179,7 +179,7 @@ pub static COMMANDS: &[Command] = &[
     // `Action` (unlike the `writing_nits` sentinel below), so it is unambiguous
     // through `RunAction` and independently rebindable via `[keys]`.
     Command { name: "Toggle spellcheck", action: Action::ToggleSpellcheck, native: "",     emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Toggle hidden files", action: Action::ToggleHiddenFiles, native: "Cmd-S-.", emacs: ""  , native_only: false, web_only: false },
+    Command { name: "Toggle hidden files", action: Action::ToggleHiddenFiles, native: "", emacs: ""  , native_only: false, web_only: false },
     Command { name: "Toggle caret style", action: Action::ToggleCaretMode, native: "",       emacs: ""        , native_only: false, web_only: false },
     Command { name: "Toggle page mode",  action: Action::TogglePageMode,  native: "",        emacs: ""        , native_only: false, web_only: false },
     // TOGGLE WRITING NITS: the quiet mechanical-typo underline highlighter (default
@@ -198,7 +198,7 @@ pub static COMMANDS: &[Command] = &[
     // TOGGLE OUTLINE: the persistent margin table-of-contents (ON by default,
     // flipped 2026-07-09). The Cmd-Shift-O chord (formerly the summoned heading-jump
     // picker's) now toggles it; rebindable via config `[keys] toggle_outline`.
-    Command { name: "Toggle outline",    action: Action::ToggleOutline,   native: "Cmd-S-o", emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Toggle outline",    action: Action::ToggleOutline,   native: "", emacs: ""        , native_only: false, web_only: false },
     // TOGGLE TYPEWRITER SCROLL: pin the caret's line centered so the doc scrolls under
     // it (OFF by default). No default chord — palette-only, like About/Settings; a
     // real `Action`, independently rebindable via config `[keys] toggle_typewriter_scroll`.
@@ -278,12 +278,12 @@ pub static COMMANDS: &[Command] = &[
     Command { name: "Blockquote",        action: Action::ToggleBlockquote,   native: "",         emacs: ""        , native_only: false, web_only: false },
     Command { name: "Bullet list",       action: Action::ToggleBulletList,   native: "",         emacs: ""        , native_only: false, web_only: false },
     Command { name: "Numbered list",     action: Action::ToggleNumberedList, native: "",         emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Task list",         action: Action::ToggleTaskList,     native: "Cmd-S-l",  emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Task list",         action: Action::ToggleTaskList,     native: "",  emacs: ""        , native_only: false, web_only: false },
     Command { name: "Heading",           action: Action::ToggleHeading,      native: "",         emacs: ""        , native_only: false, web_only: false },
     Command { name: "Code block",        action: Action::ToggleCodeBlock,    native: "",         emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Bold",              action: Action::Bold,               native: "Cmd-B",    emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Italic",            action: Action::Italic,             native: "Cmd-I",    emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Inline code",       action: Action::InlineCode,         native: "Cmd-E",    emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Bold",              action: Action::Bold,               native: "",    emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Italic",            action: Action::Italic,             native: "",    emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Inline code",       action: Action::InlineCode,         native: "",    emacs: ""        , native_only: false, web_only: false },
     Command { name: "Highlight",         action: Action::Highlight,          native: "",         emacs: ""        , native_only: false, web_only: false },
     Command { name: "Strikethrough",     action: Action::Strikethrough,      native: "",         emacs: ""        , native_only: false, web_only: false },
     // LINKS V2: Cmd-K — the chord the keybinding-idiom audit reserved for exactly
@@ -292,34 +292,34 @@ pub static COMMANDS: &[Command] = &[
     // Links v2 is new, not a retirement). See `Action::InsertLink`'s own doc for
     // the three-mode behavior (wrap selection / edit existing link / insert empty
     // markup). On LINUX this chord has NO effective binding by default, on
-    // EITHER keymap flavor — `keymap::LINUX_BUILTIN_KEEP` keeps Ctrl-K's
+    // EITHER keymap flavor — `keymap::linux_builtin_keep()` keeps Ctrl-K's
     // kill-line meaning unconditionally (the user's own call: kill-line is too
     // load-bearing for emacs hands to lose), so Insert link is reachable there
     // only via the palette or an explicit `[keys] insert_link = "C-k"`.
-    Command { name: "Insert link…",      action: Action::InsertLink,         native: "Cmd-K",    emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Insert link…",      action: Action::InsertLink,         native: "",    emacs: ""        , native_only: false, web_only: false },
     // NOTE: the held stats HUD (Option-Cmd-I) is deliberately NOT a palette command. It
     // is a momentary HOLD-to-peek (shown while the key is down, gone the instant it
     // lifts), so a DISCRETE selection — which has no key-release to dismiss it — would
     // leave it stuck on. Its ONLY summon path is the held Option-Cmd-I chord (resolved
     // in `keymap.rs`); see `hud.rs`.
-    Command { name: "Save",              action: Action::Save,            native: "Cmd-S",   emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Quit",              action: Action::Quit,            native: "Cmd-Q",   emacs: ""        , native_only: true, web_only: false },
-    Command { name: "Search forward",    action: Action::SearchForward,   native: "Cmd-F",   emacs: "C-s"     , native_only: false, web_only: false },
-    Command { name: "Search backward",   action: Action::SearchBackward,  native: "Cmd-S-f", emacs: "C-r"     , native_only: false, web_only: false },
-    Command { name: "Find and replace…", action: Action::OpenReplace,     native: "Cmd-R",   emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Undo",              action: Action::Undo,            native: "Cmd-Z",   emacs: "C-/"     , native_only: false, web_only: false },
-    Command { name: "Redo",              action: Action::Redo,            native: "Cmd-S-z", emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Save",              action: Action::Save,            native: "",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Quit",              action: Action::Quit,            native: "",   emacs: ""        , native_only: true, web_only: false },
+    Command { name: "Search forward",    action: Action::SearchForward,   native: "",   emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Search backward",   action: Action::SearchBackward,  native: "", emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Find and replace…", action: Action::OpenReplace,     native: "",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Undo",              action: Action::Undo,            native: "",   emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Redo",              action: Action::Redo,            native: "", emacs: ""        , native_only: false, web_only: false },
     // CLIPBOARD + SELECT-ALL: bound in the keymap (native Cmd-C/X/V/A, emacs M-w/C-w/C-y)
     // but previously absent here, so they were invisible to Cmd-P and the rebind menu.
     // Listed with their ACTUAL bindings so they show + become rebindable. (Bare C-a stays
     // LineStart in the emacs slot, so Select all is Cmd-only.)
-    Command { name: "Copy",              action: Action::CopyRegion,      native: "Cmd-C",   emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Cut",               action: Action::KillRegion,      native: "Cmd-X",   emacs: "C-w"     , native_only: false, web_only: false },
-    Command { name: "Paste",             action: Action::Yank,            native: "Cmd-V",   emacs: "C-y"     , native_only: false, web_only: false },
-    Command { name: "Select all",        action: Action::SelectAll,       native: "Cmd-A",   emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Zoom in",           action: Action::ZoomIn,          native: "Cmd-=",   emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Zoom out",          action: Action::ZoomOut,         native: "Cmd--",   emacs: ""        , native_only: false, web_only: false },
-    Command { name: "Reset zoom",        action: Action::ZoomReset,       native: "Cmd-0",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Copy",              action: Action::CopyRegion,      native: "",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Cut",               action: Action::KillRegion,      native: "",   emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Paste",             action: Action::Yank,            native: "",   emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Select all",        action: Action::SelectAll,       native: "",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Zoom in",           action: Action::ZoomIn,          native: "",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Zoom out",          action: Action::ZoomOut,         native: "",   emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Reset zoom",        action: Action::ZoomReset,       native: "",   emacs: ""        , native_only: false, web_only: false },
     // MOTION COMMANDS (user-decided 2026-07-10, superseding the original all-motions
     // exclusion — see the module doc): the curated NAVIGATION motions are catalog rows
     // so they show in Cmd-P + the Keybindings rebind menu and are REBINDABLE via
@@ -331,12 +331,12 @@ pub static COMMANDS: &[Command] = &[
     // override is ADDITIVE); the emacs slots left empty by that retirement stay
     // empty for the user to fill — never re-shipped. Line start/end keep their
     // surviving bare-control second slots (C-a / C-e), now visible + teachable.
-    Command { name: "Forward word",      action: Action::ForwardWord,     native: "M-Right",   emacs: ""     , native_only: false, web_only: false },
-    Command { name: "Backward word",     action: Action::BackwardWord,    native: "M-Left",    emacs: ""     , native_only: false, web_only: false },
-    Command { name: "Line start",        action: Action::LineStart,       native: "Cmd-Left",  emacs: "C-a"  , native_only: false, web_only: false },
-    Command { name: "Line end",          action: Action::LineEnd,         native: "Cmd-Right", emacs: "C-e"  , native_only: false, web_only: false },
-    Command { name: "Document start",    action: Action::BufferStart,     native: "Cmd-Up",    emacs: ""     , native_only: false, web_only: false },
-    Command { name: "Document end",      action: Action::BufferEnd,       native: "Cmd-Down",  emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Forward word",      action: Action::ForwardWord,     native: "",   emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Backward word",     action: Action::BackwardWord,    native: "",    emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Line start",        action: Action::LineStart,       native: "",  emacs: ""  , native_only: false, web_only: false },
+    Command { name: "Line end",          action: Action::LineEnd,         native: "", emacs: ""  , native_only: false, web_only: false },
+    Command { name: "Document start",    action: Action::BufferStart,     native: "",    emacs: ""     , native_only: false, web_only: false },
+    Command { name: "Document end",      action: Action::BufferEnd,       native: "",  emacs: ""     , native_only: false, web_only: false },
     // THE EMACS-HANDS-ON-LINUX ROUND: the LAST four bare-control nav motions join
     // the catalog (char forward/back, line up/down) — the ones a Linux emacs hand
     // reaches for constantly (C-f/C-b/C-n/C-p) and that the Linux-native collision
@@ -351,21 +351,55 @@ pub static COMMANDS: &[Command] = &[
     // before"), so there is no macOS-flavored CHORD to teach or rebind here, only
     // the emacs letter. `[keys] forward_char = "C-f"` still rebinds it (to any
     // chord, not just the default) like any other catalog command.
-    Command { name: "Forward char",      action: Action::ForwardChar,     native: "",          emacs: "C-f"  , native_only: false, web_only: false },
-    Command { name: "Backward char",     action: Action::BackwardChar,    native: "",          emacs: "C-b"  , native_only: false, web_only: false },
-    Command { name: "Next line",         action: Action::NextLine,        native: "",          emacs: "C-n"  , native_only: false, web_only: false },
-    Command { name: "Previous line",     action: Action::PreviousLine,    native: "",          emacs: "C-p"  , native_only: false, web_only: false },
+    Command { name: "Forward char",      action: Action::ForwardChar,     native: "",          emacs: ""  , native_only: false, web_only: false },
+    Command { name: "Backward char",     action: Action::BackwardChar,    native: "",          emacs: ""  , native_only: false, web_only: false },
+    Command { name: "Next line",         action: Action::NextLine,        native: "",          emacs: ""  , native_only: false, web_only: false },
+    Command { name: "Previous line",     action: Action::PreviousLine,    native: "",          emacs: ""  , native_only: false, web_only: false },
     // Settings: Cmd-, is THE preferences chord since Mac OS X 10.1 (P1 of the
     // keybinding idiom audit — the highest-value single binding in that report).
     // It summons the faceted SETTINGS MENU (the friendly default); the raw
     // config-as-text file lives behind the menu's "Edit config as text" row
     // (`Action::OpenSettings`).
-    Command { name: "Settings…",         action: Action::OpenSettingsMenu, native: "Cmd-,",  emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Settings…",         action: Action::OpenSettingsMenu, native: "",  emacs: ""        , native_only: false, web_only: false },
     // Keybindings has NO default chord either — summon it by name (Cmd-P) like
     // Settings; it is the GAME-STYLE rebind menu (capture a key per command). It is
     // itself rebindable via `[keys] keybindings = "..."`.
     Command { name: "Keybindings…",      action: Action::OpenKeybindings, native: "",        emacs: ""        , native_only: false, web_only: false },
 ];
+
+/// THE KEYMAP-DEFAULTS-AS-DATA ROUND (CLAUDE.md): the actual command catalog.
+/// [`COMMAND_SEED`] above carries every command's NAME, ORDER, `Action`, and
+/// platform scope (`native_only`/`web_only`) — hand-written code, unchanged
+/// by this round — but its own `native`/`emacs` fields are unused
+/// placeholders (always `""` in the literal). The REAL default chord values
+/// are looked up ONCE by slug from the embedded `assets/keymap-defaults.toml`
+/// ([`crate::keymap_defaults::command_defaults`]) and spliced in here — so a
+/// default chord now exists in exactly ONE place (the TOML file), never
+/// duplicated as a second literal in this array. `Box::leak` is a one-time,
+/// ~80-entry startup cost (the whole `Vec` is memoized by `LazyLock`, so this
+/// closure runs at most once per process) — it keeps `Command::native`/
+/// `emacs`'s public field TYPE (`&'static str`) unchanged, so every existing
+/// consumer (`c.native.trim()`, `COMMANDS.iter()`, `COMMANDS[i]`, …) needed no
+/// edit beyond a handful of bare `for c in COMMANDS` loops (which cannot
+/// desugar against a `LazyLock`'s owned `Vec` without an explicit `.iter()`,
+/// unlike the retired `&'static [Command]` slice, which was `Copy`).
+pub static COMMANDS: std::sync::LazyLock<Vec<Command>> = std::sync::LazyLock::new(|| {
+    let defaults = crate::keymap_defaults::command_defaults();
+    COMMAND_SEED
+        .iter()
+        .map(|seed| {
+            let (native, emacs) = defaults.get(slug(seed.name).as_str()).cloned().unwrap_or_default();
+            Command {
+                name: seed.name,
+                action: seed.action.clone(),
+                native: Box::leak(native.into_boxed_str()),
+                emacs: Box::leak(emacs.into_boxed_str()),
+                native_only: seed.native_only,
+                web_only: seed.web_only,
+            }
+        })
+        .collect()
+});
 
 /// Join a command's two binding slots into ONE dim palette label, e.g.
 /// `"⌘S · C-x C-s"`. The NATIVE (slot 1, macOS) chord renders as mac MODIFIER
@@ -780,7 +814,7 @@ fn join_slots_truthful(c: &Command, convention: Convention, platform: Platform, 
 /// that collision is a property of the dispatch table on ANY Linux build). The
 /// LINUX column's `keep` list is [`crate::config::Config::empty`]'s
 /// `effective_linux_keep()` — the DEFAULT, config-free composition (just
-/// `keymap::LINUX_BUILTIN_KEEP`, under the default `native` flavor) — so a
+/// `keymap::linux_builtin_keep()`, under the default `native` flavor) — so a
 /// command like Insert link, unbound on Linux out of the box, correctly shows
 /// an empty Linux cell rather than a chord no default install would ever
 /// actually honor. The LAW TEST living beside `GUIDE_MD` (`guide::tests::
@@ -795,7 +829,7 @@ pub(crate) fn generate_keys_reference_markdown() -> String {
     out.push_str("| Command | macOS | Linux |\n");
     out.push_str("|---|---|---|\n");
     let default_linux_keep = crate::config::Config::empty().effective_linux_keep();
-    for c in COMMANDS {
+    for c in COMMANDS.iter() {
         let mac = join_slots_truthful(c, Convention::Mac, Platform::Native, &[]);
         let linux = join_slots_truthful(c, Convention::Linux, Platform::Native, &default_linux_keep);
         out.push_str(&format!("| {} | {mac} | {linux} |\n", c.name));
@@ -1126,10 +1160,94 @@ pub fn clear_recent() {
 mod tests {
     use super::*;
 
+    // ── THE KEYMAP-DEFAULTS-AS-DATA ROUND — LAW TESTS ON THE DATA ──────────────
+    //
+    // These pin the embedded `assets/keymap-defaults.toml` against the catalog
+    // it feeds: every slug it names is a real `COMMAND_SEED` entry, every
+    // `COMMAND_SEED` entry is either named there or explicitly unbound, and the
+    // spliced `COMMANDS` that results is what every other test in this module
+    // (which predates this round and is otherwise UNCHANGED) already exercises
+    // — `catalog_and_keymap_agree_on_every_default_chord` and
+    // `no_two_catalog_commands_share_a_default_chord` below now run against
+    // DATA-SOURCED values without themselves needing an edit.
+
+    #[test]
+    fn every_defaults_toml_slug_names_a_real_catalog_command() {
+        for slug_in_file in crate::keymap_defaults::command_defaults().keys() {
+            assert!(
+                COMMAND_SEED.iter().any(|c| &slug(c.name) == slug_in_file),
+                "assets/keymap-defaults.toml names {slug_in_file:?}, which is not a commands::COMMAND_SEED slug"
+            );
+        }
+    }
+
+    #[test]
+    fn every_catalog_command_appears_in_the_defaults_toml_or_is_unbound() {
+        // "explicitly listed unbound" per the round's own law — this codebase's
+        // embedded file lists EVERY command (even the palette-only, all-empty
+        // ones), so this degenerates to "every slug is present"; still asserted
+        // directly (not merely implied by the reverse-direction test above) so a
+        // future author who starts omitting all-empty rows doesn't silently
+        // regress past this law without a compile-time nudge.
+        let defaults = crate::keymap_defaults::command_defaults();
+        for c in COMMAND_SEED.iter() {
+            assert!(
+                defaults.contains_key(&slug(c.name)),
+                "{:?} (slug {:?}) has no entry in assets/keymap-defaults.toml — every catalog \
+                 command must appear there, even if unbound (both slots empty)",
+                c.name,
+                slug(c.name)
+            );
+        }
+    }
+
+    #[test]
+    fn defaults_toml_has_no_stale_slugs_and_no_duplicates() {
+        // The reverse-coverage pair above already proves a 1:1 SET correspondence;
+        // this additionally proves the embedded file has exactly as many entries
+        // as the catalog (so a renamed command can't leave an orphaned old-slug
+        // row silently sitting in the TOML alongside its new one).
+        let defaults = crate::keymap_defaults::command_defaults();
+        assert_eq!(
+            defaults.len(),
+            COMMAND_SEED.len(),
+            "assets/keymap-defaults.toml's entry count must equal the catalog's — an orphaned \
+             or duplicated slug would slip past the pure set-membership checks alone"
+        );
+    }
+
+    #[test]
+    fn commands_splices_the_embedded_defaults_verbatim() {
+        // THE SINGLE-SOURCE LAW, checked directly: `COMMANDS[i].native`/`.emacs`
+        // is EXACTLY what `assets/keymap-defaults.toml` names for that command's
+        // slug (never a residual literal from `COMMAND_SEED`, which carries only
+        // `""` placeholders in both slots by construction).
+        let defaults = crate::keymap_defaults::command_defaults();
+        for c in COMMANDS.iter() {
+            let (native, emacs) = defaults.get(&slug(c.name)).cloned().unwrap_or_default();
+            assert_eq!(c.native, native, "{:?}'s native slot must come from the embedded defaults", c.name);
+            assert_eq!(c.emacs, emacs, "{:?}'s emacs slot must come from the embedded defaults", c.name);
+        }
+    }
+
+    #[test]
+    fn command_seed_itself_carries_no_residual_chord_literals() {
+        // A belt-and-suspenders structural check: `COMMAND_SEED`'s own
+        // `native`/`emacs` fields (never read by anything but the `COMMANDS`
+        // splice above) must stay blank placeholders — a stray literal chord
+        // reintroduced there would silently be DISCARDED by the splice (which
+        // always overwrites both fields), so this catches the authoring mistake
+        // even though it would otherwise have zero runtime effect.
+        for c in COMMAND_SEED.iter() {
+            assert_eq!(c.native, "", "{:?}: COMMAND_SEED must not carry a literal native chord", c.name);
+            assert_eq!(c.emacs, "", "{:?}: COMMAND_SEED must not carry a literal emacs chord", c.name);
+        }
+    }
+
     #[test]
     fn catalog_non_empty_and_named() {
         assert!(!COMMANDS.is_empty(), "the command catalog must list commands");
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             assert!(!c.name.trim().is_empty(), "command needs a display name");
         }
         // Every entry HAS at least one filled slot except the PALETTE-ONLY commands
@@ -1190,7 +1308,7 @@ mod tests {
             "Highlight",
             "Strikethrough",
         ];
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             if !PALETTE_ONLY.contains(&c.name) {
                 assert!(
                     !join_slots(c.native, c.emacs).is_empty(),
@@ -1300,7 +1418,7 @@ mod tests {
         // so a command shown as "Switch theme…" keys under exactly `switch_theme`, the
         // SAME key a `[keys]` entry or the menu-routing table derives. This law pins
         // that a `…` can never fork a second config key.
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             let s = slug(c.name);
             assert!(!s.contains('…'), "{}: slug must not carry the ellipsis: {s:?}", c.name);
             // The suffixed display name and its bare form slug IDENTICALLY, and both
@@ -1704,14 +1822,14 @@ mod tests {
         // (`keymap::tests::linux_collision_table_matches_the_documented_displaced_list`),
         // not something this sweep should re-assert. SYMMETRICALLY, the NATIVE
         // half skips a chord the DEFAULT (config-free) Linux keep-list holds
-        // back (`keymap::LINUX_BUILTIN_KEEP` — Insert link's Ctrl-K, which
+        // back (`keymap::linux_builtin_keep()` — Insert link's Ctrl-K, which
         // yields to kill-line out of the box; the insert-link-yields round) —
         // that non-firing is ITS own law-tested contract too
         // (`keymap::tests::out_of_the_box_linux_ctrl_k_is_kill_line_under_both_keymap_flavors`),
         // and the labels never advertise the chord there either
         // (`insert_link_has_no_visible_linux_binding_out_of_the_box_mac_shows_cmd_k`).
         let default_linux_keep = crate::config::Config::empty().effective_linux_keep();
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             for convention in [Convention::Mac, Convention::Linux] {
                 if !c.native.trim().is_empty() {
                     let resolved = resolved_native(c, convention);
@@ -1774,7 +1892,7 @@ mod tests {
         // share — today there are NONE, so the list is empty and every default
         // chord belongs to exactly one command.
         const INTENTIONALLY_SHARED: &[(&str, &str)] = &[];
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             for chord in [c.native, c.emacs] {
                 if chord.trim().is_empty() {
                     continue;
@@ -1870,7 +1988,7 @@ mod tests {
             Action::BufferStart,
             Action::BufferEnd,
         ];
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             if c.action.is_motion() {
                 assert!(
                     NAVIGATION_MOTIONS.contains(&c.action),
@@ -1986,7 +2104,7 @@ mod tests {
 
     #[test]
     fn no_command_is_flagged_unavailable_on_both_platforms() {
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             assert!(
                 !(c.native_only && c.web_only),
                 "{}: native_only and web_only can never both be true (available nowhere)",
@@ -2015,7 +2133,7 @@ mod tests {
 
     #[test]
     fn every_other_command_is_available_on_both_platforms() {
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             if HIDE_ON_WEB.contains(&c.name) || HIDE_ON_NATIVE.contains(&c.name) {
                 continue;
             }
@@ -2148,7 +2266,7 @@ mod tests {
     /// pre-round `join_slots(c.native, c.emacs)` for EVERY catalog command.
     #[test]
     fn mac_native_label_truth_is_byte_identical_to_join_slots() {
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             assert_eq!(
                 join_slots_truthful(c, Convention::Mac, Platform::Native, &[]),
                 join_slots(c.native, c.emacs),
@@ -2281,7 +2399,7 @@ mod tests {
             Command { name: "Synthetic", action: Action::Ignore, native: "Cmd-N", emacs: "C-k", native_only: false, web_only: false };
         // 'k' is NOT in the Linux displaced-letters set (kill-line's own
         // Ctrl-K keeps its emacs meaning unconditionally, via
-        // `keymap::LINUX_BUILTIN_KEEP` — see the insert-link-yields-to-
+        // `keymap::linux_builtin_keep()` — see the insert-link-yields-to-
         // kill-line round), so it survives there too.
         assert_eq!(join_slots_truthful(&synthetic, Convention::Mac, Platform::Web, &[]), "C-k");
         assert_eq!(join_slots_truthful(&synthetic, Convention::Linux, Platform::Web, &[]), "C-k");
@@ -2348,7 +2466,7 @@ mod tests {
     /// until it is accounted for — the no-wildcard sweep the round's laws ask for.
     #[test]
     fn label_truth_law_holds_across_the_whole_catalog() {
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             for convention in [Convention::Mac, Convention::Linux] {
                 for platform in [Platform::Native, Platform::Web] {
                     let native_resolved = resolved_native(c, convention);
@@ -2460,7 +2578,7 @@ mod tests {
     #[test]
     fn linux_keep_emacs_is_inert_on_mac_for_the_whole_catalog() {
         let keep = vec!["C-f".to_string(), "C-b".to_string(), "C-n".to_string(), "C-p".to_string()];
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             assert_eq!(
                 join_slots_truthful(c, Convention::Mac, Platform::Native, &keep),
                 join_slots_truthful(c, Convention::Mac, Platform::Native, &[]),
@@ -2508,7 +2626,7 @@ mod tests {
     #[test]
     fn keymap_flavor_emacs_preset_is_inert_on_mac_for_the_whole_catalog() {
         let preset = crate::keymap::linux_emacs_preset_keep();
-        for c in COMMANDS {
+        for c in COMMANDS.iter() {
             assert_eq!(
                 join_slots_truthful(c, Convention::Mac, Platform::Native, &preset),
                 join_slots_truthful(c, Convention::Mac, Platform::Native, &[]),
@@ -2570,14 +2688,14 @@ mod tests {
     /// `linux_keep_emacs_is_inert_on_mac_for_the_whole_catalog`/
     /// `keymap_flavor_emacs_preset_is_inert_on_mac_for_the_whole_catalog`, but
     /// driven by the REAL `Config::effective_linux_keep()` composition (which,
-    /// as of this round, always contains `keymap::LINUX_BUILTIN_KEEP`'s "C-k").
+    /// as of this round, always contains `keymap::linux_builtin_keep()`'s "C-k").
     #[test]
     fn effective_linux_keep_builtin_floor_is_inert_on_mac_for_the_whole_catalog() {
         for flavor in ["native", "emacs"] {
             let mut cfg = crate::config::Config::empty();
             cfg.keymap = Some(flavor.to_string());
             let keep = cfg.effective_linux_keep();
-            for c in COMMANDS {
+            for c in COMMANDS.iter() {
                 assert_eq!(
                     join_slots_truthful(c, Convention::Mac, Platform::Native, &keep),
                     join_slots_truthful(c, Convention::Mac, Platform::Native, &[]),
@@ -2585,6 +2703,34 @@ mod tests {
                     c.name
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod identity_snapshot {
+    //! THE KEYMAP-DEFAULTS-AS-DATA ROUND'S OWN IDENTITY-PROOF TOOL: dumps the
+    //! ENTIRE `COMMANDS` catalog (name/action/native/emacs/native_only/
+    //! web_only) in stable order, one line per command. `--ignored
+    //! --nocapture` this before AND after any future round that touches how
+    //! `COMMANDS` is constructed (this round used it to diff byte-for-byte
+    //! against the pre-refactor base commit, on a temporary copy of this
+    //! same test, and got an exact match) — since every downstream consumer
+    //! (`effective_bindings`, `join_slots_truthful`, the menu roster, the
+    //! GUIDE reference table, the rebind menu, whichkey) is a pure function
+    //! of this exact data, an identical dump is sufficient to prove the
+    //! whole label/dispatch-agreement surface is behavior-identical without
+    //! re-deriving every derived view by hand. Kept `#[ignore]`d (zero cost
+    //! to the normal suite) as a reusable tool, not a law test with its own
+    //! failure mode — the data-shape laws above already guard the catalog
+    //! going forward.
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn print_full_catalog_snapshot() {
+        for c in COMMANDS.iter() {
+            println!("{}|{:?}|{}|{}|{}|{}", c.name, c.action, c.native, c.emacs, c.native_only, c.web_only);
         }
     }
 }
