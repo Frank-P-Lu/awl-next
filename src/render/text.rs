@@ -999,7 +999,7 @@ impl TextPipeline {
     /// no-op the moment there is no table on the document at all (checked
     /// right after the (already-required) cache refresh, so that refresh
     /// always happens regardless).
-    fn resync_table_layout_for_width(&mut self) {
+    pub(super) fn resync_table_layout_for_width(&mut self) {
         if !self.md_enabled {
             return;
         }

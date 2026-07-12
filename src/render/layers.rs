@@ -1006,6 +1006,24 @@ impl TextPipeline {
             .map(|(_, g)| g.row_heights.clone())
     }
 
+    /// TEST-ONLY: the CACHED per-column x-offsets + widths for the table block
+    /// whose byte range starts at `range_start` — a direct peek at
+    /// [`TableGridCache`] so a test can assert every cell's x-range stays
+    /// within the writing column WITHOUT a GPU pixel diff. `None` if no table
+    /// is cached at that range.
+    #[cfg(test)]
+    pub(super) fn table_grid_cache_col_geometry(
+        &self,
+        range_start: usize,
+    ) -> Option<(Vec<f32>, Vec<f32>)> {
+        self.table_grid_cache
+            .entries
+            .borrow()
+            .iter()
+            .find(|(s, _)| *s == range_start)
+            .map(|(_, g)| (g.col_x.clone(), g.col_w.clone()))
+    }
+
     /// TEST-ONLY: every table cell's document line the LAST [`Self::prepare_table_grid`]
     /// call actually uploaded as a `TextArea` (see `last_table_cell_lines`'s own
     /// field doc). A doc line absent from this list drew NO grid cells that frame.

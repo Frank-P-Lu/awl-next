@@ -3470,6 +3470,22 @@ impl TextPipeline {
         if changed(before.0, Some(wrap_w)) || changed(before.1, Some(shape_h)) {
             self.row_geom.invalidate();
         }
+        // TABLES: `set_size` just re-wrapped the document buffer to the new
+        // width DIRECTLY (above), so by the time `prepare()`'s own
+        // `sync_wrap_width` runs, `buffer.size().0` already equals
+        // `text_wrap_width()` — its own drift check is false, and its
+        // table-resync companion (`resync_table_layout_for_width`) never
+        // fires. Without this, a real window resize (this is the ONLY seam
+        // `WindowEvent::Resized` drives — a page-measure edit goes through
+        // `sync_wrap_width` alone and is already covered) leaves
+        // `TableGridCache` pinned to whatever width the last full `set_text`
+        // reshape used, so a shrunk window keeps drawing the OLD (too-wide)
+        // column geometry — the real user-reported overflow. Gated on the
+        // SAME `changed(...)` width check above: a height-only resize (or no
+        // real change at all) never re-shapes tables it doesn't need to.
+        if changed(before.0, Some(wrap_w)) {
+            self.resync_table_layout_for_width();
+        }
     }
 
 
