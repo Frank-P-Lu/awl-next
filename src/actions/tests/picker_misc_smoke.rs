@@ -425,7 +425,7 @@ fn every_catalog_command_dispatches_without_panicking() {
         assets: vec![],
     };
 
-    for c in crate::commands::COMMANDS {
+    for c in crate::commands::COMMANDS.iter() {
         // The About card's "open" global OWNS the very next key (apply_core's
         // top-of-fn dismiss intercept), so reset it before EACH dispatch — else
         // a prior `Action::About` iteration would make the next command a no-op
