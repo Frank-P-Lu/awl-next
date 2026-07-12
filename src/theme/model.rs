@@ -175,6 +175,71 @@ pub enum ImageReveal {
     Opaque,
 }
 
+/// Which CORNER of the summoned overlay card a [`TitleStyle::Placard`]
+/// wordmark anchors to — see [`TitleStyle`]'s own module doc for the
+/// mechanism. `TL`/`TR` sit level with the query line; `BL`/`BR` sit level
+/// with the card's foot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlacardCorner {
+    TL,
+    TR,
+    BL,
+    BR,
+}
+
+/// The ink a [`TitleStyle::Placard`] wordmark draws in — always DERIVED from
+/// the world's own ink ladder (never a free color; see [`super::derive::placard_ink`],
+/// the one owner). `Faint` is the existing faintest ladder rung
+/// ([`Theme::faint`]); `Ghost` steps ONE rung further toward the card's own
+/// ground (`base_300`) — barely-there, the P3R "watermark" read. Neither
+/// variant carries a raw `Srgb` — the enum itself makes "invent a placard
+/// color" unrepresentable, mirroring [`HighlightTreatment`]'s own
+/// no-absent-variant discipline.
+///
+/// **A ONE-BIT world's own law still applies on top of this ladder** (see
+/// `Theme::is_one_bit`'s doc): a true 1-bit world may draw ONLY pure black or
+/// pure white, so neither `Faint` nor `Ghost` (both ordinary greys on every
+/// world today) is a legal choice THERE — no world ships `Placard` yet
+/// (`RenderCaps::DEFAULT` is `InlinePrefix` everywhere), so this is a banked
+/// constraint, not yet a live bug; `theme::tests::a_placard_ghost_title_style_
+/// would_violate_a_one_bit_worlds_own_law` guards the combination structurally
+/// so a FUTURE assignment can't ship it by accident (see that test's own doc
+/// for why the guard lives in `theme::`, never `render::`, where reading
+/// `is_one_bit()` is banned outright).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlacardInk {
+    Faint,
+    Ghost,
+}
+
+/// How a summoned overlay card announces which picker it is (see
+/// `OverlayKind::title`, the one owner of the announced TEXT — this field
+/// only ever decides how that text RENDERS). `InlinePrefix` is the shipped
+/// default on EVERY world today: the existing quiet "<title> › " prefix on
+/// the picker's own input line (`overlay_shape.rs::shape_overlay_names`,
+/// `theme_picker.rs`'s own mirror), untouched by this round.
+///
+/// `Placard` is the OVERLAY-PERSONALITY-AS-DATA round's new capability: a
+/// large, corner-anchored, DIM wordmark of the SAME title text drawn BEHIND
+/// the card's rows (Persona 3 Reload's CONFIG-screen watermark is the
+/// reference) — `scale` multiplies the markdown heading TITLE type rung
+/// (`markdown::headings::type_scale::TITLE`) over the document's own body
+/// font size, so a world can dial how loud its wordmark reads without a
+/// second magic number; `ink` picks which ink-ladder rung it draws in (see
+/// [`PlacardInk`]). **Clipped to the card, never bleeding into the scrim**
+/// (a deliberate, logged deviation from P3R's own bleed — see
+/// `render::chrome::overlay_shape`'s placard doc for the legibility
+/// reasoning); rows/text always composite OVER it. NO world ships `Placard`
+/// yet — this round is the machinery only (`RenderCaps::DEFAULT` + ALL 15
+/// worlds' literals are `InlinePrefix`, byte-identity gated); the assignment
+/// itself is the human eyeball-and-decide step this round's probe gallery
+/// exists to feed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TitleStyle {
+    InlinePrefix,
+    Placard { corner: PlacardCorner, scale: f32, ink: PlacardInk },
+}
+
 /// THE ONE emphasis texture a world draws `==highlight==` spans and search
 /// matches with (deliberately shared — see `worlds.rs::WAGTAIL`'s "one kind
 /// of emphasis, one texture" doc). `Wash` is the default: a hue-derived
@@ -205,6 +270,13 @@ pub struct RenderCaps {
     pub decorative_wash: DecorativeWash,
     pub image_reveal: ImageReveal,
     pub highlight_texture: HighlightTexture,
+    /// THE OVERLAY-PERSONALITY-AS-DATA round's capability: how the summoned
+    /// overlay card announces its title (see [`TitleStyle`]'s own doc). The
+    /// card's ELEVATION/border story needs no new field here — [`Elevation`]
+    /// already names it (`Flat` vs `Bordered`), and a `Placard` world can
+    /// combine with EITHER elevation freely (the wordmark draws behind the
+    /// rows on the SAME card either way).
+    pub title_style: TitleStyle,
 }
 
 impl RenderCaps {
@@ -216,6 +288,7 @@ impl RenderCaps {
         decorative_wash: DecorativeWash::Enabled,
         image_reveal: ImageReveal::Translucent,
         highlight_texture: HighlightTexture::Wash,
+        title_style: TitleStyle::InlinePrefix,
     };
 
     /// THE ONE owner of the row/title "selected region" highlight decision —

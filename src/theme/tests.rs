@@ -766,3 +766,84 @@ fn highlight_treatment_matches_selection_style_on_every_world_no_absent_case() {
         }
     }
 }
+
+// --- THE OVERLAY-PERSONALITY-AS-DATA ROUND -----------------------------
+
+/// `Srgb::lerp` — the pure blend primitive `placard_ink` (below) leans on.
+#[test]
+fn lerp_interpolates_and_clamps() {
+    let a = Srgb::rgb(0, 0, 0);
+    let b = Srgb::rgb(100, 200, 40);
+    assert_eq!(a.lerp(b, 0.0), a, "t=0 is exactly self");
+    assert_eq!(a.lerp(b, 1.0), b, "t=1 is exactly other");
+    assert_eq!(a.lerp(b, 0.5), Srgb::rgb(50, 100, 20), "t=0.5 is the exact midpoint");
+    // Out-of-range t clamps rather than extrapolating past either endpoint.
+    assert_eq!(a.lerp(b, -1.0), a, "t<0 clamps to self");
+    assert_eq!(a.lerp(b, 2.0), b, "t>1 clamps to other");
+}
+
+/// `theme::placard_ink` NEVER invents a free color — `Faint` is exactly
+/// [`derive::faint`], and `Ghost` is a pure blend of two tokens already on
+/// the active world's own palette (`faint` and `base_300`), for EVERY world.
+#[test]
+fn placard_ink_derives_from_the_ink_ladder_never_a_free_color() {
+    let _g = crate::testlock::serial();
+    for t in THEMES.iter() {
+        set_active_by_name(t.name).unwrap();
+        assert_eq!(
+            derive::placard_ink(model::PlacardInk::Faint),
+            t.faint,
+            "{}: PlacardInk::Faint must be exactly the world's own faint ink",
+            t.name
+        );
+        let ghost = derive::placard_ink(model::PlacardInk::Ghost);
+        let expected = t.faint.lerp(t.base_300, 0.5);
+        assert_eq!(ghost, expected, "{}: PlacardInk::Ghost must be a pure faint/base_300 blend", t.name);
+    }
+    set_active(DEFAULT_THEME);
+}
+
+/// ALL FIFTEEN worlds ship [`model::TitleStyle::InlinePrefix`] this round —
+/// the byte-identity gate the round's own spec demands (no world's rendering
+/// may change). A future round FLIPPING a world to `Placard` edits this
+/// test consciously; it can never happen by accident.
+#[test]
+fn every_world_ships_inline_prefix_title_style_this_round() {
+    for t in THEMES.iter() {
+        assert!(
+            matches!(t.render_caps.title_style, model::TitleStyle::InlinePrefix),
+            "{}: expected InlinePrefix (no world assigns Placard yet)",
+            t.name
+        );
+    }
+}
+
+/// REPAIR ROUND 2's flagged gap, closed structurally: a `TitleStyle::Placard`
+/// paired with `PlacardInk::Ghost` on a TRUE 1-BIT world (`Theme::is_one_bit`)
+/// would render a plain mid-grey wordmark — a `faint`/`base_300` blend is an
+/// ordinary intermediate grey on every world today, and a 1-bit world's own
+/// law (`render::tests::syntax_roles::every_one_bit_world_renders_only_pure_
+/// black_or_white`) permits ONLY pure black or pure white, no grey rung at
+/// all. No world ships `Placard` yet (the test above pins that), so this is
+/// a BANKED guard against a future assignment, not a live bug — but the
+/// guard itself is real: it fails loudly the moment any world's
+/// `render_caps.title_style` becomes `Placard { ink: Ghost, .. }` while that
+/// same world is `is_one_bit()`. Lives in `theme::`, deliberately never
+/// `render::`, where a bare `.is_one_bit()` call is banned outright
+/// (`render::tests::theme_caps_law`) — this is exactly the "pin an identity,
+/// not a render mechanism" carve-out that grep-law's own doc describes.
+#[test]
+fn a_placard_ghost_title_style_would_violate_a_one_bit_worlds_own_law() {
+    for t in THEMES.iter() {
+        if let model::TitleStyle::Placard { ink: model::PlacardInk::Ghost, .. } = t.render_caps.title_style {
+            assert!(
+                !t.is_one_bit(),
+                "{}: TitleStyle::Placard{{ink: Ghost}} on a true 1-bit world renders an \
+                 illegal intermediate grey — pick PlacardInk::Faint isn't legal there either \
+                 (still an ordinary grey); a 1-bit world needs its own render_caps escape hatch \
+                 (mirroring Wagtail's own render_caps overrides) before it can ship a placard at all",
+                t.name
+            );
+        }
+    }
+}

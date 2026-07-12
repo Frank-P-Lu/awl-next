@@ -29,6 +29,7 @@ mod distinguishability;
 mod one_bit;
 mod oracle;
 mod outline;
+mod overlay_personality;
 mod pixeldiff;
 mod syntax_ligatures;
 mod syntax_roles;

@@ -79,6 +79,17 @@ impl Srgb {
         (h, s, l)
     }
 
+    /// Linear per-channel blend toward `other` by `t` (`0.0` = self, `1.0` =
+    /// other; clamped). Alpha blends too. The one arithmetic primitive the
+    /// PLACARD-INK derivation (`theme::derive::placard_ink`) uses to step a
+    /// rung below [`Theme::faint`] WITHOUT inventing a free color — the result
+    /// is always a mix of two tokens already on the world's own ink ladder.
+    pub fn lerp(self, other: Srgb, t: f32) -> Srgb {
+        let t = t.clamp(0.0, 1.0);
+        let ch = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round().clamp(0.0, 255.0) as u8;
+        Srgb::rgba(ch(self.r, other.r), ch(self.g, other.g), ch(self.b, other.b), ch(self.a, other.a))
+    }
+
     /// An OPAQUE [`Srgb`] from `(hue°, saturation, lightness)` — the inverse of
     /// [`Srgb::to_hsl`] (up to u8 rounding, which stays authoritative). Hue wraps;
     /// saturation / lightness clamp to `[0, 1]`.

@@ -6,7 +6,104 @@
 
 use super::*;
 
+/// Breathing inset (px) between the card's own edge and a
+/// [`theme::TitleStyle::Placard`] wordmark's glyph box — mirrors the card's
+/// own `pad` (12.0, `overlay_geometry`) so the wordmark sits inside the same
+/// margin every other card element does.
+const PLACARD_INSET: f32 = 12.0;
+
+/// Pure corner placement: the wordmark's `(x, y)` top-left, given its own
+/// shaped `(w, h)` and the card rect `(x, y, w, h)`. `TR`/`BR` anchor the
+/// wordmark's RIGHT edge to the card's right edge (never past `card_x`, so a
+/// wordmark wider than the card degrades to hugging the LEFT edge rather
+/// than reporting a negative origin); `BL`/`BR` anchor the BOTTOM edge
+/// likewise.
+fn placard_origin(
+    corner: theme::PlacardCorner,
+    card: (f32, f32, f32, f32),
+    w: f32,
+    h: f32,
+    inset: f32,
+) -> (f32, f32) {
+    let (cx, cy, cw, ch) = card;
+    let x = match corner {
+        theme::PlacardCorner::TL | theme::PlacardCorner::BL => cx + inset,
+        theme::PlacardCorner::TR | theme::PlacardCorner::BR => (cx + cw - inset - w).max(cx),
+    };
+    let y = match corner {
+        theme::PlacardCorner::TL | theme::PlacardCorner::TR => cy + inset,
+        theme::PlacardCorner::BL | theme::PlacardCorner::BR => (cy + ch - inset - h).max(cy),
+    };
+    (x, y)
+}
+
 impl TextPipeline {
+    /// THE PLACARD RENDERER — the one owner of [`theme::TitleStyle::Placard`].
+    /// Shapes the picker's own title text (`overlay_title`, the ONE owner of
+    /// the announced text — see `OverlayKind::title`'s doc; already gated
+    /// empty for the two kinds that orient via their own modal prompt
+    /// instead) as a large, corner-anchored, DIM wordmark into
+    /// `placard_buffer` — sized by `scale` over the document body's own font
+    /// size × the markdown heading TITLE rung
+    /// (`markdown::type_scale::TITLE`), so a world dials how loud its
+    /// wordmark reads with ONE number, never a second magic constant.
+    /// Uppercased (a taste call, flagged — a display wordmark reads as a
+    /// title card, not running prose).
+    ///
+    /// Returns the wordmark's natural `(x, y, w, h)` draw rect, or `None`
+    /// when this frame draws no placard: the active [`theme::TitleStyle`]
+    /// (probe-forced or the active world's own, see
+    /// `render::effective_title_style`) is `InlinePrefix` (every world
+    /// today), the picker is the theme picker (its own separate shaper,
+    /// `theme_picker.rs`) or the header-less spell popup (no title line at
+    /// all), or the kind draws no title (Rename/InsertLink — `overlay_title`
+    /// is already empty for those). The CALLER clips the upload to the
+    /// CARD's rect regardless of this fn's returned `w`/`h` — CLIPPED TO THE
+    /// CARD, never bleeding into the scrim (a deliberate, logged deviation
+    /// from Persona 3 Reload's own bleed: the card is the ONE region every
+    /// other overlay element already reasons about, so a placard that could
+    /// paint over the document/scrim would need its own separate clip/z-order
+    /// story for no gain a calm dim wordmark behind the rows doesn't already
+    /// deliver — rows/text always composite OVER it, legibility first).
+    pub(in crate::render) fn overlay_shape_placard(&mut self, geom: &OverlayGeom) -> Option<(f32, f32, f32, f32)> {
+        if geom.theme || geom.header_rows == 0 || self.overlay_title.is_empty() {
+            return None;
+        }
+        let (corner, scale, ink) = match crate::render::effective_title_style() {
+            theme::TitleStyle::Placard { corner, scale, ink } => (corner, scale, ink),
+            theme::TitleStyle::InlinePrefix => return None,
+        };
+        let font_size = self.metrics.font_size * crate::markdown::type_scale::TITLE * scale;
+        // A generous plain leading — no body text ever sits inside a
+        // single-line wordmark box to match against.
+        let line_height = font_size * 1.1;
+        let metrics = GlyphMetrics::new(font_size, line_height);
+        self.placard_buffer.set_metrics(&mut self.font_system, metrics);
+        self.placard_buffer.set_size(&mut self.font_system, None, None);
+        self.placard_buffer.set_wrap(&mut self.font_system, Wrap::None);
+        let text = self.overlay_title.to_uppercase();
+        let color = theme::placard_ink(ink).to_glyphon();
+        self.placard_buffer.set_text(
+            &mut self.font_system,
+            &text,
+            &panel_attrs().color(color),
+            Shaping::Advanced,
+            None,
+        );
+        self.placard_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        let mut w = 0.0f32;
+        for run in self.placard_buffer.layout_runs() {
+            w = w.max(run.line_w);
+        }
+        if w <= 0.0 {
+            return None;
+        }
+        let card = (geom.card_x, geom.card_y, geom.card_w, geom.card_h);
+        let (x, y) = placard_origin(corner, card, w, line_height, PLACARD_INSET);
+        Some((x, y, w, line_height))
+    }
+
     /// Compose + shape the overlay text into the shared buffers: the query line +
     /// candidate rows (selected ink / rest muted) in `panel_buffer`, and the dim
     /// `Align::Right` chord/time column in `panel_bind_buffer`. Returns whether a
