@@ -68,8 +68,8 @@ pub use model::{Lens, RoleOverrides, ThemeTags};
 // bundle type + one field's enum); every non-test in-crate caller today reaches
 // them through `Theme::render_caps.<field>` rather than this bare re-export.
 pub use model::{
-    Backdrop, CaretBlockStyle, DecorativeWash, Elevation, HighlightTexture, ImageReveal,
-    RenderCaps, SelectionStyle,
+    Backdrop, CaretBlockStyle, DecorativeWash, Elevation, HighlightTexture, HighlightTreatment,
+    ImageReveal, RenderCaps, SelectionStyle,
 };
 #[allow(unused_imports)] // the per-world ornament/bullet data: public API
 // surface, no NON-TEST in-crate caller today.

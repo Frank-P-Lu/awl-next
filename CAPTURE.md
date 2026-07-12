@@ -171,6 +171,49 @@ a face lacks resolve to a system face and can vary by OS. The JSON sidecar is fu
 platform-independent (it contains no glyph bitmaps), so prefer the sidecar for
 cross-platform assertions.
 
+**The sidecar is a STATE oracle, not an APPEARANCE oracle.** It reports what
+the view state IS — `selected_index: 2`, `search.active: true`, an
+instance-count seam like `overlay_rows.instance_count() == 1` — never what a
+frame LOOKS like. The 2026-07 Wagtail invisible-picker-row bug is the
+concrete case: the sidecar truthfully reported the selected row's index every
+single time, and a mechanism-shaped test (`instance_count == 1`) passed every
+single time, while the row itself rendered as a fully-transparent
+`[0,0,0,0]`-alpha band — invisible on screen, six surfaces, three separate
+rounds, before anyone actually read a pixel back. Appearance-class properties
+("visible", "distinct", "legible", "the highlight moved") MUST be asserted
+over the PNG's PIXELS — arithmetic over the bytes (a redmean color distance,
+a differing-pixel fraction, a max-channel delta), never inferred from
+sidecar state. `render/tests/pixeldiff.rs`'s `assert_perceptibly_different`/
+`assert_identical` are the in-process tool for this — see below.
+
+**A fourth live-only bug class: compositor interaction during window
+mutation.** CLAUDE.md's conventions section names three live-only bug
+classes the capture harness is structurally immune to (stale swap caches,
+missing resize invalidation, redraw-scheduling gaps) because it rebuilds
+text and re-sizes the pipeline every frame before setting it. There is a
+FOURTH class this harness cannot reach at all, not even in principle: how
+the OS COMPOSITOR behaves *between* frames while the window itself is being
+mutated — a fast page-column drag-resize's mid-stretch frame, a live-resize
+event stream outrunning the app's own redraw cadence, a Wayland/macOS
+compositor coalescing or dropping intermediate frames during a rapid
+resize. `--screenshot-motion` proves a SINGLE deterministic mid-glide frame
+is drawn correctly; it says nothing about whether the compositor actually
+PRESENTS every frame the app submits during a real fast drag, or about the
+visual stretch/tear artifact a real user sees between two per-frame-correct
+states. Every per-frame invariant can hold and the LIVED feel can still be
+wrong — flag this class for live human confirmation exactly like the timing/
+feel gap above; do not claim it "verified" from a capture.
+
+**The pixel-diff helper is the appearance-assertion tool.** `render/tests/
+pixeldiff.rs` (`assert_perceptibly_different(a, b, width, height, region,
+floor, label)` / `assert_identical(..)`) turns "does state A actually look
+different from state B" into one line — pixel-count + max-channel-delta
+arithmetic over two already-rendered `Vec<[u8;4]>` buffers, with a
+documented floor (`DistinguishFloor::DEFAULT`). Reach for it whenever a test
+would otherwise assert a MECHANISM (an instance count, a dither flag, a
+computed color) and stop there — the mechanism proves the renderer INTENDED
+to draw something; the pixel diff proves it actually did.
+
 ## The sidecar JSON — schema `awl-capture/99` (`/100` timeline, `/101` held)
 
 Field order is stable; consumers may parse positionally or by key.

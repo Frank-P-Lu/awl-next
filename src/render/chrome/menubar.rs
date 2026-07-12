@@ -160,13 +160,19 @@ impl TextPipeline {
         // TRUE 1-BIT WORLDS: route the band into the inverse-video pipeline
         // instead of the ordinary fill — see `menubar_hi_invert`'s field doc
         // (mirrors `overlay_draw_card`'s identical split for the picker).
-        if theme::active().render_caps.selection_style == theme::SelectionStyle::InverseVideo {
-            self.menubar_hi.prepare(device, queue, width, height, &[]);
-            self.menubar_hi_invert.prepare(device, queue, width, height, hi);
-        } else {
-            self.menubar_hi.prepare(device, queue, width, height, hi);
-            self.menubar_hi_invert
-                .prepare(device, queue, width, height, &[]);
+        // Routed through `RenderCaps::highlight_treatment` — the LAW ROUND's
+        // no-absent-variant enum, see that fn's own doc for the bug history
+        // this closes.
+        match theme::active().render_caps.highlight_treatment(theme::selection()) {
+            theme::HighlightTreatment::Invert => {
+                self.menubar_hi.prepare(device, queue, width, height, &[]);
+                self.menubar_hi_invert.prepare(device, queue, width, height, hi);
+            }
+            theme::HighlightTreatment::ValueBand(_) => {
+                self.menubar_hi.prepare(device, queue, width, height, hi);
+                self.menubar_hi_invert
+                    .prepare(device, queue, width, height, &[]);
+            }
         }
 
         // Draw the title text (vertically centered in the bar).

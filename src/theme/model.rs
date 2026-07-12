@@ -217,6 +217,43 @@ impl RenderCaps {
         image_reveal: ImageReveal::Translucent,
         highlight_texture: HighlightTexture::Wash,
     };
+
+    /// THE ONE owner of the row/title "selected region" highlight decision —
+    /// the picker's selected row (`render/chrome/overlay.rs`) and the menu
+    /// bar's open-title band (`render/chrome/menubar.rs`) both call this
+    /// instead of hand-rolling their own `if selection_style == ..`
+    /// conditional. See [`HighlightTreatment`]'s own doc for why the return
+    /// type itself — not a bool plus a separately-computed color — is the
+    /// fix: it makes "draw nothing" a compile error, closing the exact hole
+    /// the Wagtail invisible-picker-row bug lived in (a fully-transparent
+    /// band silently passed every mechanism-shaped test, six surfaces, three
+    /// rounds, because "no indicator" was a REPRESENTABLE outcome of the old
+    /// `if invert { .. } else { .. }` shape).
+    pub fn highlight_treatment(&self, band: Srgb) -> HighlightTreatment {
+        match self.selection_style {
+            SelectionStyle::Fill => HighlightTreatment::ValueBand(band),
+            SelectionStyle::InverseVideo => HighlightTreatment::Invert,
+        }
+    }
+}
+
+/// The row/title HIGHLIGHT decision every "selected region" surface reduces
+/// to — see [`RenderCaps::highlight_treatment`]'s doc for the full history.
+/// Deliberately carries NO absent/no-indicator variant: a consumer that
+/// matches this enum is structurally incapable of preparing neither pipeline
+/// (or both), which is exactly the shape that let a fully-transparent
+/// highlight band ship unnoticed. `#[must_use]` so a caller that computes a
+/// treatment and discards it (rather than acting on it) is a compile
+/// warning, not a silent no-op.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[must_use]
+pub enum HighlightTreatment {
+    /// The default: an ordinary opaque value-band quad, tinted `Srgb`, under
+    /// the row/title's own text.
+    ValueBand(Srgb),
+    /// True inverse video (`1 - dst` per channel) — the only legal "selected"
+    /// mechanism on a world with no intermediate grey to fill a band with.
+    Invert,
 }
 
 /// The MARGIN ground a world paints behind its centered page (PAGE MODE).
