@@ -584,6 +584,7 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
     opts.overlay = Some(OverlayInfo {
         active: true,
         mode: "caret",
+        title: "caret style",
         query: String::new(),
         items: vec!["Block".into(), "Morph".into(), "I-beam".into()],
         bindings: vec![
@@ -650,6 +651,7 @@ fn caret_picker_morph_preview_paints_the_silhouette() {
     opts.overlay = Some(OverlayInfo {
         active: true,
         mode: "caret",
+        title: "caret style",
         query: String::new(),
         items: vec!["Block".into(), "Morph".into(), "I-beam".into()],
         bindings: vec![
@@ -734,6 +736,7 @@ fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
     opts.overlay = Some(OverlayInfo {
         active: true,
         mode: ov.kind.as_str(),
+        title: ov.kind.title(),
         query: ov.query.clone(),
         items: ov.item_strings(),
         bindings: ov.item_bindings(),

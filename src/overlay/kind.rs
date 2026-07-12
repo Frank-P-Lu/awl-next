@@ -462,6 +462,72 @@ impl OverlayKind {
         }
     }
 
+    /// THE OVERLAY-TITLES ROUND: the short, lowercase name this picker announces
+    /// itself with — a QUIET PREFIX drawn on the picker's own input line ("<title>
+    /// › " in muted ink before the typed query), so routing from the palette into
+    /// another picker (Keybindings / Settings / Themes / …) always says where you
+    /// landed. A NO-WILDCARD match: a future kind fails to compile here until it
+    /// names itself, mirroring [`Self::accept_disposition`]/[`Self::hint_actions`].
+    /// Not every kind actually DRAWS this prefix (the RENDER exceptions — Spell has
+    /// no input line to prefix, and Rename/InsertLink already orient via their own
+    /// modal prompt — are a render-time choice, not a reason to leave a kind
+    /// unnamed here).
+    pub fn title(self) -> &'static str {
+        match self {
+            OverlayKind::Goto => "go to",
+            OverlayKind::Project => "switch project",
+            OverlayKind::Browse => "browse",
+            OverlayKind::Theme => "themes",
+            OverlayKind::Caret => "caret style",
+            OverlayKind::MoveDest => "move note",
+            OverlayKind::Dictionary => "dictionary",
+            OverlayKind::CjkLang => "ambiguous cjk",
+            OverlayKind::Command => "commands",
+            OverlayKind::Spell => "spelling",
+            OverlayKind::Keybindings => "keybindings",
+            OverlayKind::History => "version history",
+            OverlayKind::Settings => "settings",
+            OverlayKind::Assets => "unused assets",
+            OverlayKind::Rename => "rename",
+            OverlayKind::InsertLink => "insert link",
+        }
+    }
+
+    /// THE OVERLAY-TITLES ROUND: does this kind's RENDER draw the `title() › `
+    /// prefix on its input line? `false` for Rename/InsertLink — their own modal
+    /// prompt (`foot_hint`, "rename to:"/"link to:") already orients, so a second
+    /// self-announcement would be redundant chrome; the SIDECAR still reports
+    /// [`Self::title`] unconditionally for every kind (the law is "every kind names
+    /// itself", not "every kind draws it" — see [`Self::title`]'s own doc). Spell
+    /// (no input line at all, `header_rows == 0`) needs no exclusion here — the
+    /// render path simply never reaches a query line to prefix for it.
+    pub fn draws_title_prefix(self) -> bool {
+        !matches!(self, OverlayKind::Rename | OverlayKind::InsertLink)
+    }
+
+    /// THE SETTINGS-MARKER GLYPH (the union round): a settings row reached via the
+    /// command palette draws this glyph, dim in muted ink, before its name (e.g.
+    /// `"§ Keymap"`) so it reads as visibly a SETTING, never a command. Measured
+    /// against the bundled `AwlMarks.ttf` (awl's own symbol set, `render::
+    /// SYMBOL_FAMILY`) FIRST per the round's own priority order — § (U+00A7,
+    /// SECTION SIGN) is already one of that face's typographic marks (alongside
+    /// † ‡ • ◦ ▪, see `theme::ornament`'s module doc), so it renders IDENTICALLY
+    /// on every world and every platform (bundled, never a system fallback — the
+    /// same guarantee the chord glyphs `⌘⇧⌥` lean on). The gear ⚙ (U+2699) was
+    /// also measured and does NOT exist in `AwlMarks.ttf` — confirmed via
+    /// `fontTools.ttLib`'s cmap — so it loses to § outright; a system-font gear
+    /// would also violate the "identical on every platform" bar the bundled face
+    /// meets for free. `render::spans::is_symbol` already lists § (it's a
+    /// pre-existing reference mark), so no font-routing code changed — only this
+    /// marker's USE is new.
+    ///
+    /// The full marker PREFIX (glyph + one space) a settings row's display text
+    /// carries — the single owner both [`OverlayState::display_of`] (which
+    /// prepends it) and [`crate::overlay::row_split`] (which recognizes it as the
+    /// muted-ink figure/ground split point, exactly like a file row's directory
+    /// prefix) read, so the two can never disagree about where the marker ends.
+    pub const SETTINGS_MARKER_PREFIX: &'static str = "§ ";
+
     /// The calm line a FACETING picker shows when a REFINEMENT lens (a strip index
     /// past the flat `All` home) filtered the corpus down to zero — distinct from an
     /// empty CORPUS ([`Self::empty_corpus_message`]) or a query that matched nothing

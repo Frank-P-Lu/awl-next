@@ -834,6 +834,117 @@ User-facing docs (CREDITS, GUIDE, welcome/tour seeds, site pages) are **matter-o
   the page's own DOM rendering (confirmed live via Playwright against a real
   served page), not a real OS browser spawn.
 
+## Settings join the Cmd-P palette + every picker names itself (`overlay/` + `settings.rs` + `actions/overlay_nav.rs`)
+
+- **What:** two folded rounds, one seam. (1) THE UNION: the Cmd-P palette's row
+  set is now catalog commands **∪** [`crate::settings::SETTINGS`] — a settings
+  row (e.g. "Keymap") is fuzzy-findable straight from the palette, not just
+  from "Settings…" → browse. Still ONE `OverlayKind::Command` overlay (no new
+  picker kind); the union is DATA on the existing `OverlayState`, not a new
+  code path. (2) OVERLAY TITLES: every `OverlayKind` now names itself
+  (`OverlayKind::title`), drawn as a quiet muted prefix on the picker's own
+  input line ("keymap → theme" reads as `settings › ` no more — a route from
+  the palette into Keybindings/Settings/Themes/… now always says where you
+  landed).
+- **THE UNION — corpus + marker.** `overlay::build`'s `OverlayKind::Command`
+  arm calls the new `OverlayState::attach_settings_rows(names, values)`
+  (mirrors `attach_headings`'s file-rows-first convention exactly): the
+  PLATFORM-FILTERED settings corpus (`settings::visible_names()` /
+  `visible_value_cells()` — the SAME corpus the Settings menu itself opens
+  with) is appended AFTER the commands, with a new parallel `is_setting: Vec
+  <bool>` flag (mirrors `heading`). The flat **All** lens fuzzy-ranks commands
+  + settings together for free; the File/Edit/View/Recent lenses (which
+  bucket by `menu_section`/`recent`, neither of which any setting name
+  matches) naturally EXCLUDE the settings rows — no bucket code needed, the
+  same "opts out" behavior an un-menued command like Quit/About already had.
+  A settings row's SECONDARY column carries its CURRENT VALUE (riding the
+  EXISTING `bindings` column — a command shows its chord there, a setting its
+  value; never both on one row).
+- **THE MARKER — measured, not guessed.** Priority order per the round's own
+  spec: (a) a glyph from **awl's own symbol set** (`AwlMarks.ttf`, `render::
+  SYMBOL_FAMILY`) FIRST. Measured via `fontTools.ttLib`'s cmap: **§ (U+00A7,
+  SECTION SIGN) IS already bundled** in `AwlMarks.ttf` (`theme::ornament`'s own
+  doc already lists it among the face's typographic marks, alongside † ‡ • ◦
+  ▪) — it renders IDENTICALLY on every world and platform (bundled, never a
+  system fallback, the same guarantee the `⌘⇧⌥` chord glyphs lean on), so it
+  won outright. (b) the gear ⚙ (U+2699) was ALSO measured and is **NOT** in
+  `AwlMarks.ttf` — confirmed absent from its cmap — so it never got to
+  compete on the "identical everywhere" bar a bundled glyph clears for free;
+  a settings row draws `§ Keymap`, never a borrowed OS gear. `render::spans::
+  is_symbol` already listed § as a reference mark, so no font-routing code
+  changed — only its USE (`OverlayKind::SETTINGS_MARKER_PREFIX = "§ "`) is
+  new. Rendered through the EXISTING rowlayout figure/ground split — `overlay
+  ::row_split` now recognizes the marker prefix exactly like a file row's
+  directory prefix (muted ink for the marker, content ink for the name), so
+  no new render code path exists; `rowlayout::fit_primary`/`plan` still own
+  the elision + yield-order law untouched.
+- **DISPATCH PARITY BY CONSTRUCTION.** `actions/overlay_nav.rs`'s former
+  `settings_accept` was split into a thin wrapper + the real shared owner,
+  `dispatch_settings_row(ctx, row, breadcrumb, close_on_toggle)` — the ONE
+  function BOTH the Settings menu's own accept AND the palette's settings-row
+  accept call, so the two can never drift. `breadcrumb` is the overlay a
+  Picker/Submenu/Path row's sub-picker pops back to on Esc (`Settings` from
+  the Settings menu; `Command` from the palette — mirroring how running
+  "Switch theme…" from the palette itself behaves via the pre-existing
+  `stamp_return_to` seam). `close_on_toggle` is the ONE behavioral difference:
+  `false` for the Settings menu (a persistent surface you keep configuring —
+  Enter on a Toggle flips it and STAYS open), `true` for the palette (its own
+  "running a row closes it" convention, matching an ordinary command row).
+  `OverlayState::selected_setting_row()` (new) resolves the Command overlay's
+  highlighted row back to its `SettingRow` by NAME (never a tracked offset —
+  it looks the corpus text up in `settings::visible_rows()` directly), so it
+  can never mis-map regardless of how many commands precede the settings
+  block; `None` for an ordinary command row, which then falls through to the
+  pre-existing `RunAction` path unchanged.
+- **OVERLAY TITLES.** `OverlayKind::title(self) -> &'static str` is a
+  NO-WILDCARD match (mirrors `accept_disposition`/`hint_actions`) — short,
+  lowercase, pairwise-distinct names ("commands", "settings", "keybindings",
+  "themes", "go to", "version history", …). `OverlayKind::draws_title_prefix`
+  is the ONE render-time exception list: `false` for Rename/InsertLink (their
+  own modal prompt — "rename to:"/"link to:" — already orients; a second
+  self-announcement would be redundant chrome), `true` for every other kind.
+  Render: `ViewState`/`TextPipeline` gain `overlay_title: &'static str`
+  (`ViewState::base()`-defaulted, wired at `App::sync_view`'s exhaustive seam
+  and the headless `capture::modes` mirror); `overlay_shape.rs`'s
+  `shape_overlay_names` and the theme picker's own separate shaper
+  (`theme_picker.rs`, which never reaches the generic path) both prepend
+  `"<title> › "` (muted) in place of the bare `"› "` sigil when `overlay_title`
+  is non-empty. Spell (the one `header_rows == 0` kind, no query line at all)
+  needs no special-case — the render path simply never reaches a query line
+  to prefix for it; its `title()` still satisfies the sidecar law.
+- **Sidecar:** the `overlay` block gains `title` (the picker's self-
+  announcement, `null` when no overlay is open) — ONE combined schema bump
+  covers both rounds (`/166` → `/167`); no other field changed. A settings
+  row appearing in `overlay.items` needs no NEW field — it's an ordinary item
+  string (`"§ Keymap"`) and its value rides the EXISTING `overlay.bindings`
+  parallel column.
+- **Headless drive (the honest scope boundary):** `--keys "Cmd-P k e y m a p
+  RET"` reaches the settings row through the real keymap + fuzzy filter +
+  accept seam and signals the SAME `Effect::SettingToggle{key:"keymap"}` the
+  Settings menu's own accept would, closing the palette — this is fully
+  `--keys`-drivable and unit-tested (`main::run::tests::
+  replay_keys_palette_filters_to_a_settings_row_and_toggles_it` +
+  `_palette_filter_surfaces_the_marked_settings_row`). What it does NOT prove
+  headlessly: the keymap flavor's VALUE actually flipping — `Effect::
+  SettingToggle` was ALREADY a documented headless no-op before this round
+  (`main/run.rs`'s `Effect` match: "the capture path has neither a global
+  setter it should mutate nor a config file to write" — flipping + persisting
+  is `App::setting_toggle`'s live-only job, unit-tested at that seam
+  instead). This round did not widen that boundary; it only proved the NEW
+  dispatch PATH reaches the same pre-existing edge.
+- **Tests:** `overlay::tests::every_kind_names_itself_with_a_nonempty_
+  distinct_title` (the title law, no-wildcard by construction);
+  `actions::tests::overlay_drive` (`union_palette_lists_settings_rows_with_
+  marker_and_current_value`, `palette_settings_toggle_row_signals_setting_
+  toggle_and_closes_the_palette`, `palette_settings_picker_row_opens_sub_
+  picker_with_command_breadcrumb`, `union_palette_ordinary_command_row_still_
+  runs`); `main::run::tests` (the two `--keys`-driven replay tests above).
+- **LIVE-ONLY (needs human confirmation):** the § marker's actual pixel
+  weight/placement beside a settings row name, and the title prefix's pixel
+  taste (whether "settings › " genuinely reads as calm chrome rather than
+  noise) — TASTE-FLAGGED, the harness proves the glyph resolves + the
+  figure/ground split + the render wiring, not the on-screen feel.
+
 ## Conventions
 - **Picker rows go through `render/rowlayout` — never place row text directly.** Every summoned-overlay row is a PRIMARY cell (name/path — never dropped, elided only as a last resort, never when short) plus an optional SECONDARY right column (chord / description / time / diff count — always the first to yield), budgeted by `rowlayout::plan` → `rowlayout::fits` (shaped-pixel arbiter) → `rowlayout::fit_primary` (the only elision door). The law test in `rowlayout.rs` enumerates `OverlayKind` with a NO-WILDCARD match, so a new picker kind fails to compile until it is under the no-overlap / yield-order / no-elide-short-names sweep — the same single-owner pattern as `syn_role_color` and the float-panel primitive. **The bottom-left page-mode GUTTER rides the same owner** (`rowlayout::gutter_plan`, `render::TextPipeline::gutter_layout` in `render/chrome.rs`): a vertically-STACKED (filename over project) surface rather than a picker's side-by-side split, so the laws diverge from a picker row's exactly where the geometry does — no horizontal overlap to arbitrate, so (taste-corrected) **neither line yields to the other from width pressure**: the filename NEVER wraps (pre-fit to one line through `fit_primary` before it ever reaches the wrapping box) and the project line is fit to that SAME budget independently, eliding on its own when it's the long one — both stay visible, each middle-elided as needed, until a hard floor (`GUTTER_MIN_NAME_CHARS`) hides the whole gutter rather than draw a stub. (This is the fix for the "DESIGN.md wraps to DESIG/N.md and the project vanishes" class of bug — the gutter used to lay raw text into a wrapping box instead of routing through the shared elision door.)
 - **Determinism:** the headless path has NO clock / animation / random. Don't add one. Live-only animation must render its *settled* state in capture.

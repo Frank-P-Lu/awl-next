@@ -112,6 +112,13 @@ pub struct OverlayInfo {
     /// via its `as_str`; emitted as `overlay.return_to` so a `--keys` breadcrumb chain
     /// (palette → theme → Esc → palette) is assertable straight from the sidecar.
     pub return_to: Option<&'static str>,
+    /// THE OVERLAY-TITLES ROUND: this picker's short, lowercase self-announcement
+    /// ([`crate::overlay::OverlayKind::title`]) — the same text the render path
+    /// draws as a quiet prefix on the input line. Emitted as `overlay.title` so the
+    /// destination of a palette→picker route is agent-verifiable straight from the
+    /// sidecar (a picker with no title-carrying render surface still reports it
+    /// here — the law is "every kind names itself", not "every kind draws it").
+    pub title: &'static str,
 }
 
 /// The Keybindings menu's capture sub-state for the sidecar `overlay.capture` block.

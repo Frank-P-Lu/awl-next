@@ -130,11 +130,24 @@ impl TextPipeline {
         let base = panel_attrs();
         let mk = |c| base.clone().color(c);
         let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
-        // The query line (with its `› ` sigil) occupies text line 0 when present; the
-        // spell panel skips it so its first suggestion IS line 0.
+        // The query line occupies text line 0 when present; the spell panel skips it
+        // so its first suggestion IS line 0. THE OVERLAY-TITLES ROUND: a picker that
+        // draws its title (`overlay_title` nonempty — every kind except Rename/
+        // InsertLink, which already orient via their own modal prompt) prepends it,
+        // muted, before the `› ` sigil — "<title> › query", so routing from the
+        // palette into another picker always says where you landed.
+        let title_prefix = if self.overlay_title.is_empty() {
+            String::new()
+        } else {
+            format!("{} › ", self.overlay_title)
+        };
         let sigil = "› ";
         if has_query {
-            spans.push((sigil, mk(muted)));
+            if title_prefix.is_empty() {
+                spans.push((sigil, mk(muted)));
+            } else {
+                spans.push((title_prefix.as_str(), mk(muted)));
+            }
             spans.push((self.overlay_query.as_str(), mk(ink)));
         }
         // Every row's FILENAME is the FIGURE: content ink at BODY size. Its leading

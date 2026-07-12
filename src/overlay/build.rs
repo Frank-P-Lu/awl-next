@@ -130,6 +130,18 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
             // process, so headless Recent is inert), translated into VISIBLE-CORPUS
             // indices (`visible_recent_indices`) so it can never point at a hidden row.
             ov.recent = crate::commands::visible_recent_indices();
+            // THE UNION ROUND: the SETTINGS corpus joins the palette — appended after
+            // the commands (mirrors Go-to's headings-after-files convention), so the
+            // flat All lens fuzzy-ranks commands + settings together while the File/
+            // Edit/View/Recent lenses (which bucket by `menu_section`/`recent`, neither
+            // of which any setting name matches) naturally exclude them, no bucket code
+            // needed. Same platform-filtered corpus + value readout the Settings menu
+            // itself opens with, so a setting reached via the palette shows the
+            // identical current-value secondary cell.
+            ov.attach_settings_rows(
+                crate::settings::visible_names(),
+                crate::settings::visible_value_cells(&ctx.settings_values),
+            );
             Some(ov)
         }
         // Rebind menu: the same platform-filtered command catalog + effective chords
@@ -305,5 +317,12 @@ pub fn elide_path(path: &str, max: usize) -> String {
 /// from it on is the FILENAME (content ink). `0` when the row has no `/` (a bare
 /// filename → all content ink).
 pub fn row_split(row: &str) -> usize {
+    // THE UNION ROUND: a settings row's marker PREFIX (`"§ "`, `OverlayKind::
+    // SETTINGS_MARKER_PREFIX`) is figure/ground-split exactly like a directory
+    // prefix — the glyph recedes to muted ink, the setting name stays content ink.
+    // Checked first (a setting name never itself contains a `/`).
+    if row.starts_with(OverlayKind::SETTINGS_MARKER_PREFIX) {
+        return OverlayKind::SETTINGS_MARKER_PREFIX.len();
+    }
     row.rfind('/').map(|i| i + 1).unwrap_or(0)
 }

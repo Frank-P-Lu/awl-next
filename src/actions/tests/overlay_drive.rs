@@ -262,6 +262,139 @@ fn every_settings_toggle_row_signals_its_own_setting_toggle_key() {
     }
 }
 
+// ── THE UNION ROUND: settings rows join the Cmd-P palette ──────────────────
+
+/// Build a COMMAND PALETTE overlay with the settings corpus attached, exactly
+/// as `overlay::build`'s real `OverlayKind::Command` arm does.
+fn command_overlay_with_settings() -> OverlayState {
+    let mut ov = OverlayState::new_command(
+        crate::commands::visible_names(),
+        crate::commands::visible_effective_bindings(&[], &[]),
+    );
+    ov.attach_settings_rows(
+        crate::settings::visible_names(),
+        crate::settings::visible_value_cells(&Default::default()),
+    );
+    ov
+}
+
+/// A make_overlay for the union-round tests: the Command palette (settings
+/// attached) plus the sub-pickers a settings Picker/Submenu row can open.
+fn command_drive(overlay: &mut Option<OverlayState>, action: &Action) -> Effect {
+    let mut buffer = Buffer::scratch();
+    let mut shift = false;
+    let mut zoom = 1.0;
+    let mut search = None;
+    let mut make_overlay = |k: OverlayKind| match k {
+        OverlayKind::Command => Some(command_overlay_with_settings()),
+        OverlayKind::Theme => Some(OverlayState::new_theme(
+            crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect(),
+            crate::theme::active_index(),
+        )),
+        OverlayKind::Keybindings => Some(OverlayState::new_keybindings(
+            crate::commands::visible_names(),
+            crate::commands::visible_effective_bindings(&[], &[]),
+        )),
+        _ => None,
+    };
+    let mut browse_to = |_k: OverlayKind, _r: Option<String>| None;
+    let mut ctx = ActionCtx {
+        buffer: &mut buffer,
+        shift_selecting: &mut shift,
+        zoom: &mut zoom,
+        search: &mut search,
+        scroll_page_lines: 1,
+        overlay,
+        make_overlay: &mut make_overlay,
+        browse_to: &mut browse_to,
+        oracle: None,
+    };
+    apply_core(&mut ctx, action, false)
+}
+
+/// The palette's corpus is the UNION of commands + settings — a settings row
+/// (e.g. "Keymap") is fuzzy-findable there, wears the `§ ` marker glyph in its
+/// display text, and shows its CURRENT VALUE in the secondary (binding) column
+/// exactly like the Settings menu itself.
+#[test]
+fn union_palette_lists_settings_rows_with_marker_and_current_value() {
+    let mut ov = command_overlay_with_settings();
+    // The full corpus is commands ++ settings (no rows dropped or duplicated).
+    assert_eq!(
+        ov.corpus.len(),
+        crate::commands::visible_names().len() + crate::settings::visible_names().len()
+    );
+    for ch in ['k', 'e', 'y', 'm', 'a', 'p'] {
+        ov.push(ch);
+    }
+    assert!(
+        ov.item_strings().iter().any(|s| s == "§ Keymap"),
+        "typing \"keymap\" should surface the marked settings row: {:?}",
+        ov.item_strings()
+    );
+    let idx = ov.item_strings().iter().position(|s| s == "§ Keymap").unwrap();
+    assert_eq!(
+        ov.item_bindings()[idx],
+        crate::settings::value_for(
+            crate::settings::SETTINGS.iter().find(|r| r.name == "Keymap").unwrap(),
+            &Default::default()
+        ),
+        "the settings row's secondary column carries its CURRENT VALUE"
+    );
+}
+
+/// DISPATCH PARITY BY CONSTRUCTION: Enter on a settings TOGGLE row reached via
+/// the palette signals the SAME `Effect::SettingToggle{key}` the Settings menu's
+/// own accept signals — but, matching a COMMAND row's own "running it closes
+/// the palette" convention, the palette closes outright (unlike the Settings
+/// menu, which stays open for more toggling).
+#[test]
+fn palette_settings_toggle_row_signals_setting_toggle_and_closes_the_palette() {
+    let mut ov = Some(command_overlay_with_settings());
+    let idx = ov
+        .as_ref()
+        .unwrap()
+        .corpus
+        .iter()
+        .position(|c| c == "Page mode")
+        .unwrap();
+    ov.as_mut().unwrap().selected =
+        ov.as_ref().unwrap().items.iter().position(|&i| i == idx).unwrap();
+    assert_eq!(ov.as_ref().unwrap().selected_value(), Some("Page mode"));
+    let eff = command_drive(&mut ov, &Action::Newline);
+    assert_eq!(eff, Effect::SettingToggle { key: "page_mode".to_string() });
+    assert!(ov.is_none(), "activating a settings row closes the palette");
+}
+
+/// A settings PICKER row (e.g. "Theme") reached via the palette opens the
+/// SAME sub-picker the Settings menu opens — with the breadcrumb set to
+/// `Command` (not `Settings`), so canceling it returns to the PALETTE, mirroring
+/// how running "Switch theme…" straight from the palette behaves.
+#[test]
+fn palette_settings_picker_row_opens_sub_picker_with_command_breadcrumb() {
+    let mut ov = Some(command_overlay_with_settings());
+    let idx = ov.as_ref().unwrap().corpus.iter().position(|c| c == "Theme").unwrap();
+    ov.as_mut().unwrap().selected =
+        ov.as_ref().unwrap().items.iter().position(|&i| i == idx).unwrap();
+    let eff = command_drive(&mut ov, &Action::Newline);
+    assert_eq!(eff, Effect::None);
+    let next = ov.as_ref().expect("a sub-picker opened");
+    assert_eq!(next.kind, OverlayKind::Theme);
+    assert_eq!(next.return_to, Some(OverlayKind::Command), "breadcrumb points back to the palette");
+}
+
+/// An ORDINARY command row (not a setting) is UNCHANGED by the union: Enter
+/// still runs it via `Effect::RunAction`.
+#[test]
+fn union_palette_ordinary_command_row_still_runs() {
+    let mut ov = Some(command_overlay_with_settings());
+    let idx = ov.as_ref().unwrap().corpus.iter().position(|c| c == "Save").unwrap();
+    ov.as_mut().unwrap().selected =
+        ov.as_ref().unwrap().items.iter().position(|&i| i == idx).unwrap();
+    let eff = command_drive(&mut ov, &Action::Newline);
+    assert_eq!(eff, Effect::RunAction(Action::Save));
+}
+
 #[test]
 fn settings_action_row_opens_config_as_text_and_closes() {
     // Fuzzy-filter to the Advanced "Edit config as text" ACTION row.
