@@ -691,11 +691,13 @@ impl TextPipeline {
         // would hide that row's own white text. There is no punch mechanism
         // wired for this call site, so the band is OFF instead; the row's own
         // amber caret still marks the current position.
-        self.overlay_rows.set_color(if theme::active().is_one_bit() {
-            [0, 0, 0, 0]
-        } else {
-            theme::surface_selected().rgba_bytes()
-        });
+        self.overlay_rows.set_color(
+            if theme::active().render_caps.elevation == theme::Elevation::Bordered {
+                [0, 0, 0, 0]
+            } else {
+                theme::surface_selected().rgba_bytes()
+            },
+        );
         let sel_rects: Vec<[f32; 4]> = if geom.n_items == 0 {
             Vec::new()
         } else if geom.theme {

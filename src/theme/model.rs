@@ -62,6 +62,155 @@ impl RoleOverrides {
     };
 }
 
+// --- THEME CAPABILITIES AS DATA -------------------------------------------
+//
+// `RenderCaps` is the declarative capability contract every per-theme render
+// BEHAVIOR routes through — the roadmap's "theme capabilities as data" head
+// item. Before this round, a handful of render-side call sites branched
+// directly on `Theme::is_one_bit()` (an ad hoc derived boolean) to decide
+// things like "does selection draw as a translucent fill or a true inverted
+// video mask" or "does the elevated card get a border". That worked while
+// exactly one world (Wagtail) ever needed anything other than the default —
+// but it meant a FUTURE theme wanting one of those same behaviors would have
+// had to grow ANOTHER `is_one_bit()`-shaped special case rather than simply
+// setting a field. `RenderCaps` names each of those render decisions as its
+// own field with a plain enum/number value (TOML-ready shapes — no closures,
+// no trait objects — though nothing here ships an on-disk parser; see
+// `ROADMAP.md`'s "theme capabilities as data" entry). FOURTEEN of the fifteen
+// worlds ship [`RenderCaps::DEFAULT`] byte-identically; Wagtail is simply DATA
+// that sets every field away from its default (`worlds.rs::WAGTAIL`) — no
+// world-name string comparison, no `is_one_bit()` read, anywhere in
+// `src/render/**` (a structural law test, `render::tests::theme_caps_law`,
+// bans both from ever reappearing there).
+///
+/// Whether document SELECTION paints as the ordinary translucent `selection`
+/// fill, or as TRUE inverse video (`SelectionPipeline::new_invert`, an
+/// `OneMinusDst` blend drawn after text) — the only mechanism that can render
+/// "selected" on a world with no intermediate grey to fill with. See
+/// `TextPipeline::selection_invert`'s field doc + `prepare_selection_layer`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectionStyle {
+    /// The default: a translucent `selection`-tinted quad under the text.
+    Fill,
+    /// True inverse video: `1 - dst` per channel, wherever the range covers.
+    /// Also switches the SEARCH-MATCH quad + the `==highlight==`/dither
+    /// texture over to the same mechanism family (see `HighlightTexture`).
+    InverseVideo,
+}
+
+/// Whether the BLOCK caret draws as an ordinary opaque quad UNDER the glyph
+/// (the default — the glyph composites over it normally), or must instead
+/// route through the same true-inverse-video mechanism as `SelectionStyle`'s
+/// `InverseVideo` case, because an opaque quad tinted this world's caret
+/// color would be the exact same value as the glyph's own ink and erase it
+/// (a caret landing on a heading's `#` on an all-white-ink world). MORPH mode
+/// degrades to BLOCK under `InverseVideo` (see `prepare_caret_layer`) — a
+/// glyph-shaped invert mask has no accent color to carry in a two-value
+/// world. See `TextPipeline::caret_invert`'s field doc.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaretBlockStyle {
+    Normal,
+    InverseVideo,
+}
+
+/// Whether a full-takeover overlay / the held HUD / the lifetime card /
+/// hold-peek recedes the document behind a frosted GAUSSIAN BLUR (the
+/// default), or must skip the blur entirely because a defocus of a purely
+/// two-value document mathematically smears every edge into a forbidden
+/// intermediate grey. `Flat` falls back to the pre-existing crisp path (the
+/// same one the theme/caret pickers already use, doc stays bright, no
+/// blur/scrim). See `TextPipeline::backdrop_blur`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backdrop {
+    Blur,
+    Flat,
+}
+
+/// Whether a summoned card's elevation reads as the ordinary FLAT `base_300`
+/// fill (the default — depth is carried by the surface-ramp value step
+/// alone), or must instead draw a crisp raised BORDER (`surface_selected()`'s
+/// one-bit override, pure white) because the surface ramp has collapsed
+/// (`base_200 == base_300`) and a flat fill would be an invisible card on an
+/// identical ground. Also gates the picker's selected-ROW value band
+/// (`overlay_rows`) OFF under `Bordered` — filling a whole row the SAME ink
+/// as its own text would hide the text; the row's own caret still marks the
+/// position. See `surface_selected()`, `prepare_panel_card_elevation`,
+/// `render/chrome/overlay.rs`'s `overlay_rows`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Elevation {
+    Flat,
+    Bordered,
+}
+
+/// Whether the renderer's small DECORATIVE translucent washes — the
+/// floating-panel drop SHADOW (`float_shadow_srgba`) and the writing-nit
+/// underline (`nit_underline_srgba`), both an ink/muted tone at a low,
+/// non-edge alpha — are allowed to draw at all. `Off` forces both fully
+/// transparent: any partial alpha over a world with only two legal values
+/// would composite a forbidden intermediate grey, so the decorative wash is
+/// simply skipped rather than tuned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecorativeWash {
+    Enabled,
+    Off,
+}
+
+/// Whether the inline-image reveal CAPTION SCRIM (`image_reveal_scrim`) draws
+/// as its ordinary TRANSLUCENT veil over the dimmed image (the default), or
+/// must be fully OPAQUE instead — the same "no partial alpha allowed"
+/// constraint as [`DecorativeWash`], but the fallback here is full occlusion
+/// (the caption's ground fully replaces the image) rather than "off", since
+/// the scrim's geometry still needs to draw for the caption to read at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageReveal {
+    Translucent,
+    Opaque,
+}
+
+/// THE ONE emphasis texture a world draws `==highlight==` spans and search
+/// matches with (deliberately shared — see `worlds.rs::WAGTAIL`'s "one kind
+/// of emphasis, one texture" doc). `Wash` is the default: a hue-derived
+/// translucent quad (`highlight_wash`) at the ordinary alpha, and the search
+/// match reads the plain `selection` token. `Stipple` names a fixed opaque
+/// color (rendered via `SelectionPipeline::set_dither`, `shaders/
+/// selection.wgsl`'s Bayer-ordered dither branch) plus its `density` — every
+/// drawn pixel is either that color at FULL opacity or fully transparent,
+/// never a fractional alpha, so it stays legal on a world with no
+/// intermediate grey. See `highlight_wash`, `wagtail_dither_density`,
+/// `search_match_rgba_bytes`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HighlightTexture {
+    Wash,
+    Stipple { color: Srgb, density: f32 },
+}
+
+/// The declarative capability bundle a world's render behavior is built from.
+/// See the module-level doc above. `DEFAULT` is what fourteen of the fifteen
+/// worlds carry, byte-identical to the pre-capabilities-as-data render paths;
+/// only `worlds.rs::WAGTAIL` deviates, on every field.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderCaps {
+    pub selection_style: SelectionStyle,
+    pub caret_block_style: CaretBlockStyle,
+    pub backdrop: Backdrop,
+    pub elevation: Elevation,
+    pub decorative_wash: DecorativeWash,
+    pub image_reveal: ImageReveal,
+    pub highlight_texture: HighlightTexture,
+}
+
+impl RenderCaps {
+    pub const DEFAULT: RenderCaps = RenderCaps {
+        selection_style: SelectionStyle::Fill,
+        caret_block_style: CaretBlockStyle::Normal,
+        backdrop: Backdrop::Blur,
+        elevation: Elevation::Flat,
+        decorative_wash: DecorativeWash::Enabled,
+        image_reveal: ImageReveal::Translucent,
+        highlight_texture: HighlightTexture::Wash,
+    };
+}
+
 /// The MARGIN ground a world paints behind its centered page (PAGE MODE).
 ///
 /// A TAGGED union — the user's locked model: the theme DECLARES which ground it
@@ -330,6 +479,13 @@ pub struct Theme {
     /// case — because the shared hue-anchored derivation cannot serve a
     /// zero-saturation world at all (see `worlds.rs::WAGTAIL`).
     pub role_overrides: RoleOverrides,
+    /// The declarative render-CAPABILITIES bundle (see [`RenderCaps`]'s module
+    /// doc) — every per-theme render BEHAVIOR (selection style, caret-block
+    /// invert, backdrop blur, elevation, decorative washes, the image-reveal
+    /// scrim, the highlight/search-match texture) is a plain DATA read of
+    /// this field. [`RenderCaps::DEFAULT`] on fourteen of the fifteen worlds;
+    /// Wagtail is the escape hatch's real use (`worlds.rs::WAGTAIL`).
+    pub render_caps: RenderCaps,
 }
 
 impl Theme {

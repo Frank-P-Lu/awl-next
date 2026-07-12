@@ -28,8 +28,11 @@ mod caret;
 /// ORDERED (BAYER) DITHER — the pure math mirror of `shaders/background.wgsl`'s
 /// banding-kill offset and `shaders/selection.wgsl`'s one-bit highlight/search
 /// stipple. See [`dither`]'s own module doc for the "why one matrix, two uses"
-/// shape and THEMES.md's 1-bit section for the product razor.
-mod dither;
+/// shape and THEMES.md's 1-bit section for the product razor. `pub(crate)` so
+/// `theme::worlds` can read [`dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY`] as
+/// plain CAPABILITY DATA (`Theme::render_caps`'s `HighlightTexture::Stipple`)
+/// rather than duplicating the tuned value.
+pub(crate) mod dither;
 
 /// SPAN / ATTRS LAYERING — the pure free functions that assemble one buffer line's
 /// `AttrsList` from the base doc attrs plus the markdown / syntax / CJK / heading-
@@ -1178,7 +1181,7 @@ pub const OVERSCROLL_KEEP_ROWS: usize = 1;
 /// light world and a gentle rim on a dark one — value-only depth (DESIGN §8), never a
 /// hue, never amber (§3). Kept as a free helper so `new` + `sync_theme` agree.
 fn float_shadow_srgba() -> [u8; 4] {
-    if theme::active().is_one_bit() {
+    if theme::active().render_caps.decorative_wash == theme::DecorativeWash::Off {
         // A translucent ink-over-canvas shadow would composite a forbidden
         // grey on a true 1-bit world — OFF, leaving the crisp white BORDER
         // (`surface_selected`'s one-bit override) alone to carry elevation.
@@ -1196,7 +1199,7 @@ fn float_shadow_srgba() -> [u8; 4] {
 /// distinct from a spelling error. Kept as a free helper so `new` + `sync_theme`
 /// agree on the tint.
 fn nit_underline_srgba() -> [u8; 4] {
-    if theme::active().is_one_bit() {
+    if theme::active().render_caps.decorative_wash == theme::DecorativeWash::Off {
         // Same reasoning as `float_shadow_srgba`: any non-0/255 alpha over
         // this world's pure-black ground composites a forbidden grey — OFF.
         return [0, 0, 0, 0];
@@ -1749,7 +1752,8 @@ pub struct TextPipeline {
     /// The GPU quad pipeline that draws translucent search-match highlights
     /// (same SELECTION color; the current match is shown by the amber caret).
     pub match_pipeline: SelectionPipeline,
-    /// TRUE 1-BIT WORLDS ONLY (`Theme::is_one_bit`): TRUE inverse-video
+    /// TRUE 1-BIT WORLDS ONLY (`Theme::render_caps.selection_style ==
+    /// SelectionStyle::InverseVideo`): TRUE inverse-video
     /// selection — a `SelectionPipeline` built via
     /// [`crate::selection::SelectionPipeline::new_invert`] (its own
     /// `OneMinusDst`-blended `RenderPipeline` object) drawn AFTER the
@@ -1762,7 +1766,8 @@ pub struct TextPipeline {
     /// instances) on every other world — a non-Wagtail capture is
     /// byte-identical.
     pub selection_invert: SelectionPipeline,
-    /// TRUE 1-BIT WORLDS ONLY (`Theme::is_one_bit`), THE 1-BIT CARET ROUND:
+    /// TRUE 1-BIT WORLDS ONLY (`Theme::render_caps.caret_block_style ==
+    /// CaretBlockStyle::InverseVideo`), THE 1-BIT CARET ROUND:
     /// sibling of [`Self::selection_invert`] — the SAME true-inverse-video
     /// mechanism (`SelectionPipeline::new_invert`, `OneMinusDst`/`Zero`
     /// blend, drawn AFTER text), carrying the BLOCK caret's own current
@@ -1820,7 +1825,8 @@ pub struct TextPipeline {
     /// CENTERED-OVERLAY elevation companions to `panel_card` — the SAME
     /// shadow/raised-border shape [`set_float_quads`] draws for every other
     /// summoned card (search / spell / caret-preview / HUD / which-key / menu
-    /// dropdown), but drawn ONLY on a TRUE 1-BIT world (`Theme::is_one_bit`).
+    /// dropdown), but drawn ONLY when `Theme::render_caps.elevation ==
+    /// Elevation::Bordered` (a true 1-bit world).
     /// Every OTHER world's centered overlay stays the exact pre-existing flat
     /// `panel_card` fill with these two parked empty — byte-identical to before
     /// this pair existed. On a one-bit world the blur/scrim backdrop that used to
@@ -2704,7 +2710,7 @@ impl TextPipeline {
         let menubar_hi = SelectionPipeline::new(
             device,
             format,
-            if theme::active().is_one_bit() {
+            if theme::active().render_caps.elevation == theme::Elevation::Bordered {
                 [0, 0, 0, 0]
             } else {
                 theme::selection().rgba_bytes()
@@ -3062,11 +3068,13 @@ impl TextPipeline {
         // one-bit world) — filling the band would hide that text exactly
         // like the picker's `overlay_rows` case. OFF instead; the title still
         // reads via its own (unchanged) ink.
-        self.menubar_hi.set_color(if theme::active().is_one_bit() {
-            [0, 0, 0, 0]
-        } else {
-            theme::selection().rgba_bytes()
-        });
+        self.menubar_hi.set_color(
+            if theme::active().render_caps.elevation == theme::Elevation::Bordered {
+                [0, 0, 0, 0]
+            } else {
+                theme::selection().rgba_bytes()
+            },
+        );
         self.menu_drop_shadow.set_color(float_shadow_srgba());
         self.menu_drop_border.set_color(theme::surface_selected().rgba_bytes());
         self.menu_drop_card.set_color(theme::base_300().rgba_bytes());
@@ -3641,7 +3649,7 @@ impl TextPipeline {
     /// the doc recedes by BLUR, not grey). Drives both the blur prepare + the render
     /// path's offscreen-capture branch.
     ///
-    /// **TRUE 1-BIT WORLDS (`Theme::is_one_bit`) forgo the frost entirely.** A
+    /// **TRUE 1-BIT WORLDS (`Theme::render_caps.backdrop == Backdrop::Flat`) forgo the frost entirely.** A
     /// gaussian defocus of a document that is only ever pure black or pure
     /// white mathematically SMEARS every edge into intermediate grey — there
     /// is no tuning of the blur that avoids this, it is the nature of the
@@ -3651,7 +3659,7 @@ impl TextPipeline {
     /// theme/caret pickers already use — so the solid white-bordered card
     /// still reads clearly over a SHARP, not smeared, black/white document.
     fn backdrop_blur(&self) -> bool {
-        if theme::active().is_one_bit() {
+        if theme::active().render_caps.backdrop == theme::Backdrop::Flat {
             return false;
         }
         self.overlay_blur()

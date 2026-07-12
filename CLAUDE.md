@@ -834,6 +834,93 @@ User-facing docs (CREDITS, GUIDE, welcome/tour seeds, site pages) are **matter-o
   the page's own DOM rendering (confirmed live via Playwright against a real
   served page), not a real OS browser spawn.
 
+## Theme capabilities as data (`theme/model.rs::RenderCaps`) — no theme may need its own code path
+
+- **What:** a REFACTOR (behavior-preserving — verified byte-identical across
+  all fifteen worlds over four fixtures, see below), the roadmap's head
+  item. Before this round, a handful of `src/render/**` call sites branched
+  directly on `Theme::is_one_bit()` (an ad hoc derived boolean — Wagtail was
+  the only world it was ever `true` for) to decide things like "does
+  selection draw as a translucent fill or true inverse video", "does the
+  elevated card get a border", "is the frosted blur backdrop allowed". That
+  worked while exactly one world ever deviated, but a FUTURE world wanting
+  ANY of those same behaviors would have had to grow another
+  `is_one_bit()`-shaped special case — exactly the "a theme needing its own
+  code path means the design is wrong" smell this doc's own engineering
+  principles warn against. `Theme` gained one new field, `render_caps:
+  RenderCaps` (`theme/model.rs`), naming SEVEN capabilities as plain
+  enums/numbers (TOML-ready shapes — no closures, no trait objects, though
+  no on-disk parser ships this round; the roadmap's "theme capabilities as
+  data" entry deliberately keeps that banked): `selection_style` (`Fill` |
+  `InverseVideo`), `caret_block_style` (`Normal` | `InverseVideo`),
+  `backdrop` (`Blur` | `Flat`), `elevation` (`Flat` | `Bordered`),
+  `decorative_wash` (`Enabled` | `Off`), `image_reveal` (`Translucent` |
+  `Opaque`), and `highlight_texture` (`Wash` | `Stipple { color, density }`).
+  `RenderCaps::DEFAULT` is what FOURTEEN of the fifteen worlds carry
+  (byte-identical to the pre-refactor render paths); Wagtail
+  (`theme/worlds.rs::WAGTAIL`) is simply DATA that sets every field away
+  from its default — see `THEMES.md`'s "Render capabilities as data"
+  section for the full field table + which mechanism each one drives.
+- **Every render call site that used to read `Theme::is_one_bit()` now reads
+  the matching `render_caps` field instead** — `render.rs` (`float_shadow_
+  srgba`, `nit_underline_srgba`, the menu-bar open-title highlight ×2,
+  `backdrop_blur`), `render/spans.rs` (`highlight_wash`, `wagtail_dither_
+  density`, `search_match_rgba_bytes`), `render/layers.rs` (the caret-block
+  invert route + Morph→Block degrade, the selection fill-vs-invert branch),
+  `render/chrome/mod.rs` (`prepare_panel_card_elevation`'s `elevated` gate),
+  `render/chrome/overlay.rs` (the picker's `overlay_rows` selected-band
+  gate), and `theme/derive.rs` (`surface_selected`, `image_reveal_scrim` —
+  these two stay inside `theme/`, so they were converted for single-source-
+  of-truth consistency even though the grep-law below only reaches
+  `src/render/**`). `render::dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY`
+  (the one taste-tunable number the `Stipple` variant carries) went from
+  `pub(super)` to `pub(crate)` so `theme::worlds::WAGTAIL`'s literal can
+  read it as data, rather than duplicating the tuned value.
+- **`Theme::is_one_bit()` itself is UNCHANGED and still exists** — a pure
+  derivation helper in `theme/model.rs` (checks `base_100`/`base_content`/
+  `primary` are each exactly pure black or white), kept because it PINS
+  Wagtail's identity for the monochrome/1-bit law tests
+  (`wagtail_alone_is_one_bit`, `every_one_bit_world_renders_only_pure_
+  black_or_white`, …) — those tests are unchanged by this round (the task's
+  own instruction: "the monochrome law test keeps passing untouched — it
+  pins Wagtail's identity, not the mechanism"). What changed is that the
+  RENDERER no longer reads it.
+- **THE GREP-LAW TEST** (`render::tests::theme_caps_law`, mirroring
+  `println_audit.rs`'s scanner shape exactly — a brace-balanced `#[cfg(test)]`
+  skip, a `tests/`-directory + `tests.rs`-file exemption, doc-comment lines
+  skipped): walks every non-test `.rs` file under `src/render/` (plus
+  `src/render.rs` itself) and fails if `.is_one_bit(` or a quoted per-world
+  name (`"Wagtail"`, or any of the other fourteen) appears in real code —
+  structurally banning a future per-theme special case from ever
+  reappearing in the renderer. `framebench.rs`/`perfbench.rs` are exempted
+  by name (their `BURST_WORLDS` cycle-by-name is a bench DRIVER choosing
+  which worlds to visit for a font-reshape-cost measurement, not a
+  per-theme render branch — a legitimate, logged exception, same shape as
+  `println_audit.rs`'s own per-file allowances).
+- **Behavior-preservation, the hard gate:** a baseline PNG+JSON capture was
+  taken for every one of the FIFTEEN worlds over FOUR fixtures — `samples/
+  tour.md` plain (exercises headings/emphasis/highlight/list/table/fence),
+  `samples/tour.md` with `--keys "Cmd-A"` (full-buffer selection —
+  `selection_style`), `samples/tour.md` with `--keys "Cmd-P"` (the command
+  palette overlay open — `elevation`/`decorative_wash`/`backdrop`), and
+  `samples/image-reveal.md` with `--keys "C-n C-n C-n C-n"` (the caret
+  parked on the image line — `image_reveal`) — 60 capture pairs total, on
+  the pre-refactor base commit and again after this round's changes, then
+  `cmp`'d byte-for-byte. All 60 PNG/JSON pairs are identical; zero
+  exceptions.
+- **Tests:** `render::tests::theme_caps_law` (the grep-law, above); every
+  PRE-EXISTING law test that used to read `Theme::is_one_bit()` in a
+  `render/tests/**` fixture (`syntax_roles.rs`, `one_bit.rs`, `dither.rs`,
+  `chrome_panels.rs`) is UNCHANGED — those live under `render/tests/`, the
+  grep-law's own exemption, and still pin Wagtail's rendered behavior
+  directly; they all pass unmodified, which is itself part of the
+  behavior-preservation proof (the mechanism moved; what it produces did
+  not).
+- **LIVE-ONLY (needs human confirmation):** none — this round adds no new
+  live-only behavior; every capability it names was already shipped
+  (Wagtail's 1-bit render), only its WIRING moved from an ad hoc predicate
+  to declarative data.
+
 ## Conventions
 - **Picker rows go through `render/rowlayout` — never place row text directly.** Every summoned-overlay row is a PRIMARY cell (name/path — never dropped, elided only as a last resort, never when short) plus an optional SECONDARY right column (chord / description / time / diff count — always the first to yield), budgeted by `rowlayout::plan` → `rowlayout::fits` (shaped-pixel arbiter) → `rowlayout::fit_primary` (the only elision door). The law test in `rowlayout.rs` enumerates `OverlayKind` with a NO-WILDCARD match, so a new picker kind fails to compile until it is under the no-overlap / yield-order / no-elide-short-names sweep — the same single-owner pattern as `syn_role_color` and the float-panel primitive. **The bottom-left page-mode GUTTER rides the same owner** (`rowlayout::gutter_plan`, `render::TextPipeline::gutter_layout` in `render/chrome.rs`): a vertically-STACKED (filename over project) surface rather than a picker's side-by-side split, so the laws diverge from a picker row's exactly where the geometry does — no horizontal overlap to arbitrate, so (taste-corrected) **neither line yields to the other from width pressure**: the filename NEVER wraps (pre-fit to one line through `fit_primary` before it ever reaches the wrapping box) and the project line is fit to that SAME budget independently, eliding on its own when it's the long one — both stay visible, each middle-elided as needed, until a hard floor (`GUTTER_MIN_NAME_CHARS`) hides the whole gutter rather than draw a stub. (This is the fix for the "DESIGN.md wraps to DESIG/N.md and the project vanishes" class of bug — the gutter used to lay raw text into a wrapping box instead of routing through the shared elision door.)
 - **Determinism:** the headless path has NO clock / animation / random. Don't add one. Live-only animation must render its *settled* state in capture.
