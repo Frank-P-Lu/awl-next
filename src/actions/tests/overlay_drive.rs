@@ -265,15 +265,18 @@ fn every_settings_toggle_row_signals_its_own_setting_toggle_key() {
 // ── THE UNION ROUND: settings rows join the Cmd-P palette ──────────────────
 
 /// Build a COMMAND PALETTE overlay with the settings corpus attached, exactly
-/// as `overlay::build`'s real `OverlayKind::Command` arm does.
+/// as `overlay::build`'s real `OverlayKind::Command` arm does — the
+/// PALETTE-filtered corpus (`settings::palette_names`/`palette_value_cells`),
+/// which excludes any settings row covered by an available command
+/// (`settings::COVERED_BY` — see the "one palette door per destination" fix).
 fn command_overlay_with_settings() -> OverlayState {
     let mut ov = OverlayState::new_command(
         crate::commands::visible_names(),
         crate::commands::visible_effective_bindings(&[], &[]),
     );
     ov.attach_settings_rows(
-        crate::settings::visible_names(),
-        crate::settings::visible_value_cells(&Default::default()),
+        crate::settings::palette_names(),
+        crate::settings::palette_value_cells(&Default::default()),
     );
     ov
 }
@@ -295,6 +298,9 @@ fn command_drive(overlay: &mut Option<OverlayState>, action: &Action) -> Effect 
             crate::commands::visible_names(),
             crate::commands::visible_effective_bindings(&[], &[]),
         )),
+        OverlayKind::CjkLang => Some(OverlayState::new_cjk_lang(
+            crate::frontmatter::cjk_priority().first().copied().unwrap_or(crate::frontmatter::Lang::Ja),
+        )),
         _ => None,
     };
     let mut browse_to = |_k: OverlayKind, _r: Option<String>| None;
@@ -312,17 +318,19 @@ fn command_drive(overlay: &mut Option<OverlayState>, action: &Action) -> Effect 
     apply_core(&mut ctx, action, false)
 }
 
-/// The palette's corpus is the UNION of commands + settings — a settings row
-/// (e.g. "Keymap") is fuzzy-findable there, wears the `§ ` marker glyph in its
-/// display text, and shows its CURRENT VALUE in the secondary (binding) column
-/// exactly like the Settings menu itself.
+/// The palette's corpus is the UNION of commands + NON-COVERED settings — a
+/// settings row with no command twin (e.g. "Keymap") is fuzzy-findable there,
+/// wears the `§ ` marker glyph in its display text, and shows its CURRENT VALUE
+/// in the secondary (binding) column exactly like the Settings menu itself. A
+/// COVERED row (e.g. "Theme" — see `settings::COVERED_BY`) is excluded: its
+/// covering command is the one door.
 #[test]
 fn union_palette_lists_settings_rows_with_marker_and_current_value() {
     let mut ov = command_overlay_with_settings();
-    // The full corpus is commands ++ settings (no rows dropped or duplicated).
+    // The full corpus is commands ++ palette-visible (non-covered) settings.
     assert_eq!(
         ov.corpus.len(),
-        crate::commands::visible_names().len() + crate::settings::visible_names().len()
+        crate::commands::visible_names().len() + crate::settings::palette_names().len()
     );
     for ch in ['k', 'e', 'y', 'm', 'a', 'p'] {
         ov.push(ch);
@@ -347,7 +355,11 @@ fn union_palette_lists_settings_rows_with_marker_and_current_value() {
 /// the palette signals the SAME `Effect::SettingToggle{key}` the Settings menu's
 /// own accept signals — but, matching a COMMAND row's own "running it closes
 /// the palette" convention, the palette closes outright (unlike the Settings
-/// menu, which stays open for more toggling).
+/// menu, which stays open for more toggling). Uses "Reduce motion" — a Toggle
+/// row with NO covering command (see `settings::COVERED_BY`), so it's still
+/// palette-visible; "Page mode" (which IS covered by "Toggle page mode") is no
+/// longer reachable this way — see `covered_rows_are_excluded_from_the_palette_*`
+/// in `settings.rs`.
 #[test]
 fn palette_settings_toggle_row_signals_setting_toggle_and_closes_the_palette() {
     let mut ov = Some(command_overlay_with_settings());
@@ -356,31 +368,52 @@ fn palette_settings_toggle_row_signals_setting_toggle_and_closes_the_palette() {
         .unwrap()
         .corpus
         .iter()
-        .position(|c| c == "Page mode")
+        .position(|c| c == "Reduce motion")
         .unwrap();
     ov.as_mut().unwrap().selected =
         ov.as_ref().unwrap().items.iter().position(|&i| i == idx).unwrap();
-    assert_eq!(ov.as_ref().unwrap().selected_value(), Some("Page mode"));
+    assert_eq!(ov.as_ref().unwrap().selected_value(), Some("Reduce motion"));
     let eff = command_drive(&mut ov, &Action::Newline);
-    assert_eq!(eff, Effect::SettingToggle { key: "page_mode".to_string() });
+    assert_eq!(eff, Effect::SettingToggle { key: "reduce_motion".to_string() });
     assert!(ov.is_none(), "activating a settings row closes the palette");
 }
 
-/// A settings PICKER row (e.g. "Theme") reached via the palette opens the
-/// SAME sub-picker the Settings menu opens — with the breadcrumb set to
-/// `Command` (not `Settings`), so canceling it returns to the PALETTE, mirroring
-/// how running "Switch theme…" straight from the palette behaves.
+/// A settings PICKER row with NO covering command ("Ambiguous CJK reads as" —
+/// see `settings::COVERED_BY`) reached via the palette opens the SAME sub-picker
+/// the Settings menu opens — with the breadcrumb set to `Command` (not
+/// `Settings`), so canceling it returns to the PALETTE. "Theme" (which IS
+/// covered by "Switch theme…") is no longer reachable this way — the exact fix
+/// for the reported duplication.
 #[test]
 fn palette_settings_picker_row_opens_sub_picker_with_command_breadcrumb() {
     let mut ov = Some(command_overlay_with_settings());
-    let idx = ov.as_ref().unwrap().corpus.iter().position(|c| c == "Theme").unwrap();
+    let idx =
+        ov.as_ref().unwrap().corpus.iter().position(|c| c == "Ambiguous CJK reads as").unwrap();
     ov.as_mut().unwrap().selected =
         ov.as_ref().unwrap().items.iter().position(|&i| i == idx).unwrap();
     let eff = command_drive(&mut ov, &Action::Newline);
     assert_eq!(eff, Effect::None);
     let next = ov.as_ref().expect("a sub-picker opened");
-    assert_eq!(next.kind, OverlayKind::Theme);
+    assert_eq!(next.kind, OverlayKind::CjkLang);
     assert_eq!(next.return_to, Some(OverlayKind::Command), "breadcrumb points back to the palette");
+}
+
+/// A COVERED settings row (e.g. "Theme") is simply ABSENT from the palette
+/// union's corpus — its covering command ("Switch theme…") is the one door.
+/// This is the literal user-reported bug's regression guard.
+#[test]
+fn covered_settings_row_is_absent_from_the_palette_corpus() {
+    let ov = command_overlay_with_settings();
+    for (row_name, cmd_name) in crate::settings::COVERED_BY {
+        assert!(
+            !ov.corpus.iter().any(|c| c == row_name),
+            "{row_name:?} must not appear in the palette corpus — {cmd_name:?} covers it"
+        );
+        assert!(
+            ov.corpus.iter().any(|c| c == cmd_name),
+            "{cmd_name:?} must still be the one door in the palette corpus"
+        );
+    }
 }
 
 /// An ORDINARY command row (not a setting) is UNCHANGED by the union: Enter
