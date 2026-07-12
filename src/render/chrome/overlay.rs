@@ -88,6 +88,8 @@ impl TextPipeline {
         self.panel_shadow.prepare(device, queue, width, height, &[]);
         self.panel_border.prepare(device, queue, width, height, &[]);
         self.overlay_rows.prepare(device, queue, width, height, &[]);
+        self.overlay_rows_invert
+            .prepare(device, queue, width, height, &[]);
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &[]);
         // The amber query caret: parked (nothing drawn).
@@ -686,18 +688,22 @@ impl TextPipeline {
         // stays content ink, readable on the band. The band sits `header_rows` lines
         // below the card top (past the query line, if any), matching the shaped rows.
         //
-        // TRUE 1-BIT WORLDS: `surface_selected()` returns pure white here (the
-        // elevation BORDER token, see its doc) — filling the WHOLE row white
-        // would hide that row's own white text. There is no punch mechanism
-        // wired for this call site, so the band is OFF instead; the row's own
-        // amber caret still marks the current position.
-        self.overlay_rows.set_color(
-            if theme::active().render_caps.elevation == theme::Elevation::Bordered {
-                [0, 0, 0, 0]
-            } else {
-                theme::surface_selected().rgba_bytes()
-            },
-        );
+        // TRUE 1-BIT WORLDS (`render_caps.selection_style ==
+        // SelectionStyle::InverseVideo`): a flat fill would need SOME token
+        // between `base_300`/`base_content` (both pure black/white here) to
+        // read as "selected without erasing the row's own text" — no such
+        // token exists on a one-bit world. The System-7 answer: invert the
+        // row instead of filling it (`overlay_rows_invert`, the SAME true
+        // inverse-video mechanism `selection_invert`/`caret_invert` already
+        // use) — the row's ground flips to white and its text flips to
+        // black, so the selection reads as loudly as anywhere else in the
+        // app, never invisible. `overlay_rows` itself is parked empty on
+        // this branch; `overlay_rows_invert` stays parked empty on every
+        // other (Fill) world.
+        let invert_row = theme::active().render_caps.selection_style
+            == theme::SelectionStyle::InverseVideo;
+        self.overlay_rows
+            .set_color(theme::surface_selected().rgba_bytes());
         let sel_rects: Vec<[f32; 4]> = if geom.n_items == 0 {
             Vec::new()
         } else if geom.theme {
@@ -722,8 +728,16 @@ impl TextPipeline {
                 overlay_row_top(geom.text_top, geom.header_rows, sel_row, lh);
             vec![[geom.card_x, row_top, geom.card_w, lh]]
         };
-        self.overlay_rows
-            .prepare(device, queue, width, height, &sel_rects);
+        if invert_row {
+            self.overlay_rows.prepare(device, queue, width, height, &[]);
+            self.overlay_rows_invert
+                .prepare(device, queue, width, height, &sel_rects);
+        } else {
+            self.overlay_rows
+                .prepare(device, queue, width, height, &sel_rects);
+            self.overlay_rows_invert
+                .prepare(device, queue, width, height, &[]);
+        }
         // THEME PICKER active-lens underline: the rect the shaper recorded; a non-theme
         // card parks it empty (so a stale rect from a prior theme picker never lingers).
         let underline: Vec<[f32; 4]> = if geom.theme {

@@ -2127,8 +2127,25 @@ pub struct TextPipeline {
     search_editing_replacement: bool,
     /// The selected-ROW highlight quad behind the overlay's chosen candidate
     /// (same rounded SelectionPipeline primitive as match/selection, tinted with
-    /// the muted selection token so amber stays reserved for the caret).
+    /// the muted selection token so amber stays reserved for the caret). Used on
+    /// every world whose `render_caps.selection_style` is `Fill` (fourteen of
+    /// fifteen) — parked empty on a world using [`Self::overlay_rows_invert`]
+    /// instead (see that field's doc).
     pub overlay_rows: SelectionPipeline,
+    /// TRUE 1-BIT WORLDS (`render_caps.selection_style ==
+    /// theme::SelectionStyle::InverseVideo`): the picker's selected-ROW band,
+    /// drawn as TRUE INVERSE VIDEO instead of `overlay_rows`'s ordinary
+    /// translucent fill — the SAME mechanism family as `selection_invert`/
+    /// `caret_invert` (`SelectionPipeline::new_invert`, `OneMinusDst`/`Zero`
+    /// blend). A flat white fill would hide the row's own white text on a
+    /// world with no intermediate grey (Wagtail's `base_300`/`base_content`
+    /// are pure black/white); inverting whatever is already composited there
+    /// — the black card ground AND the white glyph ink — flips the WHOLE row
+    /// (ground -> white, text -> black), the System-7 highlight idiom. Drawn
+    /// strictly AFTER the overlay text (`draw_overlay_card`), mirroring
+    /// `selection_invert`'s AFTER-text slot. Idle (zero instances) on every
+    /// other world.
+    pub overlay_rows_invert: SelectionPipeline,
     /// THEME PICKER only: the thin UNDERLINE quad under the ACTIVE lens label in the
     /// faceted strip — content-INK, never amber (DESIGN §3): the active lens is marked
     /// by VALUE + this hairline. A reused `SelectionPipeline`; parked empty for every
@@ -2192,11 +2209,20 @@ pub struct TextPipeline {
     /// bar is off, so a default (macOS) capture stays byte-identical.
     ///   * `menubar_bg` — the bar's ground strip (a value step off the room, `base_200`).
     ///   * `menubar_hi` — the OPEN title's highlight band (the muted `selection` token,
-    ///     never amber — the same band the picker's selected row uses).
+    ///     never amber — the same band the picker's selected row uses on a `Fill`
+    ///     world). On a TRUE 1-BIT world (`render_caps.selection_style ==
+    ///     InverseVideo`) the fill is parked empty and `menubar_hi_invert` (below)
+    ///     carries the band instead — the SAME System-7 answer `overlay_rows_invert`
+    ///     uses for the picker's selected row (see that field's doc).
+    ///   * `menubar_hi_invert` — the true-inverse-video sibling of `menubar_hi`,
+    ///     drawn strictly AFTER `menubar_renderer`'s title glyphs (mirrors
+    ///     `selection_invert`/`overlay_rows_invert`'s AFTER-text slot). Idle on
+    ///     every world using the ordinary `menubar_hi` fill.
     ///   * `menubar_renderer`/`_buffer` — the title glyphs (LABEL size, faint / the
     ///     open one muted), laid out as ONE shaped line and read back for hit-testing.
     pub menubar_bg: SelectionPipeline,
     pub menubar_hi: SelectionPipeline,
+    pub menubar_hi_invert: SelectionPipeline,
     pub menubar_renderer: TextRenderer,
     pub menubar_buffer: GlyphBuffer,
     /// WEB/LINUX MENU BAR dropdown (open when `crate::menubar::open_menu()` is `Some`):
@@ -2673,6 +2699,10 @@ impl TextPipeline {
         // The overlay's selected-row highlight: same rounded quad as selection,
         // tinted with the muted selection token (amber stays the caret's alone).
         let overlay_rows = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
+        // TRUE 1-BIT WORLDS: the picker's selected-row band via true inverse
+        // video (see the field's own doc) — starts idle, parked/prepared
+        // per-frame in `overlay_draw_card` alongside `overlay_rows`.
+        let overlay_rows_invert = SelectionPipeline::new_invert(device, format);
         // The theme picker's active-lens underline: a hairline in CONTENT ink (value +
         // hairline mark the active lens; never amber, DESIGN §3). Parked empty otherwise.
         let overlay_lens_underline =
@@ -2715,15 +2745,10 @@ impl TextPipeline {
         // The OPEN title's highlight rides the muted SELECTION token (the same calm,
         // explicitly-non-amber band the picker's selected row uses — amber stays the
         // caret's alone), never `surface_selected` (which reads too loud as a fill).
-        let menubar_hi = SelectionPipeline::new(
-            device,
-            format,
-            if theme::active().render_caps.elevation == theme::Elevation::Bordered {
-                [0, 0, 0, 0]
-            } else {
-                theme::selection().rgba_bytes()
-            },
-        );
+        let menubar_hi = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
+        // TRUE 1-BIT WORLDS: the open title's band via true inverse video
+        // instead — see `menubar_hi_invert`'s field doc.
+        let menubar_hi_invert = SelectionPipeline::new_invert(device, format);
         let menubar_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let menubar_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
@@ -2870,6 +2895,7 @@ impl TextPipeline {
             search_replacement: String::new(),
             search_editing_replacement: false,
             overlay_rows,
+            overlay_rows_invert,
             overlay_lens_underline,
             overlay_theme_underline: None,
             overlay_right_shown: false,
@@ -2887,6 +2913,7 @@ impl TextPipeline {
             outline_buffer,
             menubar_bg,
             menubar_hi,
+            menubar_hi_invert,
             menubar_renderer,
             menubar_buffer,
             menu_drop_shadow,
@@ -3072,18 +3099,11 @@ impl TextPipeline {
         // amber — figure/ground by value only (DESIGN §3/§4). The title/item text ink
         // (faint / muted / content) is re-read live at prepare time.
         self.menubar_bg.set_color(theme::base_200().rgba_bytes());
-        // TRUE 1-BIT WORLDS: `selection` is pure opaque white here, and the
-        // OPEN title's own ink is `muted` (== `base_content` == white on a
-        // one-bit world) — filling the band would hide that text exactly
-        // like the picker's `overlay_rows` case. OFF instead; the title still
-        // reads via its own (unchanged) ink.
-        self.menubar_hi.set_color(
-            if theme::active().render_caps.elevation == theme::Elevation::Bordered {
-                [0, 0, 0, 0]
-            } else {
-                theme::selection().rgba_bytes()
-            },
-        );
+        // TRUE 1-BIT WORLDS: `menubar_hi` is parked empty at prepare time in
+        // favor of `menubar_hi_invert` (true inverse video) — see that
+        // field's doc; `menubar_hi`'s own color still tracks the world here
+        // so a switch BACK to a `Fill` world is never left stale.
+        self.menubar_hi.set_color(theme::selection().rgba_bytes());
         self.menu_drop_shadow.set_color(float_shadow_srgba());
         self.menu_drop_border.set_color(theme::surface_selected().rgba_bytes());
         self.menu_drop_card.set_color(theme::base_300().rgba_bytes());
@@ -3972,6 +3992,13 @@ impl TextPipeline {
         self.panel_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon overlay render failed: {e:?}"))?;
+        // TRUE 1-BIT WORLDS: the selected-row band as inverse video, drawn
+        // STRICTLY AFTER the overlay text above — the `OneMinusDst` blend
+        // needs the destination to already hold the composited card+glyph
+        // pixels it's about to flip (mirrors `selection_invert`'s AFTER-text
+        // slot in `draw_document_layers`). Idle (zero instances) on every
+        // other world, where `overlay_rows` above already carried the band.
+        self.overlay_rows_invert.draw(pass);
         // CARET-STYLE PICKER: the animated demo caret (under the sample text, like the
         // document block caret), then the sample line, then — Morph only, settled on
         // a real glyph — the demo's OWN silhouette pipeline OVER the text, exactly
@@ -4033,6 +4060,10 @@ impl TextPipeline {
         self.menubar_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon menubar render failed: {e:?}"))?;
+        // TRUE 1-BIT WORLDS: the open title's band as inverse video, drawn
+        // STRICTLY AFTER the title glyphs above (mirrors `overlay_rows_invert`'s
+        // AFTER-text slot) — idle on every world using the ordinary fill above.
+        self.menubar_hi_invert.draw(pass);
         self.menu_drop_shadow.draw(pass);
         self.menu_drop_border.draw(pass);
         self.menu_drop_card.draw(pass);
