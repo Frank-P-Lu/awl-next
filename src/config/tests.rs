@@ -457,6 +457,38 @@ fn load_reads_outline_pref_and_outline_on_defaults_true() {
 }
 
 #[test]
+fn load_reads_menu_bar_pref_and_menu_bar_on_defaults_to_the_platform_default() {
+    // Mirrors `load_reads_outline_pref_and_outline_on_defaults_true` above, but
+    // for `menu_bar`, whose leniency default is PLATFORM-dependent (ON for
+    // web/Linux, OFF for macOS — `menubar::MENU_BAR_ON`'s own cfg-derived
+    // default) rather than a fixed bool. An explicit `menu_bar = false` must
+    // win over that default on every platform.
+    use std::sync::Arc;
+    let p = PathBuf::from("/cfg/config.toml");
+    let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "menu_bar = false\n"));
+    crate::fs::with_fs(fs, || {
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.menu_bar, Some(false));
+        assert!(!cfg.menu_bar_on(), "an explicit menu_bar=false overrides the platform default");
+    });
+    let fs2 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "theme = \"Tawny\"\n"));
+    crate::fs::with_fs(fs2, || {
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.menu_bar, None);
+        assert_eq!(
+            cfg.menu_bar_on(),
+            cfg!(not(target_os = "macos")),
+            "absent = the platform default (ON web/Linux, OFF macOS)"
+        );
+    });
+    assert_eq!(
+        Config::empty().menu_bar_on(),
+        cfg!(not(target_os = "macos")),
+        "Config::empty() also defaults to the platform default"
+    );
+}
+
+#[test]
 fn load_reads_reduce_motion_pref_absent_means_auto() {
     // ACCESSIBILITY TIER 1: `reduce_motion` round-trips through REAL TOML
     // parsing exactly like the other sticky bool prefs, but — UNLIKE them —

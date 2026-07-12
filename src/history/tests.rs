@@ -153,11 +153,6 @@ fn entries_aged(now: u64, ages: &[u64]) -> Vec<Entry> {
     v
 }
 
-/// Build one un-pinned [`Entry`] from an age-ms against `now`.
-fn entry_aged(now: u64, age: u64) -> Entry {
-    Entry { ts: now - age, content: format!("v@{age}"), pinned: false }
-}
-
 #[test]
 fn ladder_keeps_everything_under_15_min() {
     // The undo-adjacent recent past stays at FULL resolution: a burst of

@@ -1241,7 +1241,6 @@
         // The SAME document, once CRLF-ended and once LF-ended. After load both
         // ropes are pure '\n', so EVERY caret / motion result is identical — there
         // is no '\r' in the rope for the caret to land "inside".
-        use crate::fs::FileSystem;
         use std::sync::Arc;
         let crlf_path = std::path::PathBuf::from("/docs/w.md");
         let lf_path = std::path::PathBuf::from("/docs/u.md");
