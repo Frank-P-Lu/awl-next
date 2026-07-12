@@ -480,3 +480,103 @@ fn table_draw_and_reservation_stay_identical_across_a_width_only_frame() {
     crate::page::set_page_on(false);
     crate::page::set_measure(crate::page::DEFAULT_MEASURE);
 }
+
+/// BUG FIX (the real user-reported overflow): a genuine WINDOW RESIZE — i.e. a
+/// live `set_size(width, height)` call, not a page-measure edit — must ALSO
+/// re-clamp the table grid to the (now narrower) column. `set_size` re-wraps
+/// the document buffer to the new width DIRECTLY (`buffer.set_size` +
+/// `shape_until_scroll`, `render.rs`), so by the time `prepare()`'s own
+/// `sync_wrap_width` runs, `buffer.size().0` already equals `text_wrap_width()`
+/// — its drift check is false, so its table-resync companion
+/// (`resync_table_layout_for_width`) never fires. This is the SIBLING of the
+/// already-fixed page-measure-only case (`table_draw_and_reservation_stay_
+/// identical_across_a_width_only_frame`, which goes through a DIFFERENT seam —
+/// `page::set_measure` alone never touches `TextPipeline::set_size` at all) —
+/// so that test passing does not cover this one. Every uploaded cell's
+/// x-range (`col_x`/`col_w`, read through the real `TableGridCache` — never
+/// parallel math) must stay within `[column_left, column_left+column_width]`
+/// after the resize.
+#[test]
+fn table_grid_reclamps_to_the_column_on_a_real_window_resize() {
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _w = crate::testlock::serial();
+    crate::markdown::set_wysiwyg_on(true);
+    crate::page::set_page_on(true);
+    crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+
+    let Some((device, queue, mut p)) = pollster::block_on(async {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("awl table-resize test device"),
+                ..Default::default()
+            })
+            .await
+            .ok()?;
+        let cache = Cache::new(&device);
+        let mut p =
+            TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+        p.set_size(2400.0, 800.0);
+        Some((device, queue, p))
+    }) else {
+        eprintln!("skipping table_grid_reclamps_to_the_column_on_a_real_window_resize: no wgpu adapter");
+        return;
+    };
+
+    // A cell with a long phrase that fits on one line at a WIDE canvas but
+    // must wrap/clamp once the window shrinks. Caret off the table so the
+    // grid draws (not the x-ray).
+    let phrase = "a phrase long enough to sit on one line at a wide canvas but must \
+                  wrap once the window shrinks to a much narrower size";
+    let text = format!("| World | Ground |\n|-------|--------|\n| Short | {phrase} |\n\nprose after\n");
+
+    // WIDE canvas — first real reshape.
+    p.set_view(&view_md(&text, 4, 0));
+    p.prepare(&device, &queue, 2400, 800).unwrap();
+    let wide_cols = p.tables_report()[0].col_widths.clone();
+
+    // NARROW: a genuine live window resize — `set_size` alone, exactly what
+    // `WindowEvent::Resized` drives — then a normal `prepare()` (no text
+    // change, no explicit `page::set_measure`).
+    p.set_size(500.0, 800.0);
+    p.prepare(&device, &queue, 500, 800).unwrap();
+
+    let narrow_cols = p.tables_report()[0].col_widths.clone();
+
+    // The columns actually shrank to the new narrow canvas — proof the cache
+    // was genuinely re-shaped, not merely re-read stale.
+    assert_ne!(
+        wide_cols, narrow_cols,
+        "the resize must have re-clamped the grid geometry (still wide: {wide_cols:?})"
+    );
+
+    // THE ACTUAL OVERFLOW ASSERTION: every drawn cell's x-range must stay
+    // within [column_left, column_left+column_width] — read through the real
+    // accessors, never parallel math.
+    let col_left = p.column_left();
+    let col_w = p.column_width();
+    let col_right = col_left + col_w;
+    let text_left = p.text_left();
+    let (col_x, col_ws) = p
+        .table_grid_cache_col_geometry(0)
+        .expect("table geometry cached at range start 0");
+    for (i, (x, w)) in col_x.iter().zip(col_ws.iter()).enumerate() {
+        let cell_left = text_left + x;
+        let cell_right = cell_left + w;
+        assert!(
+            cell_left >= col_left - 0.5 && cell_right <= col_right + 0.5,
+            "column {i} spills past the writing column after resize: \
+             cell=[{cell_left},{cell_right}] column=[{col_left},{col_right}] \
+             (wide_cols={wide_cols:?} narrow_cols={narrow_cols:?})"
+        );
+    }
+
+    crate::page::set_page_on(false);
+    crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+}
