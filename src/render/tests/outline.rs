@@ -447,11 +447,14 @@ fn column_left_is_pixel_stable_across_a_one_px_resize_sweep() {
     // (d) once pinned to the outline's FULL preferred rail, column_left is
     // byte-constant across every width in that sub-range — the user's own
     // "lock the width for the left gutter" hypothesis, tested directly.
+    // The expected pinned value is the desired left's FLOOR: the whole-pixel
+    // snap (the subpixel-shimmer fix — `adaptive_column_left`'s own doc) floors
+    // the final left, and the raw desired_left here (244.96) is fractional.
     let pref = rowlayout::OUTLINE_PREFERRED_CHARS as f32
         * CHAR_WIDTH
         * crate::markdown::type_scale::LABEL;
     let gap = CHAR_WIDTH * crate::render::chrome::MARGIN_COLUMN_GAP_CHARS;
-    let full_rail_left = pref + gap + TEXT_LEFT;
+    let full_rail_left = (pref + gap + TEXT_LEFT).floor();
     let pinned: Vec<(u32, f32)> = widths
         .iter()
         .copied()

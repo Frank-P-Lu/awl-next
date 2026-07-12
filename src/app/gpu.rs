@@ -164,6 +164,45 @@ impl Gpu {
         self.pipeline.set_size(width as f32, height as f32);
     }
 
+    /// LIVE-RESIZE CONTENT-STRETCH FIX (macOS only): toggle the underlying
+    /// `CAMetalLayer`'s own `presentsWithTransaction` flag.
+    ///
+    /// Metal's `CAMetalLayer` presents ASYNCHRONOUSLY by default — a `present()`
+    /// is handed to the compositor independently of AppKit's own window-resize
+    /// animation. During a FAST live-resize drag, AppKit commits a new
+    /// Core Animation transaction for the window's growing/shrinking bounds on
+    /// every drag tick; if OUR next frame hasn't presented yet when that
+    /// transaction commits, the compositor has nothing fresh at the new size to
+    /// show and instead SCALES the last-presented (stale-size) drawable to cover
+    /// the new bounds — the classic macOS "content stretches while you drag
+    /// fast" artifact (confirmed as the user's actual live symptom: a slow,
+    /// one-pixel-at-a-time drag was already smooth after the earlier rail-entry-
+    /// ramp fix; only a FAST drag still visibly stretched — a compositor-level
+    /// effect the headless harness cannot see, since it never opens a real
+    /// window). Setting `presentsWithTransaction(true)` makes our `present()`
+    /// JOIN that same transaction instead of racing it, so the window waits for
+    /// our frame before committing the resize — content stays crisp at every
+    /// drag speed.
+    ///
+    /// **The documented trade-off** (Apple's own note on the property): a
+    /// transaction-synced present costs a little throughput / can make the
+    /// drag feel a touch "heavier" — so this is armed ON only while `Resized`
+    /// events are actively arriving (`App::arm_live_resize_sync`) and flipped
+    /// back OFF a short settle period after the last one (`App::about_to_wait`'s
+    /// `RESIZE_SYNC_SETTLE` debounce), rather than left on permanently.
+    #[cfg(target_os = "macos")]
+    pub(super) fn set_presents_with_transaction(&self, on: bool) {
+        // SAFETY: this only reads the Metal surface handle to flip one plain
+        // boolean property on its `CAMetalLayer`, then drops the guard
+        // immediately — no resource is retained, destroyed, or used past this
+        // call (mirrors `current_gpu_bytes`'s identical `as_hal` shape above).
+        unsafe {
+            if let Some(surf) = self.surface.as_hal::<wgpu::hal::api::Metal>() {
+                surf.render_layer().lock().setPresentsWithTransaction(on);
+            }
+        }
+    }
+
     /// Draw one frame. Returns `Some((cost_ms, present_return))` when the frame
     /// actually PRESENTED and the debug panel is on — the frame's CPU COST in ms
     /// plus the instant `frame.present()` returned (the key→px latency endpoint)
@@ -232,6 +271,13 @@ impl Gpu {
             eprintln!("render error: {e}");
         }
         self.queue.submit(Some(encoder.finish()));
+        // Notify winit we're about to present, per its own documented practice
+        // ("call this after drawing, before you submit the buffer to the
+        // display"). A no-op on macOS/X11/Windows/Web (winit lists it
+        // "Unsupported" there) — the platform this matters for is Wayland,
+        // where it schedules winit's own frame-callback throttling for
+        // `RedrawRequested`; harmless everywhere else, so unconditional.
+        self.window.pre_present_notify();
         frame.present();
         // The latency endpoint: present-SUBMISSION return (wgpu exposes no
         // presented-time), stamped before the off-frame atlas trim.

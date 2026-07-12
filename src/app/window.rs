@@ -51,14 +51,62 @@ impl App {
 
     /// `WindowEvent::Resized`: resize the surface, re-sync the view (re-wraps the
     /// column at the new physical size), and redraw.
+    ///
+    /// **SYNCHRONOUS REDRAW ON RESIZE** (macOS live-resize correctness): a bare
+    /// `request_redraw()` only QUEUES a `RedrawRequested` for winit's run loop
+    /// to deliver later — normally prompt, but during a live-resize drag it
+    /// leaves a real gap in which the surface has been reconfigured to the NEW
+    /// size while the LAST rendered frame is still the OLD one. Drawing +
+    /// presenting the just-reconfigured surface RIGHT HERE, gated to an actual
+    /// size change, closes that gap outright rather than depending on the
+    /// queued redraw's timing. `gpu.redraw()` alone never touches the caret-
+    /// spring / debug-panel bookkeeping that lives in `on_redraw_requested`
+    /// (spring advance, `redraw_count`, key→px stamping) — it is a pure,
+    /// idempotent "draw what's already prepared, right now", so calling it
+    /// here is safe alongside the unchanged trailing `request_redraw()` below,
+    /// which still keeps that bookkeeping on its normal cadence.
+    ///
+    /// This alone does not fully cure a FAST drag, though: even a synchronous
+    /// present here can still lose a race against AppKit's own resize-tracking
+    /// Core Animation transaction at high drag speed, which is what shows as
+    /// the compositor briefly STRETCHING the last frame instead of showing a
+    /// blank/stale one — see `Gpu::set_presents_with_transaction`'s doc for
+    /// the companion half of this fix (`arm_live_resize_sync` below).
     pub(super) fn on_resized(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+        let mut changed = false;
         if let Some(gpu) = self.gpu.as_mut() {
+            changed = gpu.config.width != size.width || gpu.config.height != size.height;
             gpu.resize(size.width, size.height);
         }
         self.sync_view(true);
+        if changed {
+            #[cfg(target_os = "macos")]
+            self.arm_live_resize_sync();
+            if let Some(gpu) = self.gpu.as_mut() {
+                gpu.redraw();
+            }
+        }
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
+    }
+
+    /// (macOS only) Re-arm the live-resize Core-Animation-transaction sync for
+    /// one more tick: turn `presentsWithTransaction` ON if this is a FRESH drag
+    /// (it wasn't already armed) and (re)stamp the settle deadline either way —
+    /// `about_to_wait`'s `RESIZE_SYNC_SETTLE` debounce flips it back off
+    /// `RESIZE_SYNC_SETTLE` after the LAST tick, not the first, so a fast
+    /// multi-tick drag keeps sliding the deadline forward exactly like the
+    /// theme-font/zoom-persist debounces. See `resize_settle_at`'s own doc for
+    /// the full mechanism + the user-reported symptom this closes.
+    #[cfg(target_os = "macos")]
+    fn arm_live_resize_sync(&mut self) {
+        if self.resize_settle_at.is_none() {
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.set_presents_with_transaction(true);
+            }
+        }
+        self.resize_settle_at = Some(Instant::now());
     }
 
     /// `WindowEvent::ScaleFactorChanged`: the window moved to a monitor with a

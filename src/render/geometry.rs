@@ -255,7 +255,64 @@ pub fn column_left_for(window_w: f32, char_width: f32, page_on: bool, measure: u
 /// mode on, a markdown buffer with at least one heading —
 /// `TextPipeline::outline_wants_rail`) — everything BUT the horizontal-room
 /// question this function itself decides.
+///
+/// **THE WHOLE-PIXEL SNAP (subpixel-shimmer fix, 2026-07-13 — the second,
+/// surviving half of the user's resize-jitter report):** the final left is
+/// FLOORED to a whole PHYSICAL pixel before being returned — the one owner
+/// every downstream reader (glyph origins via `text_left`, caret, selection,
+/// washes, hit-test) composes, so they all shift together. Why: the symmetric
+/// centered left is `(window_w − measure_px) / 2`, which moves in **0.5px
+/// steps** as a live resize drags the window 1px at a time. Glyph draw
+/// origins inherit that fraction (glyphon feeds `TextArea.left` into
+/// cosmic-text's `PhysicalGlyph::physical`, whose `SubpixelBin` quantizes the
+/// fractional x into a rasterization bin) — so every SECOND pixel of window
+/// width re-rasterized the entire column at a flipped antialiasing phase.
+/// Measured on real captures (fixture at `--measure 40`): widths 1200 vs
+/// 1202 (left 312.0 → 313.0, a whole-pixel shift) rendered the glyph band
+/// BYTE-IDENTICAL under a 1px translation, while 1200 vs 1201 (left 312.0 →
+/// 312.5) differed in **4.4% of the band's bytes** — the visible vibration
+/// during a drag even though the placement math is perfectly smooth. With
+/// the floor, a 1px resize moves the column by exactly 0 or 1 whole px — AA
+/// phase stable, drag reads as a solid column sliding. FLOOR (not round) so
+/// the snap can only ever move the column LEFT of the raw policy position —
+/// the right-margin breathing floor (`RIGHT_MARGIN_BREATH`) is never eaten
+/// by the snap, and floor-of-monotone stays monotone so the entry ramp's
+/// no-jump law is preserved. DPI: `window_w`/`char_width` are PHYSICAL px
+/// here, so this snaps to whole physical pixels — on a 2x display that is
+/// 0.5 LOGICAL px, exactly the raster grid the glyphs rasterize on. The
+/// even-width reference captures (1200px canvas, measures 40/70/80 → lefts
+/// 312/96/24, all integral) are byte-identical under the snap.
 pub fn adaptive_column_left(
+    window_w: f32,
+    char_width: f32,
+    page_on: bool,
+    measure: usize,
+    outline_wants: bool,
+    outline_pref_px: f32,
+    outline_min_px: f32,
+    gap: f32,
+    left_pad: f32,
+) -> f32 {
+    adaptive_column_left_raw(
+        window_w,
+        char_width,
+        page_on,
+        measure,
+        outline_wants,
+        outline_pref_px,
+        outline_min_px,
+        gap,
+        left_pad,
+    )
+    .floor()
+}
+
+/// The RAW (un-snapped) placement policy behind [`adaptive_column_left`] —
+/// module-private so no production reader can bypass the whole-pixel snap
+/// (the same "make the bypass seam private" discipline as `rowlayout`'s
+/// elision door). See the public wrapper's doc for the three regimes + the
+/// snap's rationale; this body is the policy verbatim.
+fn adaptive_column_left_raw(
     window_w: f32,
     char_width: f32,
     page_on: bool,
@@ -1802,10 +1859,18 @@ mod tests {
         let left =
             adaptive_column_left(win, CW, true, measure, true, pref, min, gap, ADAPTIVE_LEFT_PAD);
         assert!(left > symmetric, "narrow: column shifts right, got {left} vs symmetric {symmetric}");
+        // The granted rail sits within ONE pixel of the full preference: the raw
+        // policy grants it exactly, and the whole-pixel snap (the subpixel-shimmer
+        // fix) floors the final left, costing the rail at most a sub-pixel sliver.
         let avail = (left - gap) - ADAPTIVE_LEFT_PAD;
         assert!(
-            (avail - pref).abs() < 0.5,
-            "narrow: outline granted its full preferred rail, avail={avail} pref={pref}"
+            (avail - pref).abs() < 1.0,
+            "narrow: outline granted its full preferred rail (within the whole-pixel snap), avail={avail} pref={pref}"
+        );
+        assert_eq!(
+            left,
+            (pref + gap + ADAPTIVE_LEFT_PAD).floor(),
+            "narrow: the granted left is exactly the snapped desired_left"
         );
         let total_margin = win - width;
         let right_margin = total_margin - left;
@@ -1923,8 +1988,11 @@ mod tests {
         );
         let left =
             adaptive_column_left(win, CW, true, measure, true, pref, min, gap, ADAPTIVE_LEFT_PAD);
+        // The boundary resolves to WIDE — the SNAPPED symmetric position, never a
+        // spurious NARROW shift past it (the whole-pixel snap floors the final
+        // left, so compare against the symmetric position's own floor).
         assert!(
-            (left - symmetric).abs() < 1e-3,
+            (left - symmetric.floor()).abs() < 1e-3,
             "boundary resolves to WIDE (no shift) at the exact threshold: left={left} symmetric={symmetric}"
         );
     }
@@ -1994,6 +2062,46 @@ mod tests {
             ADAPTIVE_LEFT_PAD,
         );
         assert_eq!(left, symmetric, "well outside the ramp band: still a bare recenter, no partial shift");
+    }
+
+    #[test]
+    fn adaptive_left_snaps_to_whole_physical_pixels_across_a_1px_sweep() {
+        // THE SUBPIXEL-SHIMMER FIX law (2026-07-13, the second half of the
+        // user's resize-jitter report): the symmetric centered left is
+        // `(window − measure_px)/2`, which moves in 0.5px steps under a
+        // 1px-at-a-time live resize — and a fractional left re-rasterizes
+        // every glyph at a flipped antialiasing phase (measured: 4.4% of the
+        // glyph band's bytes differ between a x.0 and a x.5 left; zero
+        // between x.0 and (x+1).0). The fix floors the final left, so:
+        // (1) the returned left is ALWAYS a whole physical pixel, and
+        // (2) in the plain symmetric regime a 1px window step moves it by
+        //     exactly 0 or 1 whole px — a pure translation, AA-phase stable.
+        // (The outline's ramp band legitimately steps faster — whole-pixel
+        // is the law there too, just not the 0/1 step bound.)
+        let pref = outline_pref_px();
+        let min = outline_min_px();
+        let gap = margin_gap();
+        for wants in [false, true] {
+            let mut prev: Option<f32> = None;
+            for w in 1000..=1400u32 {
+                let left = adaptive_column_left(
+                    w as f32, CW, true, 70, wants, pref, min, gap, ADAPTIVE_LEFT_PAD,
+                );
+                assert_eq!(
+                    left,
+                    left.floor(),
+                    "width {w} (wants={wants}): left must be a whole physical pixel, got {left}"
+                );
+                if let (Some(p), false) = (prev, wants) {
+                    let step = left - p;
+                    assert!(
+                        step == 0.0 || step == 1.0,
+                        "width {w}: symmetric-regime left must step exactly 0 or 1 whole px per width px, got {step}"
+                    );
+                }
+                prev = Some(left);
+            }
+        }
     }
 
     // === ZOOM DECOUPLING (the bug fix) =====================================

@@ -71,6 +71,18 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 # same crate instance, no duplicate build.)
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-metal = { version = "0.3.2", default-features = false, features = ["MTLDevice"] }
+# LIVE-RESIZE content-stretch fix (`Gpu::set_presents_with_transaction`,
+# `app/gpu.rs`): toggles the raw `CAMetalLayer`'s `presentsWithTransaction`
+# flag (via `Surface::as_hal::<Metal>()`'s `render_layer()`) so a present JOINS
+# AppKit's own resize Core-Animation transaction instead of racing it — without
+# this, a FAST live-resize drag can show the compositor stretching the last
+# frame to the new bounds. Same version-matching convention as `objc2-metal`
+# just above: pull the SAME `objc2-quartz-core` version wgpu-hal 29 already
+# uses (0.3.2), `default-features = false` + only the one feature
+# (`CALayer`, which gates `CAMetalLayer` itself) needed to name the type in a
+# doc-comment / keep the dependency edge explicit — Cargo unifies this with
+# wgpu-hal's own copy, no duplicate build.
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["CALayer"] }
 # The native macOS MENU BAR (App/File/Edit/View/Window — `src/menu.rs`). muda
 # is tauri's winit-compatible cross-platform menu crate; `default-features =
 # false` drops its `libxdo`/`gtk` defaults, which are Linux-only optional deps
