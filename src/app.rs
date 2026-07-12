@@ -122,6 +122,19 @@ const ZOOM_PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 /// (Enter), revert (Esc/C-g), and the headless capture all stay SYNCHRONOUS.
 const THEME_FONT_DEBOUNCE: Duration = Duration::from_millis(150);
 
+/// Quiet period after the last LIVE-RESIZE `Resized` tick before the macOS
+/// Core-Animation-transaction present sync (`Gpu::set_presents_with_
+/// transaction`) is flipped back OFF (debounce; macOS-only — see
+/// `resize_settle_at`'s doc for the full mechanism). A fast drag re-stamps the
+/// deadline on every tick (`App::arm_live_resize_sync`), so this only fires
+/// once the drag genuinely stops. TASTE TUNABLE, mirrors `THEME_FONT_
+/// DEBOUNCE`'s value: short enough that the transaction-sync cost (Apple's
+/// own documented throughput trade-off for `presentsWithTransaction`) is paid
+/// only while actually dragging, long enough that a brief pause mid-drag
+/// doesn't flap it on/off.
+#[cfg(target_os = "macos")]
+const RESIZE_SYNC_SETTLE: Duration = Duration::from_millis(150);
+
 use glyphon::Cache;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -606,6 +619,27 @@ pub struct App {
     /// replay applies theme fonts synchronously through the pure core + a fresh
     /// pipeline, so captures are untouched).
     theme_font_at: Option<Instant>,
+    /// LIVE-RESIZE CONTENT-STRETCH FIX (macOS only, `app/window.rs`'s
+    /// `on_resized` + `arm_live_resize_sync`): when the last genuine
+    /// `WindowEvent::Resized` tick landed, while the CAMetalLayer's
+    /// `presentsWithTransaction` is armed ON. Metal's surface presents
+    /// ASYNCHRONOUSLY by default, so during a FAST drag the window's own
+    /// resize animation (a Core Animation transaction AppKit commits on every
+    /// tick) can commit before our next frame presents — the compositor then
+    /// has nothing fresh to show and instead SCALES the last-presented
+    /// (stale-size) drawable to cover the new bounds, the classic macOS
+    /// "content stretches while dragging fast" artifact (user-reported: a
+    /// SLOW, one-pixel-at-a-time drag was already fine after the rail-ramp
+    /// fix; a FAST drag still visibly stretched). `presentsWithTransaction
+    /// (true)` makes our present JOIN that same transaction instead of racing
+    /// it. `about_to_wait`'s `RESIZE_SYNC_SETTLE` debounce flips it back OFF
+    /// once ticks stop arriving (Apple's own documented trade-off: a
+    /// transaction-synced present costs a touch of throughput, so it's armed
+    /// only while genuinely dragging, not left on permanently). `None` =
+    /// not currently resizing (live only; a headless capture never resizes a
+    /// real window, so this is structurally unreachable there).
+    #[cfg(target_os = "macos")]
+    resize_settle_at: Option<Instant>,
     /// The loaded persistent config (keybinding overrides + folder defaults + the
     /// Settings-open path). Re-loaded when the config file is SAVED in the editor,
     /// which live-reapplies the keymap + folders.
@@ -890,6 +924,8 @@ impl App {
             history_scroll_before: None,
             zoom_persist_at: None,
             theme_font_at: None,
+            #[cfg(target_os = "macos")]
+            resize_settle_at: None,
             config,
             cli_notes_root,
             cli_workspace,
@@ -1458,6 +1494,35 @@ impl ApplicationHandler<AwlEvent> for App {
                 }
                 false if self.last_frame.is_none() => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + ZOOM_PERSIST_DEBOUNCE));
+                }
+                false => {}
+            }
+        }
+        // LIVE-RESIZE CONTENT-STRETCH FIX settle (macOS only — see
+        // `resize_settle_at`'s doc): once `RESIZE_SYNC_SETTLE` passes with no
+        // further `Resized` ticks, flip the CAMetalLayer's `presentsWithTransaction`
+        // back OFF (paying its throughput cost only while a drag is actually live).
+        // Each new tick RE-STAMPS `resize_settle_at` (`App::arm_live_resize_sync`),
+        // sliding the deadline exactly like the theme-font/zoom-persist debounces
+        // above — the same single-`WaitUntil` shape, so a still window costs nothing.
+        #[cfg(target_os = "macos")]
+        if let Some(dirty) = self.resize_settle_at {
+            match debounce_due(dirty, RESIZE_SYNC_SETTLE, Instant::now()) {
+                true => {
+                    self.resize_settle_at = None;
+                    if let Some(gpu) = self.gpu.as_ref() {
+                        gpu.set_presents_with_transaction(false);
+                    }
+                    // Same reason as the sibling debounces above: route through
+                    // `on_redraw_requested`'s own control-flow decision instead of
+                    // leaving this now-elapsed `WaitUntil` in place (which would
+                    // busy-spin `about_to_wait` until the next real input).
+                    if let Some(gpu) = self.gpu.as_ref() {
+                        gpu.window.request_redraw();
+                    }
+                }
+                false if self.last_frame.is_none() => {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + RESIZE_SYNC_SETTLE));
                 }
                 false => {}
             }
