@@ -64,6 +64,8 @@ impl TextPipeline {
             self.menu_drop_menu = None;
             self.menubar_bg.prepare(device, queue, width, height, &[]);
             self.menubar_hi.prepare(device, queue, width, height, &[]);
+            self.menubar_hi_invert
+                .prepare(device, queue, width, height, &[]);
             self.park_menu_text(device, queue, width, height, bounds)?;
             self.park_menu_dropdown(device, queue, width, height, bounds)?;
             return Ok(());
@@ -155,7 +157,17 @@ impl TextPipeline {
             )],
             None => Vec::new(),
         };
-        self.menubar_hi.prepare(device, queue, width, height, hi);
+        // TRUE 1-BIT WORLDS: route the band into the inverse-video pipeline
+        // instead of the ordinary fill — see `menubar_hi_invert`'s field doc
+        // (mirrors `overlay_draw_card`'s identical split for the picker).
+        if theme::active().render_caps.selection_style == theme::SelectionStyle::InverseVideo {
+            self.menubar_hi.prepare(device, queue, width, height, &[]);
+            self.menubar_hi_invert.prepare(device, queue, width, height, hi);
+        } else {
+            self.menubar_hi.prepare(device, queue, width, height, hi);
+            self.menubar_hi_invert
+                .prepare(device, queue, width, height, &[]);
+        }
 
         // Draw the title text (vertically centered in the bar).
         let title_top = (bar_h - label_lh) * 0.5;

@@ -627,6 +627,169 @@ fn every_overlay_kind_is_classified_and_the_two_families_render_as_declared() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
+/// THE PICKER-ROW-HIGHLIGHT ROUND'S OWN "selected row is invisible" report,
+/// at the INSTANCE-COUNT seam (mirrors
+/// `wagtail_selection_uses_the_invert_pipeline_other_worlds_use_the_ordinary_fill`
+/// above): on Wagtail, `overlay_rows` (the ordinary fill) uploads ZERO
+/// instances and `overlay_rows_invert` carries exactly one — the OPPOSITE of
+/// every other world, where `overlay_rows` carries the real band and
+/// `overlay_rows_invert` stays idle.
+#[test]
+fn wagtail_picker_row_uses_the_invert_pipeline_other_worlds_use_the_ordinary_fill_band() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping wagtail_picker_row_uses_the_invert_pipeline_other_worlds_use_the_ordinary_fill_band: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+    v.overlay_selected = 0;
+
+    theme::set_active_by_name("Wagtail").unwrap();
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert_eq!(
+        p.overlay_rows.instance_count(),
+        0,
+        "Wagtail (one-bit): the ordinary fill band must upload nothing — a flat white \
+         quad would hide the selected row's own white text"
+    );
+    assert_eq!(
+        p.overlay_rows_invert.instance_count(),
+        1,
+        "Wagtail (one-bit): the invert pipeline carries exactly one instance -- this \
+         frame's selected-row rect"
+    );
+
+    theme::set_active_by_name("Tawny").unwrap();
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert_eq!(
+        p.overlay_rows.instance_count(),
+        1,
+        "Tawny: the ordinary fill band carries the real selected-row rect"
+    );
+    assert_eq!(
+        p.overlay_rows_invert.instance_count(),
+        0,
+        "Tawny: overlay_rows_invert stays idle on an ordinary (non-one-bit) world"
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// THE ROUND'S OWN motivating bug, at the REAL-PIXEL seam (mirrors
+/// `wagtail_palette_card_real_pixels_show_a_white_border_ring_black_interior`):
+/// a Wagtail command-palette capture with the selected row's own rect (read
+/// back via `overlay_window_report`) sampled directly must show a genuinely
+/// MIXED region — some pure white (the inverted ground), some pure black
+/// (the inverted text) — never the uniform all-black the pre-fix renderer
+/// produced (a flat `[0,0,0,0]`-alpha band composited straight onto the
+/// already-black card, indistinguishable from an unselected row). Also
+/// proves the highlight FOLLOWS the selection: after one `C-n`, the row that
+/// used to read as selected goes back to mostly black and the next
+/// candidate's row picks up the white band instead.
+#[test]
+fn wagtail_picker_row_pixels_actually_invert_and_the_highlight_follows_the_selection() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping wagtail_picker_row_pixels_actually_invert_and_the_highlight_follows_the_selection: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+    v.overlay_selected = 0;
+
+    theme::set_active_by_name("Wagtail").unwrap();
+    p.sync_theme();
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+
+    let (top, _lines, sel_row, card_h, _canvas_h) =
+        p.overlay_window_report().expect("the overlay must be open");
+    assert_eq!(top, 0);
+    assert_eq!(sel_row, 0, "row 0 is selected at the start");
+    let rect = p.overlay_card_rect().expect("the card must be open");
+    let [card_x, card_y, card_w, _] = rect;
+
+    let sample_row = |p: &TextPipeline,
+                       device: &wgpu::Device,
+                       queue: &wgpu::Queue,
+                       row: usize|
+     -> (usize, usize, usize) {
+        let (texture, tview) = super::dither::offscreen(device, 1200, 800);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("awl one-bit picker-row encoder"),
+        });
+        p.render(&mut encoder, &tview).unwrap();
+        queue.submit(Some(encoder.finish()));
+        let pixels = super::dither::read_pixels(device, queue, &texture, 1200, 800);
+        let at = |x: i64, y: i64| pixels[(y as u32 * 1200 + x as u32) as usize];
+        // header row (the query line) sits above the candidate rows; each
+        // candidate row is `lh` tall (`overlay_lh`, the shared owner both
+        // shaping and geometry read).
+        let lh = p.overlay_lh();
+        let text_top = card_y + 12.0; // pad
+        let row_top = (text_top + lh * (1.0 + row as f32)) as i64; // + header_rows
+        let row_bottom = (text_top + lh * (2.0 + row as f32)) as i64;
+        let mut white = 0usize;
+        let mut black = 0usize;
+        let mut other = 0usize;
+        for y in row_top..row_bottom {
+            for x in (card_x as i64)..((card_x + card_w) as i64) {
+                match at(x, y) {
+                    [255, 255, 255, 255] => white += 1,
+                    [0, 0, 0, 255] => black += 1,
+                    _ => other += 1,
+                }
+            }
+        }
+        (white, black, other)
+    };
+
+    let _ = card_h;
+    let (white0, black0, _) = sample_row(&p, &device, &queue, 0);
+    assert!(
+        white0 > 0,
+        "row 0 (selected) must contain SOME pure-white pixels (the inverted ground) -- \
+         got white={white0} black={black0}"
+    );
+    assert!(
+        black0 > 0,
+        "row 0 (selected) must also contain SOME pure-black pixels (the inverted text) -- \
+         a uniform white slab would just be a different invisibility"
+    );
+
+    // Move the selection down one (`C-n`) and re-derive.
+    v.overlay_selected = 1;
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let (_, _, sel_row2, _, _) = p.overlay_window_report().unwrap();
+    assert_eq!(sel_row2, 1, "the selection moved to row 1");
+    let (white1_row0, _black1_row0, _) = sample_row(&p, &device, &queue, 0);
+    let (white1_row1, black1_row1, _) = sample_row(&p, &device, &queue, 1);
+    assert!(
+        white1_row1 > 0 && black1_row1 > 0,
+        "row 1 (now selected) must carry the mixed inverted band -- got white={white1_row1} \
+         black={black1_row1}"
+    );
+    assert!(
+        white1_row0 < white0,
+        "row 0 (no longer selected) must lose most of its white pixels once the \
+         highlight moves off it -- was {white0}, now {white1_row0}"
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 /// THE OTHER NON-OVERLAY SUMMONED CARDS (HUD / About / the menu-bar dropdown)
 /// already rode the shared float-panel primitive UNCONDITIONALLY before this
 /// round (see `render.rs`'s `hud_shadow`/`hud_border`/`hud_card` and

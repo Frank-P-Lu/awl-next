@@ -88,6 +88,14 @@ impl RoleOverrides {
 /// `OneMinusDst` blend drawn after text) — the only mechanism that can render
 /// "selected" on a world with no intermediate grey to fill with. See
 /// `TextPipeline::selection_invert`'s field doc + `prepare_selection_layer`.
+/// The SAME field also drives every OTHER "highlight a row/band" surface
+/// that faces the identical constraint: the picker's selected-row value band
+/// (`overlay_rows`/`overlay_rows_invert`, `render/chrome/overlay.rs`) and the
+/// web/Linux menu bar's open-title band (`menubar_hi`/`menubar_hi_invert`,
+/// `render/chrome/menubar.rs`) — a picker row or an open menu title is, in
+/// this renderer's terms, just another "selected" region; a value-band fill
+/// has the same "no legal intermediate grey" problem document selection does
+/// on a one-bit world, and the System-7 answer is the same inversion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectionStyle {
     /// The default: a translucent `selection`-tinted quad under the text.
