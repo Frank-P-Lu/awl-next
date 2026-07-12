@@ -1542,6 +1542,94 @@ fn apply_cjk_force(font_system: &mut FontSystem) {
     }
 }
 
+/// DEV-ONLY probe override for the OVERLAY-PERSONALITY-AS-DATA round's
+/// `gallery/overlay-personality/` captures (mirrors [`awl_cjk_force`]/
+/// [`apply_cjk_force`]'s shape exactly): `AWL_OVERLAY_STYLE_FORCE` forces a
+/// [`theme::TitleStyle`] at runtime for EVERY world, so the gallery can shoot
+/// a placard-styled card without any world actually shipping one yet. Total
+/// no-op unset (every normal run, every default capture); no config key, no
+/// CLI flag, undocumented in CAPTURE.md — same "not a product feature"
+/// footing as `AWL_CJK_FORCE`.
+///
+/// Grammar: `"inline"` forces [`theme::TitleStyle::InlinePrefix`];
+/// `"placard:<corner>:<scale>:<ink>"` forces a [`theme::TitleStyle::Placard`]
+/// — `<corner>` one of `TL`/`TR`/`BL`/`BR` (case-insensitive), `<scale>` a
+/// plain float, `<ink>` one of `faint`/`ghost` (case-insensitive), e.g.
+/// `"placard:BL:3.0:ghost"`. A malformed value parses to `None` (falls
+/// through to the active world's own `render_caps.title_style` — never a
+/// crash).
+fn parse_overlay_style_force(s: &str) -> Option<theme::TitleStyle> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("inline") {
+        return Some(theme::TitleStyle::InlinePrefix);
+    }
+    let mut parts = s.split(':');
+    if !parts.next()?.eq_ignore_ascii_case("placard") {
+        return None;
+    }
+    let corner = match parts.next()?.to_ascii_uppercase().as_str() {
+        "TL" => theme::PlacardCorner::TL,
+        "TR" => theme::PlacardCorner::TR,
+        "BL" => theme::PlacardCorner::BL,
+        "BR" => theme::PlacardCorner::BR,
+        _ => return None,
+    };
+    let scale: f32 = parts.next()?.parse().ok()?;
+    let ink = match parts.next()?.to_ascii_lowercase().as_str() {
+        "faint" => theme::PlacardInk::Faint,
+        "ghost" => theme::PlacardInk::Ghost,
+        _ => return None,
+    };
+    if parts.next().is_some() {
+        return None; // trailing garbage — reject rather than silently ignore
+    }
+    Some(theme::TitleStyle::Placard { corner, scale, ink })
+}
+
+/// The `AWL_OVERLAY_STYLE_FORCE` dev knob, read ONCE and memoized — mirrors
+/// [`awl_cjk_force`]'s own doc for why an unmemoized `std::env::var` read is
+/// the hazard to avoid on a call site that can run every frame an overlay is
+/// open (`overlay_shape_placard`).
+fn awl_overlay_style_force() -> &'static Option<theme::TitleStyle> {
+    static ONCE: std::sync::OnceLock<Option<theme::TitleStyle>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_OVERLAY_STYLE_FORCE").ok().and_then(|s| parse_overlay_style_force(&s))
+    })
+}
+
+/// TEST-ONLY escape hatch: force the EFFECTIVE title style without touching
+/// the env var — which, like `AWL_CJK_FORCE`, is memoized after first read
+/// and so cannot safely change mid-process (many tests share one binary).
+/// Guarded by [`crate::testlock::serial`] at the CALL SITE, mirroring every
+/// other `cfg(test)` global writer this codebase already serializes (the
+/// `page` measure setters, `fs::FsGuard`, …). `None` clears the override.
+#[cfg(test)]
+static PLACARD_TEST_OVERRIDE: std::sync::Mutex<Option<theme::TitleStyle>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_title_style_test_override(style: Option<theme::TitleStyle>) {
+    *PLACARD_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = style;
+}
+
+/// The EFFECTIVE [`theme::TitleStyle`] for this frame: a `cfg(test)` override
+/// if a test set one, else the `AWL_OVERLAY_STYLE_FORCE` dev probe if set,
+/// else the active world's own `render_caps.title_style` — today
+/// `InlinePrefix` on every one of the 15 worlds (see that field's own doc),
+/// so an unset-env, non-test run is BYTE-IDENTICAL to before this round.
+pub(crate) fn effective_title_style() -> theme::TitleStyle {
+    #[cfg(test)]
+    {
+        if let Some(style) = *PLACARD_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return style;
+        }
+    }
+    match awl_overlay_style_force() {
+        Some(style) => *style,
+        None => theme::active().render_caps.title_style,
+    }
+}
+
 /// Remove [`BAD_FALLBACK_FAMILIES`] from the font system's database so cosmic-text
 /// never selects them during fallback. Safe no-op if none are present (e.g. on
 /// non-macOS, or if the system set changes). Only affects fallback for glyphs the
@@ -1879,6 +1967,14 @@ pub struct TextPipeline {
     /// clean right column, replacing the old char-count space padding (which went
     /// ragged on proportional faces).
     pub panel_bind_buffer: GlyphBuffer,
+    /// THE OVERLAY-PERSONALITY-AS-DATA round: the large corner-anchored
+    /// wordmark buffer for a [`theme::TitleStyle::Placard`] world — shaped
+    /// and uploaded as a THIRD `TextArea` at the same panel origin, drawn
+    /// FIRST (behind the name/chord columns) so rows/text always composite
+    /// over it (legibility first). Empty text on every `InlinePrefix` world
+    /// (every world today), so its `TextArea` is simply omitted — see
+    /// `render/chrome/overlay_shape.rs::overlay_shape_placard`.
+    pub placard_buffer: GlyphBuffer,
     /// The ONE amber element in the panel: the caret block at the query end.
     pub panel_caret: CaretPipeline,
     /// The LIVE preview caret quad, drawn on the sample line inside the caret-style
@@ -2675,6 +2771,10 @@ impl TextPipeline {
         let panel_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // The right-aligned chord/time column, drawn over the same panel card.
         let panel_bind_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // The placard wordmark buffer (see its field doc) — starts at the same
+        // metrics as everything else; `overlay_shape_placard` re-metrics it
+        // per-frame to the world's own `scale`.
+        let placard_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // The accent caret block inside the panel (the one-organic-element law).
         let panel_caret = CaretPipeline::new(device, format, theme::primary().rgb_bytes());
         let caret_preview_pipeline =
@@ -2827,6 +2927,7 @@ impl TextPipeline {
             panel_renderer,
             panel_buffer,
             panel_bind_buffer,
+            placard_buffer,
             panel_caret,
             caret_preview_pipeline,
             caret_preview_glyph_pipeline,

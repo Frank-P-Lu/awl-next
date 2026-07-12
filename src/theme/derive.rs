@@ -100,6 +100,21 @@ pub fn selection() -> Srgb {
     active().selection
 }
 
+/// THE ONE owner of a [`super::model::PlacardInk`] rung's color — always a
+/// pure blend of two tokens already on the active world's own ink ladder,
+/// never a free color (see [`super::model::PlacardInk`]'s own doc for why
+/// the enum has no raw-`Srgb` variant to smuggle one in through). `Faint` is
+/// the existing [`faint`] rung verbatim; `Ghost` steps HALFWAY further from
+/// `faint` toward `base_300` — the card's own ground, since the placard
+/// draws ON the card — reading as barely-there without inventing a THIRD
+/// authored-per-world ink field.
+pub fn placard_ink(ink: super::model::PlacardInk) -> Srgb {
+    match ink {
+        super::model::PlacardInk::Faint => faint(),
+        super::model::PlacardInk::Ghost => faint().lerp(base_300(), 0.5),
+    }
+}
+
 /// SELECTED-ROW value BAND for the summoned pickers (command palette / go-to /
 /// theme / keybindings). The overlay card is `base_300`; the selected row reads as
 /// a rung further up the SURFACE ladder — `base_300` stepped [`SELECTED_BAND_STEPS`]

@@ -53,8 +53,15 @@ impl TextPipeline {
         let ink = theme::base_content().to_glyphon();
         let muted = theme::muted().to_glyphon();
         let geom = self.overlay_geometry(width);
+        // THE PLACARD RENDERER: shaped BEFORE the name/chord columns so its
+        // upload (below) can be the FIRST `TextArea` — drawn behind the rows,
+        // never over them (legibility first). `None` on every world today
+        // (all `InlinePrefix`) — see `overlay_shape_placard`'s own doc.
+        let placard = self.overlay_shape_placard(&geom);
         let has_right = self.overlay_shape_text(&geom, ink, muted);
-        self.overlay_upload_text(device, queue, width, height, &geom, has_right, ink, muted)?;
+        self.overlay_upload_text(
+            device, queue, width, height, &geom, has_right, ink, muted, placard,
+        )?;
         self.overlay_draw_card(device, queue, width, height, &geom);
         self.overlay_place_caret(queue, width, height, &geom);
         Ok(())
@@ -580,9 +587,11 @@ impl TextPipeline {
             && py < geom.text_top + lh
     }
 
-    /// Upload the shaped overlay text areas: the name column at the panel origin,
-    /// plus (when present) the right-aligned chord column whose own right edge lands
-    /// at `text_left + text_w` = the card's right text edge → chords flush.
+    /// Upload the shaped overlay text areas: the OPTIONAL placard wordmark FIRST
+    /// (drawn behind everything else that follows in this same batch), then the
+    /// name column at the panel origin, plus (when present) the right-aligned
+    /// chord column whose own right edge lands at `text_left + text_w` = the
+    /// card's right text edge → chords flush.
     #[allow(clippy::too_many_arguments)]
     fn overlay_upload_text(
         &mut self,
@@ -594,6 +603,7 @@ impl TextPipeline {
         has_right: bool,
         ink: glyphon::Color,
         muted: glyphon::Color,
+        placard: Option<(f32, f32, f32, f32)>,
     ) -> anyhow::Result<()> {
         let text_left = geom.text_left;
         let text_top = geom.text_top;
@@ -614,9 +624,31 @@ impl TextPipeline {
             default_color: ink,
             custom_glyphs: &[],
         };
+        // The placard wordmark is FIRST in the batch (drawn behind everything
+        // that follows), CLIPPED TO THE CARD's own rect — never the tighter
+        // text column, and never past the card's own edges (no bleed into the
+        // scrim, see `overlay_shape_placard`'s doc).
+        let mut areas: Vec<TextArea> = Vec::new();
+        if let Some((px, py, _pw, _ph)) = placard {
+            let card_bounds = TextBounds {
+                left: geom.card_x.max(0.0) as i32,
+                top: geom.card_y.max(0.0) as i32,
+                right: ((geom.card_x + geom.card_w).min(width as f32)) as i32,
+                bottom: ((geom.card_y + geom.card_h).min(height as f32)) as i32,
+            };
+            areas.push(TextArea {
+                buffer: &self.placard_buffer,
+                left: px,
+                top: py,
+                scale: 1.0,
+                bounds: card_bounds,
+                default_color: ink,
+                custom_glyphs: &[],
+            });
+        }
         // The right-aligned label column shares the panel origin; its own right edge
         // lands at `text_left + text_w` = the card's right text edge → chords flush.
-        let mut areas: Vec<TextArea> = vec![panel_area];
+        areas.push(panel_area);
         if has_right {
             areas.push(TextArea {
                 buffer: &self.panel_bind_buffer,

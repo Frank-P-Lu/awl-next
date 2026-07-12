@@ -10,7 +10,8 @@ use super::cjk::{
 use super::color::Srgb;
 use super::model::{
     Backdrop, Background, CaretBlockStyle, DecorativeWash, Elevation, HighlightTexture,
-    ImageReveal, RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags, WashOverride,
+    ImageReveal, RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags, TitleStyle,
+    WashOverride,
 };
 use super::ornament::{
     Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, ORNAMENT_GARAMOND,
@@ -939,6 +940,12 @@ pub const WAGTAIL: Theme = Theme {
             color: Srgb::rgb(0xFF, 0xFF, 0xFF),
             density: crate::render::dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY,
         },
+        // THE OVERLAY-PERSONALITY-AS-DATA round: `InlinePrefix` — every world
+        // (Wagtail included) DEFAULTS to today's inline title prefix. No
+        // world ships `Placard` this round; the assignment step is the
+        // human eyeball-and-decide call this round's own probe gallery
+        // exists to feed (see `theme::model::TitleStyle`'s doc).
+        title_style: TitleStyle::InlinePrefix,
     },
 };
 

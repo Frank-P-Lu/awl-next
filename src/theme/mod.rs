@@ -50,7 +50,7 @@ pub(crate) use cjk::EMBEDDED_CJK_FAMILIES;
 pub use color::Srgb;
 pub use derive::{
     active, active_index, background, base_100, base_200, base_300, base_content, error, faint,
-    image_reveal_scrim, muted, primary, selection, set_active, set_active_by_name,
+    image_reveal_scrim, muted, placard_ink, primary, selection, set_active, set_active_by_name,
     surface_selected, THEME_FACETS,
 };
 #[allow(unused_imports)] // cycle/overlay_scrim/primary_content/tag_for: public API
@@ -69,7 +69,7 @@ pub use model::{Lens, RoleOverrides, ThemeTags};
 // them through `Theme::render_caps.<field>` rather than this bare re-export.
 pub use model::{
     Backdrop, CaretBlockStyle, DecorativeWash, Elevation, HighlightTexture, HighlightTreatment,
-    ImageReveal, RenderCaps, SelectionStyle,
+    ImageReveal, PlacardCorner, PlacardInk, RenderCaps, SelectionStyle, TitleStyle,
 };
 #[allow(unused_imports)] // the per-world ornament/bullet data: public API
 // surface, no NON-TEST in-crate caller today.
