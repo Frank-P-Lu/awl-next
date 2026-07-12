@@ -64,7 +64,7 @@ pub(super) fn bayer_threshold01(x: u32, y: u32) -> f32 {
 /// deliberately a single fixed value, not a ladder (the razor: one kind of
 /// emphasis, one texture — see THEMES.md's 1-bit section). ~25% pattern
 /// coverage reads as a clear stipple band without swallowing the covered text.
-pub(super) const WAGTAIL_HIGHLIGHT_DITHER_DENSITY: f32 = 0.25;
+pub(crate) const WAGTAIL_HIGHLIGHT_DITHER_DENSITY: f32 = 0.25;
 
 /// The BANDING-KILL gradient offset at pixel `(x, y)`, in units of ONE 8-bit
 /// sRGB step (i.e. the caller adds this directly to a `[0,1]` float channel

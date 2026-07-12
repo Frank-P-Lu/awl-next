@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::color::Srgb;
-use super::model::{Background, Lens, Theme};
+use super::model::{Background, Elevation, ImageReveal, Lens, Theme};
 use super::worlds::{DEFAULT_THEME, THEMES};
 
 /// The active theme index. A process-global so every render call site reads the
@@ -121,7 +121,7 @@ pub(super) const SELECTED_BAND_STEPS: i32 = 2;
 
 pub fn surface_selected() -> Srgb {
     let a = active();
-    if a.is_one_bit() {
+    if a.render_caps.elevation == Elevation::Bordered {
         // A true 1-bit world's elevation ladder collapses to a strict binary:
         // the CARD FILL stays the ground value (`base_300 == base_100` ==
         // black, so ink text drawn on it stays legible) and this BORDER-only
@@ -180,7 +180,7 @@ const IMAGE_REVEAL_SCRIM_ALPHA: u8 = 0xB8;
 /// caret's alone (DESIGN §3). Re-tinted per world (geometry is theme-independent).
 pub fn image_reveal_scrim() -> Srgb {
     let b = active().base_100;
-    if active().is_one_bit() {
+    if active().render_caps.image_reveal == ImageReveal::Opaque {
         // A translucent veil over an image would composite a forbidden grey
         // on a true 1-bit world — opaque ground instead (the reveal fully
         // occludes the image rather than dimming it). Unaudited beyond this:

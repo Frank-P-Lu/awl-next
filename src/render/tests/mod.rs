@@ -32,6 +32,7 @@ mod syntax_ligatures;
 mod syntax_roles;
 mod tables;
 mod theme;
+mod theme_caps_law;
 mod washes;
 #[cfg(not(target_arch = "wasm32"))]
 mod webgl_shader_validation;

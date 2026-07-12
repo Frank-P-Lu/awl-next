@@ -271,7 +271,8 @@ impl TextPipeline {
         height: u32,
         rect: Option<[f32; 4]>,
     ) {
-        let elevated = rect.is_some() && theme::active().is_one_bit();
+        let elevated = rect.is_some()
+            && theme::active().render_caps.elevation == theme::Elevation::Bordered;
         set_float_quads(
             &mut self.panel_shadow,
             &mut self.panel_border,

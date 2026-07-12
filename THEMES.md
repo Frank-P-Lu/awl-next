@@ -456,6 +456,57 @@ actual pixel output under a REAL browser WebGL2 context (framebuffer
 correctness, backend-specific driver quirks) — flagged for live web testing,
 not claimed verified.
 
+### Render capabilities as data (`Theme::render_caps` — the 2026-07 refactor)
+
+Everything above (selection, elevation, decorative washes, backdrop, the
+highlight/search texture) was originally WIRED by a handful of render call
+sites branching directly on `Theme::is_one_bit()` — an ad hoc derived
+boolean. That worked while exactly one world (Wagtail) ever needed anything
+other than the default, but it meant a FUTURE world wanting one of those same
+behaviors would have had to grow another `is_one_bit()`-shaped special case
+rather than simply setting a field — exactly the "a theme needing its own
+code path means the design is wrong" smell `CLAUDE.md`'s engineering
+principles warn against. This round is a pure REFACTOR (behavior-preserving,
+verified by byte-identical before/after captures across all fifteen worlds —
+no visual change to any world) that replaces every one of those branches with
+a read of a declarative field on `Theme::render_caps` (`theme::model::
+RenderCaps`):
+
+| Field | Values | Governs | Deviates from default |
+|---|---|---|---|
+| `selection_style` | `Fill` \| `InverseVideo` | Document selection: translucent fill vs. true `1 - dst` inverse video (`prepare_selection_layer`) — and, paired with `highlight_texture`, the search-match quad's color (`search_match_rgba_bytes`). | Wagtail (`InverseVideo`) |
+| `caret_block_style` | `Normal` \| `InverseVideo` | Whether the BLOCK caret draws as an ordinary opaque quad, or must route through the same inverse-video mechanism (an opaque quad the same value as the ink would erase the glyph underneath); also degrades MORPH mode to BLOCK. | Wagtail (`InverseVideo`) |
+| `backdrop` | `Blur` \| `Flat` | Whether a full-takeover overlay / held HUD / lifetime card / hold-peek recedes the document behind a frosted gaussian blur, or falls back to the crisp no-blur path (a defocus of a two-value document smears every edge into a forbidden grey). | Wagtail (`Flat`) |
+| `elevation` | `Flat` \| `Bordered` | Whether a summoned card's elevation reads as a flat `base_300` fill (`surface_selected`, `prepare_panel_card_elevation`, the menu-bar open-title highlight, the picker's selected-row band) or a crisp raised white BORDER, because the surface ramp has collapsed (`base_200 == base_300`). | Wagtail (`Bordered`) |
+| `decorative_wash` | `Enabled` \| `Off` | The floating-panel drop shadow (`float_shadow_srgba`) and the writing-nit underline (`nit_underline_srgba`) — both a translucent low-alpha wash, forbidden on a world with no intermediate grey. | Wagtail (`Off`) |
+| `image_reveal` | `Translucent` \| `Opaque` | The inline-image reveal caption scrim (`image_reveal_scrim`) — translucent veil vs. full opaque occlusion. | Wagtail (`Opaque`) |
+| `highlight_texture` | `Wash` \| `Stipple { color, density }` | THE ONE emphasis texture `==highlight==` spans and search matches share (`highlight_wash`, `wagtail_dither_density`) — a hue-derived translucent wash vs. a fixed-color Bayer-ordered dither stipple at `density`. | Wagtail (`Stipple { white, 0.25 }`) |
+
+`RenderCaps::DEFAULT` is what FOURTEEN of the fifteen worlds carry — every
+field at its ordinary value, byte-identical to the pre-refactor render paths.
+Wagtail (`theme/worlds.rs::WAGTAIL`) is simply DATA that sets every field
+away from its default — the mechanism-by-mechanism reasoning in the sections
+above is unchanged; only WHERE that reasoning lives moved, from a scattered
+`is_one_bit()` read at each render call site to one theme-owned struct
+literal. Fields are plain enums/numbers (TOML-ready shapes, no closures, no
+trait objects) — a future on-disk user-theme format could express them
+directly — but this round ships NO parser and NO on-disk format; that stays
+deliberately banked (see `ROADMAP.md`'s "theme capabilities as data" entry).
+
+`Theme::is_one_bit()` itself still exists, unchanged, as a pure derivation
+helper (`base_100`/`base_content`/`primary` are each exactly pure black or
+white) — it is what PINS Wagtail's identity for the monochrome/1-bit law
+tests above (`wagtail_alone_is_one_bit`, `every_one_bit_world_renders_only_
+pure_black_or_white`, …), which this refactor does not touch. What changed is
+that `src/render/**`'s RUNTIME code (the renderer itself) no longer reads it,
+or any per-world name string, at all — enforced structurally by
+`render::tests::theme_caps_law::render_never_reads_is_one_bit_or_hardcodes_a_
+world_name`, a grep-law test (mirroring `println_audit.rs`'s scanner) that
+walks every non-test `.rs` file under `src/render/` and fails if either
+pattern reappears. A future theme wanting inverse-video selection, or a
+bordered card, or the dither stipple, sets the matching `render_caps` field —
+it can never again need a bespoke branch in the renderer.
+
 ### Per-script font resolution (i18n round — `FontId`; Chinese round — the zh-Hans/ko floors)
 
 `Theme::cjk` (Japanese, mincho/gothic split) generalizes to `theme::FontId`

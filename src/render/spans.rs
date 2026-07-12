@@ -1064,8 +1064,8 @@ pub(super) fn wash_rgba_bytes(kind: crate::syntax::SynKind) -> [u8; 4] {
 /// exactly like search matches do on a one-bit world (see
 /// `wagtail_dither_density`'s doc for the "one texture, two consumers" wiring).
 pub(super) fn highlight_wash(th: &theme::Theme) -> theme::Srgb {
-    if th.is_one_bit() {
-        return theme::Srgb::rgba(0xFF, 0xFF, 0xFF, 0xFF);
+    if let theme::HighlightTexture::Stipple { color, .. } = th.render_caps.highlight_texture {
+        return theme::Srgb::rgba(color.r, color.g, color.b, 0xFF);
     }
     let (s, l, alpha) = if th.dark {
         (HIGHLIGHT_S_DARK, HIGHLIGHT_L_DARK, HIGHLIGHT_ALPHA_DARK)
@@ -1097,10 +1097,9 @@ pub(super) fn highlight_wash_rgba_bytes() -> [u8; 4] {
 /// function + density: the razor is ONE texture for ONE meaning ("something
 /// here is marked"), not a per-consumer ladder.
 pub(super) fn wagtail_dither_density() -> f32 {
-    if theme::active().is_one_bit() {
-        dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY
-    } else {
-        0.0
+    match theme::active().render_caps.highlight_texture {
+        theme::HighlightTexture::Stipple { density, .. } => density,
+        theme::HighlightTexture::Wash => 0.0,
     }
 }
 
@@ -1113,10 +1112,11 @@ pub(super) fn wagtail_dither_density() -> f32 {
 /// on `match_pipeline`) rather than the old solid-white/punch-outline
 /// mechanism document selection used to share with it.
 pub(super) fn search_match_rgba_bytes() -> [u8; 4] {
-    if theme::active().is_one_bit() {
-        theme::Srgb::rgba(0xFF, 0xFF, 0xFF, 0xFF).rgba_bytes()
-    } else {
-        theme::selection().rgba_bytes()
+    match theme::active().render_caps.highlight_texture {
+        theme::HighlightTexture::Stipple { color, .. } => {
+            theme::Srgb::rgba(color.r, color.g, color.b, 0xFF).rgba_bytes()
+        }
+        theme::HighlightTexture::Wash => theme::selection().rgba_bytes(),
     }
 }
 

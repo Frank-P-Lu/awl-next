@@ -8,7 +8,10 @@ use super::cjk::{
     CJK_ZH_HANS_KLEE, CJK_ZH_HANS_SANS, CJK_ZH_HANS_SERIF, CJK_ZH_HANT,
 };
 use super::color::Srgb;
-use super::model::{Background, RoleOverrides, Theme, ThemeTags, WashOverride};
+use super::model::{
+    Backdrop, Background, CaretBlockStyle, DecorativeWash, Elevation, HighlightTexture,
+    ImageReveal, RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags, WashOverride,
+};
 use super::ornament::{
     Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, ORNAMENT_GARAMOND,
     ORNAMENT_JUNICODE, ORNAMENT_MARKS, ORNAMENT_SCALE_FLEURON, ORNAMENT_SCALE_GEOMETRIC,
@@ -57,6 +60,7 @@ pub const GUMTREE: Theme = Theme {
     // Curated: shows under Day / Literary / Cool; opts OUT of Register (crowded → Bilby/Saltpan/Undertow keep Refined).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Cool") },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Potoroo — dark den-warm nocturne (raw-sienna caret in a burnt-orange room).
@@ -103,6 +107,7 @@ pub const POTOROO: Theme = Theme {
     // Curated: a headliner on ALL four — Dusk / Humble / Technical / Warm are each its clearest exemplar.
     tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: Some("Technical"), temperature: Some("Warm") },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Bilby — light desert dawn (deep pyrite-gold caret on a pale-blue page).
@@ -144,6 +149,7 @@ pub const BILBY: Theme = Theme {
     // Curated: shows under Day / Refined; opts OUT of Voice (Literary crowded) + Temperature (Cool crowded).
     tags: ThemeTags { time: Some("Day"), register: Some("Refined"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Saltpan — light sun-bleached salt flat (cinnamon-clay caret on warm ecru).
@@ -194,6 +200,7 @@ pub const SALTPAN: Theme = Theme {
     // Curated: shows under Dawn / Refined; opts OUT of Voice (Literary crowded) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dawn"), register: Some("Refined"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Quokka — light cheerful reef (teal caret cooling a warm peach page).
@@ -235,6 +242,7 @@ pub const QUOKKA: Theme = Theme {
     // Curated: a headliner on ALL four — Dawn / Everyday / Modern / Warm each read clearly on the friendly peach sans.
     tags: ThemeTags { time: Some("Dawn"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Warm") },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Undertow — dark deep midnight current (hot indian-lake caret in violet dark).
@@ -290,6 +298,7 @@ pub const UNDERTOW: Theme = Theme {
     // Curated: shows under Night / Refined / Literary (the classical serif's home); opts OUT of Temperature (Cool crowded).
     tags: ThemeTags { time: Some("Night"), register: Some("Refined"), voice: Some("Literary"), temperature: None },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Outback — dark red-centre night (hays-russet caret in blackish-olive room).
@@ -340,6 +349,7 @@ pub const OUTBACK: Theme = Theme {
     // Curated: headlines Everyday alone (Night/Literary/Cool are each crowded); still reachable via All.
     tags: ThemeTags { time: None, register: Some("Everyday"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Tawny — a quiet warm-grey nocturne with a tawny-gold caret; awl's original
@@ -384,6 +394,7 @@ pub const TAWNY: Theme = Theme {
     // Curated: shows under Humble / Neutral (its plainest traits); opts OUT of Time (Night crowded) + Voice (Technical crowded).
     tags: ThemeTags { time: None, register: Some("Humble"), voice: None, temperature: Some("Neutral") },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Mopoke — Tawny warmed a notch: the cool near-black neutrals nudged to a warm
@@ -430,6 +441,7 @@ pub const MOPOKE: Theme = Theme {
     // Curated: shows under Dusk / Humble (its cosy utilitarian core); opts OUT of Voice (Modern crowded) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Kingfisher — a deep midnight-navy dark world: a cool, still room of blue-black
@@ -474,6 +486,7 @@ pub const KINGFISHER: Theme = Theme {
     // Curated: a headliner on ALL four — the crisp midnight dive reads clearly Night / Everyday / Modern / Cool.
     tags: ThemeTags { time: Some("Night"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Cool") },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Currawong — a near-pure-black OLED world: the deepest base awl ships, planes
@@ -517,6 +530,7 @@ pub const CURRAWONG: Theme = Theme {
     // Curated: shows under Night (the darkest, most iconic) / Technical / Neutral; opts OUT of Register (Humble crowded).
     tags: ThemeTags { time: Some("Night"), register: None, voice: Some("Technical"), temperature: Some("Neutral") },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Mangrove — dark tidal-teal coding den (one warm low-tide ember at the caret).
@@ -577,6 +591,7 @@ pub const MANGROVE: Theme = Theme {
     // Curated: shows under Technical / Cool (its rooted teal-mono character); opts OUT of Time (Night crowded) + Register (Humble crowded).
     tags: ThemeTags { time: None, register: None, voice: Some("Technical"), temperature: Some("Cool") },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Galah — light dusty galah-pink reading room (rose-garnet ember at the caret).
@@ -619,6 +634,7 @@ pub const GALAH: Theme = Theme {
     // Curated: shows under Dawn / Modern / Warm (its soft rosy dawn feel); opts OUT of Register (Everyday crowded).
     tags: ThemeTags { time: Some("Dawn"), register: None, voice: Some("Modern"), temperature: Some("Warm") },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Magpie — light stark high-contrast page (terracotta spark at the caret).
@@ -664,6 +680,7 @@ pub const MAGPIE: Theme = Theme {
     // Curated: shows under Day / Literary / Neutral (sharp black-on-white slab); opts OUT of Register (Everyday crowded).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Neutral") },
     role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
 };
 
 /// Wagtail — the FIFTEENTH world, and awl's first true MONOCHROME one — REWORKED
@@ -903,6 +920,25 @@ pub const WAGTAIL: Theme = Theme {
         str_fg: Some(Srgb::rgb(0xFF, 0xFF, 0xFF)),
         comment_wash: WashOverride::Off,
         str_wash: WashOverride::Off,
+    },
+    // THEME CAPABILITIES AS DATA: Wagtail is the escape hatch's real use —
+    // every field deviates from `RenderCaps::DEFAULT`, DATA-encoding exactly
+    // the render decisions this world's doc comment above walks through
+    // mechanism-by-mechanism (selection/caret true inverse video, no
+    // frosted blur, bordered elevation, decorative washes off, an opaque
+    // image-reveal scrim, and the one dithered stipple texture shared by
+    // `==highlight==` spans + search matches).
+    render_caps: RenderCaps {
+        selection_style: SelectionStyle::InverseVideo,
+        caret_block_style: CaretBlockStyle::InverseVideo,
+        backdrop: Backdrop::Flat,
+        elevation: Elevation::Bordered,
+        decorative_wash: DecorativeWash::Off,
+        image_reveal: ImageReveal::Opaque,
+        highlight_texture: HighlightTexture::Stipple {
+            color: Srgb::rgb(0xFF, 0xFF, 0xFF),
+            density: crate::render::dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY,
+        },
     },
 };
 

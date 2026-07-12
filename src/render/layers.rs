@@ -221,7 +221,8 @@ impl TextPipeline {
         // drawing. Only `prepare_caret_block`, when it runs on a one-bit
         // world, repopulates it with this frame's real rect.
         self.caret_invert.prepare(device, queue, width, height, &[]);
-        let one_bit = theme::active().is_one_bit();
+        let caret_invert_on =
+            theme::active().render_caps.caret_block_style == theme::CaretBlockStyle::InverseVideo;
         // MORPH-IN-ONE-BIT FALLS BACK TO THE INVERTED BLOCK (documented
         // call — see CLAUDE.md's "1-bit Wagtail caret" round /
         // `caret_invert`'s field doc): the glyph-silhouette look recolors
@@ -235,7 +236,7 @@ impl TextPipeline {
         // degrades to Block here. Ibeam is UNCHANGED — its thin bar sits
         // BETWEEN glyph cells, never over one, so it never collides with a
         // glyph's own ink in the first place.
-        let mode = if one_bit && crate::caret::mode() == CaretMode::Morph {
+        let mode = if caret_invert_on && crate::caret::mode() == CaretMode::Morph {
             CaretMode::Block
         } else {
             crate::caret::mode()
@@ -354,7 +355,7 @@ impl TextPipeline {
         let (cw, ch, ccorner) = self.pop_scaled(cw, ch, ccorner);
         self.caret_glyph_pipeline.clear();
 
-        if theme::active().is_one_bit() {
+        if theme::active().render_caps.caret_block_style == theme::CaretBlockStyle::InverseVideo {
             // TRUE 1-BIT WORLDS: an opaque pre-text quad here — even one
             // tinted `primary` (pure white on a one-bit world, the SAME
             // value as the text ink) — would white-out a glyph the caret
@@ -482,7 +483,7 @@ impl TextPipeline {
     /// translucent `selection_pipeline` fill, or `selection_invert`'s true
     /// inverse-video) — a plain `if`/`else` today because there are only two
     /// mechanisms, but structured so a later `Theme::selection_style` (or
-    /// similar capabilities-as-data field replacing `is_one_bit()`'s ad hoc
+    /// `Theme::render_caps.selection_style` field, the capabilities-as-data
     /// read) only ever has to change what THIS branch reads, never how the
     /// rects themselves are built. Never duplicate `rects` per-mechanism —
     /// that is exactly the "different builder per bucket" shape that would
@@ -500,7 +501,7 @@ impl TextPipeline {
         // selection or preedit.
         let mut rects = self.selection_rects();
         rects.extend(self.preedit_rects());
-        let one_bit = theme::active().is_one_bit();
+        let one_bit = theme::active().render_caps.selection_style == theme::SelectionStyle::InverseVideo;
 
         // ORDINARY WORLDS: the translucent fill, unchanged.
         //

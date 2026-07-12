@@ -26,11 +26,15 @@ the way it is; nothing below overrides it.
     another name — "attendance", not a feature. Revisit only with REAL
     stranded-user evidence (people genuinely missing releases, not a
     hypothetical), not by default.
-- **Theme capabilities as data.** Fold the remaining per-theme render behaviors
-  (selection style, wash style, backdrop, elevation, dither) into declarative
-  `Theme` fields — no theme may need its own code path. This is internal data
-  model work (no on-disk format, no migration risk) and the foundation for
-  most of what follows.
+- **Theme capabilities as data — SHIPPED.** Folded the per-theme render
+  behaviors (selection style, caret-block invert, backdrop, elevation,
+  decorative washes, the image-reveal scrim, the highlight/search-match
+  texture) into `Theme::render_caps` (`theme::model::RenderCaps`) —
+  declarative fields, no theme may need its own code path. A pure,
+  behavior-preserving refactor (byte-identical captures across all fifteen
+  worlds); internal data model work only, no on-disk format, no migration
+  risk. See `THEMES.md`'s "Render capabilities as data" section for the
+  field table and `CLAUDE.md`'s round note. The foundation for what follows.
 - **Theme experiments.** With capabilities as data: inverse-video selection on
   the mono worlds, stipple washes on the paper worlds, striped-gradient
   grounds, ruled-border cards on light worlds — tried as gallery captures
