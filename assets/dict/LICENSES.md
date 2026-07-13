@@ -10,36 +10,36 @@ carries — read from the files themselves, not assumed.
 | pair | variant | in-file license statement | maintainer / provenance | upstream |
 |------|---------|---------------------------|--------------------------|----------|
 | `en_GB.aff` / `en_GB.dic` | British | **LGPL 2.1** — the `.aff` header states "Built from scratch for MySpell. Released under LGPL." with a full LGPL 2.1 notice (Copyright (C) 2000 Björn Jacke, subsequent work by David Bartlett, Andrew Brown, and Marco A.G.Pinto) | Marco A.G.Pinto (current maintainer) | github.com/marcoagpinto/aoo-mozilla-en-dict |
-| `en_US.aff` / `en_US.dic` | American | ⚠ **no license statement embedded** — the `.aff` carries only a dated authorship comment ("2024-01-29 (Marco A.G.Pinto) — Fix: apostrophe handling…"), no copyright/license block | Marco A.G.Pinto, same maintainer as `en_GB` | not independently confirmed in-tree — see flag below |
-| `en_AU.aff` / `en_AU.dic` | Australian | ⚠ **no license statement embedded** — same dated authorship comment as `en_US`, byte-identical `.aff` rule set | Marco A.G.Pinto, same maintainer as `en_GB` | not independently confirmed in-tree — see flag below |
+| `en_US.aff` / `en_US.dic` | American | **SCOWL permissive grant + Ispell BSD license** — `README_en_AU.txt` expressly covers en_US and en_AU, grants use/copy/modify/distribute/sell for the generated word lists, and reproduces the BSD terms covering the affix-file basis | Kevin Atkinson / SCOWL; 2024 apostrophe-handling change by Marco A.G.Pinto is clearly marked in the `.aff` header | `.aff`: LibreOffice `dictionaries` at `da8a7e73fd26a134ad7c6438fa7c310730906b3a`; `.dic`: Chromium `deps/hunspell_dictionaries` at `b5fc8001934aeb7ed8d1303888f42ed995b9c32a` |
+| `en_AU.aff` / `en_AU.dic` | Australian | **SCOWL permissive grant + Ispell BSD license** — the bundled `README_en_AU.txt` is this variant's upstream license/provenance file and also names the Australian VarCon grant by Benjamin Titze | Kevin Atkinson / SCOWL; Australian variant work by Benjamin Titze; 2024 apostrophe-handling change by Marco A.G.Pinto is clearly marked in the `.aff` header | `.aff`: LibreOffice `dictionaries` at `da8a7e73fd26a134ad7c6438fa7c310730906b3a`; `.dic`: Chromium `deps/hunspell_dictionaries` at `b5fc8001934aeb7ed8d1303888f42ed995b9c32a` |
 
-## ⚠ the honest gap (flag, not a guess)
+## en_US / en_AU provenance verification
 
-`en_US.aff` and `en_AU.aff` embed **no explicit copyright or license line** —
-unlike `en_GB.aff`, which carries a complete LGPL 2.1 notice naming its
-authors. All three files share the same maintainer attribution style ("Marco
-A.G.Pinto") and the identical dated fix comment, and Marco A.G.Pinto's public
-dictionary projects (the `en_GB` pair confirmed above, plus the sibling
-`extra-firefox-dictionaries`/`hunspell-en` family he maintains) are
-consistently released under LGPL/MPL-family terms — but **that inference is
-not the same as an in-file grant**, and this file does not assert one on the
-`en_US`/`en_AU` pair's behalf.
+The license is not embedded in each `.aff` / `.dic`; it travels in the bundled
+upstream `README_en_AU.txt`. Despite the filename, that README expressly lists
+and covers **both** the official en_US and en_AU Hunspell dictionaries. It says
+the dictionaries are generated from SCOWL, includes Kevin Atkinson's
+permission to use, copy, modify, distribute, and sell the word lists and their
+generated output, names Benjamin Titze's equivalent grant for the Australian
+variant data, and reproduces Geoff Kuenning's BSD terms for the Ispell-derived
+affix file.
 
-**Recorded, not resolved:** if a fully authoritative license text for the
-bundled `en_US`/`en_AU` `.aff`/`.dic` pair turns up (a versioned upstream
-release, a `LICENSE` file in the maintainer's own dictionary repo covering
-these exact variants, or a direct confirmation from the maintainer), replace
-this paragraph with the same complete citation `en_GB` already has. Until
-then: treat `en_US`/`en_AU` as **license-unconfirmed bundled data**, not as
-silently-assumed-LGPL — this file exists so that gap is visible rather than
-buried.
+Verified byte-for-byte against versioned upstream files: both bundled `.aff`
+files match LibreOffice `dictionaries` commit
+`da8a7e73fd26a134ad7c6438fa7c310730906b3a` (including Marco A.G.Pinto's
+clearly marked 2024 apostrophe-handling change), and both bundled `.dic` files
+match Chromium `deps/hunspell_dictionaries` commit
+`b5fc8001934aeb7ed8d1303888f42ed995b9c32a`. LibreOffice carries a per-variant
+README with the same SCOWL/Ispell grants reproduced in this directory's
+`README_en_AU.txt`; Chromium carries that same README beside the pinned data.
+No unstated license inference is needed.
 
 ## why this matters for GPL compatibility
 
 None of the three pairs are linked or compiled — they are plain-text data
 files read at runtime (via `include_str!`) by awl's own GPL-3.0 spell-checker
 code (`spell.rs`, using the independent `spellbook` crate to parse them).
-LGPL 2.1 (`en_GB`) is compatible with GPL-3.0 distribution as a bundled data
-asset. The unconfirmed `en_US`/`en_AU` pair's status is exactly the open
-question this file flags — it is data, not linked code, so the practical risk
-is low, but it remains genuinely open rather than asserted closed.
+LGPL 2.1 (`en_GB`) and the permissive SCOWL/Ispell terms (`en_US`, `en_AU`) are
+compatible with GPL-3.0 distribution as bundled data assets. The relevant
+copyright notices, permission grants, conditions, and disclaimers are retained
+verbatim in `README_en_GB.txt` and `README_en_AU.txt`.
