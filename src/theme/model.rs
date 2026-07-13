@@ -360,9 +360,10 @@ pub enum Background {
     Stripes { from: Srgb, to: Srgb, band: Srgb, angle: f32 },
     /// THE LAVA-LAMP GROUND — awl's first TIME-VARYING background (the mirror of
     /// Wagtail: the one world whose one warm thing is the GROUND itself). A slow
-    /// 2D metaball field ("lava lamp" register) painted MARGINS-ONLY — masked out
-    /// of the writing column entirely, so the page stays the clean flat figure and
-    /// the two thin lamps flank it (see `crate::lava` for the field + mask math and
+    /// ONE viewport-space 2D metaball field ("lava lamp" register) behind the
+    /// page, masked out of the writing column so the page stays the clean flat
+    /// figure. Page width changes only what the page occludes; the field's layout
+    /// never changes (see `crate::lava` for the field + mask math and
     /// `shaders/lava.wgsl` for the shader). `ground` is the margin floor (the
     /// world's own `base_100`); `blob_lo`/`blob_hi` are the metaball's dim edge and
     /// bright core tones (value steps up the world's ladder, hue-rotated ≥40° clear

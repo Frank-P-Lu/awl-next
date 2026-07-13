@@ -1,8 +1,9 @@
 // LAVA-LAMP GROUND shader — awl's first TIME-VARYING background. A 2D metaball
-// field ("lava lamp" register) painted MARGINS-ONLY behind the centered page
-// column, drawn as ONE fullscreen triangle right AFTER the margin-gradient
-// background pass and BEFORE every foreground layer (washes / selection / caret
-// / text) — so it reads as a genuine GROUND the document floats on.
+// field ("lava lamp" register) authored as ONE viewport-space backdrop behind
+// the centered page column, drawn as ONE fullscreen triangle right AFTER the
+// margin-gradient background pass and BEFORE every foreground layer (washes /
+// selection / caret / text) — so it reads as a genuine GROUND the document
+// floats on.
 //
 // See `src/lava.rs` for the host wiring (the `Background::Lava` theme variant,
 // the `LavaPipeline`, the slow ~10 fps ambient-tick cadence, and the pure-Rust
@@ -15,9 +16,10 @@
 // uniform (never a clock read in the shader), so a headless capture at the fixed
 // t=0 phase is byte-deterministic.
 //
-// MARGINS-ONLY (always): the field is masked OUT of the writing column entirely
-// via the live column bounds in `g.margin` (fed by `TextPipeline::column_left`/
-// `column_width`, the ONE geometry owner — never a parallel computation here).
+// ONE FIELD, MARGINS-ONLY VISIBILITY: the immutable viewport field is masked OUT
+// of the writing column entirely via the live column bounds in `g.margin` (fed
+// by `TextPipeline::column_left`/`column_width`, the ONE geometry owner — never
+// a parallel computation here).
 // Inside the column the fragment is fully TRANSPARENT (alpha 0), so the flat
 // base_100 page clear shows through — except the `Glow` treatment's faint
 // sub-threshold tail bleeding a short way under the edge.
@@ -88,8 +90,8 @@ fn blob_center(i: u32, base: vec4<f32>) -> vec2<f32> {
     // Per-blob vertical amplitude (fraction of UV height) + a gentle horizontal
     // sway an octave slower, both offset by the index so the field necks + splits
     // as neighbours drift past each other. Horizontal amplitude follows the
-    // host-resolved radius: a small lamp in a tight margin sways less than a large
-    // one in a generous margin. MUST match `lava::animated_center`.
+    // authored viewport-relative radius, never a margin measurement. MUST match
+    // `lava::animated_center`.
     let amp_y = 0.055 + 0.020 * fract(fi * 0.37);
     let aspect = g.viewport.y / max(g.viewport.x, 1.0);
     let amp_x = base.z * aspect * (0.18 + 0.08 * fract(fi * 0.61));

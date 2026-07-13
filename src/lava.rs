@@ -1,7 +1,9 @@
 //! src/lava.rs — the LAVA-LAMP GROUND machinery: awl's first TIME-VARYING
-//! background. A 2D metaball field ("lava lamp" register) painted MARGINS-ONLY
-//! behind the centered page column — the mirror of Wagtail (the one world whose
-//! one warm thing is the GROUND itself). This module owns:
+//! background. ONE continuous viewport-space metaball field ("lava lamp"
+//! register) sits behind the centered page; the page mask merely reveals it in
+//! the margins. Page-width changes never resize or recompose the lamp — the
+//! mirror of Wagtail (the one world whose one warm thing is the GROUND itself).
+//! This module owns:
 //!
 //! * [`LavaPipeline`] — the wgpu pipeline (`shaders/lava.wgsl`), a single
 //!   fullscreen triangle drawn AFTER the margin-gradient background pass and
@@ -46,7 +48,7 @@ pub const LAVA_SPEED: f32 = 0.03;
 
 /// The FROZEN phase: what the lamp settles to under Reduce Motion, and the fixed
 /// phase a headless capture always renders (t=0, deterministic). The base blob
-/// layout ([`MARGIN_BLOBS`]) is authored so this phase reads as a settled mid
+/// layout ([`BACKDROP_BLOBS`]) is authored so this phase reads as a settled mid
 /// composition, so the one frozen frame serves BOTH the accessibility freeze
 /// and the capture — matching the caret-demo `settle()` precedent (`render.rs`).
 pub const LAVA_FROZEN_PHASE: f32 = 0.0;
@@ -56,49 +58,27 @@ pub const LAVA_FROZEN_PHASE: f32 = 0.0;
 /// modest margin. TASTE TUNABLE — flagged for live review.
 pub const MARGIN_GAP_PX: f32 = 28.0;
 
-/// Maximum blobs the shader's uniform carries (`array<vec4<f32>, 8>`); the base
-/// layout uses fewer, and `blob_count` names how many are live.
+/// Maximum blobs the shader's uniform carries (`array<vec4<f32>, 8>`); the
+/// backdrop currently uses the full budget, and `blob_count` names how many are
+/// live.
 pub const MAX_BLOBS: usize = 8;
 
-/// The canonical HALF-lamp layout, expanded symmetrically by
-/// [`margin_relative_blobs`]. Each row is `[x, cy, r, w]`: `x` is the center as
-/// a fraction of the ACTUAL side margin measured from the window edge, `cy` is
-/// viewport-height-relative, `r` is margin-width-relative, and `w` is field
-/// weight. This makes the lamp fill the space the page leaves it rather than
-/// remaining a tiny fixed-pixel ornament on a normal/wide window.
-pub const MARGIN_BLOBS: [[f32; 4]; 3] = [
-    [0.48, 0.66, 0.46, 1.2],
-    [0.56, 0.42, 0.40, 1.0],
-    [0.44, 0.20, 0.32, 0.8],
+/// ONE continuous backdrop field, authored in viewport UV and wholly independent
+/// of the page column. Each row is `[cx, cy, r, w]`: center in viewport UV,
+/// radius as a fraction of viewport height, and field weight. Several blobs sit
+/// behind the ordinary page footprint on purpose; widening/narrowing the page
+/// only occludes/reveals this same composition instead of manufacturing two
+/// separately-sized side lamps.
+pub const BACKDROP_BLOBS: [[f32; 4]; 8] = [
+    [0.08, 0.18, 0.14, 0.90],
+    [0.16, 0.50, 0.18, 1.05],
+    [0.12, 0.82, 0.16, 0.95],
+    [0.38, 0.68, 0.21, 1.10],
+    [0.58, 0.30, 0.20, 1.00],
+    [0.86, 0.18, 0.14, 0.90],
+    [0.82, 0.50, 0.18, 1.05],
+    [0.88, 0.82, 0.16, 0.95],
 ];
-
-/// Keep a very wide/short window from turning one side-margin blob into a shape
-/// taller than the lamp register. Within that safety ceiling, radius is wholly
-/// margin-relative.
-const MAX_RADIUS_HEIGHT_FRAC: f32 = 0.16;
-
-/// Resolve the canonical half-lamp against the LIVE page geometry into the six
-/// shader blobs `[cx_uv, cy_uv, radius_as_height_fraction, weight]`. Left and
-/// right use their own margin widths, so the law remains true even if future page
-/// geometry stops being exactly symmetric.
-pub fn margin_relative_blobs(viewport: (f32, f32), col_left: f32, col_right: f32) -> [[f32; 4]; 6] {
-    let (width, height) = (viewport.0.max(1.0), viewport.1.max(1.0));
-    let left_w = col_left.clamp(0.0, width);
-    let right_w = (width - col_right).clamp(0.0, width);
-    let mut out = [[0.0; 4]; 6];
-    for (i, spec) in MARGIN_BLOBS.iter().enumerate() {
-        let left_r = (spec[2] * left_w / height).min(MAX_RADIUS_HEIGHT_FRAC);
-        let right_r = (spec[2] * right_w / height).min(MAX_RADIUS_HEIGHT_FRAC);
-        out[i] = [spec[0] * left_w / width, spec[1], left_r, spec[3]];
-        out[i + MARGIN_BLOBS.len()] = [
-            (width - spec[0] * right_w) / width,
-            spec[1],
-            right_r,
-            spec[3],
-        ];
-    }
-    out
-}
 
 #[allow(dead_code)] // shader-mirror constant (see the pure-math note below).
 const TAU: f32 = std::f32::consts::TAU;
@@ -147,9 +127,8 @@ pub fn animated_center(
 ) -> (f32, f32) {
     let fi = i as f32;
     let amp_y = 0.055 + 0.020 * (fi * 0.37).fract();
-    // Horizontal sway follows the resolved blob radius instead of a fixed
-    // viewport fraction; a narrow margin's small lamp no longer wanders by the
-    // same pixels as a generous margin's large one.
+    // Horizontal sway follows the authored viewport-relative radius, so the
+    // whole backdrop scales coherently with the window, never with page width.
     let aspect = viewport.1.max(1.0) / viewport.0.max(1.0);
     let amp_x = base_r * aspect * (0.18 + 0.08 * (fi * 0.61).fract());
     let off = fi * 1.7;
@@ -441,15 +420,13 @@ impl LavaPipeline {
             }
         };
         self.active = true;
-        let resolved =
-            margin_relative_blobs((width as f32, height as f32), col_left, col_left + col_w);
         let mut blobs = [[0.0f32; 4]; MAX_BLOBS];
-        for (dst, src) in blobs.iter_mut().zip(resolved.iter()) {
+        for (dst, src) in blobs.iter_mut().zip(BACKDROP_BLOBS.iter()) {
             *dst = *src;
         }
         let globals = Globals {
             viewport: [width as f32, height as f32],
-            blob_count: resolved.len() as u32,
+            blob_count: BACKDROP_BLOBS.len() as u32,
             dither: dithered as u32,
             margin: [col_left, col_left + col_w, MARGIN_GAP_PX, edge.mask_mode()],
             anim: [phase, 0.0, 0.0, 0.0],
@@ -567,72 +544,48 @@ mod tests {
         }
     }
 
-    // --- The MARGIN-RELATIVE layout -------------------------------------------
+    // --- ONE viewport-space backdrop, page-width invariant --------------------
 
     #[test]
-    fn blobs_grow_with_the_margin_and_mirror_within_each_side() {
+    fn backdrop_layout_has_no_page_geometry_input() {
         let vp = (1200.0, 800.0);
-        let tight = margin_relative_blobs(vp, 100.0, 1100.0);
-        let roomy = margin_relative_blobs(vp, 300.0, 900.0);
-
-        for i in 0..MARGIN_BLOBS.len() {
-            let left = roomy[i];
-            let right = roomy[i + MARGIN_BLOBS.len()];
+        // BACKDROP_BLOBS has no column argument at all: page geometry can only
+        // reach `column_mask`, never the underlying centers/radii/field.
+        assert_eq!(BACKDROP_BLOBS.len(), MAX_BLOBS);
+        for b in BACKDROP_BLOBS {
+            assert!((0.0..=1.0).contains(&b[0]));
+            assert!((0.0..=1.0).contains(&b[1]));
             assert!(
-                roomy[i][2] > tight[i][2],
-                "blob {i} radius grows with its margin"
-            );
-            assert!(
-                (left[0] + right[0] - 1.0).abs() < 1e-6,
-                "blob {i} mirrors around the viewport"
-            );
-            assert!(
-                left[0] * vp.0 < 300.0,
-                "left blob {i} center stays in the left margin"
-            );
-            assert!(
-                right[0] * vp.0 > 900.0,
-                "right blob {i} center stays in the right margin"
+                b[2] * vp.1 >= 100.0,
+                "backdrop blob is substantial at 1200×800"
             );
         }
     }
 
     #[test]
-    fn each_side_uses_its_own_margin_width() {
+    fn page_width_only_occludes_or_reveals_the_same_backdrop_field() {
         let vp = (1200.0, 800.0);
-        let blobs = margin_relative_blobs(vp, 120.0, 800.0); // left=120, right=400
-        for i in 0..MARGIN_BLOBS.len() {
-            let left = blobs[i];
-            let right = blobs[i + MARGIN_BLOBS.len()];
-            assert!(
-                right[2] > left[2],
-                "right blob {i} follows the roomier right margin"
-            );
-            assert!(left[0] * vp.0 < 120.0);
-            assert!(right[0] * vp.0 > 800.0);
-        }
+        let px = (250.0, 400.0);
+        let field = metaball_field(px, vp, &BACKDROP_BLOBS, 0.0);
+        assert!(
+            field > 0.5,
+            "the immutable backdrop has visible lava at the probe: {field}"
+        );
+        assert!(column_mask(px.0, 300.0, 900.0, MARGIN_GAP_PX) > 0.0);
+        assert_eq!(column_mask(px.0, 200.0, 1000.0, MARGIN_GAP_PX), 0.0);
+        // The raw field is deliberately not recomputed from either column: the
+        // wider page hides this pixel; the narrower page reveals the SAME value.
+        assert_eq!(field, metaball_field(px, vp, &BACKDROP_BLOBS, 0.0));
     }
 
     #[test]
-    fn resolved_lamp_produces_visible_field_in_tight_and_roomy_margins() {
+    fn backdrop_continues_behind_the_page_while_the_page_stays_flat() {
         let vp = (1200.0, 800.0);
-        for (left, right) in [(40.0, 1160.0), (300.0, 900.0)] {
-            let blobs = margin_relative_blobs(vp, left, right);
-            for (i, b) in blobs.iter().enumerate() {
-                let center = animated_center(i, b[0], b[1], b[2], vp, 0.0);
-                let px = (center.0 * vp.0, center.1 * vp.1);
-                let field = metaball_field(px, vp, &blobs, 0.0);
-                let mask = column_mask(px.0, left, right, MARGIN_GAP_PX);
-                assert!(
-                    field >= 0.8,
-                    "blob {i} has a real silhouette in margin {left}: {field}"
-                );
-                assert!(
-                    mask > 0.0,
-                    "blob {i} center is visibly outside the column in margin {left}"
-                );
-            }
-        }
+        let b = BACKDROP_BLOBS[3]; // authored under the ordinary page footprint
+        let center = animated_center(3, b[0], b[1], b[2], vp, 0.0);
+        let px = (center.0 * vp.0, center.1 * vp.1);
+        assert!(metaball_field(px, vp, &BACKDROP_BLOBS, 0.0) >= b[3]);
+        assert_eq!(column_mask(px.0, 300.0, 900.0, MARGIN_GAP_PX), 0.0);
     }
 
     // --- The MARGINS-ONLY column mask ------------------------------------------

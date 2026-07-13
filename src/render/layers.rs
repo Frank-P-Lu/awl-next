@@ -135,8 +135,9 @@ impl TextPipeline {
     }
 
     /// Per-frame LAVA-LAMP GROUND ([`crate::theme::Background::Lava`]): a slow 2D
-    /// metaball field painted MARGINS-ONLY, over the flat margin ground the
-    /// background pass just laid. A total no-op (INACTIVE, draws nothing) for
+    /// viewport-space metaball field behind the page, visible MARGINS-ONLY over
+    /// the flat ground the background pass just laid. Column width changes only
+    /// the mask; they never resize/recompose the field. A total no-op for
     /// every non-lava world — so all fifteen shipped worlds stay byte-identical.
     ///
     /// The effective background honors the dev gallery knob (`crate::lava::

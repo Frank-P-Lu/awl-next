@@ -473,11 +473,13 @@ not claimed verified.
 
 ### The `Background::Lava` law (lava worlds — Firetail, Mangrove)
 
-A lava world's margin ground is awl's first TIME-VARYING background: a slow 2D
-metaball "lava lamp" (`Background::Lava { ground, blob_lo, blob_hi, edge,
-dithered }`, `src/lava.rs` + `shaders/lava.wgsl`) drifting in the page-mode
-margins. This is a **named, narrow exception** to DESIGN.md §3's "the caret is
-the only thing that breathes" (see that section's ambient-motion amendment) —
+A lava world's margin ground is awl's first TIME-VARYING background: ONE slow
+viewport-space 2D metaball "lava lamp" (`Background::Lava { ground, blob_lo,
+blob_hi, edge, dithered }`, `src/lava.rs` + `shaders/lava.wgsl`) behind the page,
+revealed only by the page-mode margins. Page-width changes alter only the
+occluding mask, never the lamp's centers or radii. This is a **named, narrow
+exception** to DESIGN.md §3's "the caret is the only thing that breathes" (see
+that section's ambient-motion amendment) —
 the SECOND deliberate §3 exception, and the exact MIRROR of the first: Wagtail
 is the world with no warm living thing; a lava world is the world whose one warm
 living thing is the GROUND itself. Because it is a genuine second moving thing,
