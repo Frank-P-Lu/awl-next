@@ -24,7 +24,7 @@
 
 const WORLD_NAMES: &[&str] = &[
     "Tawny", "Mopoke", "Currawong", "Potoroo", "Outback", "Undertow", "Kingfisher", "Gumtree",
-    "Bilby", "Saltpan", "Quokka", "Mangrove", "Galah", "Magpie", "Wagtail",
+    "Bilby", "Saltpan", "Quokka", "Mangrove", "Galah", "Magpie", "Wagtail", "Firetail",
 ];
 
 /// True iff `line` (already known to be OUTSIDE a skipped cfg(test) block)

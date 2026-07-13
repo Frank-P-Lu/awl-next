@@ -468,7 +468,12 @@ fn page_json(pipeline: &TextPipeline) -> String {
         class,
         col_left,
         col_w,
-        background_json(crate::theme::background()),
+        // The EFFECTIVE background actually drawn (honors the dev `AWL_LAVA` gallery
+        // knob), plus the effective lava PHASE — for a lava ground the block reports
+        // `kind`/`ground`/`blob_lo`/`blob_hi`/`edge`/`dithered`/`phase`. Every one
+        // of the fifteen non-lava worlds reports exactly as before (byte-identical
+        // content; `phase` appears only on the lava arm).
+        background_json(pipeline.effective_background(), pipeline.lava_render_phase()),
     )
 }
 
@@ -968,7 +973,7 @@ fn caret_block(caret: Option<&CaretFrame>) -> (String, String) {
 /// tagged shape mirrors the enum: every object carries `kind` + exactly the
 /// colors/params that ground uses (so a reviewer reads back precisely what the
 /// theme declared). Hex colors via [`json_string`], floats inline.
-fn background_json(bg: crate::theme::Background) -> String {
+fn background_json(bg: crate::theme::Background, lava_phase: f32) -> String {
     use crate::theme::Background;
     let hex = |c: crate::theme::Srgb| json_string(&c.hex());
     match bg {
@@ -991,6 +996,16 @@ fn background_json(bg: crate::theme::Background) -> String {
         Background::Stripes { from, to, band, angle } => format!(
             "{{ \"kind\": \"stripes\", \"from\": {}, \"to\": {}, \"band\": {}, \"angle\": {} }}",
             hex(from), hex(to), hex(band), angle
+        ),
+        // THE LAVA-LAMP GROUND: the metaball ground's DATA (ground/blob tones +
+        // edge treatment + dither) plus the effective render `phase` (a FIXED
+        // t=0 in every headless capture — the determinism law). NO shipped world
+        // emits this arm today (all fifteen are the five static grounds), so a
+        // default capture never reaches it; it appears only under the dev
+        // `AWL_LAVA` gallery knob or a future authored lava world.
+        Background::Lava { ground, blob_lo, blob_hi, edge, dithered } => format!(
+            "{{ \"kind\": \"lava\", \"ground\": {}, \"blob_lo\": {}, \"blob_hi\": {}, \"edge\": \"{}\", \"dithered\": {}, \"phase\": {} }}",
+            hex(ground), hex(blob_lo), hex(blob_hi), edge.as_str(), dithered, lava_phase
         ),
     }
 }

@@ -61,6 +61,9 @@ mod keymap;
 mod keymap_defaults;
 mod keyspec;
 mod keytoken;
+// THE LAVA-LAMP GROUND — awl's first time-varying background (metaballs, painted
+// margins-only behind the page column). Machinery only: no world ships it yet.
+mod lava;
 mod lifetime;
 mod mac_chrome;
 mod markdown;

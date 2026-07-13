@@ -14,7 +14,29 @@ impl App {
     /// (native only) the session restore state on the same blur trigger. Also
     /// resets the OS pointer to Visible so a focus change never leaves it hidden
     /// behind another app.
+    /// `WindowEvent::Focused(true)`: the window regained focus. RESUME the ambient
+    /// lava tick (`crate::lava`): mark focused + clear the tick stamp so
+    /// `about_to_wait` re-arms it FRESH (avoiding one huge `dt` catch-up bob from
+    /// the blurred gap), and request a redraw so the lamp repaints and the tick
+    /// re-arms this turn. Inert for a non-lava world (nothing to resume — the tick
+    /// gate stays false), so no extra frame is scheduled there.
+    pub(super) fn on_focus_gained(&mut self) {
+        self.focused = true;
+        self.lava_tick_at = None;
+        if crate::theme::background().is_lava() {
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window.request_redraw();
+            }
+        }
+    }
+
     pub(super) fn on_focus_lost(&mut self) {
+        // AMBIENT LAVA TICK: the window lost focus — PAUSE the lava drift (hold the
+        // current phase, stop scheduling frames) so a backgrounded window costs 0%
+        // CPU. `about_to_wait`'s gate reads `self.focused`; clearing the stamp means
+        // a later regain re-arms fresh rather than firing a huge catch-up dt.
+        self.focused = false;
+        self.lava_tick_at = None;
         // ROBUST AUTOSAVE: the window lost focus (the user switched away);
         // flush a pending note write now so a note is never left unsaved
         // behind another app — and flush the document autosave / scratch

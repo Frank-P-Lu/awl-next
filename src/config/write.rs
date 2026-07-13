@@ -177,6 +177,10 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                accessibility preference where one is reachable — macOS, the
 #                web build — else off). Set true/false to override auto either
 #                way; also toggleable from Settings -> Editor -> Reduce motion.
+#   ambient_motion : the slow drift of a time-varying background (the lava-lamp
+#                ground) — default on. OFF freezes any animated ground to its
+#                settled frame (it still draws, just static). Independent of
+#                reduce_motion (which also freezes it, as an accessibility rule).
 #   keymap     : \"native\" (default) or \"emacs\" — see the keymap section above;
 #                also toggleable from Settings -> Keybindings -> Keymap.
 # theme = \"Tawny\"
@@ -200,6 +204,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # menu_bar = true
 # typewriter_scroll = false
 # stats = true
+# ambient_motion = true
 # keymap = \"native\"
 
 [keys]

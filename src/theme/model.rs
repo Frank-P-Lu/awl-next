@@ -358,6 +358,61 @@ pub enum Background {
     /// that DISSOLVES outward into the gradient. The band uses the theme-supplied
     /// MUTED `band` tint (NOT the accent — amber stays the caret's, DESIGN §3).
     Stripes { from: Srgb, to: Srgb, band: Srgb, angle: f32 },
+    /// THE LAVA-LAMP GROUND — awl's first TIME-VARYING background (the mirror of
+    /// Wagtail: the one world whose one warm thing is the GROUND itself). A slow
+    /// 2D metaball field ("lava lamp" register) painted MARGINS-ONLY — masked out
+    /// of the writing column entirely, so the page stays the clean flat figure and
+    /// the two thin lamps flank it (see `crate::lava` for the field + mask math and
+    /// `shaders/lava.wgsl` for the shader). `ground` is the margin floor (the
+    /// world's own `base_100`); `blob_lo`/`blob_hi` are the metaball's dim edge and
+    /// bright core tones (value steps up the world's ladder, hue-rotated ≥40° clear
+    /// of the caret's amber `primary`, DESIGN §3's one-accent law). `edge` is the
+    /// column-boundary treatment ([`LavaEdge`]); `dithered` selects the coarse
+    /// ordered (Bayer) print-grain stipple. The ANIMATION cadence (slow ~10 fps
+    /// tick, pause on blur, `ambient_motion`-gated, Reduce-Motion/capture frozen)
+    /// lives on the live App + `crate::lava`, NOT in this data. NO world ships this
+    /// yet — this is the machinery only; a lava world is a later authored-DATA step.
+    Lava {
+        ground: Srgb,
+        blob_lo: Srgb,
+        blob_hi: Srgb,
+        edge: LavaEdge,
+        dithered: bool,
+    },
+}
+
+/// The [`Background::Lava`] margin-boundary treatment — how the metaball field
+/// meets the writing column's edge. Both read the SAME live column bounds
+/// (`TextPipeline::column_left`/`column_width`, the one geometry owner); only the
+/// fragment-shader mask math differs (see `shaders/lava.wgsl`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LavaEdge {
+    /// The field fades fully BEFORE the column edge — a clean flat page, lava
+    /// strictly marginal.
+    Hard,
+    /// The hard fade, PLUS a faint sub-threshold glow bleeding a short way UNDER
+    /// the column edge (lamp-light spilling onto a desk, capped well below
+    /// text-contrast relevance). The probe's agent pick.
+    Glow,
+}
+
+impl LavaEdge {
+    /// The shader mask-mode selector (`g.margin.w` in `shaders/lava.wgsl`):
+    /// `1.0` = hard, `2.0` = edge-glow. Kept as a method so the shader contract
+    /// has one owner rather than a magic literal at the upload site.
+    pub fn mask_mode(self) -> f32 {
+        match self {
+            LavaEdge::Hard => 1.0,
+            LavaEdge::Glow => 2.0,
+        }
+    }
+    /// Lowercase name for the capture sidecar.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LavaEdge::Hard => "hard",
+            LavaEdge::Glow => "glow",
+        }
+    }
 }
 
 impl Background {
@@ -371,6 +426,13 @@ impl Background {
             Background::Starfield { .. } => 2,
             Background::Pinstripe { .. } => 3,
             Background::Stripes { .. } => 4,
+            // LAVA rides its OWN pipeline (`shaders/lava.wgsl`), drawn AFTER this
+            // margin-ground shader. Here it degrades to shader 0 (a plain FLAT
+            // gradient of the lava `ground`, `from == to`, no marks) so the margin
+            // floor is painted even before the lava overlay draws — the lava layer
+            // then overdraws the margins opaquely. See `crate::background`'s
+            // `background_desc` (which reads these accessors) + `crate::lava`.
+            Background::Lava { .. } => 0,
         }
     }
     /// Lowercase variant name for the capture sidecar.
@@ -381,9 +443,11 @@ impl Background {
             Background::Starfield { .. } => "starfield",
             Background::Pinstripe { .. } => "pinstripe",
             Background::Stripes { .. } => "stripes",
+            Background::Lava { .. } => "lava",
         }
     }
-    /// Gradient START endpoint.
+    /// Gradient START endpoint. For [`Background::Lava`] this is the margin
+    /// `ground` (so the flat-gradient shader-0 degrade paints the lava floor).
     pub fn from(&self) -> Srgb {
         match self {
             Background::Gradient { from, .. }
@@ -391,9 +455,12 @@ impl Background {
             | Background::Starfield { from, .. }
             | Background::Pinstripe { from, .. }
             | Background::Stripes { from, .. } => *from,
+            Background::Lava { ground, .. } => *ground,
         }
     }
-    /// Gradient END endpoint.
+    /// Gradient END endpoint. For [`Background::Lava`] this equals [`Self::from`]
+    /// (`ground`) so the degrade is a FLAT fill (the lava overlay carries all the
+    /// motion; the base ground never gradients).
     pub fn to(&self) -> Srgb {
         match self {
             Background::Gradient { to, .. }
@@ -401,10 +468,12 @@ impl Background {
             | Background::Starfield { to, .. }
             | Background::Pinstripe { to, .. }
             | Background::Stripes { to, .. } => *to,
+            Background::Lava { ground, .. } => *ground,
         }
     }
     /// Gradient DIRECTION (a roughly unit UV vector). For [`Background::Stripes`]
-    /// it is DERIVED from `angle` so the gradient runs ALONG the stripe angle.
+    /// it is DERIVED from `angle` so the gradient runs ALONG the stripe angle. For
+    /// [`Background::Lava`] the base fill is flat, so `dir` is an inert placeholder.
     pub fn dir(&self) -> (f32, f32) {
         match self {
             Background::Gradient { dir, .. }
@@ -412,11 +481,14 @@ impl Background {
             | Background::Starfield { dir, .. }
             | Background::Pinstripe { dir, .. } => *dir,
             Background::Stripes { angle, .. } => (angle.cos(), angle.sin()),
+            Background::Lava { .. } => (0.0, 1.0),
         }
     }
     /// The marks/band tint: the dot / star / pinstripe tint, or the stripe band.
     /// A plain [`Background::Gradient`] has NO marks; it returns its `from`
-    /// endpoint as an inert placeholder (shader id 0 draws no marks).
+    /// endpoint as an inert placeholder (shader id 0 draws no marks). [`Background::Lava`]
+    /// likewise has no margin-ground marks (the metaballs are the lava layer's), so
+    /// it returns `ground`.
     pub fn tint(&self) -> Srgb {
         match self {
             Background::Dots { tint, .. }
@@ -424,6 +496,7 @@ impl Background {
             | Background::Pinstripe { tint, .. } => *tint,
             Background::Stripes { band, .. } => *band,
             Background::Gradient { from, .. } => *from,
+            Background::Lava { ground, .. } => *ground,
         }
     }
     /// PROXIMITY-SCALING flag — only [`Background::Dots`] honors it (`true` =>
@@ -436,6 +509,25 @@ impl Background {
         match self {
             Background::Stripes { angle, .. } => *angle,
             _ => 0.0,
+        }
+    }
+    /// True iff this world's margin ground is the animated [`Background::Lava`]
+    /// lamp — the ONE gate every "should the lava layer draw / should the ambient
+    /// tick arm / should page mode auto-enable" decision reads (never a per-world
+    /// name comparison, which the `render::tests::theme_caps_law` grep-law bans).
+    pub fn is_lava(&self) -> bool {
+        matches!(self, Background::Lava { .. })
+    }
+    /// The lava metaball's `(ground, blob_lo, blob_hi, edge, dithered)` params, or
+    /// `None` for the five static grounds — the pipeline uploads these when active
+    /// and skips the draw entirely when `None` (so every non-lava world stays
+    /// byte-identical).
+    pub fn lava_params(&self) -> Option<(Srgb, Srgb, Srgb, LavaEdge, bool)> {
+        match self {
+            Background::Lava { ground, blob_lo, blob_hi, edge, dithered } => {
+                Some((*ground, *blob_lo, *blob_hi, *edge, *dithered))
+            }
+            _ => None,
         }
     }
 }

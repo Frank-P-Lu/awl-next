@@ -251,7 +251,16 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // the Cmd-P palette adds no field of its own — a settings row appears as an
 // ordinary `overlay.items` entry (its `"§ "`-prefixed display text), and its
 // current value rides the EXISTING `overlay.bindings` column.
-pub const SCHEMA_VERSION: u32 = 167;
+// `/168` — THE LAVA-LAMP GROUND round (machinery only): `page.background` gains a
+// new tagged arm, `{ "kind": "lava", ground, blob_lo, blob_hi, edge, dithered,
+// phase }` — the metaball ground's DATA plus the effective render `phase` (a
+// FIXED t=0 in every headless capture, the determinism law). The block now
+// reports the EFFECTIVE background actually drawn (honoring the dev `AWL_LAVA`
+// gallery knob) rather than `theme::background()` directly; for every one of the
+// fifteen shipped worlds (no knob, no lava world) that is identical, so a default
+// capture's `page.background` CONTENT is byte-unchanged — only the schema string
+// bumps.
+pub const SCHEMA_VERSION: u32 = 168;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

@@ -38,7 +38,10 @@ swatch. Fifteen ship today (nine dark, six light; `theme::THEMES`), each with:
 - **A ground** (`Background`): the procedural margin pattern (Dots / Gradient /
   Starfield / Pinstripe / Stripes) drawn only in the page-mode margins, never the
   document column itself (`every_world_has_a_valid_background`,
-  `every_world_has_a_real_margin_gradient`).
+  `every_world_has_a_real_margin_gradient`). The sixteenth ground is **`Lava`** —
+  awl's first TIME-VARYING background, a slow metaball "lava lamp" in the margins
+  (Firetail warm, Mangrove cool) — see §3's "The `Background::Lava` law" and
+  DESIGN.md §3's ambient-motion amendment.
 - **A CJK fallback** matched to its character: serif worlds get the mincho list,
   sans/mono worlds get the gothic list (`cjk_fallback_matches_world_character`).
   Generalized to a per-script `FontId` ladder (ja/zh-Hans/zh-Hant/ko) by the
@@ -53,6 +56,18 @@ than a swatch-grid filler. See §3's "The monochrome law" and §4's "RoleOverrid
 first use" below. **2026-07: reworked from greyscale to true 1-bit** — "only
 black or white, no gray" (anti-aliased glyph/quad edges excepted) — see §3's
 "The 1-bit law", the stricter sibling law this round added.
+
+The sixteenth world, **Firetail**, is the OTHER kind of statement world — the
+MIRROR of Wagtail. Where Wagtail keeps NO warm thing, Firetail's one warm living
+thing is the **ground itself**: a slow umber/wine lava-lamp drifting in the page
+margins (`Background::Lava`), a named exception to `DESIGN.md` §3's "the caret is
+the only thing that breathes." Its room is Potoroo's warm den, ink ladder derived
+verbatim, so it passes every ink/role/contrast law by construction; its
+distinctness is the living ground + a flame-amber caret held clear of the wine.
+**Mangrove** folds the COOL second lava ground (a dithered deep-sea lamp),
+deepening its existing tidal-teal identity. Both are law-tested by §3's "The
+`Background::Lava` law". This reaches PHILOSOPHY.md §2's upper "sixteen" — future
+worlds displace, not just append.
 
 ---
 
@@ -456,6 +471,70 @@ actual pixel output under a REAL browser WebGL2 context (framebuffer
 correctness, backend-specific driver quirks) — flagged for live web testing,
 not claimed verified.
 
+### The `Background::Lava` law (lava worlds — Firetail, Mangrove)
+
+A lava world's margin ground is awl's first TIME-VARYING background: a slow 2D
+metaball "lava lamp" (`Background::Lava { ground, blob_lo, blob_hi, edge,
+dithered }`, `src/lava.rs` + `shaders/lava.wgsl`) drifting in the page-mode
+margins. This is a **named, narrow exception** to DESIGN.md §3's "the caret is
+the only thing that breathes" (see that section's ambient-motion amendment) —
+the SECOND deliberate §3 exception, and the exact MIRROR of the first: Wagtail
+is the world with no warm living thing; a lava world is the world whose one warm
+living thing is the GROUND itself. Because it is a genuine second moving thing,
+the exception is fenced by **measurable laws**, exactly like the monochrome and
+1-bit laws fence Wagtail's:
+
+- **Figure/ground, at the WORST animation phase (the value-band law).** The lava
+  lives ONLY in the margins — the writing column is untouched, flat `base_100`,
+  the clean figure — and the animated marks must stay inside the world's own
+  **ground value band**: the brightest pixel the metaball can ever produce
+  (`blob_hi`, since the shader only blends `ground → blob_lo → blob_hi` and
+  `mix()` is bounded by its endpoints) must not brighten past the world's own
+  brightest ground rung, `base_300`, in perceptual (Rec.709) luminance. So the
+  margins read as recessive GROUND at every phase, never as competing figure.
+  The ink (`base_content`) is proven to clear a strong contrast floor against
+  that same worst-phase pixel (redmean ≥ 150; measured ~500 on both worlds), so
+  text near the margins stays unmistakably the figure. Enforced over COMPOSITED
+  PIXELS (the pure-Rust shader mirror `crate::lava` + the world's blob colors +
+  color arithmetic), never over sidecar state — the Wagtail-invisible-picker-row
+  lesson: appearance is proven over the bytes. Test:
+  `theme::tests::lava_worlds_keep_figure_ground_at_the_worst_animation_phase`.
+- **Amber-hue-clear (the one-accent guard).** The blobs are ambient GROUND
+  motion, but the CARET's amber must remain the one accent (DESIGN §3), so any
+  blob tone with real chroma (HSL saturation > 0.15) sits ≥30° of hue from
+  `primary`. Firetail's wine blobs (~351°) clear its flame-amber caret (~36°) by
+  ~44°; Mangrove's cool-blue blobs (~204°) clear its amber (~30°) by ~175°. Test:
+  `theme::tests::lava_blob_hues_stay_clear_of_the_amber_caret` (the same guard
+  the syntax role tints already carry, one owner's worth of discipline applied to
+  the ground).
+- **The 1-bit foil (why a lava world can NEVER be Wagtail).** A `Background::Lava`
+  paints authored COLOR (wine, teal) at fractional metaball-blend coverage — the
+  exact two things a TRUE 1-bit world (`Theme::is_one_bit()`) forbids: a hue at
+  all, and any intermediate value between pure black and pure white. So a colored
+  lava is structurally ILLEGAL on Wagtail: Wagtail is the conceptual FOIL a lava
+  world is defined against, never a lava host (its ground stays the flat
+  `from == to` black `Gradient`, the one variant guaranteed to introduce no grey
+  — see "The 1-bit law" above). The two statement worlds are mutually exclusive
+  by construction, and sit as mirror bookends closing the cycle.
+
+**Cadence, freeze, determinism (the promises the motion keeps).** The lava ticks
+SLOW (~10 fps, a single `WaitUntil`, never the caret spring's hot loop), pauses
+on window blur, and is gated behind the `ambient_motion` setting (default on;
+off makes the room perfectly still). It is FROZEN to a fixed phase under Reduce
+Motion, and to `t=0` in every headless capture — so a lava world's capture stays
+byte-deterministic and the accessibility promise holds. A lava world also forces
+page mode ON (page-off = no margins = no lava). The machinery (the pipeline,
+the tick gate, the phase resolver, the sidecar `page.background` block) is the
+lava-lamp MACHINERY round; the two worlds are the assignment step on top of it.
+
+**The base ground is FLAT (the shader degrade).** `Background::Lava`'s
+`shader_id()` is 0 with `from == to == ground` — a flat fill of the margin floor,
+painted by the ordinary background pass, then OVERDRAWN opaquely by the lava
+overlay. So `every_world_has_a_real_margin_gradient` carries a declared lava
+exemption (flat is correct here, like the 1-bit exemption), and
+`ground == base_100` keeps the flat page column and the margin floor one seamless
+den.
+
 ### Render capabilities as data (`Theme::render_caps` — the 2026-07 refactor)
 
 Everything above (selection, elevation, decorative washes, backdrop, the
@@ -818,7 +897,14 @@ Checklist:
 2. Author the base planes + ink ladder (`base_100/200/300`, `base_content`,
    `muted`, `faint`) and the accents (`primary`, `primary_content`, `error`,
    `selection`).
-3. Pick a `Background` ground and tags on all four lenses.
+3. Pick a `Background` ground and tags on all four lenses. Most worlds pick a
+   STATIC ground (Dots / Gradient / Starfield / Pinstripe / Stripes). A world may
+   instead pick the animated `Background::Lava` (a statement world — the whole
+   room is the lava lamp), but then it MUST satisfy "The `Background::Lava` law"
+   (§3): `ground == base_100`, `blob_hi` inside the ground value band, blobs
+   ≥30° off the amber caret, and never on a 1-bit world. Curation note: the four
+   lenses are near-saturated — a new world may have to opt OUT of crowded sections
+   (the cap is 2–4 per section) and headline the one lens where it reads clearest.
 4. Pick a CJK fallback list matching the world's character (mincho for serif,
    gothic for sans/mono) for `cjk`; mirror the SAME serif/sans split for
    `zh_hans` (`CJK_ZH_HANS_SERIF`/`CJK_ZH_HANS_SANS` — a Klee-derived world

@@ -1806,6 +1806,20 @@ pub struct TextPipeline {
     /// PAGE MODE: the per-world margin GRADIENT drawn first (under everything).
     /// Punches a hole for the page column so the flat base_100 clear shows there.
     pub background_pipeline: BackgroundPipeline,
+    /// THE LAVA-LAMP GROUND ([`Background::Lava`]): a slow 2D metaball field
+    /// painted MARGINS-ONLY, drawn right AFTER `background_pipeline` and BEFORE the
+    /// washes/selection/text. INACTIVE (draws nothing) for every non-lava world,
+    /// so all fifteen shipped worlds stay byte-identical. The animation PHASE is
+    /// driven by the live App's slow ~10 fps tick (never `advance()`'s hot loop);
+    /// [`Self::lava_phase`] holds it. See [`crate::lava`].
+    pub lava_pipeline: crate::lava::LavaPipeline,
+    /// The lava lamp's current animation PHASE (in cycles), advanced ONLY by the
+    /// live App's slow ambient tick (`App::about_to_wait`) via [`Self::advance_lava`].
+    /// The construction default is [`crate::lava::LAVA_FROZEN_PHASE`] (0.0), and a
+    /// headless capture never ticks, so a capture always renders the fixed t=0
+    /// phase — deterministic. Reduce Motion / the dev gallery knob override it at
+    /// read time (see [`Self::lava_render_phase`]).
+    lava_phase: f32,
     /// SYNTAX WASHES: the low-alpha tinted quads drawn BEHIND prose-comment spans
     /// (all worlds) — the warm band that carries comment identity now that prose
     /// comments render at FULL ink (the tonsky inversion). A reused
@@ -2628,7 +2642,14 @@ fn srgb_u8_to_linear3(c: [u8; 4]) -> [f32; 3] {
 }
 
 fn background_desc() -> BgDesc {
-    let bg = theme::background();
+    // The EFFECTIVE margin background — the dev `AWL_LAVA` gallery knob forces a
+    // `Background::Lava` here too (not just at the lava overlay), so the margin
+    // FLOOR the lava overdraws is the flat lava `ground` (Lava's `from == to`,
+    // shader 0) rather than the host world's own stripes/dots bleeding through —
+    // i.e. the gallery renders exactly as a REAL authored lava world would. Absent
+    // the knob this is `theme::background()` verbatim, so every non-lava capture is
+    // byte-identical.
+    let bg = crate::lava::env_override().unwrap_or_else(theme::background);
     BgDesc {
         from: bg.from().rgba_bytes(),
         to: bg.to().rgba_bytes(),
@@ -2672,6 +2693,9 @@ impl TextPipeline {
         // PAGE MODE margin gradient, drawn first (under selection + text). Tinted
         // from the active world's margin tokens; re-tinted on a live theme switch.
         let background_pipeline = BackgroundPipeline::new(device, format, background_desc());
+        // THE LAVA-LAMP GROUND: its own metaball pipeline, drawn right after the
+        // margin gradient. Starts inactive (no lava world → draws nothing).
+        let lava_pipeline = crate::lava::LavaPipeline::new(device, format);
         // SYNTAX WASH quads (under selection, over the ground): the warm band
         // behind prose comments + the green band behind dark-world strings. The
         // tints come from THE role style provider (`role_style_for`, via
@@ -2906,6 +2930,8 @@ impl TextPipeline {
             caret_from_key: None,
             caret_look: crate::caret::mode(),
             background_pipeline,
+            lava_pipeline,
+            lava_phase: crate::lava::LAVA_FROZEN_PHASE,
             wash_comment_pipeline,
             wash_string_pipeline,
             wash_highlight_pipeline,
@@ -3642,6 +3668,46 @@ impl TextPipeline {
             | self.step_copy_pulse(dt)
     }
 
+    /// THE EFFECTIVE margin background this frame — the active world's own
+    /// [`theme::Background`], UNLESS the dev gallery knob (`AWL_LAVA=...`) forces a
+    /// [`Background::Lava`] over it (`crate::lava::env_override`). For every one of
+    /// the fifteen shipped worlds (no knob) this is exactly `theme::background()`,
+    /// so both the lava layer and the sidecar report precisely what's drawn.
+    pub fn effective_background(&self) -> theme::Background {
+        crate::lava::env_override().unwrap_or_else(theme::background)
+    }
+
+    /// THE EFFECTIVE lava PHASE this frame, resolving the determinism ladder in
+    /// one place ([`crate::lava::lava_phase_for`]): the dev gallery knob's fixed
+    /// phase wins outright; else Reduce Motion pins [`crate::lava::LAVA_FROZEN_PHASE`];
+    /// else the App-driven [`Self::lava_phase`] (which stays the frozen 0.0 in a
+    /// headless capture, since the capture never ticks — so a capture always
+    /// renders the fixed t=0 phase). Read by [`Self::prepare_lava_layer`] + the
+    /// capture sidecar.
+    pub fn lava_render_phase(&self) -> f32 {
+        crate::lava::lava_phase_for(
+            self.lava_phase,
+            crate::motion::reduced(),
+            crate::lava::env_phase(),
+        )
+    }
+
+    /// Advance the lava lamp's animation phase by `dt` seconds — called ONLY by
+    /// the live App's slow ambient tick (`App::about_to_wait`), NEVER `advance()`'s
+    /// hot per-frame loop (the lava's whole point is a ~10 fps sparse cadence, not
+    /// full refresh). Wraps into `[0, 1)` ([`crate::lava::advance_phase`]).
+    pub fn advance_lava(&mut self, dt: f32) {
+        self.lava_phase = crate::lava::advance_phase(self.lava_phase, dt);
+    }
+
+    /// Pin the lava lamp's phase to the FROZEN composition — the live App calls
+    /// this when the lamp must be static (Reduce Motion, or `ambient_motion` off),
+    /// so resuming from a hard-frozen state restarts from the settled frame rather
+    /// than a stale mid-bob.
+    pub fn freeze_lava(&mut self) {
+        self.lava_phase = crate::lava::LAVA_FROZEN_PHASE;
+    }
+
     /// COPY PULSE: kick the selection quad's brighten/decay AND the caret's own
     /// gentle pulse — a successful M-w/Cmd-C copy of a non-empty selection,
     /// otherwise entirely invisible. Resets [`Self::copy_pulse_t`] to 0 (full
@@ -3736,6 +3802,9 @@ impl TextPipeline {
         self.viewport.update(queue, Resolution { width, height });
 
         self.prepare_background_layer(queue, width, height);
+        // THE LAVA-LAMP GROUND: over the flat margin ground, before the washes.
+        // A no-op (draws nothing) for every non-lava world.
+        self.prepare_lava_layer(queue, width, height);
         self.prepare_wash_layer(device, queue, width, height);
         self.prepare_wysiwyg_wash_layer(device, queue, width, height);
         self.prepare_text_layer(device, queue, width, height)?;
@@ -3972,6 +4041,10 @@ impl TextPipeline {
     /// offscreen doc capture, so the captured backdrop matches the live document.
     fn draw_document_layers<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) -> anyhow::Result<()> {
         self.background_pipeline.draw(pass);
+        // THE LAVA-LAMP GROUND: over the flat margin ground, before every
+        // foreground layer. A total no-op (draws nothing) for every non-lava
+        // world — so all fifteen shipped worlds render byte-identically.
+        self.lava_pipeline.draw(pass);
         // WYSIWYG value-step panel/pill sit directly ON the ground, BEFORE the
         // syntax washes — so a fenced block's comment/string wash composites over
         // the panel exactly as it does over the bare ground, and a selection over

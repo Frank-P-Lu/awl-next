@@ -122,6 +122,14 @@ const ZOOM_PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 /// (Enter), revert (Esc/C-g), and the headless capture all stay SYNCHRONOUS.
 const THEME_FONT_DEBOUNCE: Duration = Duration::from_millis(150);
 
+/// AMBIENT LAVA TICK period — the lava-lamp ground's slow drift cadence
+/// (`crate::lava::LAVA_TICK_MS`). A single `WaitUntil` this far out in
+/// `about_to_wait` advances the phase + requests one redraw + re-arms, so a lava
+/// world costs ~10 sparse frames/sec (NEVER the caret spring's hot per-frame
+/// loop), and a non-lava world costs zero (the tick never arms). See
+/// `App::tick_lava`.
+const LAVA_TICK: Duration = Duration::from_millis(crate::lava::LAVA_TICK_MS);
+
 /// Quiet period after the last LIVE-RESIZE `Resized` tick before the macOS
 /// Core-Animation-transaction present sync (`Gpu::set_presents_with_
 /// transaction`) is flipped back OFF (debounce; macOS-only — see
@@ -619,6 +627,22 @@ pub struct App {
     /// replay applies theme fonts synchronously through the pure core + a fresh
     /// pipeline, so captures are untouched).
     theme_font_at: Option<Instant>,
+    /// AMBIENT LAVA TICK — the lava-lamp ground's slow ~10 fps drift clock
+    /// (`crate::lava`). `Some(when)` = the last tick instant, driving the single
+    /// `WaitUntil(when + LAVA_TICK)` in `about_to_wait` that advances the phase +
+    /// requests one redraw + re-arms — a SLOW sparse cadence, NEVER the caret
+    /// spring's hot per-frame loop. Armed ONLY while `lava::lava_should_tick` holds
+    /// (a lava world active, `ambient_motion` on, motion not reduced, the window
+    /// focused), so a non-lava world (every world today) schedules ZERO frames and
+    /// idles at 0% CPU. Cleared on blur / whenever the lamp goes static. `None` =
+    /// not ticking (live only — a headless capture never constructs this, so it can
+    /// never advance the phase; a capture is always the frozen t=0 phase).
+    lava_tick_at: Option<Instant>,
+    /// Whether the window currently HAS focus — tracked so the ambient lava tick
+    /// PAUSES on blur (`WindowEvent::Focused`). Starts `true` (a window is focused
+    /// on creation); only the live App reads it (the ambient-tick gate), so a
+    /// headless capture is unaffected.
+    focused: bool,
     /// LIVE-RESIZE CONTENT-STRETCH FIX (macOS only, `app/window.rs`'s
     /// `on_resized` + `arm_live_resize_sync`): when the last genuine
     /// `WindowEvent::Resized` tick landed, while the CAMetalLayer's
@@ -924,6 +948,8 @@ impl App {
             history_scroll_before: None,
             zoom_persist_at: None,
             theme_font_at: None,
+            lava_tick_at: None,
+            focused: true,
             #[cfg(target_os = "macos")]
             resize_settle_at: None,
             config,
@@ -1340,6 +1366,7 @@ impl ApplicationHandler<AwlEvent> for App {
         // the match, so the two are behaviourally identical).
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Focused(true) => self.on_focus_gained(),
             WindowEvent::Focused(false) => self.on_focus_lost(),
             WindowEvent::Resized(size) => self.on_resized(size),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -1525,6 +1552,59 @@ impl ApplicationHandler<AwlEvent> for App {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + RESIZE_SYNC_SETTLE));
                 }
                 false => {}
+            }
+        }
+        // AMBIENT LAVA TICK — the lava-lamp ground's slow ~10 fps drift, awl's
+        // FIRST time-varying background. A single `WaitUntil` cadence (NEVER the
+        // caret spring's hot per-frame `Poll` loop): when it elapses, advance the
+        // phase, request ONE redraw, and re-arm. Armed ONLY while
+        // `lava::lava_should_tick` holds — a lava world is active AND
+        // `ambient_motion` is on AND motion is not reduced AND the window is
+        // focused (pause on blur). Every one of the fifteen worlds today has a
+        // STATIC background, so `is_lava()` is false, the gate fails, and this
+        // schedules ZERO frames — 0% idle CPU preserved, byte-identical.
+        let lava_active = crate::theme::background().is_lava();
+        if crate::lava::lava_should_tick(
+            lava_active,
+            self.config.ambient_motion_on(),
+            crate::motion::reduced(),
+            self.focused,
+        ) {
+            let now = Instant::now();
+            match self.lava_tick_at {
+                Some(last) if now.saturating_duration_since(last) >= LAVA_TICK => {
+                    // Due: advance the phase by the real elapsed time and repaint.
+                    // The follow-up `about_to_wait` pass (after the redraw) re-arms
+                    // the single `WaitUntil` via the `_` arm below.
+                    let dt = (now - last).as_secs_f32();
+                    self.lava_tick_at = Some(now);
+                    if let Some(gpu) = self.gpu.as_mut() {
+                        gpu.pipeline.advance_lava(dt);
+                        gpu.window.request_redraw();
+                    }
+                }
+                _ => {
+                    // Not due yet (or the first arm): keep/arm the single
+                    // `WaitUntil`, but NEVER override the caret spring's hot `Poll`
+                    // loop (guard on `last_frame`, like every sibling debounce) —
+                    // during a caret glide the lava still advances above at ~10 fps
+                    // while the frame itself redraws at full refresh.
+                    let last = *self.lava_tick_at.get_or_insert(now);
+                    if self.last_frame.is_none() {
+                        event_loop.set_control_flow(ControlFlow::WaitUntil(last + LAVA_TICK));
+                    }
+                }
+            }
+        } else if lava_active {
+            // A lava world, but the lamp must be STATIC: reduce motion OR ambient
+            // motion off (blur is handled at the focus edge, which merely HOLDS the
+            // phase). Stop ticking; hard-freeze the phase to the settled frame so a
+            // later resume restarts cleanly rather than from a stale mid-bob.
+            self.lava_tick_at = None;
+            if crate::motion::reduced() || !self.config.ambient_motion_on() {
+                if let Some(gpu) = self.gpu.as_mut() {
+                    gpu.pipeline.freeze_lava();
+                }
             }
         }
     }
@@ -2681,18 +2761,73 @@ mod tests {
     }
 
     #[test]
-    fn finish_manual_save_ok_notices_saved_failure_notices_the_error() {
+    fn finish_manual_save_ok_is_silent_failure_notices_the_error() {
+        // SAVE-UX round: a SUCCESSFUL manual save raises NO bottom-center notice
+        // (autosave is already silent; a lone non-fading "saved" is just noise).
+        // A FAILURE still surfaces its error — errors must never go silent.
         use crate::fs::InMemoryFs;
+        let _l = crate::testlock::serial();
         let p = PathBuf::from("/notes/draft.md");
         let mem = InMemoryFs::new().with_file(&p, "v1\n");
         let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
         let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
 
         app.finish_manual_save(true, "saved".to_string());
-        assert_eq!(app.notice.as_deref(), Some("saved"));
+        assert_eq!(app.notice, None, "a successful manual save is silent — no notice");
 
         app.finish_manual_save(false, "save failed: disk full".to_string());
         assert_eq!(app.notice.as_deref(), Some("save failed: disk full"));
+    }
+
+    #[test]
+    fn finish_manual_save_clears_a_notes_dirty_marker_immediately() {
+        // BUG LOCK-DOWN: `is_document_dirty` reads `autosave_saved_version` for a
+        // NOTE, but `finish_manual_save` used to stamp only `doc_saved_version`
+        // — so ⌘S on a note left it reading dirty (the title `•` + native
+        // titlebar dot lingering) until the note's ~400ms debounced autosave
+        // redundantly rewrote and finally stamped the field.
+        use crate::fs::InMemoryFs;
+        let _l = crate::testlock::serial();
+        let notes = PathBuf::from("/notes");
+        let mem = InMemoryFs::new().with_dir(&notes);
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(None, "/notes", Config::empty());
+
+        // Make the active buffer a NOTE with content, then write it to disk the
+        // way `apply_core`'s `Action::Save` arm does before signalling SaveDone.
+        app.buffer.start_note(notes.clone());
+        app.buffer.set_text("note body\n");
+        app.buffer.save().unwrap();
+        assert!(app.buffer.is_note() && app.buffer.path().is_some(), "arranged: a saved note");
+        // Pre-bookkeeping the note reads DIRTY: `autosave_saved_version` is still
+        // stale (None) against the edited version.
+        assert!(app.is_document_dirty(), "arranged: the note reads dirty pre-bookkeeping");
+
+        app.finish_manual_save(true, "saved".to_string());
+
+        assert!(!app.is_document_dirty(), "a note is clean IMMEDIATELY after ⌘S, not ~400ms later");
+        assert!(app.autosave_dirty_at.is_none(), "the redundant ~400ms note rewrite is suppressed");
+    }
+
+    #[test]
+    fn finish_manual_save_clears_a_regular_files_dirty_marker_immediately() {
+        // REGRESSION GUARD: a path-backed file reads `doc_saved_version` in
+        // `is_document_dirty` — it was always fine, and must stay fine.
+        use crate::fs::InMemoryFs;
+        let _l = crate::testlock::serial();
+        let p = PathBuf::from("/proj/doc.md");
+        let mem = InMemoryFs::new().with_file(&p, "v1\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        let mut app = app_on(Some(p.clone()), "/proj", Config::empty());
+
+        app.buffer.set_text("edited body\n");
+        app.buffer.save().unwrap();
+        assert!(!app.buffer.is_note() && app.buffer.path().is_some(), "arranged: a saved file");
+        assert!(app.is_document_dirty(), "arranged: the file reads dirty pre-bookkeeping");
+
+        app.finish_manual_save(true, "saved".to_string());
+
+        assert!(!app.is_document_dirty(), "a regular file is clean immediately after ⌘S");
     }
 
     // ── SAVE-FEEDBACK round: the ambient dirty title marker ──

@@ -170,6 +170,17 @@ pub struct Config {
     /// determinism note) and flipped live by the "Reduce motion" settings-menu
     /// toggle, which also persists an explicit value here.
     pub reduce_motion: Option<bool>,
+    /// `ambient_motion` — the AMBIENT-BACKGROUND kill-switch (the lava-lamp
+    /// ground's slow ~10 fps drift, `crate::lava`): `None` = the built-in default
+    /// (ON, like autosave/session_restore — a quiet sticky toggle, no CLI flag).
+    /// OFF freezes any time-varying background to its settled frame (a lava world
+    /// still DRAWS, just static). Read ONLY by the live `App`'s ambient tick gate
+    /// (`crate::lava::lava_should_tick`) — the headless capture never ticks, so
+    /// this can never affect a screenshot (a capture is always the frozen t=0
+    /// phase regardless). Independent of `reduce_motion` (which also freezes it,
+    /// as an accessibility guarantee): a user may keep juice on yet turn the
+    /// ambient drift off, or vice-versa.
+    pub ambient_motion: Option<bool>,
     /// `keymap` — the KEYMAP FLAVOR preset (`"native"` | `"emacs"`); `None`/an
     /// unrecognized value = the built-in default (`Native`, today's behavior
     /// byte-identical). `Emacs` widens the `linux_keep_emacs` per-chord door
@@ -234,6 +245,7 @@ impl Config {
             typewriter_scroll: None,
             stats: None,
             reduce_motion: None,
+            ambient_motion: None,
             keymap: None,
             keys: Vec::new(),
             linux_keep_emacs: Vec::new(),
@@ -263,6 +275,14 @@ impl Config {
     /// session machinery, so this can't affect a screenshot.
     pub fn session_restore_on(&self) -> bool {
         self.session_restore.unwrap_or(true)
+    }
+
+    /// Whether AMBIENT BACKGROUND MOTION (the lava-lamp ground's slow drift) is
+    /// enabled. Absent = the built-in default (ON). Read only by the live `App`'s
+    /// ambient-tick gate (`crate::lava::lava_should_tick`) — the headless capture
+    /// never constructs the tick, so this can never affect a screenshot.
+    pub fn ambient_motion_on(&self) -> bool {
+        self.ambient_motion.unwrap_or(true)
     }
 
     /// Whether the LIFETIME STATS odometer (see `stats.rs`) tracks + persists.
@@ -408,6 +428,7 @@ impl Config {
             typewriter_scroll: None,
             stats: None,
             reduce_motion: None,
+            ambient_motion: None,
             keymap: None,
             keys: Vec::new(),
             linux_keep_emacs: Vec::new(),
@@ -535,6 +556,11 @@ impl Config {
         // explicit `true`/`false` here always wins over the OS/browser read.
         if let Some(b) = table.get("reduce_motion").and_then(|v| v.as_bool()) {
             cfg.reduce_motion = Some(b);
+        }
+        // `ambient_motion` — the ambient-background (lava-lamp) motion kill-switch,
+        // default ON (like autosave/session_restore; no CLI flag).
+        if let Some(b) = table.get("ambient_motion").and_then(|v| v.as_bool()) {
+            cfg.ambient_motion = Some(b);
         }
         // `keymap` — the KEYMAP FLAVOR preset, stored as the raw string (mirrors
         // `caret_mode`/`dictionary`); an unrecognized value is kept verbatim here

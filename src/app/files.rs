@@ -1354,14 +1354,16 @@ impl App {
     /// kept) and follow the AUTOSAVE ENGINE's own bookkeeping (the buffer
     /// version is now on disk — no redundant idle write; the fresh mtime is
     /// the clobber guard's new baseline — a manual save legitimately
-    /// force-writes over an external change). Either way, raise the ONE
-    /// user-visible acknowledgment this round adds — a brief "saved" that
-    /// fades per the existing notice behavior, or the error message on a
-    /// genuine failure (an unnamed empty note's "empty note: nothing to save
-    /// yet" included) — replacing the round's own bug, where both fates only
-    /// ever reached a terminal `eprintln!` (invisible on a GUI launch,
-    /// printed to the wrong place from a terminal one). Autosave stays
-    /// SILENT — only this explicit user action is acknowledged.
+    /// force-writes over an external change).
+    ///
+    /// SAVE-UX round: a SUCCESSFUL manual save is now SILENT — no bottom-center
+    /// notice. Autosave is already silent, and a lone non-fading "saved" is
+    /// just noise. Only a genuine FAILURE surfaces its error message (an
+    /// unnamed empty note's "save failed: empty note: nothing to save yet"
+    /// included) — errors must never go silent (the round's own bug was that
+    /// both fates once reached only a terminal `eprintln!`, invisible on a GUI
+    /// launch). Autosave stays SILENT too — only a failed explicit user action
+    /// is acknowledged.
     pub(super) fn finish_manual_save(&mut self, ok: bool, message: String) {
         if ok {
             self.snapshot_after_save();
@@ -1369,10 +1371,24 @@ impl App {
                 self.disk_mtime = Self::disk_mtime_of(&p);
                 self.doc_saved_version = Some(self.buffer.version());
             }
+            // A NOTE reads `autosave_saved_version` in `is_document_dirty`, not
+            // `doc_saved_version` — so stamp it here too (mirroring
+            // `convert_scratch_and_save`'s post-save bookkeeping). Without this,
+            // ⌘S on a note left the title `•` + native titlebar dot lingering
+            // until the note's own ~400ms debounced autosave redundantly
+            // rewrote and finally stamped the field. `Buffer::save()` does NOT
+            // bump `version()` (only edit/undo/redo/set_eol do), so the
+            // just-written version is the correct saved marker; clearing
+            // `autosave_dirty_at` also suppresses that redundant idle rewrite.
+            if self.buffer.is_note() {
+                self.autosave_saved_version = Some(self.buffer.version());
+                self.autosave_dirty_at = None;
+            }
             // NOTES VERBS round: the held HUD's SAVED stat.
             self.last_saved_ok = Some(Instant::now());
+        } else {
+            self.notice = Some(message);
         }
-        self.notice = Some(message);
     }
 
     /// SAVE-FEEDBACK round: `Cmd-S` / `C-x C-s` on the TRUE scratch surface

@@ -20,10 +20,12 @@
 //! the one organic accent (the caret), `error` is the signal color, and
 //! `selection` is a custom token (DaisyUI has no selection role).
 //!
-//! There are fifteen [`Theme`]s ("worlds"), nine dark and six light — the ninth
-//! dark world, Wagtail, is awl's first true MONOCHROME one (zero saturation
-//! everywhere, the caret included; see its own doc comment in `worlds.rs` and
-//! THEMES.md's logged DESIGN.md §3 amendment). One is the
+//! There are sixteen [`Theme`]s ("worlds"), ten dark and six light. Two are
+//! DESIGN.md §3 statement worlds: Wagtail (awl's first true MONOCHROME/1-bit
+//! world — zero saturation everywhere, the caret included) and Firetail (awl's
+//! first LAVA-LAMP world — a slow metaball ground whose living warmth IS the
+//! statement; Mangrove folds the cool second lava ground). See their own doc
+//! comments in `worlds.rs` and THEMES.md's logged DESIGN.md §3 amendments. One is the
 //! ACTIVE theme at any moment (an index into [`THEMES`]); the windowed app can
 //! cycle it live (`C-x t` / `C-x T`) and the headless `--theme NAME` flag pins
 //! it before a capture. Every color call site reads the active theme rather than
@@ -57,7 +59,7 @@ pub use derive::{
 // surface, no NON-TEST in-crate caller today (tag_for's real callers all live
 // under `#[cfg(test)]`).
 pub use derive::{cycle, overlay_scrim, primary_content, tag_for};
-pub use model::{Background, Theme, WashOverride};
+pub use model::{Background, LavaEdge, Theme, WashOverride};
 #[allow(unused_imports)] // Lens/RoleOverrides/ThemeTags: public API surface, no
 // NON-TEST in-crate caller today.
 pub use model::{Lens, RoleOverrides, ThemeTags};
@@ -83,8 +85,8 @@ pub use worlds::{DEFAULT_THEME, THEMES};
 // (each usable individually, e.g. `theme::TAWNY.mono`); non-test code always
 // reaches them through the `THEMES` array instead.
 pub use worlds::{
-    BILBY, CURRAWONG, GALAH, GUMTREE, KINGFISHER, MAGPIE, MANGROVE, MOPOKE, OUTBACK, POTOROO,
-    QUOKKA, SALTPAN, TAWNY, UNDERTOW, WAGTAIL,
+    BILBY, CURRAWONG, FIRETAIL, GALAH, GUMTREE, KINGFISHER, MAGPIE, MANGROVE, MOPOKE, OUTBACK,
+    POTOROO, QUOKKA, SALTPAN, TAWNY, UNDERTOW, WAGTAIL,
 };
 
 #[cfg(test)]

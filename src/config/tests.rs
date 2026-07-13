@@ -376,6 +376,28 @@ fn load_reads_session_restore_pref_and_session_restore_on_defaults_true() {
 }
 
 #[test]
+fn load_reads_ambient_motion_pref_and_ambient_motion_on_defaults_true() {
+    // The lava-lamp ground's motion kill-switch round-trips like autosave/
+    // session_restore; absent means the built-in default (ON), and
+    // `ambient_motion_on()` reflects it exactly.
+    use std::sync::Arc;
+    let p = PathBuf::from("/cfg/config.toml");
+    let fs = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "ambient_motion = false\n"));
+    crate::fs::with_fs(fs, || {
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.ambient_motion, Some(false));
+        assert!(!cfg.ambient_motion_on());
+    });
+    let fs2 = Arc::new(crate::fs::InMemoryFs::new().with_file(&p, "theme = \"Tawny\"\n"));
+    crate::fs::with_fs(fs2, || {
+        let cfg = Config::load(p.clone());
+        assert_eq!(cfg.ambient_motion, None);
+        assert!(cfg.ambient_motion_on(), "absent = built-in default ON");
+    });
+    assert!(Config::empty().ambient_motion_on(), "Config::empty() also defaults ON");
+}
+
+#[test]
 fn apply_sticky_globals_restores_spellcheck() {
     // The remembered spellcheck value lands on the process-global (no CLI flag,
     // so it applies unconditionally). Hold spell's TEST_LOCK + restore.

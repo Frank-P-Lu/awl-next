@@ -10,7 +10,7 @@ use super::cjk::{
 use super::color::Srgb;
 use super::model::{
     Backdrop, Background, CaretBlockStyle, DecorativeWash, Elevation, HighlightTexture,
-    ImageReveal, RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags, TitleStyle,
+    ImageReveal, LavaEdge, RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags, TitleStyle,
     WashOverride,
 };
 use super::ornament::{
@@ -563,16 +563,24 @@ pub const MANGROVE: Theme = Theme {
     // to only ΔL 0.076 over this deep-teal ground — the weakest of every world. Lifted
     // L + alpha within the SAME teal hue family (~174°) to clear the contrast law.
     selection: Srgb::rgba(0x40, 0xA8, 0x9E, 0x60),
-    // Same Dots colors as before, now PROXIMITY-SCALED (`edge: true`): the dots
-    // are biggest/brightest hugging the page boundary and shrink + fade outward.
-    background: Background::Dots {
-        // from/to track the nudged base_100/base_200 above so the margin still
-        // matches the page; the teal dot tint stays as-is (already coherent).
-        from: Srgb::rgb(0x11, 0x27, 0x23),
-        to: Srgb::rgb(0x18, 0x34, 0x2E),
-        dir: (0.0, 1.0),
-        tint: Srgb::rgb(0x23, 0x3B, 0x35),
-        edge: true,
+    // THE LAVA-LAMP GROUND (folded in 2026-07 — Mangrove is the COOL lava world,
+    // the deepsea companion to Firetail's warm den): a slow DEEP-SEA metaball
+    // field bobbing in the page margins (see `Background::Lava` + `crate::lava`),
+    // deepening the existing "dark tidal-teal den, cool and rooted" identity that
+    // the proximity Dots only gestured at. `ground` == base_100 (#112723) so the
+    // flat page column and the margin floor read as one deep tidal den; blob_lo/
+    // blob_hi are the dim-edge and bright-core COOL-BLUE tones (probe `deepsea`
+    // palette, ~174° off the amber caret — nowhere near it — and both inside the
+    // base_100..base_300 value band, so the animated margins read as GROUND, never
+    // figure). Glow edge (soft light-spill under the column) + DITHERED: the coarse
+    // ordered (Bayer) print-grain suits Mangrove's rooted, OLED-geometric-mono
+    // character (and distinguishes the cool lamp from Firetail's smooth warm one).
+    background: Background::Lava {
+        ground: Srgb::rgb(0x11, 0x27, 0x23),
+        blob_lo: Srgb::rgb(0x17, 0x23, 0x2B),
+        blob_hi: Srgb::rgb(0x22, 0x3C, 0x4F),
+        edge: LavaEdge::Glow,
+        dithered: true,
     },
     font: "JetBrains Mono",
     // Display face is ALREADY JetBrains Mono → reuse it for code.
@@ -949,15 +957,90 @@ pub const WAGTAIL: Theme = Theme {
     },
 };
 
-/// All fifteen worlds, in cycle order. `C-x t` advances through this list and
+/// Firetail — the SIXTEENTH world, a WARM STATEMENT world and awl's FIRST
+/// lava-lamp ground: the MIRROR of Wagtail. Where Wagtail keeps NO warm thing
+/// (its statement is the bare 1-bit room), Firetail's one living warm thing is
+/// the GROUND ITSELF — a slow umber/wine metaball "lava lamp" bobbing in the
+/// page margins (see [`Background::Lava`] + `crate::lava`), the DESIGN.md §3
+/// ambient-motion amendment's first host (Mangrove is the cool second). The
+/// room is Potoroo's own warm den: the ink ladder is derived from it VERBATIM
+/// (`base_100`/`_200`/`_300` + the `base_content`→`muted`→`faint` ramp), so
+/// every ink / role-tint / contrast law Potoroo clears, Firetail clears
+/// identically — its distinctness is carried entirely by the living ground and
+/// the caret. That caret is ONE flame-amber (a touch more golden than Potoroo's,
+/// so it reads as Firetail's own), held ≥40° of hue clear of the wine lava so
+/// amber stays the caret's alone (DESIGN §3, the amber-guard law). Named for the
+/// Red-browed Firetail finch's flame; drawn in Potoroo's warm slab-mono Monaspace
+/// Xenon, its kin — restraint in the chrome so the lava is the whole statement.
+pub const FIRETAIL: Theme = Theme {
+    name: "Firetail",
+    dark: true,
+    // Potoroo's own warm-den ink ladder, VERBATIM — base_100 doubles as the lava
+    // `ground` so the flat page column and the animated margin floor read as one
+    // deep den (no seam). Reusing the proven ladder means every ink/role/contrast
+    // law Potoroo passes, Firetail passes by construction (role_style_for is a pure
+    // function of the palette).
+    base_100: Srgb::rgb(0x1F, 0x04, 0x00),
+    base_200: Srgb::rgb(0x31, 0x05, 0x00),
+    base_300: Srgb::rgb(0x56, 0x28, 0x00),
+    base_content: Srgb::rgb(0xF0, 0xE6, 0xDE),
+    muted: Srgb::rgb(0x9C, 0x85, 0x76),
+    faint: Srgb::rgb(0x75, 0x5D, 0x51),
+    // Flame-amber caret (hue ~36°) — Firetail's own, ≥40° clear of the wine lava
+    // blobs (~351°): amber stays the ONE accent (DESIGN §3, the amber-guard).
+    primary: Srgb::rgb(0xFF, 0xB8, 0x4D),
+    primary_content: Srgb::rgb(0x2A, 0x14, 0x02),
+    error: Srgb::rgb(0xFF, 0x6B, 0x5C),
+    selection: Srgb::rgba(0x7E, 0xB4, 0x7C, 0x52),
+    // THE LAVA-LAMP GROUND (the world's whole statement): a slow umber/wine
+    // metaball field in the margins, `ground` == base_100 (seamless). blob_lo/
+    // blob_hi are the dim-edge and bright-core WINE tones (probe `warm` palette,
+    // ~351° hue — ≥40° off the amber caret — both inside the base_100..base_300
+    // value band, so the animated margins always read as GROUND, never figure).
+    // Glow edge (soft light-spill under the column), UNDITHERED — the smooth warm
+    // lamp (Mangrove takes the dithered cool one).
+    background: Background::Lava {
+        ground: Srgb::rgb(0x1F, 0x04, 0x00),
+        blob_lo: Srgb::rgb(0x21, 0x12, 0x14),
+        blob_hi: Srgb::rgb(0x47, 0x1F, 0x25),
+        edge: LavaEdge::Glow,
+        dithered: false,
+    },
+    // Potoroo's warm slab-serif mono — kin to the den it derives from; the display
+    // face IS a monospace, so code reuses it (no second grid).
+    font: "Monaspace Xenon",
+    mono: "Monaspace Xenon",
+    cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS_SANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
+    // Warm technical den → the merged marks' spark trio (✷ 8-star + ✶ 6-star + ✦ 4-star).
+    ornaments: Ornaments { dash: '✷', star: '✶', underscore: '✦' },
+    ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // The living ground IS the statement → plain geometric bullets, restrained chrome.
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
+    // Warm lava den → Temperature=Warm (its clearest read). Every Time / Register /
+    // Voice section already sits at its curated cap, so Firetail — like Wagtail —
+    // opts OUT of them rather than crowd a section, headlining Warm alone (which the
+    // roster-growth curation widening now seats as a 4-world band).
+    tags: ThemeTags { time: None, register: None, voice: None, temperature: Some("Warm") },
+    role_overrides: RoleOverrides::NONE,
+    render_caps: RenderCaps::DEFAULT,
+};
+
+/// All sixteen worlds, in cycle order. `C-x t` advances through this list and
 /// wraps; `C-x T` steps backward. The two deep cool darks — Currawong (OLED
 /// black) beside the neutral Tawny/Mopoke pair, and Kingfisher (midnight navy)
-/// beside the violet Undertow — sit with their kin; Wagtail (the one true
-/// monochrome world) closes the cycle.
-pub const THEMES: [Theme; 15] = [
+/// beside the violet Undertow — sit with their kin; the two STATEMENT worlds
+/// close the cycle as mirror bookends — Wagtail (the bare 1-bit room, NO warm
+/// thing) beside Firetail (the warm den whose one warm thing is the living lava
+/// GROUND itself).
+pub const THEMES: [Theme; 16] = [
     TAWNY, MOPOKE, CURRAWONG,
     POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, KINGFISHER, OUTBACK, MANGROVE, GALAH, MAGPIE,
-    WAGTAIL,
+    WAGTAIL, FIRETAIL,
 ];
 
 /// Index into [`THEMES`] of the default/startup world: **Saltpan** (index 6 —

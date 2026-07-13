@@ -134,6 +134,30 @@ impl TextPipeline {
             .prepare(queue, width, height, bg_left, bg_w);
     }
 
+    /// Per-frame LAVA-LAMP GROUND ([`crate::theme::Background::Lava`]): a slow 2D
+    /// metaball field painted MARGINS-ONLY, over the flat margin ground the
+    /// background pass just laid. A total no-op (INACTIVE, draws nothing) for
+    /// every non-lava world — so all fifteen shipped worlds stay byte-identical.
+    ///
+    /// The effective background honors the dev gallery knob (`crate::lava::
+    /// env_override`); the column bounds come from the SAME `page_geometry()`
+    /// (the one geometry owner) the background pass reads, with the identical
+    /// page-off collapse (col covers the whole canvas → the mask has no margin →
+    /// nothing draws), and the effective phase from [`TextPipeline::lava_render_phase`]
+    /// (env override > Reduce-Motion freeze > the App-driven [`TextPipeline::lava_phase`]).
+    pub(super) fn prepare_lava_layer(&mut self, queue: &wgpu::Queue, width: u32, height: u32) {
+        let (page_on, _measure, col_left, col_w) = self.page_geometry();
+        let (bg_left, bg_w) = if page_on {
+            (col_left, col_w)
+        } else {
+            (0.0, width as f32)
+        };
+        let params = self.effective_background().lava_params();
+        let phase = self.lava_render_phase();
+        self.lava_pipeline
+            .prepare(queue, width, height, bg_left, bg_w, params, phase);
+    }
+
     /// Upload the document text layer with the full-ink default color — the one
     /// glyphon `prepare` per frame (the caret is a quad drawn underneath).
     pub(super) fn prepare_text_layer(

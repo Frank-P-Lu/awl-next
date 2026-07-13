@@ -10,13 +10,14 @@ use crate::facets::FacetItem;
 
 
 #[test]
-fn worlds_nine_dark_six_light() {
-    assert_eq!(THEMES.len(), 15);
+fn worlds_ten_dark_six_light() {
+    assert_eq!(THEMES.len(), 16);
     let dark = THEMES.iter().filter(|t| t.dark).count();
     let light = THEMES.iter().filter(|t| !t.dark).count();
-    // 9 dark (Tawny/Mopoke/Currawong/Potoroo/Undertow/Kingfisher/Outback/
-    // Mangrove/Wagtail) / 6 light (Gumtree/Bilby/Saltpan/Quokka/Galah/Magpie).
-    assert_eq!(dark, 9);
+    // 10 dark (Tawny/Mopoke/Currawong/Potoroo/Undertow/Kingfisher/Outback/
+    // Mangrove/Wagtail/Firetail) / 6 light (Gumtree/Bilby/Saltpan/Quokka/Galah/
+    // Magpie). Firetail (the sixteenth) is the warm lava statement world.
+    assert_eq!(dark, 10);
     assert_eq!(light, 6);
 }
 
@@ -45,26 +46,218 @@ fn every_world_has_a_valid_background() {
         assert_eq!(bg.tint().a, 0xFF, "{} background tint must be opaque", t.name);
         assert!(bg.shader_id() <= 4, "{} bad shader id", t.name);
     }
-    // The whole ground palette is exercised across the worlds (Stripes is new,
-    // assigned to Potoroo; the proximity-scaled Dots ride Mangrove).
+    // Every STATIC ground type is still exercised across the worlds.
     let used: std::collections::HashSet<&str> =
         THEMES.iter().map(|t| t.background.as_str()).collect();
     for p in ["gradient", "dots", "starfield", "pinstripe", "stripes"] {
         assert!(used.contains(p), "ground {p} unused by any world");
     }
-    // Exactly the two assigned worlds carry the NEW grounds.
+    // Stripes stays Potoroo's alone.
     let stripes: Vec<&str> = THEMES
         .iter()
         .filter(|t| matches!(t.background, Background::Stripes { .. }))
         .map(|t| t.name)
         .collect();
     assert_eq!(stripes, ["Potoroo"], "Stripes is Potoroo's alone");
+    // PROXIMITY-SCALED Dots (`edge: true`) rode Mangrove alone, and Mangrove
+    // folded into a lava ground (2026-07), so no world carries proximity Dots
+    // now — the `edge: bool` machinery is intact but currently unassigned (like
+    // `Background::Lava` was before this round). Not a bug: a feature may ship
+    // with zero worlds until one wants it.
     let edge_dots: Vec<&str> = THEMES
         .iter()
         .filter(|t| t.background.edge())
         .map(|t| t.name)
         .collect();
-    assert_eq!(edge_dots, ["Mangrove"], "proximity Dots is Mangrove's alone");
+    assert!(edge_dots.is_empty(), "proximity Dots is unassigned since Mangrove became lava, got {edge_dots:?}");
+}
+
+/// THE LAVA-LAMP WORLDS round: EXACTLY two worlds ship a `Background::Lava` —
+/// Firetail (warm, undithered) and Mangrove (cool deepsea, dithered), both with
+/// the Glow edge (the probe's agent pick). Pins the roster + each world's edge/
+/// dither config, and that every OTHER world stays a STATIC ground (shader id
+/// 0..=4) so the lava layer is dormant there and their captures are unaffected.
+#[test]
+fn exactly_firetail_and_mangrove_ship_lava() {
+    let _lock = crate::testlock::serial();
+    let lava: Vec<&str> = THEMES
+        .iter()
+        .filter(|t| t.background.is_lava())
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(lava, ["Mangrove", "Firetail"], "exactly Mangrove + Firetail are lava worlds");
+    for t in THEMES.iter().filter(|t| !t.background.is_lava()) {
+        assert!(
+            t.background.shader_id() <= 4,
+            "{}: a non-lava world stays a static ground",
+            t.name
+        );
+    }
+    // Firetail: WARM, undithered, Glow edge; ground == its own base_100 (seamless).
+    let f = set_active_by_name("Firetail").unwrap();
+    let (fg, _flo, _fhi, fe, fd) = f.background.lava_params().unwrap();
+    assert_eq!(fg, f.base_100, "Firetail lava ground == base_100 (seamless margin↔page)");
+    assert_eq!(fe, model::LavaEdge::Glow, "Firetail default edge is Glow");
+    assert!(!fd, "Firetail is the SMOOTH warm lamp (undithered)");
+    // Mangrove: COOL deepsea, DITHERED, Glow edge; ground == its own base_100.
+    let m = set_active_by_name("Mangrove").unwrap();
+    let (mg, _mlo, _mhi, me, md) = m.background.lava_params().unwrap();
+    assert_eq!(mg, m.base_100, "Mangrove lava ground == base_100 (seamless margin↔page)");
+    assert_eq!(me, model::LavaEdge::Glow, "Mangrove default edge is Glow");
+    assert!(md, "Mangrove is the DITHERED cool lamp (print-grain)");
+    set_active(DEFAULT_THEME);
+}
+
+/// THE `Background::Lava` FIGURE/GROUND LAW (Firetail + Mangrove): the ANIMATED
+/// metaball margins must READ AS GROUND at EVERY phase — never brightening into
+/// "figure" territory that would compete with the flat page column the text sits
+/// on, and always leaving the ink a strong contrast to sit against. Asserted over
+/// composited PIXELS (the pure-Rust shader mirror in `crate::lava` + each world's
+/// own blob colors + color arithmetic), NOT over sidecar state — the Wagtail-
+/// invisible-picker-row lesson: appearance is proven over the bytes, never inferred.
+#[test]
+fn lava_worlds_keep_figure_ground_at_the_worst_animation_phase() {
+    // Gamma-correct Rec.709 relative luminance (the `render::tests::syntax_roles`
+    // `rel_luminance` recipe), so the "ground value band" is PERCEIVED brightness.
+    fn rel_lum(c: Srgb) -> f32 {
+        fn lin(u: u8) -> f32 {
+            let s = u as f32 / 255.0;
+            if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        }
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    // redmean color distance (the `distinguishability`/`syntax_roles` metric).
+    fn redmean(a: Srgb, b: Srgb) -> f32 {
+        let rbar = (a.r as f32 + b.r as f32) * 0.5;
+        let dr = a.r as f32 - b.r as f32;
+        let dg = a.g as f32 - b.g as f32;
+        let db = a.b as f32 - b.b as f32;
+        ((2.0 + rbar / 256.0) * dr * dr + 4.0 * dg * dg + (2.0 + (255.0 - rbar) / 256.0) * db * db)
+            .sqrt()
+    }
+    for t in THEMES.iter().filter(|t| t.background.is_lava()) {
+        let (ground, blob_lo, blob_hi, _edge, _dith) = t.background.lava_params().unwrap();
+        assert_eq!(ground, t.base_100, "{}: lava ground must be base_100", t.name);
+
+        // (1) VALUE BAND. The shader only ever blends ground → blob_lo → blob_hi
+        //     (`rgb = mix(ground, mix(blob_lo, blob_hi, core_t), edge_t)`), and
+        //     mix() is bounded by its endpoints, so blob_hi is the BRIGHTEST pixel
+        //     the animated margin can ever produce. It must not brighten past the
+        //     world's own brightest GROUND rung (base_300) — else the margins would
+        //     read as "figure", competing with the page. (In HSL-L the probe noted a
+        //     ~1–3 point overshoot; in perceptual luminance it vanishes — the wine/
+        //     teal blobs are red/blue-heavy, luminance-light.)
+        let band_ceiling = rel_lum(t.base_300) + 0.005; // +float epsilon only
+        assert!(
+            rel_lum(blob_hi) <= band_ceiling,
+            "{}: blob_hi luminance {:.4} exceeds the ground band ceiling base_300 {:.4} \
+             (animated margin brightens into figure territory)",
+            t.name, rel_lum(blob_hi), rel_lum(t.base_300)
+        );
+        assert!(
+            rel_lum(blob_lo) <= band_ceiling,
+            "{}: blob_lo luminance {:.4} exceeds the ground band ceiling", t.name, rel_lum(blob_lo)
+        );
+
+        // (2) blob_hi is a REAL rendered pixel, not just a theoretical ceiling: drive
+        //     the pure mirror over a full phase sweep and confirm the metaball field
+        //     SATURATES the core blend somewhere in the margin (the shader saturates
+        //     core_t at field ≥ THRESHOLD + CORE_WIDTH = 0.85; the strongest base blob's
+        //     weight 1.2 alone exceeds that at its own animated center) — so the ground
+        //     genuinely reaches blob_hi, and (1) is a check on an ACTUAL worst-phase pixel.
+        let vp = (1200.0, 800.0);
+        let mut peak = 0.0f32;
+        for step in 0..64 {
+            let phase = step as f32 / 64.0;
+            for (i, b) in crate::lava::BASE_BLOBS.iter().enumerate() {
+                let (cx, cy) = crate::lava::animated_center(i, b[0], b[1], phase);
+                let px = (cx * vp.0, cy * vp.1);
+                peak = peak.max(crate::lava::metaball_field(px, vp, &crate::lava::BASE_BLOBS, phase));
+            }
+        }
+        assert!(
+            peak >= 1.0,
+            "{}: metaball field peaks at only {peak:.3} over a full phase sweep — the core \
+             never saturates, so blob_hi is unreached (the worst-phase check would be vacuous)",
+            t.name
+        );
+
+        // (3) TEXT CONTRAST PRESERVED at the worst phase: the ink (base_content) clears
+        //     a strong legibility floor even against the LOUDEST reachable ground pixel
+        //     (blob_hi). The floor (150) is far below the measured ~500 (both worlds), so
+        //     text sitting anywhere near the margins stays unmistakably the figure.
+        let d = redmean(t.base_content, blob_hi);
+        assert!(
+            d >= 150.0,
+            "{}: base_content vs the brightest lava pixel blob_hi only {d:.1} redmean apart \
+             (ground competes with the ink at the worst phase)",
+            t.name
+        );
+    }
+}
+
+/// THE `Background::Lava` AMBER-HUE-CLEAR GUARD (mirrors the syntax role tints'
+/// amber-guard): the lava blobs are ambient GROUND motion — the sole DESIGN.md §3
+/// exception this round grants — but the CARET's amber must remain the one accent,
+/// so any blob tone with real chroma (HSL saturation > 0.15) sits ≥30° of hue from
+/// `primary`. Firetail's wine blobs clear it at ~44°; Mangrove's cool blues at ~175°.
+#[test]
+fn lava_blob_hues_stay_clear_of_the_amber_caret() {
+    // Minimal circular hue distance in degrees.
+    fn hue_gap(a: f32, b: f32) -> f32 {
+        let d = (a - b).abs() % 360.0;
+        d.min(360.0 - d)
+    }
+    for t in THEMES.iter().filter(|t| t.background.is_lava()) {
+        let (_ground, blob_lo, blob_hi, _edge, _dith) = t.background.lava_params().unwrap();
+        let (ph, _ps, _pl) = t.primary.to_hsl();
+        for (label, blob) in [("blob_lo", blob_lo), ("blob_hi", blob_hi)] {
+            let (bh, bs, _bl) = blob.to_hsl();
+            if bs <= 0.15 {
+                continue; // a near-grey blob reads as a value step, not a second accent.
+            }
+            let gap = hue_gap(bh, ph);
+            assert!(
+                gap >= 30.0,
+                "{}: lava {label} hue {bh:.0}° sits only {gap:.0}° from the amber caret {ph:.0}° \
+                 (a second accent — DESIGN §3 one-accent law)",
+                t.name
+            );
+        }
+    }
+}
+
+/// The `Background::Lava` DATA accessors (exercised via a literal, since no world
+/// ships it yet): it degrades to a FLAT margin ground (`from == to == ground`,
+/// shader 0) that the lava overlay overdraws, names itself `"lava"`, is the ONLY
+/// `is_lava()` variant, and surfaces its `(ground, blob_lo, blob_hi, edge,
+/// dithered)` params. Plus the `LavaEdge` mask-mode / name contract.
+#[test]
+fn lava_background_accessors_are_a_flat_ground_plus_metaball_params() {
+    let ground = Srgb::rgb(0x11, 0x27, 0x23);
+    let lo = Srgb::rgb(0x17, 0x23, 0x2b);
+    let hi = Srgb::rgb(0x22, 0x3c, 0x4f);
+    let bg = Background::Lava { ground, blob_lo: lo, blob_hi: hi, edge: model::LavaEdge::Glow, dithered: true };
+    // Degrades to a FLAT ground of the lava `ground`, shader 0 (no margin marks).
+    assert_eq!(bg.shader_id(), 0);
+    assert_eq!(bg.from(), ground);
+    assert_eq!(bg.to(), ground, "flat: from == to");
+    assert_eq!(bg.tint(), ground);
+    assert!(!bg.edge(), "the Dots proximity flag is unrelated to LavaEdge");
+    assert_eq!(bg.as_str(), "lava");
+    // The one is_lava variant + its params.
+    assert!(bg.is_lava());
+    assert!(!Background::Gradient { from: ground, to: ground, dir: (0.0, 1.0) }.is_lava());
+    assert_eq!(bg.lava_params(), Some((ground, lo, hi, model::LavaEdge::Glow, true)));
+    assert_eq!(
+        Background::Gradient { from: ground, to: ground, dir: (0.0, 1.0) }.lava_params(),
+        None
+    );
+    // LavaEdge contract (the shader mask-mode selector + sidecar names).
+    assert_eq!(model::LavaEdge::Hard.mask_mode(), 1.0);
+    assert_eq!(model::LavaEdge::Glow.mask_mode(), 2.0);
+    assert_eq!(model::LavaEdge::Hard.as_str(), "hard");
+    assert_eq!(model::LavaEdge::Glow.as_str(), "glow");
 }
 
 /// The JetBrains-Mono world (Mangrove) reports that font — the second bundled
@@ -91,11 +284,12 @@ fn every_world_has_a_bundled_mono() {
     const BUNDLED_MONOS: [&str; 4] =
         ["IBM Plex Mono", "JetBrains Mono", "Monaspace Xenon", "Iosevka"];
     // The worlds whose DISPLAY face is itself a bundled mono (so they reuse it).
-    // Wagtail is the FIFTH — and the first to share its exact display font with
-    // another world (Mangrove, also JetBrains Mono) — a logged, honest
-    // consequence of adding a 15th world without bundling a 15th display face;
-    // see `worlds.rs::WAGTAIL`'s own doc comment.
-    const MONO_DISPLAY: [&str; 5] = ["Tawny", "Currawong", "Potoroo", "Mangrove", "Wagtail"];
+    // Wagtail was the FIFTH (sharing Mangrove's JetBrains Mono); Firetail is the
+    // SIXTH — it derives from Potoroo's warm den and shares its Monaspace Xenon
+    // slab-mono display (a logged, honest consequence of adding worlds faster than
+    // bundled display faces; see `worlds.rs::FIRETAIL`'s own doc comment).
+    const MONO_DISPLAY: [&str; 6] =
+        ["Tawny", "Currawong", "Potoroo", "Mangrove", "Wagtail", "Firetail"];
     for t in THEMES.iter() {
         assert!(
             BUNDLED_MONOS.contains(&t.mono),
@@ -141,7 +335,7 @@ fn cjk_fallback_matches_world_character() {
     let zenmaru = ["Galah", "Kingfisher"];
     let klee = ["Mopoke", "Quokka"];
     let mincho = ["Saltpan", "Outback", "Magpie"]; // neutral serif (Noto Serif JP)
-    let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong", "Wagtail"]; // neutral sans/mono (Noto Sans JP)
+    let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong", "Wagtail", "Firetail"]; // neutral sans/mono (Noto Sans JP)
     for t in THEMES.iter() {
         assert!(!t.cjk.is_empty(), "{} has no CJK fallback list", t.name);
         if shippori.contains(&t.name) {
@@ -368,7 +562,7 @@ fn latin_candidates_is_the_worlds_own_display_face() {
 fn zh_hans_ladder_matches_world_character_with_klee_override() {
     let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
     let klee = ["Mopoke", "Quokka"];
-    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong", "Wagtail"];
+    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong", "Wagtail", "Firetail"];
     for t in THEMES.iter() {
         assert!(!t.zh_hans.is_empty(), "{} has no zh-Hans candidate list", t.name);
         if klee.contains(&t.name) {
@@ -464,16 +658,20 @@ fn every_world_curated_into_lenses() {
             // The name-keyed accessor agrees with the inline field.
             assert_eq!(tag_for(t.name, lens), t.tags.section(lens), "{} tag_for disagrees", t.name);
         }
-        // Every declared header shows a CURATED 2–3 worlds: never an empty faint
-        // header, never the pre-curation crowd (Time=Night once held 6).
+        // Every declared header shows a CURATED band of worlds: never an empty
+        // faint header, never the pre-curation crowd (Time=Night once held 6). The
+        // upper bound widened 3→4 when the roster grew to sixteen — the sixteenth
+        // world (Firetail, the warm lava statement world) headlines Temperature=Warm,
+        // which every section was already at its 3-cap when it arrived; 4 is still
+        // curated, nowhere near the old crowd.
         for sect in sections {
             let n = THEMES
                 .iter()
                 .filter(|t| t.tags.section(lens) == Some(*sect))
                 .count();
             assert!(
-                (2..=3).contains(&n),
-                "{:?} section {sect:?} shows {n} worlds (curation wants 2–3)",
+                (2..=4).contains(&n),
+                "{:?} section {sect:?} shows {n} worlds (curation wants 2–4)",
                 lens
             );
         }
@@ -683,6 +881,20 @@ fn every_world_has_a_real_margin_gradient() {
                 bg.from(), bg.to(),
                 "{}: a one-bit world's margin gradient must be FLAT (from == to) — \
                  any real gradient interpolates through forbidden greys", t.name
+            );
+            continue;
+        }
+        // LAVA WORLDS (`Background::Lava`, Firetail/Mangrove): a DECLARED exemption,
+        // not a weakening — the base margin ground is DELIBERATELY flat (from == to
+        // == the lava `ground`), because the lava OVERLAY (`crate::lava`, a separate
+        // pipeline drawn after this margin pass) carries all the marks + motion and
+        // OVERDRAWS the margins opaquely; the flat base is only there so the floor is
+        // painted before the overlay draws. See `Background::Lava`'s shader_id() doc.
+        if t.background.is_lava() {
+            assert_eq!(
+                bg.from(), bg.to(),
+                "{}: a lava world's BASE margin ground must be FLAT (the lava overlay \
+                 carries the motion)", t.name
             );
             continue;
         }
