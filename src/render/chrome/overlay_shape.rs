@@ -6,35 +6,57 @@
 
 use super::*;
 
-/// Breathing inset (px) between the card's own edge and a
+/// Breathing inset (px) between the anchor rect's own edge and a
 /// [`theme::TitleStyle::Placard`] wordmark's glyph box — mirrors the card's
 /// own `pad` (12.0, `overlay_geometry`) so the wordmark sits inside the same
-/// margin every other card element does.
+/// margin every other element does.
 const PLACARD_INSET: f32 = 12.0;
 
 /// Pure corner placement: the wordmark's `(x, y)` top-left, given its own
-/// shaped `(w, h)` and the card rect `(x, y, w, h)`. `TR`/`BR` anchor the
-/// wordmark's RIGHT edge to the card's right edge (never past `card_x`, so a
-/// wordmark wider than the card degrades to hugging the LEFT edge rather
-/// than reporting a negative origin); `BL`/`BR` anchor the BOTTOM edge
-/// likewise.
+/// shaped `(w, h)` and the ANCHOR rect `(x, y, w, h)` (the full canvas — see
+/// `overlay_shape_placard`). `TR`/`BR` anchor the wordmark's RIGHT edge to the
+/// anchor's right edge (never past `ax`, so a wordmark wider than the anchor
+/// degrades to hugging the LEFT edge rather than reporting a negative origin);
+/// `BL`/`BR` anchor the BOTTOM edge likewise.
 fn placard_origin(
     corner: theme::PlacardCorner,
-    card: (f32, f32, f32, f32),
+    anchor: (f32, f32, f32, f32),
     w: f32,
     h: f32,
     inset: f32,
 ) -> (f32, f32) {
-    let (cx, cy, cw, ch) = card;
+    let (ax, ay, aw, ah) = anchor;
     let x = match corner {
-        theme::PlacardCorner::TL | theme::PlacardCorner::BL => cx + inset,
-        theme::PlacardCorner::TR | theme::PlacardCorner::BR => (cx + cw - inset - w).max(cx),
+        theme::PlacardCorner::TL | theme::PlacardCorner::BL => ax + inset,
+        theme::PlacardCorner::TR | theme::PlacardCorner::BR => (ax + aw - inset - w).max(ax),
     };
     let y = match corner {
-        theme::PlacardCorner::TL | theme::PlacardCorner::TR => cy + inset,
-        theme::PlacardCorner::BL | theme::PlacardCorner::BR => (cy + ch - inset - h).max(cy),
+        theme::PlacardCorner::TL | theme::PlacardCorner::TR => ay + inset,
+        theme::PlacardCorner::BL | theme::PlacardCorner::BR => (ay + ah - inset - h).max(ay),
     };
     (x, y)
+}
+
+/// Build the RIGHT-column text lines for [`TextPipeline::shape_overlay_right`]:
+/// one `\n`-prefixed line per candidate DISPLAY line, so label N lands on the
+/// display row N of the candidate area. The FIRST line carries `header_rows`
+/// leading newlines — the empties for the query line (every picker) plus the
+/// lens STRIP above the candidate area on a faceted card (`header_rows == 2`)
+/// — every later line carries one; an empty (`""`) label yields an empty,
+/// non-binding line, which is how a faceted picker's section-HEADER row gets no
+/// chord. ONE owner shared by the flat ([`TextPipeline::overlay_shape_text`])
+/// and faceted ([`TextPipeline::shape_faceted`]) paths so their two alignments
+/// can never drift (`same behavior ⇒ same code`); the flat path passes
+/// `header_rows == 1`, reproducing the historical single leading `\n`
+/// byte-for-byte.
+fn right_bind_lines<'a>(header_rows: usize, labels: impl Iterator<Item = &'a str>) -> Vec<String> {
+    labels
+        .enumerate()
+        .map(|(k, label)| {
+            let leads = if k == 0 { header_rows.max(1) } else { 1 };
+            format!("{}{label}", "\n".repeat(leads))
+        })
+        .collect()
 }
 
 impl TextPipeline {
@@ -56,23 +78,26 @@ impl TextPipeline {
     /// `render::effective_title_style`) is `InlinePrefix` (every world
     /// today), the picker is the header-less spell popup (no title line at
     /// all — `header_rows == 0`), or the kind draws no title (Rename/
-    /// InsertLink — `overlay_title` is already empty for those). The CALLER
-    /// clips the upload to the CARD's rect regardless of this fn's returned
-    /// `w`/`h` — CLIPPED TO THE CARD, never bleeding into the scrim (a
-    /// deliberate, logged deviation from Persona 3 Reload's own bleed: the
-    /// card is the ONE region every other overlay element already reasons
-    /// about, so a placard that could paint over the document/scrim would
-    /// need its own separate clip/z-order story for no gain a calm dim
-    /// wordmark behind the rows doesn't already deliver — rows/text always
-    /// composite OVER it, legibility first).
+    /// InsertLink — `overlay_title` is already empty for those).
+    ///
+    /// THE SCREEN-CORNER ANCHOR (settled — supersedes the card-clipped
+    /// original): the wordmark anchors to the FULL CANVAS corners and draws
+    /// as a dim watermark OVER the scrim, BEHIND the card (the Persona-style
+    /// bleed the card-clip original deliberately declined). The caller clips
+    /// the upload to the WHOLE CANVAS (not the tighter card rect), and the
+    /// wordmark's `TextArea` is still uploaded FIRST in the text batch, so
+    /// the rows/query line always composite OVER it — legibility first, and
+    /// the dimmed document below still shows through (the wordmark rides the
+    /// text pass, above the scrim quad).
     ///
     /// COMPOSES WITH THE FACETED LAYOUT (fixed post-launch — a prior round's
     /// guard also bailed on `geom.theme`, blanking the placard on every
     /// picker [`crate::facets::scheme`] facets — the Cmd-P palette and the
     /// Settings menu included, the two surfaces that matter most): there is
-    /// nothing kind-specific about this fn's OWN work — it reads only
-    /// `geom.card_x/_y/_w/_h` (identical fields on both `overlay_geometry`'s
-    /// flat branch and `theme_overlay_geometry`'s faceted branch) and
+    /// nothing kind-specific about this fn's OWN work — it anchors to the
+    /// CANVAS (`self.window_w`/`self.window_h`, identical on both
+    /// `overlay_geometry`'s flat branch and `theme_overlay_geometry`'s
+    /// faceted branch) and reads only `geom.header_rows` +
     /// `self.overlay_title`/`self.placard_buffer`. The faceted shaper
     /// (`theme_picker.rs::overlay_shape_theme`) fills the SAME
     /// `panel_buffer` the flat shaper does, and both are uploaded through the
@@ -119,8 +144,16 @@ impl TextPipeline {
         if w <= 0.0 {
             return None;
         }
-        let card = (geom.card_x, geom.card_y, geom.card_w, geom.card_h);
-        let (x, y) = placard_origin(corner, card, w, line_height, PLACARD_INSET);
+        // ANCHOR TO THE FULL CANVAS corners (a dim screen-corner watermark),
+        // NOT the centered card rect. DECISION: the TOP corners respect the
+        // menubar reserve (`0.0` unless the web/Linux bar is shown) so a shown
+        // bar — which draws LAST, straight over the top of the canvas — never
+        // overpaints the wordmark; the bottom edge uses the full window
+        // height. On macbook/capture (bar off) `reserve == 0.0`, so the anchor
+        // is the plain (0, 0, window_w, window_h) canvas.
+        let reserve = self.menubar_reserve();
+        let anchor = (0.0, reserve, self.window_w, self.window_h - reserve);
+        let (x, y) = placard_origin(corner, anchor, w, line_height, PLACARD_INSET);
         Some((x, y, w, line_height))
     }
 
@@ -134,18 +167,22 @@ impl TextPipeline {
     /// regime reproduces the historical char budget byte-for-byte; when the
     /// estimate goes tight the shaped PIXELS arbitrate ([`rowlayout::fits`]) and
     /// the right column YIELDS whole rather than ever painting over a name.
-    pub(super) fn overlay_shape_text(
+    pub(in crate::render) fn overlay_shape_text(
         &mut self,
         geom: &OverlayGeom,
         ink: glyphon::Color,
         muted: glyphon::Color,
     ) -> bool {
-        // THEME PICKER: the faceted lens strip + section-grouped world rows lay out
-        // differently from the flat pickers — its own shaper (which also records the
-        // active-lens underline rect). No right column (returns false).
+        // FACETED (lens-strip) pickers — the theme worlds AND the Cmd-P command
+        // palette / Settings / Browse / … once a lens strip is populated — lay out
+        // differently from the flat pickers: a section-grouped name column (its own
+        // shaper, which also records the active-lens underline rect) PLUS, when the
+        // picker fills a right column (chords / times / git), that column aligned to
+        // the plan's item rows. `shape_faceted` owns both halves and returns whether
+        // a right column was built.
         self.overlay_right_shown = false;
         if geom.theme {
-            return self.overlay_shape_theme(geom, ink, muted);
+            return self.shape_faceted(geom, ink, muted);
         }
         let visible = geom.visible;
         let top_idx = geom.top_idx;
@@ -164,14 +201,16 @@ impl TextPipeline {
             &self.overlay_git
         };
         let has_right = !right_labels.is_empty();
-        // One line per name row: a `\n`-prefixed label leaves line 0 (the query row)
-        // empty and puts label N on candidate row N; the hint row (if any) stays empty.
-        let bind_strs: Vec<String> = (0..visible)
-            .map(|row| {
-                let label = right_labels.get(top_idx + row).map(|s| s.as_str()).unwrap_or("");
-                format!("\n{label}")
-            })
-            .collect();
+        // One line per name row, aligned to the candidate rows through the shared
+        // `right_bind_lines` owner: the flat card's ONE header line (the `› query`
+        // row, `header_rows == 1`) stays empty and label N lands on candidate row N;
+        // the hint row (if any) stays empty.
+        let bind_strs = right_bind_lines(
+            geom.header_rows,
+            (0..visible).map(|row| {
+                right_labels.get(top_idx + row).map(|s| s.as_str()).unwrap_or("")
+            }),
+        );
 
         // ONE shared row budget, split by the rowlayout primitive: the card's text
         // width in mean glyph widths against the widest right-column label. `Split`/
@@ -228,6 +267,94 @@ impl TextPipeline {
         false
     }
 
+    /// FACETED (lens-strip) card shaping: the section-grouped NAME column
+    /// ([`Self::overlay_shape_theme`], which also records the active-lens
+    /// underline), then — REUSING the SAME right-column owner the flat path uses
+    /// ([`Self::shape_overlay_right`], not a copy) — the dim RIGHT column
+    /// (command-palette chords / go-to "last edited" times / Browse·Project git
+    /// tags), its lines offset to line up with the plan's ITEM rows. Returns
+    /// whether a right column was built (so the caller uploads its text area).
+    ///
+    /// THE ROW MODEL (the alignment crux — got exactly right, verified by a
+    /// capture): a faceted card has TWO header rows (query line 0 + lens STRIP
+    /// line 1, `geom.header_rows == 2`), and its candidate area is the DISPLAY
+    /// PLAN — section HEADERS ([`ThemeLine::Header`], present under a real lens
+    /// where `overlay_sections` is populated) interleaved with world/command
+    /// ROWS ([`ThemeLine::Item`]). So the bind column is built by walking the
+    /// plan one display line at a time via the shared [`right_bind_lines`]: an
+    /// `Item(i)` gets item `i`'s label (the absolute item index the plan carries,
+    /// NOT a windowed offset), a `Header` gets an EMPTY line (a header is not a
+    /// binding row), and the FIRST line carries `header_rows` leading newlines so
+    /// the plan begins on display line 2. Both buffers share the overlay UI row
+    /// height ([`Self::overlay_lh`]), so bind line N sits on the same y as name
+    /// line N.
+    ///
+    /// THE LITERAL Theme picker (Switch theme…) has empty bindings/times/git →
+    /// `has_right` false → an early `false` return with NO bind buffer built, so
+    /// it renders byte-identically. Only the faceted pickers that populate a right
+    /// column get one.
+    fn shape_faceted(
+        &mut self,
+        geom: &OverlayGeom,
+        ink: glyphon::Color,
+        muted: glyphon::Color,
+    ) -> bool {
+        // The section-grouped name column + the active-lens underline (unchanged).
+        self.overlay_shape_theme(geom, ink, muted);
+        // The dim RIGHT column: the SAME precedence the flat path uses (bindings →
+        // times → git; only one is ever populated). Empty on the literal Theme
+        // picker → no right column, byte-identical.
+        let right_labels: &[String] = if !self.overlay_bindings.is_empty() {
+            &self.overlay_bindings
+        } else if !self.overlay_times.is_empty() {
+            &self.overlay_times
+        } else {
+            &self.overlay_git
+        };
+        if right_labels.is_empty() {
+            return false;
+        }
+        // One bind line per DISPLAY line of the plan, aligned to the ITEM rows: a
+        // header line gets an empty label, an item line gets its own item's label,
+        // and the first line pads by `header_rows` (query + strip) so the plan
+        // begins on display line 2.
+        let bind_strs = right_bind_lines(
+            geom.header_rows,
+            geom.plan.iter().map(|line| match line {
+                ThemeLine::Item(i) => {
+                    right_labels.get(*i).map(|s| s.as_str()).unwrap_or("")
+                }
+                ThemeLine::Header(_) => "",
+            }),
+        );
+        self.shape_overlay_right(geom, ink, muted, &bind_strs);
+        self.overlay_right_shown = true;
+        true
+    }
+
+    /// The inline `"<title> › "` query-line prefix, or an EMPTY string when
+    /// the bare `› ` sigil should show instead. ONE owner, shared by the flat
+    /// ([`Self::shape_overlay_names`]) and faceted
+    /// ([`Self::overlay_shape_theme`]) shapers so the two inline sites can
+    /// never diverge (`same behavior ⇒ same code`). Empty when:
+    /// - this picker draws no title (`overlay_title` empty — Rename/InsertLink
+    ///   orient via their own modal prompt), OR
+    /// - the active [`theme::TitleStyle`] is a `Placard`: the corner wordmark
+    ///   already announces the picker, so the inline prefix must NOT ALSO fire
+    ///   (both firing was the reported double-title bug). `InlinePrefix` (the
+    ///   default on every world) keeps the prefix — byte-identical to before.
+    pub(super) fn overlay_title_prefix(&self) -> String {
+        let placard = matches!(
+            crate::render::effective_title_style(),
+            theme::TitleStyle::Placard { .. }
+        );
+        if self.overlay_title.is_empty() || placard {
+            String::new()
+        } else {
+            format!("{} › ", self.overlay_title)
+        }
+    }
+
     /// Shape the overlay's LEFT column into `panel_buffer`: the `› query` line (when
     /// the picker has one), the candidate `rows` (pre-budgeted by the caller through
     /// [`rowlayout`]), and the dim foot hint. Carved verbatim out of the old inline
@@ -252,12 +379,10 @@ impl TextPipeline {
         // draws its title (`overlay_title` nonempty — every kind except Rename/
         // InsertLink, which already orient via their own modal prompt) prepends it,
         // muted, before the `› ` sigil — "<title> › query", so routing from the
-        // palette into another picker always says where you landed.
-        let title_prefix = if self.overlay_title.is_empty() {
-            String::new()
-        } else {
-            format!("{} › ", self.overlay_title)
-        };
+        // palette into another picker always says where you landed. SUPPRESSED under
+        // a `Placard` title style (the corner wordmark already names the picker) —
+        // `overlay_title_prefix` owns that ONE rule for both inline sites.
+        let title_prefix = self.overlay_title_prefix();
         let sigil = "› ";
         if has_query {
             if title_prefix.is_empty() {

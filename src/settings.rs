@@ -97,8 +97,8 @@ pub static SETTINGS: &[SettingRow] = &[
     SettingRow { name: "Writing nits",      category: "Writing",     kind: SettingKind::Toggle },
     SettingRow { name: "Ambiguous CJK reads as", category: "Writing", kind: SettingKind::Picker },
     // Files & Projects —
-    SettingRow { name: "Notes root",        category: "Files",       kind: SettingKind::Path },
-    SettingRow { name: "Workspace",         category: "Files",       kind: SettingKind::Path },
+    SettingRow { name: "Notes folder",      category: "Files",       kind: SettingKind::Path },
+    SettingRow { name: "Projects folder",   category: "Files",       kind: SettingKind::Path },
     SettingRow { name: "Project root",      category: "Files",       kind: SettingKind::Path },
     SettingRow { name: "Autosave",          category: "Files",       kind: SettingKind::Toggle },
     SettingRow { name: "Local history",     category: "Files",       kind: SettingKind::Toggle },
@@ -251,8 +251,8 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
             .map(|l| l.label().to_string())
             .unwrap_or_else(|| "—".to_string()),
         // Files & Projects —
-        "Notes root" => values.notes_root.clone(),
-        "Workspace" => values.workspace.clone(),
+        "Notes folder" => values.notes_root.clone(),
+        "Projects folder" => values.workspace.clone(),
         "Project root" => values.project_root.clone(),
         "Autosave" => on_off(values.autosave).to_string(),
         "Local history" => on_off(values.history).to_string(),
@@ -319,8 +319,8 @@ pub fn value_key(name: &str) -> Option<&'static str> {
 /// additionally re-scopes the active project).
 pub fn path_key(name: &str) -> Option<&'static str> {
     Some(match name {
-        "Notes root" => "notes_root",
-        "Workspace" => "workspace",
+        "Notes folder" => "notes_root",
+        "Projects folder" => "workspace",
         "Project root" => "project_root",
         _ => return None,
     })

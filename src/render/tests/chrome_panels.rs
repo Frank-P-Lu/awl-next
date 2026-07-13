@@ -666,6 +666,121 @@ fn overlay_right_column_yields_before_names_elide() {
     assert_eq!(line(&p, 1), "Block", "…and the names still never pay for it");
 }
 
+/// REGRESSION (the faceted-palette invisible-chord bug): once the Cmd-P command
+/// palette grew a lens strip it routed through the FACETED shaper, which never
+/// built the right column — so every command's key chord rendered as BLANK
+/// pixels, even though the sidecar `overlay.bindings` still carried it correctly
+/// (`⌘S`, `⌘Z`, …). Per the Wagtail-invisible-row lesson, the sidecar CANNOT
+/// catch this class (it was green throughout), so this asserts over the SHAPED
+/// bind buffer directly: a faceted picker with bindings shapes its chord column,
+/// aligned so each chord sits on ITS command's row (the alignment crux — faceted
+/// `header_rows == 2`, plus section headers get no chord); the literal Theme
+/// picker (empty bindings) stays name-only, byte-identical.
+#[test]
+fn faceted_palette_shapes_the_chord_column_aligned_to_its_rows() {
+    let _g = crate::testlock::serial();
+    let ink = theme::base_content().to_glyphon();
+    let muted = theme::muted().to_glyphon();
+
+    // ── A faceted COMMAND PALETTE: a lens strip (→ faceted, header_rows == 2)
+    //    with per-command chords, and NO section headers (the flat All-lens
+    //    case the user sees by default). ──
+    {
+        let Some(mut p) = headless_pipeline() else {
+            eprintln!("skipping faceted_palette_shapes_the_chord_column_aligned_to_its_rows: no wgpu adapter");
+            return;
+        };
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_title = "commands";
+        v.overlay_lens = vec![
+            ("All".into(), true),
+            ("File".into(), false),
+            ("Edit".into(), false),
+        ];
+        v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+        v.overlay_bindings = vec!["⌘S".into(), "⌘Z".into(), "⌘⇧Z".into()];
+        p.set_view(&v);
+        let geom = p.overlay_geometry(1200);
+        let has_right = p.overlay_shape_text(&geom, ink, muted);
+
+        assert!(has_right, "a faceted palette WITH chords must build a right column");
+        assert!(p.overlay_right_shown, "…and mark it shown, so `overlay_upload_text` draws it");
+
+        // Real GLYPHS were shaped (not merely logical text) — the pixels exist.
+        let bind_glyphs: usize =
+            p.panel_bind_buffer.layout_runs().map(|r| r.glyphs.len()).sum();
+        assert!(bind_glyphs > 0, "the chord column must shape real glyphs, got 0");
+
+        // ALIGNMENT (the crux): faceted header_rows == 2 (query line 0 + lens
+        // strip line 1), then the item rows. Item 0's NAME is on display line 2;
+        // its CHORD must land on the SAME line of the (uniform-row-height) bind
+        // buffer — not shifted up onto the strip/query or down a row.
+        let name = |p: &TextPipeline, i: usize| p.panel_buffer.lines[i].text().to_string();
+        let bind = |p: &TextPipeline, i: usize| p.panel_bind_buffer.lines[i].text().to_string();
+        assert_eq!(name(&p, 2), "Save", "item 0 name on the first candidate row (line 2)");
+        assert_eq!(bind(&p, 2), "⌘S", "item 0's chord sits on item 0's row, not shifted");
+        assert_eq!(bind(&p, 3), "⌘Z", "item 1's chord on item 1's row");
+        assert_eq!(bind(&p, 4), "⌘⇧Z", "item 2's chord on item 2's row");
+        assert_eq!(bind(&p, 0), "", "the query row (line 0) carries no chord");
+        assert_eq!(bind(&p, 1), "", "the lens-strip row (line 1) carries no chord");
+    }
+
+    // ── A faceted palette UNDER A REAL LENS: section HEADERS interleave the item
+    //    rows (`overlay_sections` populated). A header is not a binding row, so it
+    //    gets an EMPTY bind line and the chords stay aligned to their own item
+    //    rows — the plan-walking half of the alignment. ──
+    {
+        let Some(mut p) = headless_pipeline() else { return };
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_title = "commands";
+        v.overlay_lens = vec![("All".into(), false), ("File".into(), true)];
+        v.overlay_items = vec!["Save".into(), "Open".into(), "Copy".into()];
+        v.overlay_sections = vec!["File".into(), "File".into(), "Edit".into()];
+        v.overlay_bindings = vec!["⌘S".into(), "⌘O".into(), "⌘C".into()];
+        p.set_view(&v);
+        let geom = p.overlay_geometry(1200);
+        assert!(p.overlay_shape_text(&geom, ink, muted), "still builds a right column with headers");
+        let name = |p: &TextPipeline, i: usize| p.panel_buffer.lines[i].text().to_string();
+        let bind = |p: &TextPipeline, i: usize| p.panel_bind_buffer.lines[i].text().to_string();
+        // Plan under header_rows 2: [Header FILE, Save, Open, Header EDIT, Copy] →
+        // display lines 2..7. Headers get empty chords; items keep theirs.
+        assert_eq!(name(&p, 2), "FILE", "section header at display line 2");
+        assert_eq!(bind(&p, 2), "", "a section header is not a binding row");
+        assert_eq!(name(&p, 3), "Save");
+        assert_eq!(bind(&p, 3), "⌘S", "item chord aligns PAST the header");
+        assert_eq!(name(&p, 4), "Open");
+        assert_eq!(bind(&p, 4), "⌘O");
+        assert_eq!(name(&p, 5), "EDIT", "second section header");
+        assert_eq!(bind(&p, 5), "", "…also carries no chord");
+        assert_eq!(name(&p, 6), "Copy");
+        assert_eq!(bind(&p, 6), "⌘C");
+    }
+
+    // ── THE INVARIANT: the literal Theme picker (Switch theme…) has empty
+    //    bindings/times/git → NO right column, byte-identical. A FRESH pipeline
+    //    keeps the bind buffer genuinely empty (never shaped), so a zero glyph
+    //    count is a real proof rather than stale state from a prior case. ──
+    {
+        let Some(mut p) = headless_pipeline() else { return };
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_title = "themes";
+        v.overlay_lens = vec![("All".into(), true)];
+        v.overlay_items = vec!["Tawny".into(), "Mopoke".into()];
+        // no bindings / times / git — the literal Theme picker
+        p.set_view(&v);
+        let geom = p.overlay_geometry(1200);
+        let has_right = p.overlay_shape_text(&geom, ink, muted);
+        assert!(!has_right, "the literal Theme picker builds no right column");
+        assert!(!p.overlay_right_shown, "…and never marks one shown");
+        let bind_glyphs: usize =
+            p.panel_bind_buffer.layout_runs().map(|r| r.glyphs.len()).sum();
+        assert_eq!(bind_glyphs, 0, "the Theme picker's right column stays empty (byte-identical)");
+    }
+}
+
 /// RESPONSIVE CARD: at the minimum window width the centered picker card spans
 /// nearly the full window (window − 2·margin), mirroring the responsive page
 /// column, instead of the old fixed 360 that starved the text column; at the

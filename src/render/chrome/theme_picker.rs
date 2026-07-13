@@ -223,7 +223,10 @@ impl TextPipeline {
     /// then the section-grouped world rows (faint uppercase headers at LABEL size + rows
     /// in content ink), then the foot hint. Records the active-lens underline rect
     /// (scanned from the shaped strip glyphs, so it lands exactly under the label at any
-    /// world face) into `overlay_theme_underline`. No right column (returns `false`).
+    /// world face) into `overlay_theme_underline`. Shapes only the NAME column (returns
+    /// `false`); its faceted caller ([`TextPipeline::shape_faceted`]) overlays the dim
+    /// RIGHT column (chords / times / git) aligned to the plan's item rows when the
+    /// picker fills one — the literal Theme picker has none, so it stays name-only.
     ///
     /// The strip renders ONLY the faceting lenses (strip index ≥ 1) — the `All` HOME
     /// (index 0, the flat/unfiltered corpus) is NOT drawn as a label. The flat state
@@ -371,12 +374,10 @@ impl TextPipeline {
         // OVERLAY-TITLES ROUND: prepend "<title> › " (muted) instead of the bare
         // sigil when this picker draws a title — the theme picker always does
         // (`draws_title_prefix` excludes only Rename/InsertLink, neither of which
-        // this shaper serves).
-        let title_prefix = if self.overlay_title.is_empty() {
-            String::new()
-        } else {
-            format!("{} › ", self.overlay_title)
-        };
+        // this shaper serves). SUPPRESSED under a `Placard` title style (the corner
+        // wordmark already names the picker) — the SAME `overlay_title_prefix` owner
+        // the flat shaper uses, so the two inline paths cannot diverge.
+        let title_prefix = self.overlay_title_prefix();
         let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
         if title_prefix.is_empty() {
             spans.push((sigil, mk(muted)));

@@ -555,12 +555,12 @@ fn settings_value_edit_cancel_restores_the_cell_and_keeps_menu_open() {
 
 #[test]
 fn settings_path_row_opens_navigator_with_breadcrumb_then_picks_the_named_key() {
-    // Fuzzy-filter to "Notes root" (a Path row).
+    // Fuzzy-filter to "Notes folder" (a Path row).
     let mut overlay = Some(settings_overlay());
     for c in "notes".chars() {
         settings_drive(&mut overlay, &Action::InsertChar(c));
     }
-    assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Notes root"));
+    assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Notes folder"));
     // Enter opens the folder NAVIGATOR (Project), with a Settings breadcrumb AND
     // the named config key stamped so its accept writes THAT key.
     let eff = settings_drive(&mut overlay, &Action::Newline);
@@ -599,7 +599,7 @@ fn settings_path_row_opens_navigator_with_breadcrumb_then_picks_the_named_key() 
 
 #[test]
 fn settings_path_navigator_keeps_breadcrumb_across_descend() {
-    // Open the folder navigator from the "Notes root" Path row (stamps the key +
+    // Open the folder navigator from the "Notes folder" Path row (stamps the key +
     // breadcrumb), then DESCEND into a folder (Enter, now that Project facets).
     // The breadcrumb must survive the rebuild so the eventual "." pick still
     // writes the named key and returns to Settings.

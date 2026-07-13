@@ -625,23 +625,26 @@ impl TextPipeline {
             custom_glyphs: &[],
         };
         // The placard wordmark is FIRST in the batch (drawn behind everything
-        // that follows), CLIPPED TO THE CARD's own rect — never the tighter
-        // text column, and never past the card's own edges (no bleed into the
-        // scrim, see `overlay_shape_placard`'s doc).
+        // that follows), clipped to the WHOLE CANVAS — a screen-corner
+        // watermark that bleeds OVER the scrim behind the card (never the
+        // tighter card/text rect), per `overlay_shape_placard`'s doc. It is
+        // still uploaded first, so the rows composite over it, and it rides
+        // the text pass (above the scrim quad) so the dimmed document below
+        // still shows through.
         let mut areas: Vec<TextArea> = Vec::new();
         if let Some((px, py, _pw, _ph)) = placard {
-            let card_bounds = TextBounds {
-                left: geom.card_x.max(0.0) as i32,
-                top: geom.card_y.max(0.0) as i32,
-                right: ((geom.card_x + geom.card_w).min(width as f32)) as i32,
-                bottom: ((geom.card_y + geom.card_h).min(height as f32)) as i32,
+            let canvas_bounds = TextBounds {
+                left: 0,
+                top: 0,
+                right: width as i32,
+                bottom: height as i32,
             };
             areas.push(TextArea {
                 buffer: &self.placard_buffer,
                 left: px,
                 top: py,
                 scale: 1.0,
-                bounds: card_bounds,
+                bounds: canvas_bounds,
                 default_color: ink,
                 custom_glyphs: &[],
             });
