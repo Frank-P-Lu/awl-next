@@ -46,9 +46,9 @@ pub const LAVA_SPEED: f32 = 0.03;
 
 /// The FROZEN phase: what the lamp settles to under Reduce Motion, and the fixed
 /// phase a headless capture always renders (t=0, deterministic). The base blob
-/// layout ([`BASE_BLOBS`]) is authored so this phase reads as a settled mid
-/// composition, so the one frozen frame serves BOTH the accessibility freeze and
-/// the capture — matching the caret-demo `settle()` precedent (`render.rs`).
+/// layout ([`MARGIN_BLOBS`]) is authored so this phase reads as a settled mid
+/// composition, so the one frozen frame serves BOTH the accessibility freeze
+/// and the capture — matching the caret-demo `settle()` precedent (`render.rs`).
 pub const LAVA_FROZEN_PHASE: f32 = 0.0;
 
 /// MARGINS-ONLY mask feather WIDTH (px): how far into the margin, starting from
@@ -60,25 +60,45 @@ pub const MARGIN_GAP_PX: f32 = 28.0;
 /// layout uses fewer, and `blob_count` names how many are live.
 pub const MAX_BLOBS: usize = 8;
 
-/// The BASE blob layout — two thin flanking lamps (three blobs each, the right
-/// mirrored from the left), `[cx, cy, r, w]` in UV space (cx/cy in [0,1], 0,0 =
-/// top-left; r = radius as a fraction of viewport HEIGHT; w = field weight). The
-/// shader animates each blob's position from the phase (see [`animated_center`]);
-/// these are the rest positions. Hand-placed as a starting composition — the
-/// margin-RELATIVE sizing the probe's own finding #1 asks for (fixed-UV blobs
-/// strand in a WIDE margin) is BANKED for the lava-world authoring round; the
-/// column mask is the safety net either way (blobs never spill into the page).
-/// TASTE DATA — flagged for live review when a lava world is authored.
-pub const BASE_BLOBS: [[f32; 4]; 6] = [
-    // Left lamp.
-    [0.048, 0.66, 0.055, 1.2],
-    [0.056, 0.42, 0.048, 1.0],
-    [0.044, 0.20, 0.038, 0.8],
-    // Right lamp (mirrored: cx' = 1 - cx).
-    [0.952, 0.66, 0.055, 1.2],
-    [0.944, 0.42, 0.048, 1.0],
-    [0.956, 0.20, 0.038, 0.8],
+/// The canonical HALF-lamp layout, expanded symmetrically by
+/// [`margin_relative_blobs`]. Each row is `[x, cy, r, w]`: `x` is the center as
+/// a fraction of the ACTUAL side margin measured from the window edge, `cy` is
+/// viewport-height-relative, `r` is margin-width-relative, and `w` is field
+/// weight. This makes the lamp fill the space the page leaves it rather than
+/// remaining a tiny fixed-pixel ornament on a normal/wide window.
+pub const MARGIN_BLOBS: [[f32; 4]; 3] = [
+    [0.48, 0.66, 0.46, 1.2],
+    [0.56, 0.42, 0.40, 1.0],
+    [0.44, 0.20, 0.32, 0.8],
 ];
+
+/// Keep a very wide/short window from turning one side-margin blob into a shape
+/// taller than the lamp register. Within that safety ceiling, radius is wholly
+/// margin-relative.
+const MAX_RADIUS_HEIGHT_FRAC: f32 = 0.16;
+
+/// Resolve the canonical half-lamp against the LIVE page geometry into the six
+/// shader blobs `[cx_uv, cy_uv, radius_as_height_fraction, weight]`. Left and
+/// right use their own margin widths, so the law remains true even if future page
+/// geometry stops being exactly symmetric.
+pub fn margin_relative_blobs(viewport: (f32, f32), col_left: f32, col_right: f32) -> [[f32; 4]; 6] {
+    let (width, height) = (viewport.0.max(1.0), viewport.1.max(1.0));
+    let left_w = col_left.clamp(0.0, width);
+    let right_w = (width - col_right).clamp(0.0, width);
+    let mut out = [[0.0; 4]; 6];
+    for (i, spec) in MARGIN_BLOBS.iter().enumerate() {
+        let left_r = (spec[2] * left_w / height).min(MAX_RADIUS_HEIGHT_FRAC);
+        let right_r = (spec[2] * right_w / height).min(MAX_RADIUS_HEIGHT_FRAC);
+        out[i] = [spec[0] * left_w / width, spec[1], left_r, spec[3]];
+        out[i + MARGIN_BLOBS.len()] = [
+            (width - spec[0] * right_w) / width,
+            spec[1],
+            right_r,
+            spec[3],
+        ];
+    }
+    out
+}
 
 #[allow(dead_code)] // shader-mirror constant (see the pure-math note below).
 const TAU: f32 = std::f32::consts::TAU;
@@ -117,10 +137,21 @@ pub fn column_mask(x: f32, col_left: f32, col_right: f32, gap: f32) -> f32 {
 /// slow lava bob, a per-blob sine keyed off the index so the lamps never move in
 /// unison. MUST match `shaders/lava.wgsl`'s `blob_center`. Pure.
 #[allow(dead_code)]
-pub fn animated_center(i: usize, base_cx: f32, base_cy: f32, phase: f32) -> (f32, f32) {
+pub fn animated_center(
+    i: usize,
+    base_cx: f32,
+    base_cy: f32,
+    base_r: f32,
+    viewport: (f32, f32),
+    phase: f32,
+) -> (f32, f32) {
     let fi = i as f32;
     let amp_y = 0.055 + 0.020 * (fi * 0.37).fract();
-    let amp_x = 0.010 + 0.006 * (fi * 0.61).fract();
+    // Horizontal sway follows the resolved blob radius instead of a fixed
+    // viewport fraction; a narrow margin's small lamp no longer wanders by the
+    // same pixels as a generous margin's large one.
+    let aspect = viewport.1.max(1.0) / viewport.0.max(1.0);
+    let amp_x = base_r * aspect * (0.18 + 0.08 * (fi * 0.61).fract());
     let off = fi * 1.7;
     let cy = base_cy + amp_y * (phase * TAU + off).sin();
     let cx = base_cx + amp_x * (phase * TAU * 0.5 + off * 1.3).sin();
@@ -136,7 +167,7 @@ pub fn metaball_field(px: (f32, f32), viewport: (f32, f32), blobs: &[[f32; 4]], 
     const FIELD_K: f32 = 1.2;
     let mut total = 0.0;
     for (i, b) in blobs.iter().enumerate() {
-        let (cx, cy) = animated_center(i, b[0], b[1], phase);
+        let (cx, cy) = animated_center(i, b[0], b[1], b[2], viewport, phase);
         let center = (cx * viewport.0, cy * viewport.1);
         let r_px = (b[2] * viewport.1).max(1.0);
         let dx = px.0 - center.0;
@@ -225,14 +256,25 @@ fn parse_spec(raw: &str) -> Option<(Background, f32)> {
         _ => return None,
     };
     Some((
-        Background::Lava { ground, blob_lo, blob_hi, edge, dithered },
+        Background::Lava {
+            ground,
+            blob_lo,
+            blob_hi,
+            edge,
+            dithered,
+        },
         phase,
     ))
 }
 
 fn spec() -> &'static Option<(Background, f32)> {
     static ONCE: OnceLock<Option<(Background, f32)>> = OnceLock::new();
-    ONCE.get_or_init(|| std::env::var("AWL_LAVA").ok().as_deref().and_then(parse_spec))
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_LAVA")
+            .ok()
+            .as_deref()
+            .and_then(parse_spec)
+    })
 }
 
 /// The dev gallery override [`Background::Lava`], if `AWL_LAVA` was set at startup
@@ -289,20 +331,19 @@ impl LavaPipeline {
             source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/lava.wgsl").into()),
         });
 
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("lava globals layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lava globals layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
 
         let globals_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lava globals"),
@@ -400,13 +441,15 @@ impl LavaPipeline {
             }
         };
         self.active = true;
+        let resolved =
+            margin_relative_blobs((width as f32, height as f32), col_left, col_left + col_w);
         let mut blobs = [[0.0f32; 4]; MAX_BLOBS];
-        for (dst, src) in blobs.iter_mut().zip(BASE_BLOBS.iter()) {
+        for (dst, src) in blobs.iter_mut().zip(resolved.iter()) {
             *dst = *src;
         }
         let globals = Globals {
             viewport: [width as f32, height as f32],
-            blob_count: BASE_BLOBS.len() as u32,
+            blob_count: resolved.len() as u32,
             dither: dithered as u32,
             margin: [col_left, col_left + col_w, MARGIN_GAP_PX, edge.mask_mode()],
             anim: [phase, 0.0, 0.0, 0.0],
@@ -473,14 +516,20 @@ mod tests {
         // adds sin(0)=0, so index-0 center is exactly its base at phase 0).
         let blobs = [[0.5f32, 0.5, 0.1, 1.0]];
         let vp = (1000.0, 800.0);
-        let center = animated_center(0, 0.5, 0.5, 0.0);
+        let center = animated_center(0, 0.5, 0.5, 0.1, vp, 0.0);
         let center_px = (center.0 * vp.0, center.1 * vp.1);
         let at_center = metaball_field(center_px, vp, &blobs, 0.0);
         let near = metaball_field((center_px.0 + 40.0, center_px.1), vp, &blobs, 0.0);
         let far = metaball_field((center_px.0 + 400.0, center_px.1), vp, &blobs, 0.0);
-        assert!(at_center > near, "field peaks at the center: {at_center} > {near}");
+        assert!(
+            at_center > near,
+            "field peaks at the center: {at_center} > {near}"
+        );
         assert!(near > far, "field decays with distance: {near} > {far}");
-        assert!(at_center <= 1.0 + 1e-4, "peak field ~= weight 1.0: {at_center}");
+        assert!(
+            at_center <= 1.0 + 1e-4,
+            "peak field ~= weight 1.0: {at_center}"
+        );
         assert!(far < 0.01, "far field is negligible: {far}");
     }
 
@@ -494,7 +543,10 @@ mod tests {
         let mid_px = (0.43 * vp.0, 0.5 * vp.1);
         let f_one = metaball_field(mid_px, vp, &one, 0.0);
         let f_two = metaball_field(mid_px, vp, &two, 0.0);
-        assert!(f_two > f_one, "summed field is higher between two blobs: {f_two} > {f_one}");
+        assert!(
+            f_two > f_one,
+            "summed field is higher between two blobs: {f_two} > {f_one}"
+        );
     }
 
     #[test]
@@ -502,12 +554,84 @@ mod tests {
         // A blob at a non-zero index actually bobs across phases, and stays within
         // its authored amplitude (never wandering into the column).
         let base_cy = 0.5;
-        let a = animated_center(2, 0.05, base_cy, 0.0);
-        let b = animated_center(2, 0.05, base_cy, 0.25);
-        assert!((a.1 - b.1).abs() > 1e-3, "phase 0 vs 0.25 move the blob: {a:?} {b:?}");
+        let vp = (1000.0, 800.0);
+        let a = animated_center(2, 0.05, base_cy, 0.05, vp, 0.0);
+        let b = animated_center(2, 0.05, base_cy, 0.05, vp, 0.25);
+        assert!(
+            (a.1 - b.1).abs() > 1e-3,
+            "phase 0 vs 0.25 move the blob: {a:?} {b:?}"
+        );
         for phase in [0.0, 0.1, 0.37, 0.5, 0.83, 0.99] {
-            let (_, cy) = animated_center(2, 0.05, base_cy, phase);
+            let (_, cy) = animated_center(2, 0.05, base_cy, 0.05, vp, phase);
             assert!((cy - base_cy).abs() < 0.09, "bob stays bounded: {cy}");
+        }
+    }
+
+    // --- The MARGIN-RELATIVE layout -------------------------------------------
+
+    #[test]
+    fn blobs_grow_with_the_margin_and_mirror_within_each_side() {
+        let vp = (1200.0, 800.0);
+        let tight = margin_relative_blobs(vp, 100.0, 1100.0);
+        let roomy = margin_relative_blobs(vp, 300.0, 900.0);
+
+        for i in 0..MARGIN_BLOBS.len() {
+            let left = roomy[i];
+            let right = roomy[i + MARGIN_BLOBS.len()];
+            assert!(
+                roomy[i][2] > tight[i][2],
+                "blob {i} radius grows with its margin"
+            );
+            assert!(
+                (left[0] + right[0] - 1.0).abs() < 1e-6,
+                "blob {i} mirrors around the viewport"
+            );
+            assert!(
+                left[0] * vp.0 < 300.0,
+                "left blob {i} center stays in the left margin"
+            );
+            assert!(
+                right[0] * vp.0 > 900.0,
+                "right blob {i} center stays in the right margin"
+            );
+        }
+    }
+
+    #[test]
+    fn each_side_uses_its_own_margin_width() {
+        let vp = (1200.0, 800.0);
+        let blobs = margin_relative_blobs(vp, 120.0, 800.0); // left=120, right=400
+        for i in 0..MARGIN_BLOBS.len() {
+            let left = blobs[i];
+            let right = blobs[i + MARGIN_BLOBS.len()];
+            assert!(
+                right[2] > left[2],
+                "right blob {i} follows the roomier right margin"
+            );
+            assert!(left[0] * vp.0 < 120.0);
+            assert!(right[0] * vp.0 > 800.0);
+        }
+    }
+
+    #[test]
+    fn resolved_lamp_produces_visible_field_in_tight_and_roomy_margins() {
+        let vp = (1200.0, 800.0);
+        for (left, right) in [(40.0, 1160.0), (300.0, 900.0)] {
+            let blobs = margin_relative_blobs(vp, left, right);
+            for (i, b) in blobs.iter().enumerate() {
+                let center = animated_center(i, b[0], b[1], b[2], vp, 0.0);
+                let px = (center.0 * vp.0, center.1 * vp.1);
+                let field = metaball_field(px, vp, &blobs, 0.0);
+                let mask = column_mask(px.0, left, right, MARGIN_GAP_PX);
+                assert!(
+                    field >= 0.8,
+                    "blob {i} has a real silhouette in margin {left}: {field}"
+                );
+                assert!(
+                    mask > 0.0,
+                    "blob {i} center is visibly outside the column in margin {left}"
+                );
+            }
         }
     }
 
@@ -518,8 +642,16 @@ mod tests {
         let (col_left, col_right, gap) = (300.0, 900.0, 28.0);
         // Deep inside the column: masked out entirely (transparent → page clear).
         assert_eq!(column_mask(600.0, col_left, col_right, gap), 0.0);
-        assert_eq!(column_mask(col_left, col_left, col_right, gap), 0.0, "0 AT the edge");
-        assert_eq!(column_mask(col_right, col_left, col_right, gap), 0.0, "0 AT the far edge");
+        assert_eq!(
+            column_mask(col_left, col_left, col_right, gap),
+            0.0,
+            "0 AT the edge"
+        );
+        assert_eq!(
+            column_mask(col_right, col_left, col_right, gap),
+            0.0,
+            "0 AT the far edge"
+        );
         // A full gap into the left margin: full strength.
         assert!((column_mask(col_left - gap, col_left, col_right, gap) - 1.0).abs() < 1e-4);
         assert!((column_mask(col_right + gap, col_left, col_right, gap) - 1.0).abs() < 1e-4);
@@ -534,22 +666,43 @@ mod tests {
         for k in 1..=40 {
             let x = col_left - k as f32; // stepping out into the left margin
             let m = column_mask(x, col_left, col_right, gap);
-            assert!(m >= prev - 1e-6, "mask ramps monotonically at x={x}: {m} >= {prev}");
+            assert!(
+                m >= prev - 1e-6,
+                "mask ramps monotonically at x={x}: {m} >= {prev}"
+            );
             prev = m;
         }
-        assert!((prev - 1.0).abs() < 1e-4, "settled at full strength: {prev}");
+        assert!(
+            (prev - 1.0).abs() < 1e-4,
+            "settled at full strength: {prev}"
+        );
     }
 
     // --- The CADENCE gate -------------------------------------------------------
 
     #[test]
     fn lava_ticks_only_when_active_ambient_on_not_reduced_and_focused() {
-        assert!(lava_should_tick(true, true, false, true), "all conditions met → tick");
+        assert!(
+            lava_should_tick(true, true, false, true),
+            "all conditions met → tick"
+        );
         // Each single negation kills the tick (0% idle preserved).
-        assert!(!lava_should_tick(false, true, false, true), "non-lava world never ticks");
-        assert!(!lava_should_tick(true, false, false, true), "ambient_motion off → no tick");
-        assert!(!lava_should_tick(true, true, true, true), "reduce motion → no tick");
-        assert!(!lava_should_tick(true, true, false, false), "blurred → paused, no tick");
+        assert!(
+            !lava_should_tick(false, true, false, true),
+            "non-lava world never ticks"
+        );
+        assert!(
+            !lava_should_tick(true, false, false, true),
+            "ambient_motion off → no tick"
+        );
+        assert!(
+            !lava_should_tick(true, true, true, true),
+            "reduce motion → no tick"
+        );
+        assert!(
+            !lava_should_tick(true, true, false, false),
+            "blurred → paused, no tick"
+        );
     }
 
     // --- Phase resolution / determinism ----------------------------------------
@@ -577,10 +730,16 @@ mod tests {
     #[test]
     fn advance_phase_moves_forward_and_wraps_into_unit_interval() {
         let p = advance_phase(0.0, 1.0);
-        assert!(p > 0.0 && p < 1.0, "one second advances within a cycle: {p}");
+        assert!(
+            p > 0.0 && p < 1.0,
+            "one second advances within a cycle: {p}"
+        );
         // Wrapping: a huge dt stays in [0,1).
         let w = advance_phase(0.99, 1000.0);
-        assert!((0.0..1.0).contains(&w), "wrapped into the unit interval: {w}");
+        assert!(
+            (0.0..1.0).contains(&w),
+            "wrapped into the unit interval: {w}"
+        );
         // Monotone within a cycle.
         assert!(advance_phase(0.1, 0.5) > 0.1);
     }
@@ -609,7 +768,13 @@ mod tests {
         }
         // Hard edge.
         let (bg3, _) = parse_spec("warm:0.5:hard").unwrap();
-        assert!(matches!(bg3, Background::Lava { edge: LavaEdge::Hard, .. }));
+        assert!(matches!(
+            bg3,
+            Background::Lava {
+                edge: LavaEdge::Hard,
+                ..
+            }
+        ));
         // Garbage → None (leniently ignored; no lava forced).
         assert!(parse_spec("nope:0.0").is_none());
         assert!(parse_spec("warm:notanumber").is_none());

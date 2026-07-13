@@ -166,13 +166,15 @@ fn lava_worlds_keep_figure_ground_at_the_worst_animation_phase() {
         //     weight 1.2 alone exceeds that at its own animated center) — so the ground
         //     genuinely reaches blob_hi, and (1) is a check on an ACTUAL worst-phase pixel.
         let vp = (1200.0, 800.0);
+        let blobs = crate::lava::margin_relative_blobs(vp, 300.0, 900.0);
         let mut peak = 0.0f32;
         for step in 0..64 {
             let phase = step as f32 / 64.0;
-            for (i, b) in crate::lava::BASE_BLOBS.iter().enumerate() {
-                let (cx, cy) = crate::lava::animated_center(i, b[0], b[1], phase);
+            for (i, b) in blobs.iter().enumerate() {
+                let (cx, cy) =
+                    crate::lava::animated_center(i, b[0], b[1], b[2], vp, phase);
                 let px = (cx * vp.0, cy * vp.1);
-                peak = peak.max(crate::lava::metaball_field(px, vp, &crate::lava::BASE_BLOBS, phase));
+                peak = peak.max(crate::lava::metaball_field(px, vp, &blobs, phase));
             }
         }
         assert!(

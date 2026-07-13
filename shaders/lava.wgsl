@@ -87,9 +87,12 @@ fn blob_center(i: u32, base: vec4<f32>) -> vec2<f32> {
     let phase = g.anim.x;
     // Per-blob vertical amplitude (fraction of UV height) + a gentle horizontal
     // sway an octave slower, both offset by the index so the field necks + splits
-    // as neighbours drift past each other.
+    // as neighbours drift past each other. Horizontal amplitude follows the
+    // host-resolved radius: a small lamp in a tight margin sways less than a large
+    // one in a generous margin. MUST match `lava::animated_center`.
     let amp_y = 0.055 + 0.020 * fract(fi * 0.37);
-    let amp_x = 0.010 + 0.006 * fract(fi * 0.61);
+    let aspect = g.viewport.y / max(g.viewport.x, 1.0);
+    let amp_x = base.z * aspect * (0.18 + 0.08 * fract(fi * 0.61));
     let off = fi * 1.7;
     let cy = base.y + amp_y * sin(phase * TAU + off);
     let cx = base.x + amp_x * sin(phase * TAU * 0.5 + off * 1.3);
