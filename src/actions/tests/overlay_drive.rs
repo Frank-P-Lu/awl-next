@@ -405,10 +405,15 @@ fn palette_settings_picker_row_opens_sub_picker_with_command_breadcrumb() {
 fn covered_settings_row_is_absent_from_the_palette_corpus() {
     let ov = command_overlay_with_settings();
     for (row_name, cmd_name) in crate::settings::COVERED_BY {
-        assert!(
-            !ov.corpus.iter().any(|c| c == row_name),
-            "{row_name:?} must not appear in the palette corpus — {cmd_name:?} covers it"
-        );
+        let row_count = ov.corpus.iter().filter(|c| c.as_str() == *row_name).count();
+        if row_name == cmd_name {
+            assert_eq!(row_count, 1, "same-named command/settings doors must collapse to one row");
+        } else {
+            assert_eq!(
+                row_count, 0,
+                "{row_name:?} must not appear in the palette corpus — {cmd_name:?} covers it"
+            );
+        }
         assert!(
             ov.corpus.iter().any(|c| c == cmd_name),
             "{cmd_name:?} must still be the one door in the palette corpus"
@@ -443,6 +448,17 @@ fn settings_action_row_opens_config_as_text_and_closes() {
     let eff = settings_drive(&mut overlay, &Action::Newline);
     assert_eq!(eff, Effect::OpenSettings);
     assert!(overlay.is_none(), "the action row closes the menu");
+}
+
+#[test]
+fn settings_report_problem_row_reuses_the_report_effect_and_closes() {
+    let mut overlay = Some(settings_overlay());
+    for c in "report problem".chars() {
+        settings_drive(&mut overlay, &Action::InsertChar(c));
+    }
+    assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Report a Problem"));
+    assert_eq!(settings_drive(&mut overlay, &Action::Newline), Effect::ReportProblem);
+    assert!(overlay.is_none());
 }
 
 #[test]

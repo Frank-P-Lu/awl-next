@@ -440,6 +440,19 @@ fn about_card_absent_by_default_and_open_reports_true() {
         serde_json::json!("checked —"),
         "open, headless: checked reports the fixed placeholder, never a live figure"
     );
+    assert_eq!(on["about"]["pending_crash"], serde_json::json!(false));
+
+    // Explicit marker fixture: captures never read the developer machine's
+    // crash directory, but can inject the state deterministically to prove the
+    // About pixels and sidecar take the passive-recovery branch.
+    let pending_png = dir.join("pending.png");
+    let pending_opts = CaptureOpts { pending_crash: true, ..CaptureOpts::default() };
+    capture_with(&pending_png, &md, &pending_opts).expect("pending-crash About capture");
+    let pending: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(pending_png.with_extension("json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(pending["about"]["pending_crash"], serde_json::json!(true));
 
     crate::about::set_open(false);
     let _ = std::fs::remove_dir_all(&dir);

@@ -741,11 +741,16 @@ fn dispatch_settings_row(
             }
             Effect::None
         }
-        // "Edit config as text": close the menu, open config.toml (the raw escape
-        // hatch — the same Effect the old config-as-text Settings command fired).
+        // Advanced action rows close the menu and reuse their ordinary command
+        // effects. Keeping Report a Problem here makes Settings a second calm
+        // door without duplicating its mail/crash-marker machinery.
         crate::settings::SettingKind::Action => {
             *ctx.overlay = None;
-            Effect::OpenSettings
+            match row.name {
+                "Report a Problem" => Effect::ReportProblem,
+                "Edit config as text" => Effect::OpenSettings,
+                _ => Effect::None,
+            }
         }
         // VALUE (page widths / zoom): arm the inline numeric edit sub-state, seeded
         // from the row's current cell. The overlay stays open (the value edit is its

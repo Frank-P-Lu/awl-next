@@ -86,7 +86,7 @@ mod blur;
 /// glob in like [`spans`]. The two app-facing helpers stay re-exported by name so
 /// `render::hit_test` / `render::visible_lines_z` resolve unchanged. Byte-identical.
 mod geometry;
-pub use geometry::{hit_test, visible_lines_z, ImageHandle};
+pub use geometry::{hit_test, visible_lines_z, ImageHandle, ResizeEdge};
 use geometry::*;
 
 /// TEXT / SHAPING SEAM — the `set_text` family + its supporting layout machinery
@@ -1820,6 +1820,10 @@ pub struct TextPipeline {
     /// phase — deterministic. Reduce Motion / the dev gallery knob override it at
     /// read time (see [`Self::lava_render_phase`]).
     lava_phase: f32,
+    /// Last-settled viewport used for lava metaball geometry. Live resize keeps
+    /// this fixed while the page mask follows the current window, then snaps it
+    /// once the resize debounce settles.
+    lava_field_viewport: [f32; 2],
     /// SYNTAX WASHES: the low-alpha tinted quads drawn BEHIND prose-comment spans
     /// (all worlds) — the warm band that carries comment identity now that prose
     /// comments render at FULL ink (the tonsky inversion). A reused
@@ -2403,6 +2407,9 @@ pub struct TextPipeline {
     /// [`crate::updates::checked_line`] — the same determinism boundary
     /// `hud_saved` uses. Set via [`Self::set_update_checked`].
     hud_update_checked: Option<crate::updates::UpdateChecked>,
+    /// PASSIVE CRASH RECOVERY: true while a native crash marker awaits explicit
+    /// acknowledgement through Report a Problem. False in ordinary captures.
+    hud_pending_crash: bool,
     /// HOLD-⌘ SHORTCUT PEEK rows: the personalized shortcut list the summoned peek card
     /// shows (the live ledger's graduation candidates, resolved to chord+name). The live
     /// App pushes them every `sync_view` (`App::sync_discoverability`); a headless
@@ -2932,6 +2939,7 @@ impl TextPipeline {
             background_pipeline,
             lava_pipeline,
             lava_phase: crate::lava::LAVA_FROZEN_PHASE,
+            lava_field_viewport: [0.0, 0.0],
             wash_comment_pipeline,
             wash_string_pipeline,
             wash_highlight_pipeline,
@@ -3069,6 +3077,7 @@ impl TextPipeline {
             hud_stats: None,
             hud_saved: None,
             hud_update_checked: None,
+            hud_pending_crash: false,
             peek_rows: Vec::new(),
             keybindings_tips: Vec::new(),
             whichkey_rows: None,
@@ -3701,6 +3710,20 @@ impl TextPipeline {
         self.lava_phase = crate::lava::advance_phase(self.lava_phase, dt);
     }
 
+    pub fn hold_lava_field_viewport(&mut self, width: u32, height: u32) {
+        if self.lava_field_viewport[0] <= 0.0 || self.lava_field_viewport[1] <= 0.0 {
+            self.lava_field_viewport = [width as f32, height as f32];
+        }
+    }
+
+    pub fn settle_lava_field_viewport(&mut self, width: u32, height: u32) {
+        self.lava_field_viewport = [width as f32, height as f32];
+    }
+
+    pub fn lava_blur_active(&self) -> bool {
+        self.backdrop_blur()
+    }
+
     /// Pin the lava lamp's phase to the FROZEN composition — the live App calls
     /// this when the lamp must be static (Reduce Motion, or `ambient_motion` off),
     /// so resuming from a hard-frozen state restarts from the settled frame rather
@@ -3939,6 +3962,7 @@ impl TextPipeline {
         self.cursor_col.hash(&mut h);
         self.metrics.zoom.to_bits().hash(&mut h);
         self.md_enabled.hash(&mut h);
+        self.lava_render_phase().to_bits().hash(&mut h);
         h.finish()
     }
 

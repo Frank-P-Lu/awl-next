@@ -12,9 +12,8 @@
 //!      (if a crash log exists) that log's PATH — never its content — for the
 //!      human to attach by hand. Opens through the SAME OS-handoff seam
 //!      `Action::FollowLink` uses (`App::follow_link`).
-//!   3. **Quiet next-launch notice (native, TASTE-flagged):** if a crash log is
-//!      newer than the last one the user was shown, the existing bottom-center
-//!      notice machinery says so once, then a marker file remembers it was shown.
+//!   3. **Passive recovery state (native):** a newer crash stays visible as a
+//!      quiet About-card line until Report a Problem acknowledges its marker.
 //!
 //! **THE PRIVACY LAW (this round's law test): a crash log — and a "Report a
 //! Problem" body — can NEVER contain document content.** Enforced at the TYPE
@@ -148,15 +147,6 @@ pub fn report_problem_mailto(meta: &PanicMeta, crash_log_path: Option<&str>) -> 
         url_encode(&subject),
         url_encode(&body)
     )
-}
-
-/// The quiet next-launch notice's exact wording (a TASTE default, flagged for
-/// live review — see this module's doc). One owner so the live wiring and any
-/// test asserting it can never drift apart. Native-only — the notice itself is
-/// a native-only feature (see the module doc's wasm split).
-#[cfg(not(target_arch = "wasm32"))]
-pub fn notice_text() -> &'static str {
-    "awl crashed last time — \u{2318}P → Report a Problem"
 }
 
 // --- Native-only: the crashes dir, the writer, pruning, the notice marker --
@@ -440,12 +430,6 @@ mod tests {
     }
 
     // --- Native-only: format / prune / marker (real tempdirs, no data_root) --
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn notice_text_names_the_report_a_problem_command() {
-        assert!(notice_text().contains("Report a Problem"));
-    }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn tmp_dir(tag: &str) -> PathBuf {

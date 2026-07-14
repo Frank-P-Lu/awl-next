@@ -547,6 +547,16 @@ lava-lamp MACHINERY round; the two worlds are the assignment step on top of it.
 The pure laws are `lava::tests::two_cycle_endpoint_is_seamless_for_every_blob_center`
 and `lava::tests::delayed_ambient_ticks_advance_at_most_one_fixed_step`.
 
+Live geometry follows the same politeness rule: resize holds the last-settled
+FIELD viewport while the live viewport and page mask continue tracking the
+window, snapping the field once after the settle debounce; window movement and a
+blur-eligible overlay hold the phase without resetting it. Mangrove's Bayer
+treatment is a live-document invariant, not a blur-source invariant: the
+offscreen frost capture intentionally receives the smooth form of the same
+field, preventing downsampled separable blur from turning its grid into crosses
+and stripes. The frost cache hashes the held lava phase, so it cannot reuse a
+stale world.
+
 **The base ground is FLAT (the shader degrade).** `Background::Lava`'s
 `shader_id()` is 0 with `from == to == ground` — a flat fill of the margin floor,
 painted by the ordinary background pass, then OVERDRAWN opaquely by the lava

@@ -107,6 +107,20 @@ const AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(400);
 /// (no hot loop). Blur / file switch / quit flush immediately instead.
 const AUTOSAVE_IDLE: Duration = Duration::from_secs(1);
 
+/// How long a completed file EVENT stays in the calm bottom-center readout.
+/// Toasts are armed only by the live App (once a GPU/window exists), and expire
+/// through one `WaitUntil`; captures never own this clock.
+const TOAST_LIFETIME: Duration = Duration::from_millis(2500);
+const CLOBBER_NOTICE: &str =
+    "changed on disk outside awl — ⌘S keeps yours · reopen for theirs";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum NoticeKind {
+    Toast,
+    #[default]
+    Sticky,
+}
+
 /// Quiet period after the last zoom step before the STICKY ZOOM is persisted to
 /// config (debounce). Cmd-=/Cmd-- fire one step per press, so a write-per-step would
 /// hammer the disk; instead `about_to_wait` writes the SETTLED zoom once you pause.
@@ -140,8 +154,8 @@ const LAVA_TICK: Duration = Duration::from_millis(crate::lava::LAVA_TICK_MS);
 /// own documented throughput trade-off for `presentsWithTransaction`) is paid
 /// only while actually dragging, long enough that a brief pause mid-drag
 /// doesn't flap it on/off.
-#[cfg(target_os = "macos")]
 const RESIZE_SYNC_SETTLE: Duration = Duration::from_millis(150);
+const MOVE_SETTLE: Duration = Duration::from_millis(150);
 
 use glyphon::Cache;
 use winit::application::ApplicationHandler;
@@ -389,10 +403,13 @@ pub struct App {
     /// `on_cursor_moved` in `app/input/mouse.rs`.
     drag_armed: bool,
     /// True while a DIRECT page-width resize drag is in progress (a press that landed
-    /// on a page-column edge; the pointer's distance from center drives the measure
-    /// LIVE, and the release commits + persists it). Mutually exclusive with a text
+    /// on a page-column edge; the grabbed rendered edge drives the measure LIVE,
+    /// and the release commits + persists it). Mutually exclusive with a text
     /// selection `dragging` — a press near a boundary starts this instead.
     page_resizing: bool,
+    /// The page edge that armed the active width drag. Captured at press time so
+    /// adaptive outline-rail reflow cannot switch the gesture's geometry mid-drag.
+    page_resize_edge: Option<crate::render::ResizeEdge>,
     /// INLINE-IMAGE DRAG-RESIZE (v2, live app only): `Some` while a press that landed
     /// on an image's bottom-right resize handle is being dragged — the pointer's
     /// distance past the image's left edge drives its DISPLAY WIDTH live (a pipeline
@@ -581,12 +598,17 @@ pub struct App {
     /// SAVED stat (`App::sync_hud_saved`) — `None` before the first successful
     /// write this session.
     last_saved_ok: Option<Instant>,
-    /// A transient CALM NOTICE for the bottom of the canvas (today: the autosave
-    /// clobber guard's "changed on disk outside awl — autosave held"). `None`
-    /// draws nothing. LIVE-ONLY by construction — autosave can never fire
-    /// headlessly — so it has no sidecar field and a default capture is
-    /// byte-identical (the empty notice parks off-screen).
+    /// A CALM NOTICE for the bottom of the canvas. Completed file events are
+    /// live-only TOASTS; conditions needing a decision (failures and the external
+    /// edit guard) are STICKY until resolved. `None` draws nothing.
     notice: Option<String>,
+    notice_kind: NoticeKind,
+    notice_expires_at: Option<Instant>,
+    /// Newest unacknowledged crash-log filename. It never occupies the center
+    /// notice: About and Settings surface it passively until Report a Problem
+    /// acknowledges it.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pending_crash: Option<String>,
     /// SAVE-FEEDBACK round: the dirty-state the window title/titlebar last
     /// rendered — the cheapest honest hook for "on dirty-state transitions"
     /// (`CLAUDE.md`'s own phrasing): `sync_view` (already called on nearly
@@ -644,9 +666,10 @@ pub struct App {
     /// on creation); only the live App reads it (the ambient-tick gate), so a
     /// headless capture is unaffected.
     focused: bool,
-    /// LIVE-RESIZE CONTENT-STRETCH FIX (macOS only, `app/window.rs`'s
-    /// `on_resized` + `arm_live_resize_sync`): when the last genuine
-    /// `WindowEvent::Resized` tick landed, while the CAMetalLayer's
+    /// LIVE-RESIZE settle state (all platforms; macOS additionally synchronizes
+    /// the Core Animation transaction): when the last genuine
+    /// `WindowEvent::Resized` tick landed. While present, lava holds its last
+    /// settled field geometry; on macOS the CAMetalLayer's
     /// `presentsWithTransaction` is armed ON. Metal's surface presents
     /// ASYNCHRONOUSLY by default, so during a FAST drag the window's own
     /// resize animation (a Core Animation transaction AppKit commits on every
@@ -663,8 +686,10 @@ pub struct App {
     /// only while genuinely dragging, not left on permanently). `None` =
     /// not currently resizing (live only; a headless capture never resizes a
     /// real window, so this is structurally unreachable there).
-    #[cfg(target_os = "macos")]
     resize_settle_at: Option<Instant>,
+    /// A stream of `Moved` events means the window-server is actively moving
+    /// the window. Hold ambient lava presents until this debounce settles.
+    move_settle_at: Option<Instant>,
     /// The loaded persistent config (keybinding overrides + folder defaults + the
     /// Settings-open path). Re-loaded when the config file is SAVED in the editor,
     /// which live-reapplies the keymap + folders.
@@ -888,6 +913,7 @@ impl App {
             drag_press_px: (0.0, 0.0),
             drag_armed: false,
             page_resizing: false,
+            page_resize_edge: None,
             image_resizing: None,
             cursor_icon: CursorIcon::Default,
             drag_granularity: DragGranularity::Char,
@@ -944,6 +970,9 @@ impl App {
             autosave_last_ok: None,
             last_saved_ok: None,
             notice: None,
+            notice_kind: NoticeKind::Sticky,
+            notice_expires_at: None,
+            pending_crash: None,
             title_dirty: false,
             history_preview: None,
             history_scroll_before: None,
@@ -951,8 +980,8 @@ impl App {
             theme_font_at: None,
             lava_tick_at: None,
             focused: true,
-            #[cfg(target_os = "macos")]
             resize_settle_at: None,
+            move_settle_at: None,
             config,
             cli_notes_root,
             cli_workspace,
@@ -998,24 +1027,39 @@ impl App {
         // whatever the scratch-stash restore above already picked.
         #[cfg(not(target_arch = "wasm32"))]
         app.apply_session_restore(file_arg_given);
-        // QUIET NEXT-LAUNCH CRASH NOTICE (native only, TASTE-flagged — see
-        // `crashlog.rs`'s doc): if a crash log is newer than the last one we
-        // already showed the notice for, raise it ONCE through the existing
-        // bottom-center notice machinery (`self.notice`), then acknowledge it
-        // so a plain relaunch doesn't repeat it. `App::new` never opened the
-        // notice for any other reason yet at this point, so this can't
-        // clobber one; it may itself be replaced by a later clobber-guard
-        // notice, which is fine (a crash from last time is calmly less urgent
-        // than an external edit happening right now).
+        // A previous crash is passive state, not a startup interruption: retain
+        // the marker for About + Settings, and acknowledge it only when the user
+        // chooses Report a Problem.
         #[cfg(not(target_arch = "wasm32"))]
         {
             let dir = crate::crashlog::crashes_dir();
-            if let Some(name) = crate::crashlog::pending_notice(&dir) {
-                app.notice = Some(crate::crashlog::notice_text().to_string());
-                crate::crashlog::acknowledge(&dir, &name);
-            }
+            app.pending_crash = crate::crashlog::pending_notice(&dir);
         }
         app
+    }
+
+    fn set_sticky_notice(&mut self, text: impl Into<String>) {
+        self.notice = Some(text.into());
+        self.notice_kind = NoticeKind::Sticky;
+        self.notice_expires_at = None;
+    }
+
+    fn set_toast_notice(&mut self, text: impl Into<String>) {
+        self.notice = Some(text.into());
+        self.notice_kind = NoticeKind::Toast;
+        // A real window is the live/capture boundary: unit tests and headless
+        // replay keep the text deterministic but never arm a wall-clock expiry.
+        self.notice_expires_at = self.gpu.as_ref().map(|_| Instant::now() + TOAST_LIFETIME);
+    }
+
+    fn clear_notice(&mut self) {
+        self.notice = None;
+        self.notice_kind = NoticeKind::Sticky;
+        self.notice_expires_at = None;
+    }
+
+    fn clobber_notice_active(&self) -> bool {
+        self.notice_kind == NoticeKind::Sticky && self.notice.as_deref() == Some(CLOBBER_NOTICE)
     }
 }
 
@@ -1370,6 +1414,7 @@ impl ApplicationHandler<AwlEvent> for App {
             WindowEvent::Focused(true) => self.on_focus_gained(),
             WindowEvent::Focused(false) => self.on_focus_lost(),
             WindowEvent::Resized(size) => self.on_resized(size),
+            WindowEvent::Moved(position) => self.on_moved(position),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.on_scale_factor_changed(scale_factor);
             }
@@ -1533,11 +1578,15 @@ impl ApplicationHandler<AwlEvent> for App {
         // Each new tick RE-STAMPS `resize_settle_at` (`App::arm_live_resize_sync`),
         // sliding the deadline exactly like the theme-font/zoom-persist debounces
         // above — the same single-`WaitUntil` shape, so a still window costs nothing.
-        #[cfg(target_os = "macos")]
         if let Some(dirty) = self.resize_settle_at {
             match debounce_due(dirty, RESIZE_SYNC_SETTLE, Instant::now()) {
                 true => {
                     self.resize_settle_at = None;
+                    if let Some(gpu) = self.gpu.as_mut() {
+                        gpu.pipeline
+                            .settle_lava_field_viewport(gpu.config.width, gpu.config.height);
+                    }
+                    #[cfg(target_os = "macos")]
                     if let Some(gpu) = self.gpu.as_ref() {
                         gpu.set_presents_with_transaction(false);
                     }
@@ -1555,6 +1604,21 @@ impl ApplicationHandler<AwlEvent> for App {
                 false => {}
             }
         }
+        if let Some(dirty) = self.move_settle_at {
+            match debounce_due(dirty, MOVE_SETTLE, Instant::now()) {
+                true => {
+                    self.move_settle_at = None;
+                    self.lava_tick_at = None;
+                    if let Some(gpu) = self.gpu.as_ref() {
+                        gpu.window.request_redraw();
+                    }
+                }
+                false if self.last_frame.is_none() => {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + MOVE_SETTLE));
+                }
+                false => {}
+            }
+        }
         // AMBIENT LAVA TICK — the lava-lamp ground's slow ~10 fps drift, awl's
         // FIRST time-varying background. A single `WaitUntil` cadence (NEVER the
         // caret spring's hot per-frame `Poll` loop): when it elapses, advance the
@@ -1565,11 +1629,18 @@ impl ApplicationHandler<AwlEvent> for App {
         // every other world has a static background, so `is_lava()` is false and
         // schedules ZERO ambient frames — preserving 0% idle CPU there.
         let lava_active = crate::theme::background().is_lava();
+        let lava_paused = self.resize_settle_at.is_some()
+            || self.move_settle_at.is_some()
+            || self
+                .gpu
+                .as_ref()
+                .is_some_and(|gpu| gpu.pipeline.lava_blur_active());
         if crate::lava::lava_should_tick(
             lava_active,
             self.config.ambient_motion_on(),
             crate::motion::reduced(),
             self.focused,
+            lava_paused,
         ) {
             let now = Instant::now();
             match self.lava_tick_at {
@@ -1594,7 +1665,10 @@ impl ApplicationHandler<AwlEvent> for App {
                     // while the frame itself redraws at full refresh.
                     let last = *self.lava_tick_at.get_or_insert(now);
                     if self.last_frame.is_none() {
-                        event_loop.set_control_flow(ControlFlow::WaitUntil(last + LAVA_TICK));
+                        event_loop.set_control_flow(control_flow_with_deadline(
+                            event_loop.control_flow(),
+                            last + LAVA_TICK,
+                        ));
                     }
                 }
             }
@@ -1610,6 +1684,22 @@ impl ApplicationHandler<AwlEvent> for App {
                 }
             }
         }
+        // EVENT TOAST expiry: one live-only deadline, consumed once. This runs
+        // after sibling timers so it can choose the EARLIER deadline instead of
+        // delaying a lava tick (or being delayed by one). Poll always wins.
+        if let Some(deadline) = self.notice_expires_at {
+            if notice_expired(self.notice_kind, Some(deadline), Instant::now()) {
+                self.clear_notice();
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            } else if self.last_frame.is_none() {
+                event_loop.set_control_flow(control_flow_with_deadline(
+                    event_loop.control_flow(),
+                    deadline,
+                ));
+            }
+        }
     }
 }
 
@@ -1620,6 +1710,25 @@ impl ApplicationHandler<AwlEvent> for App {
 /// the debounce decision is unit-testable without an event loop.
 fn debounce_due(dirty: Instant, window: Duration, now: Instant) -> bool {
     now.saturating_duration_since(dirty) >= window
+}
+
+/// Compose one idle deadline with the event loop's current intent. A hot `Poll`
+/// always wins; an unscheduled `Wait` accepts the proposal; and two deadlines
+/// resolve to the earlier one so a slow ambient concern cannot delay a faster
+/// sibling timer. Pure, keeping the shared lava/toast scheduling law testable
+/// without a window or event loop.
+fn control_flow_with_deadline(current: ControlFlow, proposed: Instant) -> ControlFlow {
+    match current {
+        ControlFlow::Poll => ControlFlow::Poll,
+        ControlFlow::Wait => ControlFlow::WaitUntil(proposed),
+        ControlFlow::WaitUntil(current) => ControlFlow::WaitUntil(current.min(proposed)),
+    }
+}
+
+/// Pure notice lifetime law: only a Toast carrying a reached live deadline may
+/// disappear. Sticky state and clockless/headless toasts never expire.
+fn notice_expired(kind: NoticeKind, deadline: Option<Instant>, now: Instant) -> bool {
+    kind == NoticeKind::Toast && deadline.is_some_and(|d| now >= d)
 }
 
 /// Does this modifier set request wheel-zoom? Cmd/Super only (NOT Ctrl), so a
@@ -1803,6 +1912,44 @@ mod tests {
         // Once a FULL quiet window has passed since the last step, it fires.
         assert!(debounce_due(dirty, win, dirty + win));
         assert!(debounce_due(dirty, win, dirty + win + Duration::from_millis(1)));
+    }
+
+    #[test]
+    fn only_live_toasts_expire_sticky_and_clockless_notices_do_not() {
+        let now = Instant::now();
+        let deadline = now + TOAST_LIFETIME;
+        assert!(!notice_expired(NoticeKind::Toast, Some(deadline), now));
+        assert!(notice_expired(NoticeKind::Toast, Some(deadline), deadline));
+        assert!(!notice_expired(NoticeKind::Sticky, Some(deadline), deadline));
+        assert!(!notice_expired(NoticeKind::Toast, None, deadline));
+    }
+
+    #[test]
+    fn idle_deadlines_compose_without_delaying_poll_or_an_earlier_timer() {
+        let now = Instant::now();
+        let earlier = now + Duration::from_millis(40);
+        let later = now + Duration::from_millis(100);
+
+        assert_eq!(
+            control_flow_with_deadline(ControlFlow::Poll, later),
+            ControlFlow::Poll,
+            "a hot redraw loop always wins"
+        );
+        assert_eq!(
+            control_flow_with_deadline(ControlFlow::Wait, later),
+            ControlFlow::WaitUntil(later),
+            "an idle unscheduled loop accepts the proposed deadline"
+        );
+        assert_eq!(
+            control_flow_with_deadline(ControlFlow::WaitUntil(earlier), later),
+            ControlFlow::WaitUntil(earlier),
+            "a later proposal cannot delay the current earlier deadline"
+        );
+        assert_eq!(
+            control_flow_with_deadline(ControlFlow::WaitUntil(later), earlier),
+            ControlFlow::WaitUntil(earlier),
+            "an earlier proposal advances the current later deadline"
+        );
     }
 
     #[test]
@@ -2253,7 +2400,7 @@ mod tests {
         );
         assert_eq!(
             app.notice.as_deref(),
-            Some("changed on disk outside awl — autosave held"),
+            Some(CLOBBER_NOTICE),
             "a calm notice is raised"
         );
         assert!(
@@ -2479,7 +2626,7 @@ mod tests {
         );
         assert_eq!(
             app.notice.as_deref(),
-            Some("changed on disk outside awl — autosave held"),
+            Some(CLOBBER_NOTICE),
             "the notice raised while leaving A must survive into the switch, not vanish unseen"
         );
     }
@@ -2776,7 +2923,9 @@ mod tests {
         let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
 
         app.finish_manual_save(true, "saved".to_string());
-        assert_eq!(app.notice, None, "a successful manual save is silent — no notice");
+        assert_eq!(app.notice.as_deref(), Some("saved"));
+        assert_eq!(app.notice_kind, NoticeKind::Toast);
+        assert!(app.notice_expires_at.is_none(), "a headless test never arms a live timer");
 
         app.finish_manual_save(false, "save failed: disk full".to_string());
         assert_eq!(app.notice.as_deref(), Some("save failed: disk full"));
@@ -3020,7 +3169,7 @@ mod tests {
         );
         assert_eq!(
             app.notice.as_deref(),
-            Some("changed on disk outside awl — autosave held"),
+            Some(CLOBBER_NOTICE),
             "the calm notice names the hold"
         );
     }

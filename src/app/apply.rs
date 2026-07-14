@@ -901,7 +901,7 @@ impl App {
     /// reads document content; the composition is a pure function
     /// (`crashlog::report_problem_mailto`) of static build metadata + a
     /// path string.
-    pub(super) fn report_problem(&self) {
+    pub(super) fn report_problem(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         let crash_log_path: Option<String> = {
             let dir = crate::crashlog::crashes_dir();
@@ -912,6 +912,10 @@ impl App {
         let meta = crate::crashlog::PanicMeta::current(None);
         let url = crate::crashlog::report_problem_mailto(&meta, crash_log_path.as_deref());
         self.follow_link(&url);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(name) = self.pending_crash.take() {
+            crate::crashlog::acknowledge(&crate::crashlog::crashes_dir(), &name);
+        }
     }
 
     /// "Download file" (WEB-ONLY, Cmd-P, `web_only: true`): export the active

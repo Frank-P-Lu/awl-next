@@ -49,6 +49,16 @@ impl TextPipeline {
         self.hud_update_checked
     }
 
+    /// Push/read the passive pending-crash state. The live App owns the marker;
+    /// headless pipelines default false unless a capture law explicitly injects it.
+    pub fn set_pending_crash(&mut self, pending: bool) {
+        self.hud_pending_crash = pending;
+    }
+
+    pub fn hud_pending_crash(&self) -> bool {
+        self.hud_pending_crash
+    }
+
     /// Push the HOLD-⌘ SHORTCUT PEEK's personalized rows (the live ledger's graduation
     /// candidates). The live App calls this every `sync_view` (`App::sync_discoverability`);
     /// the headless capture never does, so the field stays empty and the peek card renders
@@ -263,6 +273,9 @@ impl TextPipeline {
             // whatever the live App already pushed this frame.
             if let Some(line) = crate::updates::checked_line(self.hud_update_checked) {
                 owned.push((format!("{line}\n"), 0));
+            }
+            if self.hud_pending_crash {
+                owned.push(("previous crash log available · Settings → Report a Problem\n".to_string(), 0));
             }
             // Quiet pointer to the in-app Credits door (⌘P → Credits opens the
             // embedded CREDITS.md as a buffer) — TASTE-FLAGGED wording, see

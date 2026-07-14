@@ -201,4 +201,8 @@ pub struct CaptureOpts {
     /// gets a sensible default. Populated in `run.rs`'s main capture path from
     /// the replay's registry count.
     pub buffers: Option<BuffersInfo>,
+    /// Explicit passive pending-crash state for the About-card capture law.
+    /// False by default; ordinary/headless captures never inspect ambient crash
+    /// files and remain deterministic.
+    pub pending_crash: bool,
 }

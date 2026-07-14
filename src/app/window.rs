@@ -98,11 +98,14 @@ impl App {
         let mut changed = false;
         if let Some(gpu) = self.gpu.as_mut() {
             changed = gpu.config.width != size.width || gpu.config.height != size.height;
+            if changed {
+                gpu.pipeline
+                    .hold_lava_field_viewport(gpu.config.width, gpu.config.height);
+            }
             gpu.resize(size.width, size.height);
         }
         self.sync_view(true);
         if changed {
-            #[cfg(target_os = "macos")]
             self.arm_live_resize_sync();
             if let Some(gpu) = self.gpu.as_mut() {
                 gpu.redraw();
@@ -113,22 +116,29 @@ impl App {
         }
     }
 
-    /// (macOS only) Re-arm the live-resize Core-Animation-transaction sync for
-    /// one more tick: turn `presentsWithTransaction` ON if this is a FRESH drag
-    /// (it wasn't already armed) and (re)stamp the settle deadline either way —
+    /// Re-arm the cross-platform live-resize settle debounce. On macOS, also
+    /// turn `presentsWithTransaction` ON if this is a FRESH drag. Re-stamp the
+    /// settle deadline either way —
     /// `about_to_wait`'s `RESIZE_SYNC_SETTLE` debounce flips it back off
     /// `RESIZE_SYNC_SETTLE` after the LAST tick, not the first, so a fast
     /// multi-tick drag keeps sliding the deadline forward exactly like the
     /// theme-font/zoom-persist debounces. See `resize_settle_at`'s own doc for
     /// the full mechanism + the user-reported symptom this closes.
-    #[cfg(target_os = "macos")]
     fn arm_live_resize_sync(&mut self) {
+        #[cfg(target_os = "macos")]
         if self.resize_settle_at.is_none() {
             if let Some(gpu) = self.gpu.as_ref() {
                 gpu.set_presents_with_transaction(true);
             }
         }
         self.resize_settle_at = Some(Instant::now());
+    }
+
+    pub(super) fn on_moved(&mut self, _position: winit::dpi::PhysicalPosition<i32>) {
+        if crate::theme::background().is_lava() {
+            self.move_settle_at = Some(Instant::now());
+            self.lava_tick_at = None;
+        }
     }
 
     /// `WindowEvent::ScaleFactorChanged`: the window moved to a monitor with a

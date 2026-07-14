@@ -65,7 +65,7 @@ impl App {
         if let Some(p) = self.buffer.path().map(|p| p.to_path_buf()) {
             self.disk_mtime = Self::disk_mtime_of(&p);
             self.doc_saved_version = Some(self.buffer.version());
-            self.notice = None;
+            self.clear_notice();
         }
         #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
         self.notify_daemon_waiters();

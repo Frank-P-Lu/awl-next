@@ -261,6 +261,20 @@ fn blur_signature_invalidates_on_page_geometry_change_not_on_a_no_op_frame() {
     crate::page::set_page_on(false);
     crate::page::set_measure(crate::page::DEFAULT_MEASURE);
 }
+#[test]
+fn blur_signature_invalidates_when_the_live_world_phase_changes() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping blur_signature phase law: no wgpu adapter");
+        return;
+    };
+    let before = p.blur_signature(1200, 800);
+    p.advance_lava(crate::lava::LAVA_TICK_SECONDS);
+    let after = p.blur_signature(1200, 800);
+    assert_ne!(
+        before, after,
+        "a new lava phase must invalidate the frost source"
+    );
+}
 
 /// The CARET-STYLE preview PANEL: it appears BELOW the picker (a floating card with
 /// the settled sample line + an animated caret) while the caret-style picker is

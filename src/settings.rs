@@ -73,7 +73,7 @@ pub struct SettingRow {
     pub kind: SettingKind,
 }
 
-/// The 26-setting corpus, in stable display order (grouped by category). The ONE
+/// The 27-setting corpus, in stable display order (grouped by category). The ONE
 /// owner — the FacetScheme bucket + the value readout both key off this table.
 pub static SETTINGS: &[SettingRow] = &[
     // Editor —
@@ -108,6 +108,7 @@ pub static SETTINGS: &[SettingRow] = &[
     // The whole rebind flow, opened as a sub-menu.
     SettingRow { name: "Keybindings",       category: "Keybindings", kind: SettingKind::Submenu },
     // Advanced —
+    SettingRow { name: "Report a Problem",    category: "Advanced",  kind: SettingKind::Action },
     SettingRow { name: "Edit config as text", category: "Advanced",  kind: SettingKind::Action },
 ];
 
@@ -260,7 +261,7 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
         // Keybindings —
         "Keymap" => values.keymap.clone(),
         // Keybindings / Advanced — affordances, no value cell.
-        "Keybindings" | "Edit config as text" => String::new(),
+        "Keybindings" | "Report a Problem" | "Edit config as text" => String::new(),
         // A row absent from this match is a table/readout drift — never silently
         // blank in release, caught by `every_setting_has_a_value_readout` in test.
         _ => String::new(),
@@ -458,6 +459,7 @@ pub static COVERED_BY: &[(&str, &str)] = &[
     ("Caret style", "Caret style…"),
     ("Dictionary", "Dictionary…"),
     ("Keybindings", "Keybindings…"),
+    ("Report a Problem", "Report a Problem"),
     ("Page mode", "Toggle page mode"),
     ("Typewriter scroll", "Toggle typewriter scroll"),
     ("Outline", "Toggle outline"),
@@ -535,8 +537,8 @@ pub fn visible_value_cells(values: &SettingsValues) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// The table has the audited 26 rows (22 real settings + the Keymap toggle +
-    /// the Keybindings sub-menu + the Advanced "Edit config as text" action), and
+    /// The table has the audited 27 rows (including the Keybindings sub-menu and
+    /// the two Advanced actions), and
     /// every display name is UNIQUE (it is both the fuzzy corpus and the
     /// value-readout key). The exact count is asserted below so an added/removed
     /// row must touch this comment deliberately rather than drift silently.
@@ -549,7 +551,7 @@ mod tests {
         assert_eq!(SETTINGS.len(), seen.len());
         assert_eq!(
             SETTINGS.len(),
-            26,
+            27,
             "corpus size changed — update this count deliberately (and the doc comments \
              at the top of settings.rs) rather than let it drift"
         );

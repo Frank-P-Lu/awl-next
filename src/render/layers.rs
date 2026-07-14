@@ -153,10 +153,34 @@ impl TextPipeline {
         } else {
             (0.0, width as f32)
         };
-        let params = self.effective_background().lava_params();
+        let params = self.effective_background().lava_params().map(
+            |(ground, lo, hi, edge, dithered)| {
+                // A Bayer-posterized source and the downsampled separable blur
+                // form axis-aligned crosses. While frost is active this lava is
+                // visible only through the blur capture, so feed that capture the
+                // same field without posterization; the unobscured document keeps
+                // the world's authored dither unchanged.
+                (
+                    ground,
+                    lo,
+                    hi,
+                    edge,
+                    crate::lava::dither_for_blur(dithered, self.backdrop_blur()),
+                )
+            },
+        );
         let phase = self.lava_render_phase();
         self.lava_pipeline
-            .prepare(queue, width, height, bg_left, bg_w, params, phase);
+            .prepare(
+                queue,
+                width,
+                height,
+                self.lava_field_viewport,
+                bg_left,
+                bg_w,
+                params,
+                phase,
+            );
     }
 
     /// Upload the document text layer with the full-ink default color — the one

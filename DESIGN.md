@@ -112,6 +112,16 @@ core to awl's identity. Keep it.
 
 **Animation/palette clarification (settled 2026-07-14):** Firetail is an original oxblood-charcoal room with blush ink and one ember-gold caret, measurably redder than Undertow and clear of Potoroo's orange-rust. The polite-motion bound is now exact: the vertical bob and half-frequency horizontal sway wrap together only after TWO phase cycles (~67 s), and every delayed event-loop wake advances at most one fixed 100 ms ambient step, never a catch-up leap.
 
+**Live-window clarification (settled 2026-07-14):** the lamp animates only while
+the room is genuinely idle, focused, unobscured, and not being moved or resized.
+A live resize holds the last-settled metaball geometry while the page mask follows
+the window, then snaps the field once on settle; a title-bar move holds the phase
+through the compositor transaction. Frost is a deliberate source exception:
+Mangrove's live document keeps its authored Bayer grain, but the offscreen blur
+capture receives the same field smooth, because filtering that axis-aligned grid
+creates cross/stripe moiré. Opening frost holds—never resets—the current phase,
+and the cached frost signature includes it.
+
 **Amendment (settled 2026-07, Wagtail reworked to TRUE 1-bit — "only black or white, no gray"):** the no-warm-thing exception above still stands verbatim (Wagtail keeps NO warm element, by value + motion alone); this round pushed it one step further, from *any* grey to the literal two-value floor: `Theme::is_one_bit()` — every surface Wagtail paints is EXACTLY `#000000` or `#FFFFFF`, no rung between (anti-aliased glyph/quad edges excepted — the law is about *authored* colors; see THEMES.md's "The 1-bit law"). The hardest consequence lands on §3's OTHER named exception, selection: a translucent highlight composites a forbidden grey the instant its alpha sits anywhere other than 0 or 255, so Wagtail's `selection` is now a pure opaque white quad with legibility carried by a SEPARATE render-side mechanism (a black "punch" quad carving the covered text's ground back out — see THEMES.md), not by this token's alpha. TRUE per-glyph inversion (the covered text itself flipping to black) was investigated and found to need new renderer machinery — banked, not built, this round; the shipped mechanism is the honestly-logged "least-bad 2-value selection." Elevation (cards/panels) likewise loses its smooth value ramp and becomes a strict binary: a 1px white BORDER on a flush-black card, reusing the existing float-panel double-rect primitive rather than a new one. The frosted-blur backdrop — mathematically incompatible with a pure black/white document (a gaussian defocus smears every edge into grey) — is disabled outright for this world, falling back to the pre-existing crisp-overlay path.
 
 ---

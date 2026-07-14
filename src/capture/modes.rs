@@ -207,6 +207,7 @@ async fn capture_async(
     let cache = Cache::new(&device);
     let mut pipeline = TextPipeline::new(&device, &queue, &cache, FORMAT);
     pipeline.set_size(width as f32, height as f32);
+    pipeline.set_pending_crash(opts.pending_crash);
     // DPI AFTER set_size: set_dpi re-wraps at column_width(), which reads window_w
     // (set by set_size). No-op at the default 1.0, so the no-flag path is unchanged.
     pipeline.set_dpi(dpi);

@@ -846,7 +846,7 @@ impl App {
         // in the very same call it was set, so the user never sees it at all
         // (code review nit: a real, if minor, live bug — the warning fires
         // and vanishes before a single frame renders it).
-        let clobber_notice_just_raised = self.notice.is_some();
+        let clobber_notice_just_raised = self.clobber_notice_active();
         // Already the active file: a no-op reopen preserves everything for free
         // (and avoids parking a buffer under its own key). Compared via the
         // SAME normalized identity the registry uses (`BufferKey::path`), not
@@ -898,7 +898,7 @@ impl App {
             }
         }
         if !clobber_notice_just_raised {
-            self.notice = None;
+            self.clear_notice();
         }
         self.file = Some(path.clone());
         // RECENTLY-OPENED FILES MRU: this file was just OPENED (either fresh from
@@ -1122,6 +1122,7 @@ impl App {
             return;
         };
         gpu.pipeline.set_update_checked(Some(state));
+        gpu.pipeline.set_pending_crash(self.pending_crash.is_some());
     }
 
     pub(super) fn update_title(&mut self) {
@@ -1356,9 +1357,8 @@ impl App {
     /// the clobber guard's new baseline — a manual save legitimately
     /// force-writes over an external change).
     ///
-    /// SAVE-UX round: a SUCCESSFUL manual save is now SILENT — no bottom-center
-    /// notice. Autosave is already silent, and a lone non-fading "saved" is
-    /// just noise. Only a genuine FAILURE surfaces its error message (an
+    /// A successful explicit save is a short live toast. Only a genuine FAILURE
+    /// stays sticky (an
     /// unnamed empty note's "save failed: empty note: nothing to save yet"
     /// included) — errors must never go silent (the round's own bug was that
     /// both fates once reached only a terminal `eprintln!`, invisible on a GUI
@@ -1386,8 +1386,9 @@ impl App {
             }
             // NOTES VERBS round: the held HUD's SAVED stat.
             self.last_saved_ok = Some(Instant::now());
+            self.set_toast_notice("saved");
         } else {
-            self.notice = Some(message);
+            self.set_sticky_notice(message);
         }
     }
 
@@ -1439,12 +1440,12 @@ impl App {
                     self.disk_mtime = Self::disk_mtime_of(&p);
                     self.doc_saved_version = Some(self.buffer.version());
                 }
-                self.notice = Some("saved".to_string());
+                self.set_toast_notice("saved");
                 // NOTES VERBS round: the held HUD's SAVED stat.
                 self.last_saved_ok = Some(Instant::now());
             }
             Err(e) => {
-                self.notice = Some(format!("save failed: {e}"));
+                self.set_sticky_notice(format!("save failed: {e}"));
             }
         }
         if let Some(gpu) = self.gpu.as_ref() {
@@ -1588,7 +1589,7 @@ impl App {
             return; // nothing new to write
         }
         if Self::disk_changed(&path, self.disk_mtime) {
-            self.notice = Some("changed on disk outside awl — autosave held".to_string());
+            self.set_sticky_notice(CLOBBER_NOTICE);
             // Mark the version handled so the idle timer doesn't spin on the
             // same content; the next edit re-arms (and the notice recurs calmly).
             self.doc_saved_version = Some(version);
@@ -1600,7 +1601,9 @@ impl App {
             Ok(()) => {
                 self.doc_saved_version = Some(version);
                 self.disk_mtime = Self::disk_mtime_of(&path);
-                self.notice = None;
+                if self.clobber_notice_active() {
+                    self.clear_notice();
+                }
                 // DEBUG PANEL: stamp the engine's own "last wrote successfully"
                 // clock, the ONLY place it is ever written (see `autosave_last_ok`).
                 self.autosave_last_ok = Some(Instant::now());
@@ -1626,7 +1629,7 @@ impl App {
         }
         let path = crate::fs::scratch_stash_path();
         if Self::disk_changed(&path, self.scratch_mtime) {
-            self.notice = Some("changed on disk outside awl — autosave held".to_string());
+            self.set_sticky_notice(CLOBBER_NOTICE);
             self.scratch_saved_version = Some(version);
             return;
         }
@@ -1642,7 +1645,9 @@ impl App {
             Ok(()) => {
                 self.scratch_saved_version = Some(version);
                 self.scratch_mtime = Self::disk_mtime_of(&path);
-                self.notice = None;
+                if self.clobber_notice_active() {
+                    self.clear_notice();
+                }
                 // DEBUG PANEL: stamp the engine's own "last wrote successfully"
                 // clock, the ONLY place it is ever written (see `autosave_last_ok`).
                 self.autosave_last_ok = Some(Instant::now());
@@ -1721,7 +1726,7 @@ impl App {
                 // SAVE-FEEDBACK round: an explicit "Move note" is a discrete
                 // user action, so a failure gets the SAME calm bottom-center
                 // notice a failed manual save does — never a terminal print.
-                self.notice = Some(format!("move failed: {e}"));
+                self.set_sticky_notice(format!("move failed: {e}"));
                 return;
             }
         };
@@ -1737,6 +1742,7 @@ impl App {
         }
         self.update_title();
         self.rescan_file_index();
+        self.set_toast_notice("moved");
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
@@ -1768,7 +1774,7 @@ impl App {
             return; // unchanged — nothing to do
         }
         if crate::history::is_git_managed(&old) {
-            self.notice = Some("can't rename a file git already tracks".to_string());
+            self.set_sticky_notice("can't rename a file git already tracks");
             return;
         }
         let dest = match old.parent() {
@@ -1776,11 +1782,11 @@ impl App {
             None => PathBuf::from(trimmed),
         };
         if crate::fs::active().exists(&dest) {
-            self.notice = Some(format!("already a file named \"{trimmed}\" here"));
+            self.set_sticky_notice(format!("already a file named \"{trimmed}\" here"));
             return;
         }
         if let Err(e) = crate::fs::active().rename(&old, &dest) {
-            self.notice = Some(format!("rename failed: {e}"));
+            self.set_sticky_notice(format!("rename failed: {e}"));
             return;
         }
         // Best-effort: the history log follows the file; a failed carry-over never
@@ -1795,7 +1801,7 @@ impl App {
         }
         self.update_title();
         self.rescan_file_index();
-        self.notice = Some(format!("renamed to {trimmed}"));
+        self.set_toast_notice(format!("renamed to {trimmed}"));
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
@@ -1831,10 +1837,10 @@ impl App {
         match crate::fs::write_atomic(&new_path, &bytes) {
             Ok(()) => {
                 self.load_path(new_path);
-                self.notice = Some("duplicated".to_string());
+                self.set_toast_notice("duplicated");
             }
             Err(e) => {
-                self.notice = Some(format!("duplicate failed: {e}"));
+                self.set_sticky_notice(format!("duplicate failed: {e}"));
             }
         }
         if let Some(gpu) = self.gpu.as_ref() {

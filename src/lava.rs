@@ -175,11 +175,38 @@ pub fn metaball_field(px: (f32, f32), viewport: (f32, f32), blobs: &[[f32; 4]], 
 
 /// THE CADENCE GATE: may the live App arm its slow ambient lava tick THIS frame?
 /// True ONLY when a lava world is active AND ambient motion is on AND motion is
-/// NOT reduced AND the window is focused (pause on blur). A non-lava world
+/// NOT reduced AND the window is focused and unobstructed (pause on frost,
+/// resize, and move). A non-lava world
 /// (`active == false`) is always false, so it schedules ZERO extra frames —
 /// preserving 0% idle CPU. Pure, so the whole gate is unit-testable.
-pub fn lava_should_tick(active: bool, ambient_on: bool, reduced: bool, focused: bool) -> bool {
-    active && ambient_on && !reduced && focused
+pub fn lava_should_tick(
+    active: bool,
+    ambient_on: bool,
+    reduced: bool,
+    focused: bool,
+    paused: bool,
+) -> bool {
+    active && ambient_on && !reduced && focused && !paused
+}
+
+/// Choose the viewport used to lay out the metaball field. During a live resize
+/// the last-settled dimensions are held while the live viewport and column mask
+/// continue to follow the window; the new dimensions become authoritative only
+/// on settle.
+pub fn field_viewport(live: [f32; 2], settled: [f32; 2]) -> [f32; 2] {
+    if settled[0] > 0.0 && settled[1] > 0.0 {
+        settled
+    } else {
+        live
+    }
+}
+
+/// The blur capture consumes a smooth lava source. Ordered posterization is an
+/// authored live-world treatment, but its axis-aligned grid aliases with the
+/// downsampled separable frost and produces crosses; outside capture it remains
+/// exactly as the world requested.
+pub fn dither_for_blur(authored: bool, backdrop_blur: bool) -> bool {
+    authored && !backdrop_blur
 }
 
 /// Bound an ambient wake's elapsed wall time to ONE fixed sparse tick. Normal
@@ -293,8 +320,10 @@ pub fn env_phase() -> Option<f32> {
 #[derive(Clone, Copy)]
 struct Globals {
     viewport: [f32; 2],
+    field_viewport: [f32; 2],
     blob_count: u32,
     dither: u32,
+    _pad: [u32; 2],
     /// `[col_left_px, col_right_px, gap_px, mask_mode]` — `mask_mode` from
     /// [`LavaEdge::mask_mode`] (1.0 hard, 2.0 glow).
     margin: [f32; 4],
@@ -423,6 +452,7 @@ impl LavaPipeline {
         queue: &wgpu::Queue,
         width: u32,
         height: u32,
+        settled_field_viewport: [f32; 2],
         col_left: f32,
         col_w: f32,
         params: Option<(Srgb, Srgb, Srgb, LavaEdge, bool)>,
@@ -442,8 +472,13 @@ impl LavaPipeline {
         }
         let globals = Globals {
             viewport: [width as f32, height as f32],
+            field_viewport: field_viewport(
+                [width as f32, height as f32],
+                settled_field_viewport,
+            ),
             blob_count: BACKDROP_BLOBS.len() as u32,
             dither: dithered as u32,
+            _pad: [0; 2],
             margin: [col_left, col_left + col_w, MARGIN_GAP_PX, edge.mask_mode()],
             anim: [phase, 0.0, 0.0, 0.0],
             ground: srgb_u8_to_linear(ground),
@@ -652,26 +687,60 @@ mod tests {
     #[test]
     fn lava_ticks_only_when_active_ambient_on_not_reduced_and_focused() {
         assert!(
-            lava_should_tick(true, true, false, true),
+            lava_should_tick(true, true, false, true, false),
             "all conditions met → tick"
         );
         // Each single negation kills the tick (0% idle preserved).
         assert!(
-            !lava_should_tick(false, true, false, true),
+            !lava_should_tick(false, true, false, true, false),
             "non-lava world never ticks"
         );
         assert!(
-            !lava_should_tick(true, false, false, true),
+            !lava_should_tick(true, false, false, true, false),
             "ambient_motion off → no tick"
         );
         assert!(
-            !lava_should_tick(true, true, true, true),
+            !lava_should_tick(true, true, true, true, false),
             "reduce motion → no tick"
         );
         assert!(
-            !lava_should_tick(true, true, false, false),
+            !lava_should_tick(true, true, false, false, false),
             "blurred → paused, no tick"
         );
+        assert!(
+            !lava_should_tick(true, true, false, true, true),
+            "resize, move, or blur pause holds phase"
+        );
+    }
+
+    #[test]
+    fn field_viewport_holds_settled_geometry_until_explicit_snap() {
+        let mut settled = [1200.0, 800.0];
+        assert_eq!(field_viewport([1320.0, 840.0], settled), settled);
+        assert_eq!(
+            field_viewport([1400.0, 900.0], settled),
+            settled,
+            "successive resize ticks keep the same field"
+        );
+        settled = [1400.0, 900.0];
+        assert_eq!(
+            field_viewport([1400.0, 900.0], settled),
+            [1400.0, 900.0],
+            "settle snaps exactly once to the final viewport"
+        );
+        assert_eq!(
+            field_viewport([1400.0, 900.0], [0.0, 0.0]),
+            [1400.0, 900.0],
+            "first frame falls back to live geometry"
+        );
+    }
+
+    #[test]
+    fn blur_capture_relaxes_only_the_lava_posterization_invariant() {
+        assert!(dither_for_blur(true, false), "live Mangrove stays dithered");
+        assert!(!dither_for_blur(true, true), "frost source is smooth");
+        assert!(!dither_for_blur(false, false), "Firetail stays smooth");
+        assert!(!dither_for_blur(false, true), "blur never invents dither");
     }
 
     // --- Phase resolution / determinism ----------------------------------------

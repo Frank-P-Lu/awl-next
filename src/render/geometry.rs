@@ -538,6 +538,60 @@ pub fn page_resize_measure(window_w: f32, advance: f32, pointer_x: f32) -> usize
     (measure.max(0.0) as usize).clamp(crate::page::MIN_MEASURE, crate::page::MAX_MEASURE)
 }
 
+/// The page MEASURE implied by a dragged edge, using the SAME adaptive placement
+/// geometry that draws that edge. The ordinary centered regime keeps the historic
+/// symmetric mapping. When the outline pins the column's left edge, however, the
+/// RIGHT edge is `adaptive_left + width`; matching the pointer against that rendered
+/// edge makes a one-pixel pointer move produce a one-pixel width response instead of
+/// incorrectly doubling it about the window center.
+///
+/// The left-edge path deliberately retains the centered mapping: a pinned left edge
+/// is the outline rail's fixed anchor and therefore cannot itself track a width drag.
+/// The live gesture records which edge armed at press time, so the right-edge solver
+/// remains stable after the pointer leaves the hover tolerance.
+#[allow(clippy::too_many_arguments)]
+pub fn page_resize_measure_for_edge(
+    window_w: f32,
+    advance: f32,
+    pointer_x: f32,
+    edge: ResizeEdge,
+    page_on: bool,
+    outline_wants: bool,
+    outline_pref_px: f32,
+    outline_min_px: f32,
+    gap: f32,
+    left_pad: f32,
+) -> usize {
+    if edge == ResizeEdge::Left || advance <= 0.0 {
+        return page_resize_measure(window_w, advance, pointer_x);
+    }
+
+    // The settable band is only 121 entries. Searching it directly keeps this
+    // inverse exactly coupled to the forward geometry (including its rail ramp,
+    // whole-pixel snap, responsive cap, and future policy changes) instead of
+    // growing a second hand-derived inverse that can drift.
+    (crate::page::MIN_MEASURE..=crate::page::MAX_MEASURE)
+        .min_by(|&a, &b| {
+            let right = |measure| {
+                adaptive_column_left(
+                    window_w,
+                    advance,
+                    page_on,
+                    measure,
+                    outline_wants,
+                    outline_pref_px,
+                    outline_min_px,
+                    gap,
+                    left_pad,
+                ) + column_width_for(window_w, advance, page_on, measure)
+            };
+            (right(a) - pointer_x)
+                .abs()
+                .total_cmp(&(right(b) - pointer_x).abs())
+        })
+        .unwrap_or(crate::page::MIN_MEASURE)
+}
+
 /// INLINE-IMAGE drag-resize: how close (px) the pointer must come to an image's
 /// EDGE or CORNER for the resize affordance to arm — a small tolerance around the
 /// image's border, the standard direct-manipulation resize band. A few px larger
@@ -991,14 +1045,21 @@ impl TextPipeline {
     /// this to flip the OS cursor to a resize glyph and to decide whether a press
     /// begins a width drag instead of a text selection.
     pub fn page_resize_hover(&self, pointer_x: f32) -> bool {
+        self.page_resize_edge_at(pointer_x).is_some()
+    }
+
+    /// Which page edge arms a width drag at `pointer_x`. This is the stateful
+    /// gesture's press-time counterpart to [`Self::page_resize_hover`]: callers
+    /// retain the edge for the whole drag so adaptive reflow cannot switch sides.
+    pub fn page_resize_edge_at(&self, pointer_x: f32) -> Option<ResizeEdge> {
         if !crate::page::page_on() {
-            return false;
+            return None;
         }
         let left = self.column_left();
         if left <= PAGE_MIN_PAD + 1.0 {
-            return false;
+            return None;
         }
-        page_boundary_hit(pointer_x, left, self.column_width(), PAGE_RESIZE_GRAB_PX).is_some()
+        page_boundary_hit(pointer_x, left, self.column_width(), PAGE_RESIZE_GRAB_PX)
     }
 
     /// CURSOR SHAPE — is `pointer_x` within the writing column's horizontal
@@ -1017,12 +1078,24 @@ impl TextPipeline {
     }
 
     /// DIRECT-MANIPULATION resize — the page MEASURE (chars) implied by dragging a
-    /// column edge to `pointer_x` (physical px), symmetric about the window center and
-    /// clamped to the settable band. Driven by the ZOOM-INDEPENDENT [`Self::page_advance`]
-    /// (like the column width itself), so a drag maps px→chars the same at any zoom. See
-    /// [`page_resize_measure`].
-    pub fn page_resize_measure_at(&self, pointer_x: f32) -> usize {
-        page_resize_measure(self.window_w, self.page_advance(), pointer_x)
+    /// column edge to `pointer_x` (physical px), inverted from the same adaptive
+    /// geometry that draws it and clamped to the settable band. Driven by the
+    /// ZOOM-INDEPENDENT [`Self::page_advance`] (like the column width itself), so a
+    /// drag maps px→chars the same at any zoom. See [`page_resize_measure_for_edge`].
+    pub fn page_resize_measure_at(&self, pointer_x: f32, edge: ResizeEdge) -> usize {
+        let label = crate::markdown::type_scale::LABEL;
+        page_resize_measure_for_edge(
+            self.window_w,
+            self.page_advance(),
+            pointer_x,
+            edge,
+            crate::page::page_on(),
+            self.outline_wants_rail(),
+            rowlayout::OUTLINE_PREFERRED_CHARS as f32 * self.metrics.char_width * label,
+            rowlayout::OUTLINE_MIN_CHARS as f32 * self.metrics.char_width * label,
+            self.metrics.char_width * crate::render::chrome::MARGIN_COLUMN_GAP_CHARS,
+            crate::render::TEXT_LEFT,
+        )
     }
 
     /// INLINE-IMAGE DRAG-RESIZE (v2) — the DISPLAY WIDTH (px) an image gets from
@@ -2302,6 +2375,93 @@ mod tests {
             let wider = page_resize_measure(window, adv, center + 350.0);
             let narrower = page_resize_measure(window, adv, center + 200.0);
             assert!(wider > m_right && narrower < m_right, "zoom={zoom}: out widens, in narrows");
+        }
+    }
+
+    #[test]
+    fn adaptive_right_edge_drag_maps_one_advance_to_one_measure_not_two() {
+        // USER-REPORTED LIVE BUG: at this ordinary narrow/outline fixture the
+        // adaptive policy pins LEFT to the rail while RIGHT alone grows. The old
+        // center-distance inverse nevertheless doubled every pointer delta: moving
+        // right by one glyph advance requested TWO chars. Inverting the actually
+        // rendered right edge makes one advance request exactly one char (equivalently
+        // one physical px of pointer travel is one physical px of page-width travel).
+        let window = 900.0;
+        let start = 40usize;
+        let pref = outline_pref_px();
+        let min = outline_min_px();
+        let gap = margin_gap();
+        let left = adaptive_column_left(
+            window, CW, true, start, true, pref, min, gap, ADAPTIVE_LEFT_PAD,
+        );
+        let symmetric = column_left_for(window, CW, true, start);
+        assert!(left > symmetric, "fixture must be in the pinned-left rail regime");
+        let right = left + column_width_for(window, CW, true, start);
+
+        assert_eq!(
+            page_resize_measure_for_edge(
+                window,
+                CW,
+                right,
+                ResizeEdge::Right,
+                true,
+                true,
+                pref,
+                min,
+                gap,
+                ADAPTIVE_LEFT_PAD,
+            ),
+            start,
+            "pressing the already-rendered edge must not snap the measure",
+        );
+        assert_eq!(
+            page_resize_measure_for_edge(
+                window,
+                CW,
+                right + CW,
+                ResizeEdge::Right,
+                true,
+                true,
+                pref,
+                min,
+                gap,
+                ADAPTIVE_LEFT_PAD,
+            ),
+            start + 1,
+        );
+        let old_at_press = page_resize_measure(window, CW, right);
+        let old_after_one = page_resize_measure(window, CW, right + CW);
+        assert_eq!(
+            old_after_one,
+            old_at_press + 2,
+            "self-check: the former center-derived inverse advances 2 chars per one-char pointer delta",
+        );
+    }
+
+    #[test]
+    fn rendered_edge_inverse_preserves_centered_and_dpi_regimes() {
+        // Outside the adaptive rail regime the rendered-edge inverse is the same
+        // centered geometry as before. Physical-pixel DPI scales both the advance
+        // and fixture, so the resulting measure is unchanged.
+        for dpi in [1.0_f32, 2.0] {
+            let window = 1200.0 * dpi;
+            let advance = CW * dpi;
+            let start = 40usize;
+            let right = column_left_for(window, advance, true, start)
+                + column_width_for(window, advance, true, start);
+            let target = page_resize_measure_for_edge(
+                window,
+                advance,
+                right + advance,
+                ResizeEdge::Right,
+                true,
+                false,
+                0.0,
+                0.0,
+                0.0,
+                TEXT_LEFT * dpi,
+            );
+            assert_eq!(target, start + 2, "dpi={dpi}: centered drag keeps symmetric response");
         }
     }
 

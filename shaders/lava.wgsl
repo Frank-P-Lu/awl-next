@@ -26,6 +26,9 @@
 
 struct Globals {
     viewport: vec2<f32>,
+    // Last-settled viewport used ONLY for blob geometry. During live resize the
+    // live viewport above still drives pixel coordinates and the margin mask.
+    field_viewport: vec2<f32>,
     blob_count: u32,
     dither: u32,
     // MARGINS-ONLY mask, packed as one vec4 (16-byte aligned per WGSL's
@@ -96,7 +99,7 @@ fn blob_center(i: u32, base: vec4<f32>) -> vec2<f32> {
     // authored viewport-relative radius, never a margin measurement. MUST match
     // `lava::animated_center`.
     let amp_y = 0.055 + 0.020 * fract(fi * 0.37);
-    let aspect = g.viewport.y / max(g.viewport.x, 1.0);
+    let aspect = g.field_viewport.y / max(g.field_viewport.x, 1.0);
     let amp_x = base.z * aspect * (0.18 + 0.08 * fract(fi * 0.61));
     let off = fi * 1.7;
     let cy = base.y + amp_y * sin(phase * TAU + off);
@@ -109,8 +112,8 @@ fn metaball_field(px: vec2<f32>) -> f32 {
     for (var i = 0u; i < g.blob_count; i = i + 1u) {
         let b = g.blobs[i];
         let c = blob_center(i, b);
-        let center = vec2<f32>(c.x * g.viewport.x, c.y * g.viewport.y);
-        let r_px = max(b.z * g.viewport.y, 1.0);
+        let center = vec2<f32>(c.x * g.field_viewport.x, c.y * g.field_viewport.y);
+        let r_px = max(b.z * g.field_viewport.y, 1.0);
         let d = px - center;
         let dist_sq = dot(d, d);
         total = total + b.w * exp(-FIELD_K * dist_sq / (r_px * r_px));

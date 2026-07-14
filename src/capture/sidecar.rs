@@ -835,9 +835,10 @@ fn about_json(pipeline: &TextPipeline) -> String {
         .map(|s| json_string(&s))
         .unwrap_or_else(|| "null".to_string());
     format!(
-        "{{ \"open\": {}, \"checked\": {} }}",
+        "{{ \"open\": {}, \"checked\": {}, \"pending_crash\": {} }}",
         crate::about::about_open(),
-        checked
+        checked,
+        pipeline.hud_pending_crash()
     )
 }
 

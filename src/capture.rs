@@ -260,7 +260,10 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // fifteen shipped worlds (no knob, no lava world) that is identical, so a default
 // capture's `page.background` CONTENT is byte-unchanged — only the schema string
 // bumps.
-pub const SCHEMA_VERSION: u32 = 168;
+// `/169` — PASSIVE CRASH RECOVERY: the `about` block gains `pending_crash`.
+// False by default/headlessly; an explicit injected pending marker reports true
+// and adds the matching quiet About-card line. The startup center notice is gone.
+pub const SCHEMA_VERSION: u32 = 169;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

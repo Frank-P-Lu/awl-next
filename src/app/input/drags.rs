@@ -40,14 +40,13 @@ impl App {
     /// a double-click anywhere else in the document. LIVE-ONLY gesture; the hover
     /// test + measure math + the reset action itself are unit-tested.
     pub(in crate::app) fn begin_page_resize_if_hovering(&mut self, event_loop: &ActiveEventLoop) -> bool {
-        let hovering = self
+        let edge = self
             .gpu
             .as_ref()
-            .map(|g| g.pipeline.page_resize_hover(self.cursor_px.0))
-            .unwrap_or(false);
-        if !hovering {
+            .and_then(|g| g.pipeline.page_resize_edge_at(self.cursor_px.0));
+        let Some(edge) = edge else {
             return false;
-        }
+        };
         // A resize (or a reset) is a non-edit gesture either way: seal the open
         // undo group like a click does, before branching.
         self.buffer.seal_undo_group();
@@ -61,6 +60,7 @@ impl App {
             return true;
         }
         self.page_resizing = true;
+        self.page_resize_edge = Some(edge);
         // The context flipped to "dragging the edge" WITHOUT any mouse motion: recompute
         // the cursor shape right now (`dragging_edge` outranks everything), not just on
         // the next `CursorMoved`.
@@ -83,10 +83,11 @@ impl App {
     /// redraw. Shared by the initial press + every drag move. Re-wrap mirrors the
     /// `PageWider`/`PageNarrower` command path (`set_size` reshapes at the new width).
     fn apply_page_resize(&mut self) {
-        let target = self
-            .gpu
-            .as_ref()
-            .map(|g| g.pipeline.page_resize_measure_at(self.cursor_px.0));
+        let target = self.page_resize_edge.and_then(|edge| {
+            self.gpu
+                .as_ref()
+                .map(|g| g.pipeline.page_resize_measure_at(self.cursor_px.0, edge))
+        });
         if let Some(target) = target {
             if target != crate::page::measure() {
                 crate::page::set_measure(target);
@@ -111,6 +112,7 @@ impl App {
     /// settled width (sticky, exactly like the C-x } / C-x { keyboard commands).
     pub(in crate::app) fn end_page_resize(&mut self) {
         self.page_resizing = false;
+        self.page_resize_edge = None;
         self.persist_page_width();
         if let Some(gpu) = self.gpu.as_mut() {
             // Drop the drag readout — gone the instant the edge is released.
