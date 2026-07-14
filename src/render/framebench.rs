@@ -424,6 +424,16 @@ const BURST_WIDTH: u32 = 5120;
 const BURST_HEIGHT: u32 = 2756;
 const BURST_ZOOM: f32 = 1.1;
 
+/// The zoom report's exact posture: 3538x2610 physical pixels at @2x,
+/// Firetail, page mode ON, debug pane ON, beginning at 60%.
+const ZOOM_BURST_WIDTH: u32 = 3538;
+const ZOOM_BURST_HEIGHT: u32 = 2610;
+const ZOOM_BURST_START: f32 = 0.6;
+/// Five rapid adjacent-level requests. The old input path reflowed all five;
+/// the present-boundary path applies only the final 70% request.
+const ZOOM_BURST_LEVELS: [f32; 5] = [0.7, 0.8, 0.7, 0.6, 0.7];
+const ZOOM_BURST_SAMPLES: usize = 7;
+
 /// The burst route: every hop lands on a world with a DIFFERENT display face
 /// than the previous one (see `theme/worlds.rs` FONT_THEME_FACES), so each switch takes
 /// `sync_theme`'s font-reshape branch — exactly what arrowing through the
@@ -634,6 +644,164 @@ fn burst_doc(
         "  resolve_cjk (font-DB walk, runs inside each restyle): median {:.3} ms",
         median(cj.clone()) as f64 / 1.0e6
     );
+    Ok(())
+}
+
+/// Run the exact ZOOM-BURST profiler. Unlike the steady-frame and theme
+/// profilers, this times the synchronous `set_view` transition itself, then the
+/// first frame that rasterizes the final level. The two routes replay the old
+/// eager per-input behavior and latest-wins present-boundary behavior against
+/// the same warmed pipeline.
+pub fn run_zoom_burst() -> anyhow::Result<()> {
+    pollster::block_on(zoom_burst_async())
+}
+
+async fn zoom_burst_async() -> anyhow::Result<()> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .map_err(|e| anyhow::anyhow!("no wgpu adapter for zoom-burst bench: {e:?}"))?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("awl zoom burst device"),
+            ..Default::default()
+        })
+        .await?;
+    let cache = Cache::new(&device);
+
+    crate::debug::set_debug_on(true);
+    crate::page::set_page_on(true);
+    crate::theme::set_active_by_name("Firetail");
+    let spell = crate::spell::SpellChecker::new(crate::spell::DictVariant::EnUs)
+        .map_err(|e| anyhow::anyhow!("spell checker failed to load: {e}"))?;
+    println!(
+        "zoom-burst profiler — {ZOOM_BURST_WIDTH}x{ZOOM_BURST_HEIGHT} @{DPI}x · Firetail · page ON · debug ON"
+    );
+    println!(
+        "burst: 60% -> 70 -> 80 -> 70 -> 60 -> 70; eager = five input-side reflows, coalesced = final level once before present"
+    );
+    for doc in ["CLAUDE.md", "benches/fixtures/long_bullets.md"] {
+        zoom_burst_doc(&device, &queue, &cache, &spell, doc)?;
+    }
+    Ok(())
+}
+
+fn zoom_burst_doc(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    cache: &Cache,
+    spell: &crate::spell::SpellChecker,
+    doc: &str,
+) -> anyhow::Result<()> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(doc);
+    let buffer = Buffer::from_file(&path);
+    let text = buffer.text();
+    let misspelled = spell.misspellings_for(&text, buffer.syntax_lang());
+    let lines = text.lines().count();
+    let mut view = live_view(&buffer, misspelled);
+    view.zoom = ZOOM_BURST_START;
+
+    let mut p = TextPipeline::new(device, queue, cache, FORMAT);
+    p.set_size(ZOOM_BURST_WIDTH as f32, ZOOM_BURST_HEIGHT as f32);
+    p.set_dpi(DPI);
+    p.set_view(&view);
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("awl zoom burst target"),
+        size: wgpu::Extent3d {
+            width: ZOOM_BURST_WIDTH,
+            height: ZOOM_BURST_HEIGHT,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    for _ in 0..5 {
+        zoom_frame(&mut p, device, queue, &target_view)?;
+    }
+
+    let mut eager_layout = Vec::with_capacity(ZOOM_BURST_SAMPLES);
+    let mut eager_total = Vec::with_capacity(ZOOM_BURST_SAMPLES);
+    let mut eager_reshapes = Vec::with_capacity(ZOOM_BURST_SAMPLES);
+    let mut coalesced_layout = Vec::with_capacity(ZOOM_BURST_SAMPLES);
+    let mut coalesced_total = Vec::with_capacity(ZOOM_BURST_SAMPLES);
+    let mut coalesced_reshapes = Vec::with_capacity(ZOOM_BURST_SAMPLES);
+
+    for _ in 0..ZOOM_BURST_SAMPLES {
+        view.zoom = ZOOM_BURST_START;
+        p.set_view(&view);
+        let before = p.reshape_count;
+        let total_start = Instant::now();
+        let layout_start = Instant::now();
+        for zoom in ZOOM_BURST_LEVELS {
+            view.zoom = zoom;
+            p.set_view(&view);
+        }
+        eager_layout.push(layout_start.elapsed().as_nanos());
+        eager_reshapes.push(p.reshape_count - before);
+        zoom_frame(&mut p, device, queue, &target_view)?;
+        eager_total.push(total_start.elapsed().as_nanos());
+
+        view.zoom = ZOOM_BURST_START;
+        p.set_view(&view);
+        let before = p.reshape_count;
+        let total_start = Instant::now();
+        let layout_start = Instant::now();
+        view.zoom = *ZOOM_BURST_LEVELS.last().unwrap();
+        p.set_view(&view);
+        coalesced_layout.push(layout_start.elapsed().as_nanos());
+        coalesced_reshapes.push(p.reshape_count - before);
+        zoom_frame(&mut p, device, queue, &target_view)?;
+        coalesced_total.push(total_start.elapsed().as_nanos());
+    }
+
+    anyhow::ensure!(
+        eager_reshapes.iter().all(|&n| n == ZOOM_BURST_LEVELS.len() as u64),
+        "zoom eager replay did not reshape once per requested level: {eager_reshapes:?}"
+    );
+    anyhow::ensure!(
+        coalesced_reshapes.iter().all(|&n| n == 1),
+        "zoom coalesced replay did not reshape exactly once: {coalesced_reshapes:?}"
+    );
+    let eager_layout_ms = median(eager_layout) as f64 / 1.0e6;
+    let eager_total_ms = median(eager_total) as f64 / 1.0e6;
+    let coalesced_layout_ms = median(coalesced_layout) as f64 / 1.0e6;
+    let coalesced_total_ms = median(coalesced_total) as f64 / 1.0e6;
+    println!();
+    println!("==== {doc}: {lines} lines ====");
+    println!("{:>11} | {:>8} | {:>12} | {:>18}", "route", "reflows", "layout", "layout+first frame");
+    println!("{:>11} | {:>8} | {:>10.1} ms | {:>16.1} ms", "eager", ZOOM_BURST_LEVELS.len(), eager_layout_ms, eager_total_ms);
+    println!("{:>11} | {:>8} | {:>10.1} ms | {:>16.1} ms", "coalesced", 1, coalesced_layout_ms, coalesced_total_ms);
+    println!("  saved: {:.1} ms median ({:.1}x end-to-end)", eager_total_ms - coalesced_total_ms, eager_total_ms / coalesced_total_ms.max(0.001));
+    Ok(())
+}
+
+/// One complete first frame at the reported zoom geometry. `prepare` is the
+/// live pipeline's real aggregate, and the blocking poll serializes submitted
+/// GPU work into the measurement just like the other frame profilers here.
+fn zoom_frame(
+    p: &mut TextPipeline,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target_view: &wgpu::TextureView,
+) -> anyhow::Result<()> {
+    p.advance(DT);
+    p.set_debug_perf(None, None, Some(1), false, Some(1000.0 / 60.0));
+    p.prepare(device, queue, ZOOM_BURST_WIDTH, ZOOM_BURST_HEIGHT)?;
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl zoom burst encoder"),
+    });
+    p.render(&mut encoder, target_view)?;
+    queue.submit(Some(encoder.finish()));
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .context("device poll failed")?;
+    p.atlas.trim();
     Ok(())
 }
 

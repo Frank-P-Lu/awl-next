@@ -16,6 +16,11 @@ impl App {
         if self.gpu.is_none() {
             return;
         }
+        // Any real view sync applies `self.zoom`, so it also consumes a queued
+        // zoom reflow. Usually RedrawRequested took the gate immediately before
+        // calling us; this second clear covers an unrelated input that needs a
+        // sync before that redraw arrives.
+        self.zoom_reflow.clear();
         let height = self.gpu.as_ref().unwrap().config.height as f32;
         let (cursor_line, cursor_col) = self.buffer.cursor_line_col();
         // Re-run spell detection only when the buffer text changed. We detect a

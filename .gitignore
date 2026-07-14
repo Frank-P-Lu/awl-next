@@ -2,7 +2,6 @@
 /gallery
 /tmp
 /dist
-.claude/orchestrator/
 .claude/worktrees/
 .playwright-mcp/
 

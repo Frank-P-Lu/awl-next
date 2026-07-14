@@ -228,6 +228,30 @@ enum CaretImpact {
     Copy,
 }
 
+/// A one-bit latest-wins gate for expensive zoom layout. Winit may deliver many
+/// wheel/key events before the redraw they request; every event updates
+/// `App::zoom`, while this gate makes the redraw consume exactly one reflow at
+/// the newest value. This is deliberately present-opportunity coalescing, not a
+/// time debounce: the very next redraw still paints the requested zoom.
+#[derive(Default)]
+struct ZoomReflow {
+    pending: bool,
+}
+
+impl ZoomReflow {
+    fn queue(&mut self) {
+        self.pending = true;
+    }
+
+    fn take(&mut self) -> bool {
+        std::mem::take(&mut self.pending)
+    }
+
+    fn clear(&mut self) {
+        self.pending = false;
+    }
+}
+
 struct Gpu {
     instance: wgpu::Instance,
     device: wgpu::Device,
@@ -639,6 +663,11 @@ pub struct App {
     /// rapid Cmd-=/Cmd-- run persists the SETTLED value once instead of per step.
     /// `None` = nothing pending (live only — headless never schedules this).
     zoom_persist_at: Option<Instant>,
+    /// Latest-wins zoom layout gate. Wheel/Cmd-zoom input updates `zoom`
+    /// immediately, but the expensive document reflow is consumed once at the
+    /// next present opportunity. Any intervening ordinary `sync_view` clears it
+    /// because that sync necessarily applies the newest zoom already.
+    zoom_reflow: ZoomReflow,
     /// When the theme-picker live PREVIEW last landed on a world whose display face
     /// differs from the shaped one, and the deferred FONT reshape is pending; the
     /// debounced `sync_theme_font` fires after `THEME_FONT_DEBOUNCE` of quiet in
@@ -977,6 +1006,7 @@ impl App {
             history_preview: None,
             history_scroll_before: None,
             zoom_persist_at: None,
+            zoom_reflow: ZoomReflow::default(),
             theme_font_at: None,
             lava_tick_at: None,
             focused: true,
@@ -1736,6 +1766,20 @@ fn notice_expired(kind: NoticeKind, deadline: Option<Instant>, now: Instant) -> 
 /// without a window/event loop.
 fn scroll_zoom_intent(mods: ModifiersState) -> bool {
     mods.contains(ModifiersState::SUPER)
+}
+
+#[cfg(test)]
+#[test]
+fn zoom_reflow_gate_collapses_a_burst_to_one_present_opportunity() {
+    let mut gate = ZoomReflow::default();
+    for _ in 0..12 {
+        gate.queue();
+    }
+    assert!(gate.take(), "a queued burst owes exactly one reflow");
+    assert!(!gate.take(), "the same present opportunity cannot reflow twice");
+    gate.queue();
+    gate.clear();
+    assert!(!gate.take(), "an intervening ordinary sync consumes the debt");
 }
 
 /// Has the held stats HUD's summon chord been BROKEN by a modifier release? The HUD is a

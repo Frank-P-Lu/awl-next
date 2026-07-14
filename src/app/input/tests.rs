@@ -22,7 +22,49 @@ use crate::render::{Metrics, TEXT_LEFT, TEXT_TOP};
 fn press_at_col(app: &mut App, col: usize, shift: bool) {
     let m = Metrics::with_dpi(app.zoom, app.dpi);
     app.cursor_px = (TEXT_LEFT + col as f32 * m.char_width, TEXT_TOP);
-    app.on_press(shift);
+    app.on_press(shift, true);
+}
+
+#[test]
+fn gutter_press_never_moves_or_selects_document_text() {
+    // THE REPORTED BUG: margin/gutter coordinates used to enter the ordinary
+    // hit-test, whose correct out-of-range clamp made the click land on the page's
+    // first text column. The writing-column gate must leave the entire edit state
+    // untouched — cursor, active selection, and drag arm alike.
+    let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+    app.buffer.set_text("hello world");
+    app.buffer.select_range(2, 7);
+    let before_cursor = app.buffer.cursor_char();
+    let before_selection = app.buffer.selection_range();
+
+    app.cursor_px = (0.0, TEXT_TOP);
+    app.on_press(false, false);
+
+    assert_eq!(
+        app.buffer.cursor_char(),
+        before_cursor,
+        "gutter press leaves the caret alone"
+    );
+    assert_eq!(
+        app.buffer.selection_range(),
+        before_selection,
+        "gutter press neither creates nor clears a document selection"
+    );
+    assert!(
+        !app.dragging,
+        "gutter press cannot arm a text-selection drag"
+    );
+    assert!(
+        !app.drag_armed,
+        "gutter press cannot cross the drag-slop gate later"
+    );
+
+    // Moving well past the normal drag slop after that ignored press remains a
+    // no-op: the gutter cannot become a delayed selection start.
+    let m = Metrics::with_dpi(app.zoom, app.dpi);
+    move_by(&mut app, m.char_width * 4.0, 0.0);
+    assert_eq!(app.buffer.cursor_char(), before_cursor);
+    assert_eq!(app.buffer.selection_range(), before_selection);
 }
 
 #[test]
@@ -32,7 +74,10 @@ fn plain_click_clears_the_mark_and_places_the_cursor() {
     app.buffer.set_cursor(0);
     app.buffer.set_mark(); // an existing selection from a prior gesture
     press_at_col(&mut app, 6, false); // "w" of "world"
-    assert!(!app.buffer.has_selection(), "a plain click drops any selection");
+    assert!(
+        !app.buffer.has_selection(),
+        "a plain click drops any selection"
+    );
     assert_eq!(app.buffer.cursor_char(), 6);
 }
 
@@ -46,7 +91,11 @@ fn shift_click_extends_from_the_cursors_prior_position() {
     app.buffer.set_cursor(0);
     assert!(app.buffer.anchor_char().is_none());
     press_at_col(&mut app, 6, true);
-    assert_eq!(app.buffer.anchor_char(), Some(0), "mark drops at the prior cursor spot");
+    assert_eq!(
+        app.buffer.anchor_char(),
+        Some(0),
+        "mark drops at the prior cursor spot"
+    );
     assert_eq!(app.buffer.cursor_char(), 6, "cursor moves to the click");
     assert_eq!(app.buffer.selection_range(), Some((0, 6)));
 }
@@ -60,7 +109,11 @@ fn shift_click_keeps_an_already_active_mark() {
     app.buffer.set_cursor(2);
     app.buffer.set_anchor(1); // mark pinned at char 1
     press_at_col(&mut app, 9, true);
-    assert_eq!(app.buffer.anchor_char(), Some(1), "an active mark is never disturbed");
+    assert_eq!(
+        app.buffer.anchor_char(),
+        Some(1),
+        "an active mark is never disturbed"
+    );
     assert_eq!(app.buffer.cursor_char(), 9);
 }
 
@@ -125,7 +178,10 @@ fn exceeds_drag_slop_combines_both_axes_diagonally() {
     // distance does — the squared-distance compare must sum both axes, not
     // check them independently.
     let (dx, dy): (f32, f32) = (3.0, 3.0);
-    assert!((dx * dx + dy * dy).sqrt() > DRAG_ARM_SLOP_PX, "test fixture sanity");
+    assert!(
+        (dx * dx + dy * dy).sqrt() > DRAG_ARM_SLOP_PX,
+        "test fixture sanity"
+    );
     assert!(App::exceeds_drag_slop((0.0, 0.0), (dx, dy)));
 }
 
@@ -134,7 +190,10 @@ fn exceeds_drag_slop_combines_both_axes_diagonally() {
 /// `WindowEvent::CursorMoved` takes.
 fn move_by(app: &mut App, dx: f32, dy: f32) {
     let (x, y) = app.cursor_px;
-    app.on_cursor_moved(winit::dpi::PhysicalPosition::new((x + dx) as f64, (y + dy) as f64));
+    app.on_cursor_moved(winit::dpi::PhysicalPosition::new(
+        (x + dx) as f64,
+        (y + dy) as f64,
+    ));
 }
 
 #[test]
@@ -148,8 +207,15 @@ fn stationary_pointer_after_press_never_arms_a_selection() {
     press_at_col(&mut app, 6, false);
     assert_eq!(app.buffer.cursor_char(), 6);
     move_by(&mut app, 0.0, 0.0);
-    assert!(!app.buffer.has_selection(), "no travel must never arm a selection");
-    assert_eq!(app.buffer.cursor_char(), 6, "the caret stays at the press's own hit-test result");
+    assert!(
+        !app.buffer.has_selection(),
+        "no travel must never arm a selection"
+    );
+    assert_eq!(
+        app.buffer.cursor_char(),
+        6,
+        "the caret stays at the press's own hit-test result"
+    );
 }
 
 #[test]
@@ -166,12 +232,22 @@ fn sub_slop_jitter_does_not_arm_a_selection_even_across_a_column_boundary() {
     // Half a cell short of column 6's boundary: rounds to column 6 today,
     // but a nudge of less than half a cell tips it to column 7.
     app.cursor_px = (TEXT_LEFT + 6.0 * m.char_width - 0.5, TEXT_TOP);
-    app.on_press(false);
+    app.on_press(false, true);
     let pressed_at = app.buffer.cursor_char();
-    assert!(DRAG_ARM_SLOP_PX < m.char_width / 2.0, "test fixture sanity: slop < half a cell");
+    assert!(
+        DRAG_ARM_SLOP_PX < m.char_width / 2.0,
+        "test fixture sanity: slop < half a cell"
+    );
     move_by(&mut app, DRAG_ARM_SLOP_PX - 0.1, 0.0);
-    assert!(!app.buffer.has_selection(), "sub-slop travel must never arm a selection");
-    assert_eq!(app.buffer.cursor_char(), pressed_at, "the caret must not drift under sub-slop jitter");
+    assert!(
+        !app.buffer.has_selection(),
+        "sub-slop travel must never arm a selection"
+    );
+    assert_eq!(
+        app.buffer.cursor_char(),
+        pressed_at,
+        "the caret must not drift under sub-slop jitter"
+    );
 }
 
 #[test]
@@ -185,7 +261,10 @@ fn real_drag_past_the_slop_arms_and_extends_the_selection() {
     assert!(!app.buffer.has_selection());
     let m = Metrics::with_dpi(app.zoom, app.dpi);
     move_by(&mut app, 6.0 * m.char_width, 0.0);
-    assert!(app.buffer.has_selection(), "travel past the slop must arm a real drag");
+    assert!(
+        app.buffer.has_selection(),
+        "travel past the slop must arm a real drag"
+    );
     assert_eq!(app.buffer.selection_range(), Some((0, 6)));
 }
 
@@ -203,7 +282,10 @@ fn once_armed_a_drag_stays_armed_through_further_sub_slop_moves() {
     // A tiny further nudge (well under the slop) still extends, because the
     // gesture is already armed.
     move_by(&mut app, 1.0, 0.0);
-    assert!(app.buffer.has_selection(), "an already-armed drag keeps extending on any move");
+    assert!(
+        app.buffer.has_selection(),
+        "an already-armed drag keeps extending on any move"
+    );
 }
 
 #[test]
@@ -221,7 +303,13 @@ fn release_disarms_so_the_next_press_is_slop_gated_again() {
     app.dragging = false;
     app.drag_armed = false; // mirrors `on_mouse_input`'s Released arm
     press_at_col(&mut app, 3, false);
-    assert!(!app.buffer.has_selection(), "a fresh plain click drops the old selection");
+    assert!(
+        !app.buffer.has_selection(),
+        "a fresh plain click drops the old selection"
+    );
     move_by(&mut app, DRAG_ARM_SLOP_PX - 0.1, 0.0);
-    assert!(!app.buffer.has_selection(), "the new gesture is slop-gated again, not still armed");
+    assert!(
+        !app.buffer.has_selection(),
+        "the new gesture is slop-gated again, not still armed"
+    );
 }

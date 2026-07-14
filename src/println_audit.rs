@@ -91,8 +91,9 @@ const EXPECTED: &[(&str, usize)] = &[
     ("menu.rs", 1),
     // `AWL_FONT` dev-only env var override diagnostic.
     ("render.rs", 1),
-    // `--bench-frame` / `--bench-perf`'s tabular CLI output.
-    ("render/framebench.rs", 28),
+    // `--bench-frame` / `--bench-theme-burst` / `--bench-zoom-burst`'s
+    // tabular CLI output.
+    ("render/framebench.rs", 36),
     ("render/perfbench.rs", 8),
 ];
 

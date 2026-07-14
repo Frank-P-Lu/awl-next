@@ -412,6 +412,7 @@ impl App {
     /// `about_to_wait` to schedule the flush even if nothing else is animating.
     pub(in crate::app) fn mark_zoom_dirty(&mut self) {
         self.zoom_persist_at = Some(Instant::now());
+        self.zoom_reflow.queue();
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
@@ -724,11 +725,14 @@ impl App {
             && motion_honors_shift_select(&action);
         // CHORD door: a keyboard chord is the FAST, learned path the usage ledger
         // graduates on (see `crate::stats::Door`).
+        let defer_zoom_sync = matches!(action, Action::ZoomIn | Action::ZoomOut | Action::ZoomReset);
         let exited = self.apply(action, shift, event_loop, crate::stats::Door::Chord);
         if exited {
             return;
         }
-        self.sync_view(true);
+        if !defer_zoom_sync {
+            self.sync_view(true);
+        }
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }

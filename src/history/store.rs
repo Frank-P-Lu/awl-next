@@ -325,9 +325,12 @@ pub(super) fn serialize_log(entries: &[Entry]) -> Vec<u8> {
 /// Thin wrapper over [`parse_log_checked`] that drops its TRUST flag, for
 /// existing tests that only want the entries. Production code calls
 /// [`parse_log_checked`] directly (via [`read_log`]) now that its trust flag
-/// is load-bearing — `#[cfg(test)]` only, so a non-test build doesn't warn
-/// about a wrapper nothing outside the test suite calls.
-#[cfg(test)]
+/// is load-bearing — test-only, so a non-test build doesn't warn about a
+/// wrapper nothing outside the test suite calls. Gated with the SAME cfg its
+/// only callers carry (`super::tests` is `#[cfg(all(test, not(target_arch =
+/// "wasm32")))]`, history being native-only), so the wasm TEST build — where
+/// those callers don't compile — doesn't see it as dead code either.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(super) fn parse_log(bytes: &[u8]) -> Vec<Entry> {
     parse_log_checked(bytes).0
 }

@@ -164,6 +164,14 @@ impl App {
     /// DEBUG-panel perf lines (all timing work gated on `debug_on()`) and drives
     /// its settle-stamp.
     pub(super) fn on_redraw_requested(&mut self, event_loop: &ActiveEventLoop) {
+        // Consume a wheel/key zoom burst at the present boundary: every input
+        // already updated `self.zoom`; one sync now reflows directly to the
+        // latest requested level. Put it before the frame clock to preserve the
+        // pre-coalescing spring timing (input-side sync used to finish before
+        // RedrawRequested began) while key→px still measures through present.
+        if self.zoom_reflow.take() {
+            self.sync_view(true);
+        }
         let now = Instant::now();
         let dt = match self.last_frame {
             Some(prev) => (now - prev).as_secs_f32(),

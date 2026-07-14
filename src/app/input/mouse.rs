@@ -12,6 +12,16 @@
 use crate::app::*;
 
 impl App {
+    /// Is the pointer on the page surface that owns direct document gestures?
+    /// Reuses the renderer's column geometry: page margins (including the gutter
+    /// and right readout) are orientation chrome, not clamped aliases for the first
+    /// / last character on a row.
+    fn pointer_over_writing_column(&self) -> bool {
+        self.gpu
+            .as_ref()
+            .is_some_and(|gpu| gpu.pipeline.over_writing_column(self.cursor_px.0))
+    }
+
     /// Map the current mouse pixel position to a buffer char index, accounting
     /// for scroll + zoom, then clamp to the document. Returns the char index.
     pub(in crate::app) fn hit_test_char(&self) -> usize {
@@ -74,12 +84,22 @@ impl App {
         dx * dx + dy * dy > DRAG_ARM_SLOP_PX * DRAG_ARM_SLOP_PX
     }
 
-    /// Handle a primary-button press: hit-test, set the anchor, and (for double
-    /// / triple clicks) select the word / line under the cursor. `shift` is
+    /// Handle a primary-button press inside the writing column: hit-test, set the
+    /// anchor, and (for double / triple clicks) select the word / line under the
+    /// cursor. A press in either PAGE MARGIN is swallowed before hit-testing — the
+    /// gutter is orientation, not document text, and `hit_test` deliberately clamps
+    /// out-of-column x positions to a line endpoint. Without this gate, clicking the
+    /// gutter therefore selected text at the page's left edge. A drag that STARTED in
+    /// the column may still extend into a margin through [`Self::on_drag`].
+    ///
+    /// `shift` is
     /// whether Shift was held at press time: a SHIFT-CLICK extends the existing
     /// selection (the standard gesture everywhere — TextEdit/Xcode/browsers/…)
     /// instead of starting a fresh one, so it must never `clear_mark`.
-    pub(in crate::app) fn on_press(&mut self, shift: bool) {
+    pub(in crate::app) fn on_press(&mut self, shift: bool, over_writing_column: bool) {
+        if !over_writing_column {
+            return;
+        }
         let click_count = self.bump_click_count();
         // A click is a non-edit gesture: seal the open undo group so text typed
         // after relocating the cursor is its own undo step.
@@ -437,7 +457,11 @@ impl App {
     /// selection), then summon the EXISTING spell-suggestion picker for that word.
     /// Misspelled → suggestions; otherwise `OpenSpellSuggest` no-ops (calm). Zero new
     /// spell logic — it reuses the same `suggest_at` path Cmd-`;` uses.
-    pub(in crate::app) fn on_right_press(&mut self, event_loop: &ActiveEventLoop) {
+    pub(in crate::app) fn on_right_press(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        over_writing_column: bool,
+    ) {
         // RE-TARGET: a right press ALWAYS dismisses any open overlay FIRST (through the
         // same `Action::Cancel` Esc uses, so a Theme/Caret preview reverts), then hit-tests
         // the word now under the pointer and opens ITS suggestions. So right-clicking a
@@ -445,6 +469,15 @@ impl App {
         // word instead of being swallowed by the modal overlay.
         if self.overlay.is_some() {
             let _ = self.apply(Action::Cancel, false, event_loop, crate::stats::Door::Chord);
+        }
+        // A margin right-click may dismiss an open spell picker, but it never
+        // retargets the caret/selection to the clamped edge of document text.
+        if !over_writing_column {
+            self.sync_view(true);
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window.request_redraw();
+            }
+            return;
         }
         // A click is a non-edit gesture: seal the open undo group first.
         self.buffer.seal_undo_group();
@@ -709,7 +742,8 @@ impl App {
         // OpenSpellSuggest wholesale — no new spell logic.
         if button == MouseButton::Right {
             if state == ElementState::Pressed {
-                self.on_right_press(event_loop);
+                let over_writing_column = self.pointer_over_writing_column();
+                self.on_right_press(event_loop, over_writing_column);
             }
             return;
         }
@@ -739,6 +773,7 @@ impl App {
                 if self.mods.state().contains(ModifiersState::SUPER)
                     && self.overlay.is_none()
                     && self.search.is_none()
+                    && self.pointer_over_writing_column()
                     && self.follow_link_at_pointer()
                 {
                     return;
@@ -768,8 +803,16 @@ impl App {
                     // anywhere else is a normal click / selection start.
                     if !self.outline_click() {
                         let shift = self.mods.state().contains(ModifiersState::SHIFT);
-                        self.on_press(shift);
-                        self.sync_view(true);
+                        // The SAME column-membership geometry that gives the gutter
+                        // its arrow cursor owns press admission too. Margin x values
+                        // must never reach the document hit-test (which correctly
+                        // clamps drags to line endpoints, but is the wrong behavior for
+                        // a gesture that STARTS outside the page).
+                        let over_writing_column = self.pointer_over_writing_column();
+                        self.on_press(shift, over_writing_column);
+                        if over_writing_column {
+                            self.sync_view(true);
+                        }
                     }
                 }
             }
@@ -853,7 +896,6 @@ impl App {
             if lines.abs() >= 1.0 {
                 let dir = lines.signum();
                 self.set_zoom(self.zoom + dir * render::ZOOM_STEP);
-                self.sync_view(true);
             }
         } else if lines.abs() >= 1.0 {
             // Free scroll: wheel up moves content down (scroll up), so a

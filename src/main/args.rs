@@ -139,6 +139,11 @@ pub(crate) enum Mode {
     /// after each switch (the new face's atlas rasterization), two laps
     /// (cold/warm) to expose atlas retention. Opens no window.
     BenchThemeBurst,
+    /// Hidden performance harness: replay a rapid adjacent-level zoom burst at
+    /// the reported 3538x2610 @2x / 60% posture, comparing the old eager
+    /// per-input reflow with latest-wins present-boundary coalescing. Opens no
+    /// window.
+    BenchZoomBurst,
 }
 
 /// Parse a `--sel L0:C0-L1:C1` argument into ordered line/col endpoints.
@@ -381,6 +386,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
     let mut bench_perf = false;
     let mut bench_frame = false;
     let mut bench_theme_burst = false;
+    let mut bench_zoom_burst = false;
     // `--keys` replay spec, kept RAW until after the arg loop so it parses THROUGH
     // the loaded config's keybinding overrides (the `--config` flag may appear after
     // `--keys` on the command line). Threaded into whichever screenshot Mode runs.
@@ -415,6 +421,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
             }
             "--bench-theme-burst" => {
                 bench_theme_burst = true;
+            }
+            "--bench-zoom-burst" => {
+                bench_zoom_burst = true;
             }
             "--screenshot" => {
                 let p = args
@@ -728,6 +737,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
     }
     if bench_theme_burst {
         return Ok(Mode::BenchThemeBurst);
+    }
+    if bench_zoom_burst {
+        return Ok(Mode::BenchZoomBurst);
     }
     // CLI VALIDATION (error paths only — valid runs are unaffected).
     // 1) At most ONE capture-mode flag. With more than one, the Mode chosen below
