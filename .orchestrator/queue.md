@@ -71,7 +71,7 @@ Spawn an adversarial audit agent (matrix probe: state × surface × world/platfo
 RULE THAT COMPOUNDS: every audit that finds something ENDS by writing the missing law test — scouts find the hole, laws close it permanently.
 PLUS THE VISION-SMOKE TIER (user's "5 screenshots" idea, 2026-07-13): every render-touching round's VERIFIER must LOOK at ~5 gallery shots drawn from the INTERACTION CHECKLIST (palette open + moved selection, search active, selection + caret, the changed feature in each state) and answer AFFORDANCE-LOCATING questions — "which row is selected? where is the caret? is any text clipped?" — never "does this look fine?" (agreeable-model trap). Failure to locate an affordance = defect signal. Vision = hypothesis-FREE noticing (catches what nobody asserted); arithmetic = hypothesis-driven proof (laws); the user = taste. Fold the checklist + question template into the distinguishability round's THEMES.md/CAPTURE.md amendments. Bake the vision-smoke requirement into future render-round verify prompts.
 
-## 🎬 PLAYWRIGHT / SHOT-SCRAPER HARNESS ROUND (2026-07-14) — 🔵 QUEUED, USER-APPROVED 1–5
+## 🎬 PLAYWRIGHT / SHOT-SCRAPER HARNESS ROUND (2026-07-14) — 🟡 COOKING (fired 2026-07-15, sequential workflow off main @ 56616d8; user-approved 1–5)
 
 **Goal:** turn the capture harness from a final-state key macro into a truthful,
 scriptable scenario runner that can emit fast deterministic demo films. Land in
@@ -111,7 +111,7 @@ effect; and one checked-in storyboard demonstrating typing → search → select
 palette with a human-reviewable film. Render-touching work also runs the standing
 five-shot affordance-locating vision smoke above.
 
-## 🔴 LIVE-TESTING POLISH ROUND (2026-07-14, user's live session on the lava worlds) — ✅ DIAGNOSED + SPECCED, gated on WIP-commit
+## 🔴 LIVE-TESTING POLISH ROUND (2026-07-14, user's live session on the lava worlds) — ✅ LANDED via 049ae41 + 318e1fe (verified in-tree 2026-07-15: field_viewport resize-freeze, lava phase in blur_signature, Moved handling, crash-notice → About/Settings, page-drag per-edge fix; live taste checks still open)
 
 > **Cook-ready spec → `handoffs/2026-07-14-live-world.md`** (5 lava fixes · crash-notice+toast · 2 adaptive-column/geometry fixes · 3 design rounds; A/B/C disjoint, fire once the 14-file WIP is committed off a clean base). Roster + design direction (the per-world loudness dial, light+dark poles, the STUNNING bar, the ~20-world target, feature gaps) → **`WORLD-ROLES.md`**. Full running notes below.
 
