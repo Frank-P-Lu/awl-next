@@ -33,7 +33,8 @@ struct Globals {
     // mask_mode] — mask_mode 1.0 = hard (fade before the edge), 2.0 = edge-glow
     // (hard + a faint tail under the edge). See `LavaEdge::mask_mode`.
     margin: vec4<f32>,
-    // Animation, packed: x = phase (in CYCLES — one unit is one full bob), yzw
+    // Animation, packed: x = phase (one unit is one vertical bob; the complete
+    // field loops after two because horizontal sway runs at half-frequency), yzw
     // reserved. Frozen at 0.0 in a headless capture and under Reduce Motion.
     anim: vec4<f32>,
     // Linear-space rgba (alpha unused, always 1): the margin floor + the
@@ -89,7 +90,9 @@ fn blob_center(i: u32, base: vec4<f32>) -> vec2<f32> {
     let phase = g.anim.x;
     // Per-blob vertical amplitude (fraction of UV height) + a gentle horizontal
     // sway an octave slower, both offset by the index so the field necks + splits
-    // as neighbours drift past each other. Horizontal amplitude follows the
+    // as neighbours drift past each other. The half-frequency horizontal term
+    // makes TWO phase cycles the first seamless endpoint (see
+    // `lava::LAVA_LOOP_CYCLES`). Horizontal amplitude follows the
     // authored viewport-relative radius, never a margin measurement. MUST match
     // `lava::animated_center`.
     let amp_y = 0.055 + 0.020 * fract(fi * 0.37);

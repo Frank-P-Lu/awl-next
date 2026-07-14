@@ -1,4 +1,4 @@
-//! src/theme/worlds.rs — the WORLDS DATA TABLE: the fifteen concrete
+//! src/theme/worlds.rs — the WORLDS DATA TABLE: the sixteen concrete
 //! [`Theme`] literals (exact hex from the theme spec) + the [`THEMES`] cycle
 //! order + [`DEFAULT_THEME`]. Pure data — no derivation logic lives here (see
 //! [`crate::theme::derive`] for the active-theme accessors).
@@ -19,7 +19,7 @@ use super::ornament::{
     ORNAMENT_SCALE_ORNATE,
 };
 
-// --- The fourteen worlds (exact hex from the theme spec) ---------------------
+// --- The sixteen worlds (exact hex from the theme spec) ----------------------
 
 /// Gumtree — light eucalyptus reading room (coral caret on a cool green page).
 pub const GUMTREE: Theme = Theme {
@@ -730,7 +730,7 @@ pub const MAGPIE: Theme = Theme {
 /// (`role_style_laws_hold_for_every_world`) gained a DECLARED EXEMPTION arm
 /// for `Theme::is_one_bit()`, replaced by a FLAT LAW (every role's effective fg
 /// is EXACTLY `base_content`, no role carries a wash) — never weakened for the
-/// other fourteen worlds, which still clear the full pairwise/perceptibility/
+/// other fifteen worlds, which still clear the full pairwise/perceptibility/
 /// luminance/ground-contrast suite unchanged.
 ///
 /// **Elevation (cards/panels) — BORDER, not fill.** The 1-bit answer for
@@ -960,54 +960,55 @@ pub const WAGTAIL: Theme = Theme {
 /// Firetail — the SIXTEENTH world, a WARM STATEMENT world and awl's FIRST
 /// lava-lamp ground: the MIRROR of Wagtail. Where Wagtail keeps NO warm thing
 /// (its statement is the bare 1-bit room), Firetail's one living warm thing is
-/// the GROUND ITSELF — a slow umber/wine metaball "lava lamp" bobbing in the
+/// the GROUND ITSELF — a slow oxblood/wine metaball "lava lamp" bobbing in the
 /// page margins (see [`Background::Lava`] + `crate::lava`), the DESIGN.md §3
 /// ambient-motion amendment's first host (Mangrove is the cool second). The
-/// room is Potoroo's own warm den: the ink ladder is derived from it VERBATIM
-/// (`base_100`/`_200`/`_300` + the `base_content`→`muted`→`faint` ramp), so
-/// every ink / role-tint / contrast law Potoroo clears, Firetail clears
-/// identically — its distinctness is carried entirely by the living ground and
-/// the caret. That caret is ONE flame-amber (a touch more golden than Potoroo's,
-/// so it reads as Firetail's own), held ≥40° of hue clear of the wine lava so
-/// amber stays the caret's alone (DESIGN §3, the amber-guard law). Named for the
-/// Red-browed Firetail finch's flame; drawn in Potoroo's warm slab-mono Monaspace
-/// Xenon, its kin — restraint in the chrome so the lava is the whole statement.
+/// room is its own deep oxblood-charcoal den — redder beside Undertow's violet,
+/// substantially less orange/rust than Potoroo. Warm blush ink, muted claret
+/// chrome, wine lava, and an ember-gold caret form one coherent original palette.
+/// The caret stays ≥40° of hue clear of the wine lava so amber remains the
+/// caret's alone (DESIGN §3, the amber-guard law). Named for the Red-browed
+/// Firetail finch's flame; drawn in Monaspace Xenon — technical restraint so the
+/// living ground is the whole statement.
 pub const FIRETAIL: Theme = Theme {
     name: "Firetail",
     dark: true,
-    // Potoroo's own warm-den ink ladder, VERBATIM — base_100 doubles as the lava
-    // `ground` so the flat page column and the animated margin floor read as one
-    // deep den (no seam). Reusing the proven ladder means every ink/role/contrast
-    // law Potoroo passes, Firetail passes by construction (role_style_for is a pure
-    // function of the palette).
-    base_100: Srgb::rgb(0x1F, 0x04, 0x00),
-    base_200: Srgb::rgb(0x31, 0x05, 0x00),
-    base_300: Srgb::rgb(0x56, 0x28, 0x00),
-    base_content: Srgb::rgb(0xF0, 0xE6, 0xDE),
-    muted: Srgb::rgb(0x9C, 0x85, 0x76),
-    faint: Srgb::rgb(0x75, 0x5D, 0x51),
-    // Flame-amber caret (hue ~36°) — Firetail's own, ≥40° clear of the wine lava
-    // blobs (~351°): amber stays the ONE accent (DESIGN §3, the amber-guard).
-    primary: Srgb::rgb(0xFF, 0xB8, 0x4D),
-    primary_content: Srgb::rgb(0x2A, 0x14, 0x02),
-    error: Srgb::rgb(0xFF, 0x6B, 0x5C),
-    selection: Srgb::rgba(0x7E, 0xB4, 0x7C, 0x52),
-    // THE LAVA-LAMP GROUND (the world's whole statement): a slow umber/wine
+    // ORIGINAL OXBLOOD-CHARCOAL ladder — base_100 doubles as the lava `ground`
+    // so the flat page column and animated margin floor meet without a seam.
+    // The grounds stay near red-wine (never Potoroo's orange/rust); warm blush
+    // content recedes through dusty mauve `muted` to claret `faint`.
+    base_100: Srgb::rgb(0x17, 0x09, 0x0C),
+    base_200: Srgb::rgb(0x24, 0x0D, 0x12),
+    // The focused plane reaches the lamp core's value without crossing into
+    // figure territory; the lava value-band law pins that relationship.
+    base_300: Srgb::rgb(0x52, 0x16, 0x29),
+    base_content: Srgb::rgb(0xEF, 0xE5, 0xE2),
+    muted: Srgb::rgb(0x9F, 0x7E, 0x7C),
+    faint: Srgb::rgb(0x69, 0x48, 0x4A),
+    // Ember-gold caret (hue ~41°), held ~59° clear of the wine lava (~342°):
+    // gold stays the ONE accent (DESIGN §3, the amber-guard).
+    primary: Srgb::rgb(0xF2, 0xB1, 0x40),
+    primary_content: Srgb::rgb(0x23, 0x14, 0x05),
+    error: Srgb::rgb(0xE6, 0x4E, 0x48),
+    // A lifted dusty-wine wash: in-family, visible over the oxblood floor, but
+    // neither gold nor a second loud accent.
+    selection: Srgb::rgba(0xB6, 0x5A, 0x6E, 0x60),
+    // THE LAVA-LAMP GROUND (the world's whole statement): a slow oxblood/wine
     // metaball field in the margins, `ground` == base_100 (seamless). blob_lo/
-    // blob_hi are the dim-edge and bright-core WINE tones (probe `warm` palette,
-    // ~351° hue — ≥40° off the amber caret — both inside the base_100..base_300
+    // blob_hi are the dim-edge and bright-core WINE tones (~342° hue — ≥40° off
+    // the ember caret — both inside the base_100..base_300
     // value band, so the animated margins always read as GROUND, never figure).
     // Glow edge (soft light-spill under the column), UNDITHERED — the smooth warm
     // lamp (Mangrove takes the dithered cool one).
     background: Background::Lava {
-        ground: Srgb::rgb(0x1F, 0x04, 0x00),
-        blob_lo: Srgb::rgb(0x21, 0x12, 0x14),
-        blob_hi: Srgb::rgb(0x47, 0x1F, 0x25),
+        ground: Srgb::rgb(0x17, 0x09, 0x0C),
+        blob_lo: Srgb::rgb(0x24, 0x0C, 0x14),
+        blob_hi: Srgb::rgb(0x52, 0x18, 0x2C),
         edge: LavaEdge::Glow,
         dithered: false,
     },
-    // Potoroo's warm slab-serif mono — kin to the den it derives from; the display
-    // face IS a monospace, so code reuses it (no second grid).
+    // Monaspace Xenon is the typographic kinship with Potoroo; the palette itself
+    // remains Firetail's own. The display face IS mono, so code reuses it.
     font: "Monaspace Xenon",
     mono: "Monaspace Xenon",
     cjk: CJK_GOTHIC,

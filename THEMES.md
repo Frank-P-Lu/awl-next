@@ -59,11 +59,12 @@ black or white, no gray" (anti-aliased glyph/quad edges excepted) — see §3's
 
 The sixteenth world, **Firetail**, is the OTHER kind of statement world — the
 MIRROR of Wagtail. Where Wagtail keeps NO warm thing, Firetail's one warm living
-thing is the **ground itself**: a slow umber/wine lava-lamp drifting in the page
+thing is the **ground itself**: a slow oxblood/wine lava-lamp drifting in the page
 margins (`Background::Lava`), a named exception to `DESIGN.md` §3's "the caret is
-the only thing that breathes." Its room is Potoroo's warm den, ink ladder derived
-verbatim, so it passes every ink/role/contrast law by construction; its
-distinctness is the living ground + a flame-amber caret held clear of the wine.
+the only thing that breathes." Its room is an original deep oxblood-charcoal
+den: warm blush ink, muted claret chrome, wine lava, and one ember-gold caret.
+It is measurably redder/warmer than Undertow and substantially less orange/rust
+than Potoroo; numeric whole-palette distance keeps it distinct from every world.
 **Mangrove** folds the COOL second lava ground (a dithered deep-sea lamp),
 deepening its existing tidal-teal identity. Both are law-tested by §3's "The
 `Background::Lava` law". This reaches PHILOSOPHY.md §2's upper "sixteen" — future
@@ -75,7 +76,7 @@ worlds displace, not just append.
 
 Every theme-QA pass before this one was a human staring at a screenshot. That
 caught real bugs (a live Currawong screenshot is why the dark-world role tints
-were retuned — see §4) but it doesn't scale to fourteen worlds × every surface,
+were retuned — see §4) but it doesn't scale to sixteen worlds × every surface,
 and it doesn't *stay* caught — nothing stops a future palette edit from
 reintroducing the exact same bug next month.
 
@@ -504,11 +505,21 @@ the exception is fenced by **measurable laws**, exactly like the monochrome and
 - **Amber-hue-clear (the one-accent guard).** The blobs are ambient GROUND
   motion, but the CARET's amber must remain the one accent (DESIGN §3), so any
   blob tone with real chroma (HSL saturation > 0.15) sits ≥30° of hue from
-  `primary`. Firetail's wine blobs (~351°) clear its flame-amber caret (~36°) by
-  ~44°; Mangrove's cool-blue blobs (~204°) clear its amber (~30°) by ~175°. Test:
+  `primary`. Firetail's wine blobs (~342°) clear its ember-gold caret (~41°) by
+  ~59°; Mangrove's cool-blue blobs (~204°) clear its amber (~30°) by ~175°. Test:
   `theme::tests::lava_blob_hues_stay_clear_of_the_amber_caret` (the same guard
   the syntax role tints already carry, one owner's worth of discipline applied to
   the ground).
+- **Firetail's authored character + numeric distinctness.** Firetail's
+  `base_100` stays a low-lightness, chromatic oxblood-charcoal; its lava tones
+  stay in the deep wine band; its caret stays ember-gold and at least 45° clear
+  of both wine tones. Blush ink and ember each clear strong redmean contrast
+  floors against the deep ground (≥500 and ≥300 respectively). Separately, the
+  ten-token palette signature (`base_100/200/300`, the full ink ladder, caret,
+  caret ink, error, selection tint) stays ≥70 RMS redmean from EVERY other
+  world — so a different font or moving shader can never disguise a copied
+  palette. Tests: `theme::tests::firetail_is_oxblood_wine_and_ember_not_potoroo_rust_or_undertow_violet`
+  and `theme::tests::firetail_palette_is_numerically_distinct_from_every_other_world`.
 - **The 1-bit foil (why a lava world can NEVER be Wagtail).** A `Background::Lava`
   paints authored COLOR (wine, teal) at fractional metaball-blend coverage — the
   exact two things a TRUE 1-bit world (`Theme::is_one_bit()`) forbids: a hue at
@@ -520,7 +531,12 @@ the exception is fenced by **measurable laws**, exactly like the monochrome and
   by construction, and sit as mirror bookends closing the cycle.
 
 **Cadence, freeze, determinism (the promises the motion keeps).** The lava ticks
-SLOW (~10 fps, a single `WaitUntil`, never the caret spring's hot loop), pauses
+SLOW (~10 fps, a single `WaitUntil`, never the caret spring's hot loop). Its full
+field loops after TWO phase cycles (~67 s): the vertical bob's one-cycle sine and
+the horizontal sway's half-frequency sine therefore meet at the same endpoint,
+with no ~33 s reset seam. Each wake advances by at most one fixed 100 ms ambient
+step, so a delayed macOS event-loop wake (including window dragging) cannot replay
+accumulated wall time as a field jump. The tick pauses
 on window blur, and is gated behind the `ambient_motion` setting (default on;
 off makes the room perfectly still). It is FROZEN to a fixed phase under Reduce
 Motion, and to `t=0` in every headless capture — so a lava world's capture stays
@@ -528,6 +544,8 @@ byte-deterministic and the accessibility promise holds. A lava world also forces
 page mode ON (page-off = no margins = no lava). The machinery (the pipeline,
 the tick gate, the phase resolver, the sidecar `page.background` block) is the
 lava-lamp MACHINERY round; the two worlds are the assignment step on top of it.
+The pure laws are `lava::tests::two_cycle_endpoint_is_seamless_for_every_blob_center`
+and `lava::tests::delayed_ambient_ticks_advance_at_most_one_fixed_step`.
 
 **The base ground is FLAT (the shader degrade).** `Background::Lava`'s
 `shader_id()` is 0 with `from == to == ground` — a flat fill of the margin floor,
@@ -563,7 +581,7 @@ RenderCaps`):
 | `image_reveal` | `Translucent` \| `Opaque` | The inline-image reveal caption scrim (`image_reveal_scrim`) — translucent veil vs. full opaque occlusion. | Wagtail (`Opaque`) |
 | `highlight_texture` | `Wash` \| `Stipple { color, density }` | THE ONE emphasis texture `==highlight==` spans and search matches share (`highlight_wash`, `wagtail_dither_density`) — a hue-derived translucent wash vs. a fixed-color Bayer-ordered dither stipple at `density`. | Wagtail (`Stipple { white, 0.25 }`) |
 
-`RenderCaps::DEFAULT` is what FOURTEEN of the fifteen worlds carry — every
+`RenderCaps::DEFAULT` is what FIFTEEN of the sixteen worlds carry — every
 field at its ordinary value, byte-identical to the pre-refactor render paths.
 Wagtail (`theme/worlds.rs::WAGTAIL`) is simply DATA that sets every field
 away from its default — the mechanism-by-mechanism reasoning in the sections
@@ -850,7 +868,7 @@ aspirational number for either axis alone.
 a role's fg, pin a wash color, or disable a wash — without touching the shared
 derivation. Every override still runs through the SAME law sweep (`role_style_for`
 returns the *effective* style, overrides included), so an override can never
-smuggle a law-breaking color past the tests. Fourteen of the fifteen worlds ship
+smuggle a law-breaking color past the tests. Fifteen of the sixteen worlds ship
 `RoleOverrides::NONE`: the retuned ladder alone cleared every world's floor
 in BOTH rounds, so no per-world override was needed. Reach for one only when a
 specific world's palette genuinely can't clear a law through the shared ladder —
@@ -954,7 +972,7 @@ Checklist:
    `RenderCaps` plus one control world; a brand-new world only needs adding
    to this manual gallery step if it, too, deviates from `RenderCaps::DEFAULT`
    (an ordinary default-caps world is already covered by the automated
-   color-math tier over all fifteen worlds).
+   color-math tier over all sixteen worlds).
 
 ---
 

@@ -3695,7 +3695,8 @@ impl TextPipeline {
     /// Advance the lava lamp's animation phase by `dt` seconds — called ONLY by
     /// the live App's slow ambient tick (`App::about_to_wait`), NEVER `advance()`'s
     /// hot per-frame loop (the lava's whole point is a ~10 fps sparse cadence, not
-    /// full refresh). Wraps into `[0, 1)` ([`crate::lava::advance_phase`]).
+    /// full refresh). Delayed wakes clamp to one ambient step and wrap over the
+    /// field's full two-cycle period ([`crate::lava::advance_phase`]).
     pub fn advance_lava(&mut self, dt: f32) {
         self.lava_phase = crate::lava::advance_phase(self.lava_phase, dt);
     }

@@ -1,4 +1,4 @@
-//! Tests for the `theme` module (the fifteen worlds + their derivation laws)
+//! Tests for the `theme` module (the sixteen worlds + their derivation laws)
 //! -- split verbatim out of the former `theme.rs` monolith's embedded
 //! `mod tests` (2026-07 code-organization pass); every test's NAME and MODULE
 //! PATH are unchanged (`theme::tests::foo`) -- only which file its source
@@ -168,8 +168,8 @@ fn lava_worlds_keep_figure_ground_at_the_worst_animation_phase() {
         let vp = (1200.0, 800.0);
         let blobs = &crate::lava::BACKDROP_BLOBS;
         let mut peak = 0.0f32;
-        for step in 0..64 {
-            let phase = step as f32 / 64.0;
+        for step in 0..128 {
+            let phase = step as f32 * crate::lava::LAVA_LOOP_CYCLES / 128.0;
             for (i, b) in blobs.iter().enumerate() {
                 let (cx, cy) =
                     crate::lava::animated_center(i, b[0], b[1], b[2], vp, phase);
@@ -202,7 +202,7 @@ fn lava_worlds_keep_figure_ground_at_the_worst_animation_phase() {
 /// amber-guard): the lava blobs are ambient GROUND motion — the sole DESIGN.md §3
 /// exception this round grants — but the CARET's amber must remain the one accent,
 /// so any blob tone with real chroma (HSL saturation > 0.15) sits ≥30° of hue from
-/// `primary`. Firetail's wine blobs clear it at ~44°; Mangrove's cool blues at ~175°.
+/// `primary`. Firetail's wine blobs clear it at ~59°; Mangrove's cool blues at ~175°.
 #[test]
 fn lava_blob_hues_stay_clear_of_the_amber_caret() {
     // Minimal circular hue distance in degrees.
@@ -226,6 +226,130 @@ fn lava_blob_hues_stay_clear_of_the_amber_caret() {
                 t.name
             );
         }
+    }
+}
+
+/// FIRETAIL PALETTE CHARACTER law: the sixteenth world is an ORIGINAL deep
+/// oxblood-charcoal + wine-lava + ember-gold system, not Potoroo's rust palette
+/// copied under a moving ground. Hue arithmetic pins the authored direction:
+/// Firetail's main ground is much nearer red than Undertow's violet, at least
+/// 35° away from Potoroo's orange-rust ground, and both its lava and caret stay
+/// in their named wine/gold bands.
+#[test]
+fn firetail_is_oxblood_wine_and_ember_not_potoroo_rust_or_undertow_violet() {
+    fn redmean(a: Srgb, b: Srgb) -> f32 {
+        let rbar = (a.r as f32 + b.r as f32) * 0.5;
+        let dr = a.r as f32 - b.r as f32;
+        let dg = a.g as f32 - b.g as f32;
+        let db = a.b as f32 - b.b as f32;
+        ((2.0 + rbar / 256.0) * dr * dr
+            + 4.0 * dg * dg
+            + (2.0 + (255.0 - rbar) / 256.0) * db * db)
+            .sqrt()
+    }
+    fn hue_gap(a: f32, b: f32) -> f32 {
+        let d = (a - b).abs() % 360.0;
+        d.min(360.0 - d)
+    }
+    fn red_gap(h: f32) -> f32 {
+        hue_gap(h, 0.0)
+    }
+
+    let fire_ground = FIRETAIL.base_300.to_hsl().0;
+    let potoroo_rust = POTOROO.base_300.to_hsl().0;
+    let undertow_violet = UNDERTOW.base_300.to_hsl().0;
+    assert!(
+        red_gap(fire_ground) + 60.0 <= red_gap(undertow_violet),
+        "Firetail ground {fire_ground:.1}° must read far redder/warmer than Undertow {undertow_violet:.1}°"
+    );
+    assert!(
+        hue_gap(fire_ground, potoroo_rust) >= 35.0,
+        "Firetail ground {fire_ground:.1}° must stay substantially clear of Potoroo's orange-rust {potoroo_rust:.1}°"
+    );
+
+    let (base_h, base_s, base_l) = FIRETAIL.base_100.to_hsl();
+    assert!(
+        red_gap(base_h) <= 25.0 && base_s >= 0.25 && base_l <= 0.08,
+        "Firetail base_100 must stay deep oxblood-charcoal, got h={base_h:.1}° s={base_s:.2} l={base_l:.2}"
+    );
+
+    let (_ground, lo, hi, edge, dithered) = FIRETAIL.background.lava_params().unwrap();
+    for (label, c) in [("blob_lo", lo), ("blob_hi", hi)] {
+        let h = c.to_hsl().0;
+        assert!(
+            h >= 330.0,
+            "Firetail {label} hue {h:.1}° must stay in the deep red/wine band"
+        );
+    }
+    let caret_h = FIRETAIL.primary.to_hsl().0;
+    assert!(
+        (35.0..=50.0).contains(&caret_h),
+        "Firetail caret hue {caret_h:.1}° must stay ember-gold"
+    );
+    assert!(
+        hue_gap(caret_h, lo.to_hsl().0) >= 45.0
+            && hue_gap(caret_h, hi.to_hsl().0) >= 45.0,
+        "Firetail's ember caret must stay at least 45° clear of both wine-lava tones"
+    );
+    assert!(
+        redmean(FIRETAIL.base_content, FIRETAIL.base_100) >= 500.0,
+        "Firetail blush ink must keep strong contrast over the oxblood ground"
+    );
+    assert!(
+        redmean(FIRETAIL.primary, FIRETAIL.base_100) >= 300.0,
+        "Firetail ember caret must remain immediately visible over the ground"
+    );
+    assert_eq!(edge, model::LavaEdge::Glow, "Firetail keeps its authored glow");
+    assert!(!dithered, "Firetail stays smooth; Mangrove owns lava dither");
+}
+
+/// NUMERIC INTER-WORLD DISTINCTNESS law: compare Firetail's WHOLE authored token
+/// vector (not merely its animated-background enum) against every other world by
+/// RMS redmean distance. A copied palette scores zero; a near-copy cannot
+/// hide behind a different ground shader or font. The 70-point RMS floor is a
+/// clear multi-token separation while leaving individual quiet rungs coherent.
+#[test]
+fn firetail_palette_is_numerically_distinct_from_every_other_world() {
+    fn redmean(a: Srgb, b: Srgb) -> f32 {
+        let rbar = (a.r as f32 + b.r as f32) * 0.5;
+        let dr = a.r as f32 - b.r as f32;
+        let dg = a.g as f32 - b.g as f32;
+        let db = a.b as f32 - b.b as f32;
+        ((2.0 + rbar / 256.0) * dr * dr
+            + 4.0 * dg * dg
+            + (2.0 + (255.0 - rbar) / 256.0) * db * db)
+            .sqrt()
+    }
+    fn tokens(t: &Theme) -> [Srgb; 10] {
+        [
+            t.base_100,
+            t.base_200,
+            t.base_300,
+            t.base_content,
+            t.muted,
+            t.faint,
+            t.primary,
+            t.primary_content,
+            t.error,
+            Srgb::rgb(t.selection.r, t.selection.g, t.selection.b),
+        ]
+    }
+
+    let fire = tokens(&FIRETAIL);
+    for other in THEMES.iter().filter(|t| t.name != FIRETAIL.name) {
+        let theirs = tokens(other);
+        let rms = (fire
+            .iter()
+            .zip(theirs)
+            .map(|(&a, b)| redmean(a, b).powi(2))
+            .sum::<f32>()
+            / fire.len() as f32)
+            .sqrt();
+        assert!(
+            rms >= 70.0,
+            "Firetail whole-palette distance from {} is only {rms:.1} RMS redmean (floor 70)",
+            other.name
+        );
     }
 }
 
@@ -927,7 +1051,7 @@ fn hex_round_trips_known_values() {
     assert_eq!(TAWNY.selection.hex(), "#3a6fd8");
 }
 
-/// The fourteen worlds map onto at least SIX CLEARLY-distinct display faces
+/// The sixteen worlds map onto at least SIX CLEARLY-distinct display faces
 /// (IBM Plex Mono / JetBrains Mono / Literata / Newsreader / IBM Plex Sans /
 /// Figtree / Zilla Slab), so cycling worlds visibly reskins the glyph shapes,
 /// not just the palette. The two newly-registered faces (JetBrains Mono,
@@ -953,7 +1077,7 @@ fn at_least_six_distinct_faces() {
 /// hand-rolled `if selection_style == InverseVideo { .. } else { .. }` at
 /// each of those two sites. This pins the STRUCTURAL half of the contract
 /// (every world resolves to EXACTLY the treatment its `selection_style`
-/// names, with no third "neither" outcome reachable) across all fifteen
+/// names, with no third "neither" outcome reachable) across all sixteen
 /// worlds; the REAL-PIXEL half — does the renderer actually honor it — lives
 /// in `render::tests::distinguishability`.
 #[test]

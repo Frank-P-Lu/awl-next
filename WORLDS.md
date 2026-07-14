@@ -34,8 +34,9 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 | **Tawny**      | warm-grey                  | IBM Plex Mono       | IBM Plex Mono   | Awl Marks · ✦ ✷ ◈                             | Night | Humble   | Technical | Neutral |
 | **Currawong**  | near-pure-black OLED       | Iosevka             | Iosevka         | Awl Marks · ✷ ✴ ⬥                             | Night | Humble   | Technical | Neutral |
 | **Wagtail**    | near-black, zero-saturation | JetBrains Mono     | JetBrains Mono  | Awl Marks · ✧ ⭑ ❡                             | Dusk  | —        | —         | —       |
+| **Firetail**   | deep oxblood-charcoal       | Monaspace Xenon    | Monaspace Xenon | Awl Marks · ✷ ✶ ✦                             | —     | —        | —         | Warm    |
 
-*(15 worlds. The names are Australian fauna, flora, and landscape — flavour, not taxonomy. Wagtail is the one exception to that pattern's usual warmth, not its naming — see below.)*
+*(16 worlds. The names are Australian fauna, flora, and landscape — flavour, not taxonomy. Wagtail and Firetail close the roster as statement-world mirrors — see below.)*
 
 ---
 
@@ -88,6 +89,11 @@ Dawn · Everyday · Modern · Warm.
 **A burnt-orange burrow at dusk — warm, dim, all monospace.**
 Monaspace Xenon as both page and code face; a rust-dark room.
 Dusk · Humble · Technical · Warm.
+
+### Firetail
+**A deep oxblood-charcoal lamp — wine-dark ground with one ember-gold spark.**
+Monaspace Xenon as both page and code face; smooth wine lava drifts in the margins, redder than violet Undertow and deliberately clear of Potoroo's orange-rust den.
+Warm.
 
 ### Mopoke
 **A cosy warm-charcoal room after dark — utilitarian and soft.**
@@ -172,7 +178,7 @@ Regular) on every face; and headings deliberately use size, not weight.
 ### CJK (per-script, per-world)
 - **Noto Serif JP** — Japanese mincho (serif): brushed and formal, for a literary Japanese page — the neutral floor for the display-serif worlds that keep it (Saltpan, Outback, Magpie).
 - **Shippori Mincho** — a bookish, characterful Japanese mincho: the per-world pick for awl's true book-serif worlds (Gumtree, Bilby, Undertow).
-- **Noto Sans JP** — Japanese gothic (sans): even, modern, clean kana and kanji — the neutral floor for the mono worlds that keep it (Potoroo, Tawny, Currawong, Mangrove).
+- **Noto Sans JP** — Japanese gothic (sans): even, modern, clean kana and kanji — the neutral floor for the mono worlds that keep it (Potoroo, Tawny, Currawong, Mangrove, Firetail).
 - **Zen Maru Gothic** — a rounded, warm Japanese gothic: the per-world pick for awl's rounded humanist-sans worlds (Galah, Kingfisher).
 - **Klee One** — a brush kaisho Japanese face with real calligraphic character: the per-world pick for the two Klee worlds (Mopoke, Quokka), pairing with LXGW WenKai's matching Chinese brush.
 - **Noto Serif SC** — Simplified-Chinese Song/serif: the classic printed-book hanzi shape.
@@ -187,4 +193,4 @@ Regular) on every face; and headings deliberately use size, not weight.
 Each world carries a trio of **THREE DISTINCT** section-break symbols (dash `---` / star `***` / underscore `___`), all present in its face — the dash is the flagship (also the About end-mark).
 - **EB Garamond** — its only three Renaissance fleurons ❧ ☙ ❦ (no ⁂), permuted, for the TRUE literary serifs Bilby & Undertow.
 - **Junicode** — antique Caslon flowers (botanical sprays E67D/E270/E68A, running vines F01B/F01D/F01E, quatrefoil/lattice/damask tiles EF90/EF98/EF9A + E670/F011/F014) plus the ⁂/⁑ asterisms, for the antique/slab worlds (Magpie, Mopoke, Outback) AND the warm/pale serifs (Gumtree, Saltpan) whose display face has no fleurons of its own.
-- **Awl Marks** — the merged marks face itself, drawing its per-world trios from the expanded star/floret/geometric pool, for the modern/technical/geometric worlds (Quokka ✿❀✽, Galah ❁❂✿, Potoroo ✶✦◆, Kingfisher ❂✴◈, Mangrove ❖◈⬥, Tawny ✦✷◈, Currawong ✷✴⬥, Wagtail ✧⭑❡).
+- **Awl Marks** — the merged marks face itself, drawing its per-world trios from the expanded star/floret/geometric pool, for the modern/technical/geometric worlds (Quokka ✿❀✽, Galah ❁❂✿, Potoroo ✶✦◆, Kingfisher ❂✴◈, Mangrove ❖◈⬥, Tawny ✦✷◈, Currawong ✷✴⬥, Wagtail ✧⭑❡, Firetail ✷✶✦).

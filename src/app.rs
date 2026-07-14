@@ -629,7 +629,8 @@ pub struct App {
     theme_font_at: Option<Instant>,
     /// AMBIENT LAVA TICK — the lava-lamp ground's slow ~10 fps drift clock
     /// (`crate::lava`). `Some(when)` = the last tick instant, driving the single
-    /// `WaitUntil(when + LAVA_TICK)` in `about_to_wait` that advances the phase +
+    /// `WaitUntil(when + LAVA_TICK)` in `about_to_wait` that advances the phase by
+    /// one FIXED/CLAMPED ambient step +
     /// requests one redraw + re-arms — a SLOW sparse cadence, NEVER the caret
     /// spring's hot per-frame loop. Armed ONLY while `lava::lava_should_tick` holds
     /// (a lava world active, `ambient_motion` on, motion not reduced, the window
@@ -1560,9 +1561,9 @@ impl ApplicationHandler<AwlEvent> for App {
         // phase, request ONE redraw, and re-arm. Armed ONLY while
         // `lava::lava_should_tick` holds — a lava world is active AND
         // `ambient_motion` is on AND motion is not reduced AND the window is
-        // focused (pause on blur). Every one of the fifteen worlds today has a
-        // STATIC background, so `is_lava()` is false, the gate fails, and this
-        // schedules ZERO frames — 0% idle CPU preserved, byte-identical.
+        // focused (pause on blur). Firetail + Mangrove are the two lava worlds;
+        // every other world has a static background, so `is_lava()` is false and
+        // schedules ZERO ambient frames — preserving 0% idle CPU there.
         let lava_active = crate::theme::background().is_lava();
         if crate::lava::lava_should_tick(
             lava_active,
@@ -1573,7 +1574,9 @@ impl ApplicationHandler<AwlEvent> for App {
             let now = Instant::now();
             match self.lava_tick_at {
                 Some(last) if now.saturating_duration_since(last) >= LAVA_TICK => {
-                    // Due: advance the phase by the real elapsed time and repaint.
+                    // Due: hand the elapsed time to the bounded ambient advance
+                    // (`lava::ambient_tick_dt` clamps it to one fixed tick), so a
+                    // delayed macOS window-drag wake cannot catch up in one jump.
                     // The follow-up `about_to_wait` pass (after the redraw) re-arms
                     // the single `WaitUntil` via the `_` arm below.
                     let dt = (now - last).as_secs_f32();

@@ -14,8 +14,8 @@
 //!   [`animated_center`]) — the Rust mirror the shader must stay in lockstep
 //!   with, unit-tested here without a GPU (the dither.rs / Bayer precedent).
 //! * The ANIMATION CADENCE helpers: the gate ([`lava_should_tick`]) the live
-//!   App reads before arming its slow ~10 fps `WaitUntil` tick, the phase
-//!   advance ([`advance_phase`]), and the effective-phase resolver
+//!   App reads before arming its slow ~10 fps `WaitUntil` tick, the bounded
+//!   phase advance ([`advance_phase`]), and the effective-phase resolver
 //!   ([`lava_phase_for`]) — env override > Reduce-Motion freeze > App-driven.
 //! * The dev-only [`env_override`] gallery knob (`AWL_LAVA=...`), mirroring the
 //!   `AWL_CJK_FORCE` / probe `AWL_LAVA_PROBE` precedent: a total no-op unless
@@ -26,8 +26,8 @@
 //! reduced — a non-lava world schedules zero frames); Reduce Motion freezes to a
 //! fixed phase; a headless capture renders the fixed t=0 phase (deterministic).
 //!
-//! NO world ships [`Background::Lava`] yet — this is the MACHINERY only; a lava
-//! world (its authored palette + assignment) is a later DATA step.
+//! Firetail and Mangrove ship [`Background::Lava`]; every other world leaves the
+//! pipeline dormant.
 
 use crate::theme::{Background, LavaEdge, Srgb};
 use std::sync::OnceLock;
@@ -42,9 +42,23 @@ use std::sync::OnceLock;
 /// like `THEME_FONT_DEBOUNCE`.
 pub const LAVA_TICK_MS: u64 = 100;
 
-/// Phase advance rate in CYCLES PER SECOND — one full bob every `1/LAVA_SPEED`
-/// seconds (~33 s at 0.03), the slow "lava lamp" register. TASTE TUNABLE.
+/// Phase advance rate in CYCLES PER SECOND. The composed field loops over
+/// [`LAVA_LOOP_CYCLES`] (two cycles, because horizontal sway runs at half the
+/// vertical frequency), so one seamless lamp loop lasts ~67 s at 0.03. TASTE
+/// TUNABLE.
 pub const LAVA_SPEED: f32 = 0.03;
+
+/// The WHOLE field's period in phase cycles. Vertical bob repeats after one
+/// cycle, but horizontal sway uses half-frequency and repeats only after two;
+/// wrapping at two is therefore the first phase where every blob center meets
+/// its own starting point.
+pub const LAVA_LOOP_CYCLES: f32 = 2.0;
+
+/// One fixed ambient advancement step. A delayed event-loop wake (notably while
+/// macOS is dragging the window) may report much more wall time than this, but
+/// the lamp advances by at most one sparse-tick step: it drifts instead of
+/// catching up in one visible jump.
+pub const LAVA_TICK_SECONDS: f32 = LAVA_TICK_MS as f32 / 1000.0;
 
 /// The FROZEN phase: what the lamp settles to under Reduce Motion, and the fixed
 /// phase a headless capture always renders (t=0, deterministic). The base blob
@@ -168,11 +182,20 @@ pub fn lava_should_tick(active: bool, ambient_on: bool, reduced: bool, focused: 
     active && ambient_on && !reduced && focused
 }
 
-/// Advance the phase by `dt` seconds at [`LAVA_SPEED`], wrapping to `[0, 1)` so a
-/// long-running session never loses `sin` precision. Pure.
+/// Bound an ambient wake's elapsed wall time to ONE fixed sparse tick. Normal
+/// due wakes therefore advance by exactly [`LAVA_TICK_SECONDS`]; delayed wakes
+/// never accumulate and replay the missing wall time as a visible catch-up jump.
+/// Pure, so the macOS event-loop-stall behavior is law-testable without a window.
+pub fn ambient_tick_dt(elapsed: f32) -> f32 {
+    elapsed.max(0.0).min(LAVA_TICK_SECONDS)
+}
+
+/// Advance the phase by one bounded ambient step at [`LAVA_SPEED`], wrapping to
+/// `[0, LAVA_LOOP_CYCLES)` so a long-running session never loses `sin` precision
+/// AND the half-frequency horizontal term meets its own endpoint. Pure.
 pub fn advance_phase(phase: f32, dt: f32) -> f32 {
-    let p = phase + dt * LAVA_SPEED;
-    p - p.floor()
+    let p = phase + ambient_tick_dt(dt) * LAVA_SPEED;
+    p.rem_euclid(LAVA_LOOP_CYCLES)
 }
 
 /// The EFFECTIVE render phase: the dev gallery `env` override wins outright
@@ -218,22 +241,15 @@ fn parse_spec(raw: &str) -> Option<(Background, f32)> {
             _ => return None,
         }
     }
-    // The probe's tuned palettes (Potoroo-hosted umber/wine + Mangrove-hosted
-    // deep teal), each ≥40° / ~140° clear of its host's caret amber. Colors are
-    // sRGB u8 — the pipeline converts to linear on upload.
-    let (ground, blob_lo, blob_hi) = match palette {
-        "warm" => (
-            Srgb::rgb(0x1F, 0x04, 0x00),
-            Srgb::rgb(0x21, 0x12, 0x14),
-            Srgb::rgb(0x47, 0x1F, 0x25),
-        ),
-        "deepsea" => (
-            Srgb::rgb(0x11, 0x27, 0x23),
-            Srgb::rgb(0x17, 0x23, 0x2B),
-            Srgb::rgb(0x22, 0x3C, 0x4F),
-        ),
+    // Reuse the SHIPPED worlds' authored colors rather than carrying a second
+    // probe-only copy that can drift after a palette retune. The env spec still
+    // owns its requested edge/dither treatment below.
+    let source = match palette {
+        "warm" => crate::theme::FIRETAIL.background,
+        "deepsea" => crate::theme::MANGROVE.background,
         _ => return None,
     };
+    let (ground, blob_lo, blob_hi, _, _) = source.lava_params()?;
     Some((
         Background::Lava {
             ground,
@@ -538,7 +554,7 @@ mod tests {
             (a.1 - b.1).abs() > 1e-3,
             "phase 0 vs 0.25 move the blob: {a:?} {b:?}"
         );
-        for phase in [0.0, 0.1, 0.37, 0.5, 0.83, 0.99] {
+        for phase in [0.0, 0.1, 0.37, 0.5, 0.83, 0.99, 1.25, 1.99] {
             let (_, cy) = animated_center(2, 0.05, base_cy, 0.05, vp, phase);
             assert!((cy - base_cy).abs() < 0.09, "bob stays bounded: {cy}");
         }
@@ -681,20 +697,74 @@ mod tests {
     }
 
     #[test]
-    fn advance_phase_moves_forward_and_wraps_into_unit_interval() {
+    fn advance_phase_moves_forward_and_wraps_over_the_full_field_period() {
         let p = advance_phase(0.0, 1.0);
         assert!(
-            p > 0.0 && p < 1.0,
+            p > 0.0 && p < LAVA_LOOP_CYCLES,
             "one second advances within a cycle: {p}"
         );
-        // Wrapping: a huge dt stays in [0,1).
-        let w = advance_phase(0.99, 1000.0);
+        // Wrapping: a phase already near the two-cycle endpoint wraps cleanly.
+        let w = advance_phase(1.999, 1.0);
         assert!(
-            (0.0..1.0).contains(&w),
-            "wrapped into the unit interval: {w}"
+            (0.0..LAVA_LOOP_CYCLES).contains(&w),
+            "wrapped into the two-cycle interval: {w}"
         );
         // Monotone within a cycle.
         assert!(advance_phase(0.1, 0.5) > 0.1);
+    }
+
+    #[test]
+    fn two_cycle_endpoint_is_seamless_for_every_blob_center() {
+        let vp = (1200.0, 800.0);
+        for (i, b) in BACKDROP_BLOBS.iter().enumerate() {
+            for start in [0.0, 0.17, 0.63, 1.21] {
+                let a = animated_center(i, b[0], b[1], b[2], vp, start);
+                let z = animated_center(
+                    i,
+                    b[0],
+                    b[1],
+                    b[2],
+                    vp,
+                    start + LAVA_LOOP_CYCLES,
+                );
+                assert!(
+                    (a.0 - z.0).abs() < 1e-6 && (a.1 - z.1).abs() < 1e-6,
+                    "blob {i} does not meet its two-cycle endpoint from {start}: {a:?} vs {z:?}"
+                );
+            }
+        }
+        // One cycle is deliberately NOT the full loop: horizontal sway is at
+        // half-frequency, so at least one blob must still be elsewhere there.
+        let b = BACKDROP_BLOBS[1];
+        let at_zero = animated_center(1, b[0], b[1], b[2], vp, 0.0);
+        let at_one = animated_center(1, b[0], b[1], b[2], vp, 1.0);
+        assert!((at_zero.0 - at_one.0).abs() > 1e-4);
+
+        // Centers are the field's only phase-varying input, but prove the
+        // composed metaball result too so the law names the visible outcome.
+        for px in [(24.0, 40.0), (160.0, 400.0), (600.0, 300.0), (1140.0, 720.0)] {
+            let a = metaball_field(px, vp, &BACKDROP_BLOBS, 0.0);
+            let z = metaball_field(px, vp, &BACKDROP_BLOBS, LAVA_LOOP_CYCLES);
+            assert!(
+                (a - z).abs() < 1e-6,
+                "metaball field does not meet its two-cycle endpoint at {px:?}: {a} vs {z}"
+            );
+        }
+    }
+
+    #[test]
+    fn delayed_ambient_ticks_advance_at_most_one_fixed_step() {
+        assert_eq!(ambient_tick_dt(LAVA_TICK_SECONDS), LAVA_TICK_SECONDS);
+        assert_eq!(ambient_tick_dt(8.0), LAVA_TICK_SECONDS);
+        assert_eq!(ambient_tick_dt(-1.0), 0.0);
+
+        let ordinary = advance_phase(0.4, LAVA_TICK_SECONDS);
+        let delayed = advance_phase(0.4, 8.0);
+        assert_eq!(
+            delayed, ordinary,
+            "an eight-second event-loop stall must advance exactly one ambient tick, never catch up"
+        );
+        assert!((ordinary - 0.4 - LAVA_TICK_SECONDS * LAVA_SPEED).abs() < 1e-6);
     }
 
     // --- The dev gallery knob ---------------------------------------------------

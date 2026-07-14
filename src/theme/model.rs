@@ -1,7 +1,7 @@
 //! src/theme/model.rs — the core palette DATA MODEL: [`Theme`] itself (the
 //! per-world struct), its [`Background`] margin-ground union, the syntax
 //! [`RoleOverrides`] escape hatch, and the theme-picker's [`Lens`]/[`ThemeTags`]
-//! faceting types. See [`crate::theme::worlds`] for the fifteen concrete
+//! faceting types. See [`crate::theme::worlds`] for the sixteen concrete
 //! [`Theme`] literals and [`crate::theme::derive`] for the active-theme
 //! accessors that read them.
 
@@ -11,7 +11,7 @@ use super::ornament::Ornaments;
 
 /// PER-WORLD SYNTAX ROLE-STYLE OVERRIDES — the designed escape hatch for the
 /// DERIVED role tints + washes (`render/spans.rs::role_style_for`, the one owner
-/// of role color). FOURTEEN of the fifteen worlds ship [`RoleOverrides::NONE`]:
+/// of role color). FIFTEEN of the sixteen worlds ship [`RoleOverrides::NONE`]:
 /// every role style is a pure function of the world's own palette (ink-ladder
 /// lightness × fixed hue anchors). A world may PIN a role's foreground tint, PIN
 /// a wash quad color (rgba — washes are computed quad colors, deliberately NOT
@@ -51,7 +51,7 @@ pub enum WashOverride {
 
 impl RoleOverrides {
     /// No overrides: every role style comes from the shared derivation. What
-    /// fourteen of the fifteen worlds ship with (Wagtail is the exception —
+    /// fifteen of the sixteen worlds ship with (Wagtail is the exception —
     /// see [`Theme::role_overrides`]'s doc + `worlds.rs::WAGTAIL`).
     pub const NONE: RoleOverrides = RoleOverrides {
         def_fg: None,
@@ -76,7 +76,7 @@ impl RoleOverrides {
 // setting a field. `RenderCaps` names each of those render decisions as its
 // own field with a plain enum/number value (TOML-ready shapes — no closures,
 // no trait objects — though nothing here ships an on-disk parser; see
-// `ROADMAP.md`'s "theme capabilities as data" entry). FOURTEEN of the fifteen
+// `ROADMAP.md`'s "theme capabilities as data" entry). FIFTEEN of the sixteen
 // worlds ship [`RenderCaps::DEFAULT`] byte-identically; Wagtail is simply DATA
 // that sets every field away from its default (`worlds.rs::WAGTAIL`) — no
 // world-name string comparison, no `is_one_bit()` read, anywhere in
@@ -258,7 +258,7 @@ pub enum HighlightTexture {
 }
 
 /// The declarative capability bundle a world's render behavior is built from.
-/// See the module-level doc above. `DEFAULT` is what fourteen of the fifteen
+/// See the module-level doc above. `DEFAULT` is what fifteen of the sixteen
 /// worlds carry, byte-identical to the pre-capabilities-as-data render paths;
 /// only `worlds.rs::WAGTAIL` deviates, on every field.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -683,7 +683,7 @@ pub struct Theme {
     /// a value on every lens; the picker groups worlds by the active lens's section.
     pub tags: ThemeTags,
     /// Optional per-world SYNTAX ROLE-STYLE overrides (see [`RoleOverrides`]).
-    /// [`RoleOverrides::NONE`] on fourteen of the fifteen worlds: the quiet role
+    /// [`RoleOverrides::NONE`] on fifteen of the sixteen worlds: the quiet role
     /// tints + washes are derived from this world's own palette in ONE place
     /// (`render/spans.rs::role_style_for`); a world only reaches for this to pin or
     /// disable a specific role style after a live-eyeball call, OR — Wagtail's
@@ -694,7 +694,7 @@ pub struct Theme {
     /// doc) — every per-theme render BEHAVIOR (selection style, caret-block
     /// invert, backdrop blur, elevation, decorative washes, the image-reveal
     /// scrim, the highlight/search-match texture) is a plain DATA read of
-    /// this field. [`RenderCaps::DEFAULT`] on fourteen of the fifteen worlds;
+    /// this field. [`RenderCaps::DEFAULT`] on fifteen of the sixteen worlds;
     /// Wagtail is the escape hatch's real use (`worlds.rs::WAGTAIL`).
     pub render_caps: RenderCaps,
 }
