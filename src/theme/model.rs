@@ -236,11 +236,24 @@ pub enum PlacardCorner {
 /// ship one by accident (see that test's own doc for why the guard lives in
 /// `theme::`, never `render::`, where reading `is_one_bit()` is banned
 /// outright).
+/// `Muted` and `Bold` are the FIRETAIL-MAXIMALIST-SHOWCASE round's DIAL-UP
+/// rungs — SMOOTH steps LOUDER than `Faint` (the previous ceiling), still
+/// pure ladder blends through the same one owner (`super::derive::placard_ink`):
+/// `Muted` is the world's own `muted` rung verbatim (the rows' own ink —
+/// the wordmark stops receding and reads as a peer), `Bold` steps halfway
+/// further from `muted` toward `base_content` (a clear statement, still
+/// under full ink so the rows always win). DELIBERATELY never dithered —
+/// smooth is Firetail's contrast with Mangrove (the personality-assignment
+/// round's user call), so the dial-up keeps that split: texture stays
+/// `Stipple`'s alone. NO world ships either yet (probe-reachable via
+/// `AWL_OVERLAY_STYLE_FORCE` only; a later data flip assigns them).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlacardInk {
     Faint,
     Ghost,
     Stipple,
+    Muted,
+    Bold,
 }
 
 /// How a summoned overlay card announces which picker it is (see
@@ -292,10 +305,24 @@ pub enum TitleStyle {
 /// data revert (and the `AWL_OVERLAY_ANCHOR_FORCE` dev probe A/Bs the two).
 /// The contextual SPELL popup is NOT a takeover card and ignores this — it
 /// stays anchored at its misspelled word.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `Inset` is the FIRETAIL-MAXIMALIST-SHOWCASE round's STATEMENT dial: the
+/// card's left edge sits `x_frac` of the free horizontal span in from the
+/// left margin (`0.0` reproduces `TopLeft` exactly; `1.0` pins the card's
+/// RIGHT edge one margin in from the canvas edge; `0.5` is `TopCenter`) —
+/// one owner ([`crate::render::TextPipeline::overlay_card_x`]), one float,
+/// the whole horizontal composition space as DATA. A HIGH `x_frac` (the
+/// dramatic right-shifted statement) deliberately composes with the shipped
+/// BOTTOM-LEFT placards: card right, wordmark bottom-left — balanced
+/// asymmetry with no overlap (the long-title clipping that rejected BR
+/// placards is the wordmark's own concern; the card never clips, it clamps).
+/// NO world ships `Inset` yet (probe-reachable via `AWL_OVERLAY_ANCHOR_FORCE`).
+// NOTE: no `Eq` — `Inset`'s `x_frac` is a float (same reasoning as `TitleStyle`).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CardAnchor {
     TopLeft,
     TopCenter,
+    Inset { x_frac: f32 },
 }
 
 /// Whether a thin FRAME draws around the WRITING COLUMN — the page-frame
@@ -318,6 +345,76 @@ pub enum CardAnchor {
 pub enum PageFrame {
     None,
     Line { weight_px: f32 },
+}
+
+/// The FACE a world's summoned-overlay CHROME shapes in — the FIRETAIL-
+/// MAXIMALIST-SHOWCASE round's `chrome_face` capability. "Chrome" is a
+/// CLOSED, enumerated surface set: the placard WORDMARK, the inline
+/// "<title> › " overlay TITLE prefix, and the faceted picker's lens-STRIP
+/// labels — the frame around the list, never the list. LIST ROWS, the query
+/// text, section headers, and the WRITING COLUMN itself always keep the
+/// world's own body face ([`Theme::font`]) — legibility surfaces never
+/// change face (the Persona "clean core, loud frame" split as a type rule).
+/// `Body` (the default on every world) is a TOTAL no-op: the chrome shapes
+/// in `Theme::font` exactly as before this round. `Named` swaps ONLY those
+/// chrome spans to the named registered family (a bundled face, or a
+/// probe-loaded audition candidate via `AWL_CHROME_FACE_FILE`). NO world
+/// ships `Named` yet (probe-reachable via `AWL_CHROME_FACE_FORCE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChromeFace {
+    Body,
+    Named(&'static str),
+}
+
+/// How a summoned overlay ENTERS the frame — the motion half of the
+/// FIRETAIL-MAXIMALIST-SHOWCASE round's [`MotionJuice`] capability.
+/// `Instant` (every world today) is the shipped behavior verbatim: the card
+/// appears at its settled position the frame the overlay opens. `SpringIn`
+/// slides the whole card in from a few px above with a small overshoot
+/// spring (~200ms) — LIVE ONLY: the animator is armed exclusively by the
+/// live App ([`crate::render::TextPipeline::arm_live_juice`]), so every
+/// headless capture renders the settled position byte-identically
+/// (determinism law), and Reduce Motion folds it to nothing (the step
+/// settles instantly — `motion.rs`'s pure-time-compression contract).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverlayEntrance {
+    Instant,
+    SpringIn,
+}
+
+/// How the picker's selected-row BAND responds to a selection move — the
+/// second [`MotionJuice`] dial. `Snap` (every world today) repositions the
+/// band instantly. `Slide` eases it from the previous row to the new one
+/// (~110ms, slight overshoot) — the "livelier selection response". Same
+/// live-only + Reduce-Motion contract as [`OverlayEntrance`]; the band is
+/// purely visual (the hit-test and the shaped rows never move), so the
+/// slide can never desync a click from the row it lands on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BandResponse {
+    Snap,
+    Slide,
+}
+
+/// The per-world MOTION-JUICE bundle: overlay entrance + selection-band
+/// response, both LIVE-ONLY animations over overlay CHROME (never the
+/// writing column, never a new color — pure position easing, so the
+/// never-amber and figure/ground laws are untouched by construction).
+/// [`MotionJuice::CALM`] on every world (byte-identical, zero animators
+/// armed); the loud pole flips fields as one-line DATA in a later round.
+/// Probe: `AWL_MOTION_FORCE` (live A/B only — a capture can't show time).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MotionJuice {
+    pub entrance: OverlayEntrance,
+    pub band: BandResponse,
+}
+
+impl MotionJuice {
+    /// The calm default: no entrance motion, band snaps — what every world
+    /// ships today (structurally zero animation, not "fast animation").
+    pub const CALM: MotionJuice = MotionJuice {
+        entrance: OverlayEntrance::Instant,
+        band: BandResponse::Snap,
+    };
 }
 
 /// THE ONE emphasis texture a world draws `==highlight==` spans and search
@@ -366,6 +463,15 @@ pub struct RenderCaps {
     /// composition); every world inherits it unless it opts back to
     /// `TopCenter`.
     pub card_anchor: CardAnchor,
+    /// THE FIRETAIL-MAXIMALIST-SHOWCASE round's chrome-face capability (see
+    /// [`ChromeFace`]'s own doc): which FACE the overlay chrome (placard
+    /// wordmark / title prefix / strip labels) shapes in. `Body` everywhere
+    /// (byte-identical) until a world flips it as data.
+    pub chrome_face: ChromeFace,
+    /// THE FIRETAIL-MAXIMALIST-SHOWCASE round's motion-juice capability (see
+    /// [`MotionJuice`]'s own doc): live-only overlay entrance + selection-band
+    /// response. [`MotionJuice::CALM`] everywhere until a world flips it.
+    pub motion: MotionJuice,
 }
 
 impl RenderCaps {
@@ -384,6 +490,10 @@ impl RenderCaps {
         // right side for the ghost placard). Revert to the historical centered
         // placement in ONE line here (`CardAnchor::TopCenter`).
         card_anchor: CardAnchor::TopLeft,
+        // FIRETAIL-MAXIMALIST-SHOWCASE round: both new dials land INERT —
+        // body face chrome, zero motion — on every world (byte-identical).
+        chrome_face: ChromeFace::Body,
+        motion: MotionJuice::CALM,
     };
 
 }

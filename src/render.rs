@@ -834,6 +834,18 @@ pub const COPY_PULSE_LIFT_ALPHA: f32 = 55.0;
 /// kick. TASTE TUNABLE.
 pub const COPY_PULSE_MS: f32 = 220.0;
 
+/// MOTION-JUICE feel constants (the FIRETAIL-MAXIMALIST-SHOWCASE round's
+/// [`theme::MotionJuice`] capability) — ALL THREE are TASTE TUNABLE and
+/// flagged for live human confirmation (the harness cannot judge feel over
+/// real time). The entrance: the summoned card starts `DROP_PX` above its
+/// resting place and springs down over `ENTRANCE_MS` with a small overshoot
+/// (`ease::out_back`). The band slide: the selected-row band eases between
+/// rows over `BAND_SLIDE_MS` with the same spring. Durations sit in the
+/// copy-pulse's own "obvious and understated" neighborhood (~200ms).
+pub const OVERLAY_ENTRANCE_MS: f32 = 200.0;
+pub const OVERLAY_ENTRANCE_DROP_PX: f32 = 14.0;
+pub const OVERLAY_BAND_SLIDE_MS: f32 = 110.0;
+
 /// The copy-pulse's eased SETTLE fraction at progress `t` ∈ `[0, 1]` (0 = just
 /// kicked / full brighten, 1 = fully settled / no boost) — a smoothstep ease,
 /// mirroring [`crate::caret::CaretAnim::pop_scale`]'s own easing curve exactly.
@@ -1281,6 +1293,27 @@ fn panel_attrs() -> Attrs<'static> {
         .font_features(ff)
 }
 
+/// The overlay CHROME face's attrs — the FIRETAIL-MAXIMALIST-SHOWCASE round's
+/// ONE seam between [`effective_chrome_face`] and the three chrome spans that
+/// read it (placard wordmark / inline title prefix / lens-strip labels; see
+/// [`theme::ChromeFace`]'s doc for the closed surface set). `Body` (every
+/// world today) returns [`panel_attrs`] VERBATIM — byte-identical shaping —
+/// so the capability is structurally inert until a world (or the
+/// `AWL_CHROME_FACE_FORCE` probe) names a face. List rows, the query text,
+/// and the document never call this — they stay on `panel_attrs`/`doc_attrs`.
+fn chrome_attrs() -> Attrs<'static> {
+    match effective_chrome_face() {
+        theme::ChromeFace::Body => panel_attrs(),
+        theme::ChromeFace::Named(family) => {
+            let ff = text::font_features(false, family, code_ligatures_on());
+            Attrs::new()
+                .family(Family::Name(family))
+                .weight(mono_safe_weight(family))
+                .font_features(ff)
+        }
+    }
+}
+
 /// Which corner a quiet single-line label ([`TextPipeline::prepare_corner_label`])
 /// anchors to: the bottom-right (right-aligned to the writing column) word-count
 /// readout, the top-right DEBUG panel (right-aligned to the canvas edge, clear of the
@@ -1384,6 +1417,26 @@ fn build_font_system() -> FontSystem {
                 face_bytes.to_vec(),
             )),
         );
+    }
+
+    // DEV-ONLY (FIRETAIL-MAXIMALIST-SHOWCASE round): `AWL_CHROME_FACE_FILE`
+    // registers UNCOMMITTED audition font files (colon-separated paths) so the
+    // chrome-face gallery can shoot candidate faces that are deliberately NOT
+    // in the tree (candidate files stay out of the repo until a flip round
+    // bundles the winner — the board's own rule). Pairs with
+    // `AWL_CHROME_FACE_FORCE=<family>` to select one. Total no-op unset; a
+    // missing/unreadable file prints a note and is skipped (never a crash).
+    if let Ok(paths) = std::env::var("AWL_CHROME_FACE_FILE") {
+        for path in paths.split(':').filter(|p| !p.trim().is_empty()) {
+            match std::fs::read(path.trim()) {
+                Ok(bytes) => {
+                    font_system.db_mut().load_font_source(
+                        glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(bytes)),
+                    );
+                }
+                Err(e) => eprintln!("AWL_CHROME_FACE_FILE {path:?}: {e}; skipped"),
+            }
+        }
     }
 
     // Register the bundled BOLD (700) display faces (see FONT_THEME_BOLD_FACES).
@@ -1586,10 +1639,12 @@ fn apply_cjk_force(font_system: &mut FontSystem) {
 /// Grammar: `"inline"` forces [`theme::TitleStyle::InlinePrefix`];
 /// `"placard:<corner>:<scale>:<ink>"` forces a [`theme::TitleStyle::Placard`]
 /// — `<corner>` one of `TL`/`TR`/`BL`/`BR` (case-insensitive), `<scale>` a
-/// plain float, `<ink>` one of `faint`/`ghost`/`stipple` (case-insensitive),
-/// e.g. `"placard:BL:3.0:ghost"`. A malformed value parses to `None` (falls
-/// through to the active world's own `render_caps.title_style` — never a
-/// crash).
+/// plain float, `<ink>` one of `faint`/`ghost`/`stipple`/`muted`/`bold`
+/// (case-insensitive; the last two are the FIRETAIL-MAXIMALIST-SHOWCASE
+/// round's smooth dial-up rungs), e.g. `"placard:BL:3.0:ghost"` or the
+/// dial-up probe `"placard:BL:4.0:bold"`. A malformed value parses to `None`
+/// (falls through to the active world's own `render_caps.title_style` —
+/// never a crash).
 fn parse_overlay_style_force(s: &str) -> Option<theme::TitleStyle> {
     let s = s.trim();
     if s.eq_ignore_ascii_case("inline") {
@@ -1611,6 +1666,8 @@ fn parse_overlay_style_force(s: &str) -> Option<theme::TitleStyle> {
         "faint" => theme::PlacardInk::Faint,
         "ghost" => theme::PlacardInk::Ghost,
         "stipple" => theme::PlacardInk::Stipple,
+        "muted" => theme::PlacardInk::Muted,
+        "bold" => theme::PlacardInk::Bold,
         _ => return None,
     };
     if parts.next().is_some() {
@@ -1716,11 +1773,26 @@ pub(crate) fn effective_title_style() -> theme::TitleStyle {
 /// forces the [`theme::CardAnchor`] the summoned card uses for EVERY world, so
 /// the gallery can shoot both placements without flipping any world's data.
 /// Grammar: `"tl"`/`"topleft"`/`"left"` → [`theme::CardAnchor::TopLeft`];
-/// `"center"`/`"topcenter"`/`"tc"` → [`theme::CardAnchor::TopCenter`]. Malformed
+/// `"center"`/`"topcenter"`/`"tc"` → [`theme::CardAnchor::TopCenter`];
+/// `"inset:<frac>"` (a float in `[0, 1]`, e.g. `"inset:0.85"`) →
+/// [`theme::CardAnchor::Inset`] — the FIRETAIL-MAXIMALIST-SHOWCASE round's
+/// statement-placement dial (see that variant's own doc). Malformed
 /// → `None` (falls through to the active world's own `render_caps.card_anchor`).
 /// Total no-op unset; no config key, no CLI flag.
 fn parse_overlay_anchor_force(s: &str) -> Option<theme::CardAnchor> {
-    match s.trim().to_ascii_lowercase().as_str() {
+    let s = s.trim();
+    if let Some(rest) = s
+        .strip_prefix("inset:")
+        .or_else(|| s.strip_prefix("Inset:"))
+        .or_else(|| s.strip_prefix("INSET:"))
+    {
+        let frac: f32 = rest.trim().parse().ok()?;
+        if (0.0..=1.0).contains(&frac) {
+            return Some(theme::CardAnchor::Inset { x_frac: frac });
+        }
+        return None;
+    }
+    match s.to_ascii_lowercase().as_str() {
         "tl" | "topleft" | "left" => Some(theme::CardAnchor::TopLeft),
         "tc" | "topcenter" | "center" | "centre" => Some(theme::CardAnchor::TopCenter),
         _ => None,
@@ -1842,6 +1914,207 @@ pub(crate) fn effective_overlay_selrow_band() -> theme::Srgb {
         Some(false) => theme::surface_selected(),
         _ => theme::overlay_selected_band(),
     }
+}
+
+// --- THE FIRETAIL-MAXIMALIST-SHOWCASE round's dev probes ---------------------
+//
+// Five dials, ALL landing inert (every world byte-identical by default); each
+// is reachable through an `AWL_*` env probe in the established
+// `AWL_OVERLAY_STYLE_FORCE` idiom — read once, memoized, malformed → `None`
+// (the world's own data), total no-op unset, no config key, no CLI flag.
+// The placard dial-up + Inset anchor extend the two existing probes above;
+// the three NEW probes live here: chrome face, motion juice, menu slant.
+
+/// The `AWL_CHROME_FACE_FORCE` dev knob, read ONCE and memoized — forces the
+/// overlay CHROME face ([`theme::ChromeFace`]) to the named registered family
+/// for EVERY world, so the audition gallery can shoot a candidate face
+/// without any world shipping one. The value is a raw family NAME (e.g.
+/// `"Archivo Black"`); it is leaked to `&'static str` once (a memoized probe
+/// leaks at most one small string per process). An UNREGISTERED family
+/// degrades through cosmic-text's ordinary fallback (never a crash) — pair
+/// with `AWL_CHROME_FACE_FILE` to register an uncommitted candidate file.
+fn awl_chrome_face_force() -> &'static Option<theme::ChromeFace> {
+    static ONCE: std::sync::OnceLock<Option<theme::ChromeFace>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_CHROME_FACE_FORCE").ok().and_then(|s| {
+            let s = s.trim();
+            if s.is_empty() {
+                return None;
+            }
+            Some(theme::ChromeFace::Named(Box::leak(s.to_string().into_boxed_str())))
+        })
+    })
+}
+
+/// TEST-ONLY escape hatch: force the EFFECTIVE chrome face without touching
+/// the memoized env var (mirrors [`set_title_style_test_override`]). Guarded
+/// by [`crate::testlock::serial`] at the call site. `None` clears it.
+#[cfg(test)]
+static CHROME_FACE_TEST_OVERRIDE: std::sync::Mutex<Option<theme::ChromeFace>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_chrome_face_test_override(face: Option<theme::ChromeFace>) {
+    *CHROME_FACE_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = face;
+}
+
+/// The EFFECTIVE [`theme::ChromeFace`] for this frame: a `cfg(test)` override
+/// if set, else the `AWL_CHROME_FACE_FORCE` dev probe if set, else the active
+/// world's own `render_caps.chrome_face` — `Body` on every world today, so an
+/// unset-env, non-test run is BYTE-IDENTICAL to before this round. Read only
+/// by [`chrome_attrs`] (the one seam the chrome spans shape through).
+pub(crate) fn effective_chrome_face() -> theme::ChromeFace {
+    #[cfg(test)]
+    {
+        if let Some(f) = *CHROME_FACE_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return f;
+        }
+    }
+    match awl_chrome_face_force() {
+        Some(f) => *f,
+        None => theme::active().render_caps.chrome_face,
+    }
+}
+
+/// DEV-ONLY probe for the MOTION-JUICE dial (`AWL_MOTION_FORCE`) — forces the
+/// [`theme::MotionJuice`] bundle for EVERY world so the user can FEEL the
+/// entrance spring / band slide live without any world shipping them (a
+/// capture cannot show time; this probe is for the live A/B, and is inert in
+/// any headless run anyway — the animators are armed only by the live App).
+/// Grammar: `"off"`/`"calm"` → [`theme::MotionJuice::CALM`]; `"spring"` →
+/// entrance only; `"slide"` → band only; `"spring:slide"`/`"full"`/`"on"` →
+/// both. Malformed → `None` (the world's own `render_caps.motion`).
+fn parse_motion_force(s: &str) -> Option<theme::MotionJuice> {
+    let (mut entrance, mut band) = (theme::OverlayEntrance::Instant, theme::BandResponse::Snap);
+    match s.trim().to_ascii_lowercase().as_str() {
+        "off" | "calm" => {}
+        "spring" => entrance = theme::OverlayEntrance::SpringIn,
+        "slide" => band = theme::BandResponse::Slide,
+        "spring:slide" | "slide:spring" | "full" | "on" => {
+            entrance = theme::OverlayEntrance::SpringIn;
+            band = theme::BandResponse::Slide;
+        }
+        _ => return None,
+    }
+    Some(theme::MotionJuice { entrance, band })
+}
+
+/// The `AWL_MOTION_FORCE` dev knob, read ONCE and memoized.
+fn awl_motion_force() -> &'static Option<theme::MotionJuice> {
+    static ONCE: std::sync::OnceLock<Option<theme::MotionJuice>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_MOTION_FORCE").ok().and_then(|s| parse_motion_force(&s))
+    })
+}
+
+/// TEST-ONLY escape hatch for the motion-juice bundle (mirrors
+/// [`set_title_style_test_override`]; `serial()`-guarded at call sites).
+#[cfg(test)]
+static MOTION_TEST_OVERRIDE: std::sync::Mutex<Option<theme::MotionJuice>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_motion_test_override(m: Option<theme::MotionJuice>) {
+    *MOTION_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = m;
+}
+
+/// The EFFECTIVE [`theme::MotionJuice`] for this frame: test override → env
+/// probe → the active world's own `render_caps.motion` (CALM on every world
+/// today). NOTE this is only HALF the gate — the animators additionally
+/// require [`TextPipeline::arm_live_juice`] (live-App-only) and fold to
+/// nothing under [`crate::motion::reduced`]; see `step_overlay_juice`.
+pub(crate) fn effective_motion_juice() -> theme::MotionJuice {
+    #[cfg(test)]
+    {
+        if let Some(m) = *MOTION_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return m;
+        }
+    }
+    match awl_motion_force() {
+        Some(m) => *m,
+        None => theme::active().render_caps.motion,
+    }
+}
+
+/// THE WILD-MENU SLANT PROBE's parsed shape: each successive candidate row's
+/// draw ORIGIN steps `px_per_row` further right (a Persona-style stair), and
+/// `italic` additionally requests an italic style on the row names. PROBE
+/// ONLY — no `RenderCaps` field, no world data: this ships only if the user
+/// gallery-approves it later (the board's own gate), so it stays an env-gated
+/// LAYOUT VARIANT. Rows still flow through `render/rowlayout` (the law is
+/// untouched); the slant is a DRAW-TIME row-origin transform whose maximum
+/// offset is subtracted from the effective row width BEFORE the rowlayout
+/// budget/fits math, so elision respects the reduced span (a shifted row can
+/// never paint past the card's right text edge).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SlantProbe {
+    pub px_per_row: f32,
+    pub italic: bool,
+}
+
+/// `AWL_OVERLAY_SLANT_FORCE` grammar: `"<px>"` (a positive float — the
+/// per-row stair step) or `"<px>:italic"`. Malformed / non-positive → `None`
+/// (no slant — the shipped layout, byte-identical).
+fn parse_overlay_slant_force(s: &str) -> Option<SlantProbe> {
+    let s = s.trim();
+    let (px_s, italic) = match s.split_once(':') {
+        Some((px, flag)) if flag.trim().eq_ignore_ascii_case("italic") => (px, true),
+        Some(_) => return None,
+        None => (s, false),
+    };
+    let px: f32 = px_s.trim().parse().ok()?;
+    if px > 0.0 && px.is_finite() {
+        Some(SlantProbe { px_per_row: px, italic })
+    } else {
+        None
+    }
+}
+
+/// The `AWL_OVERLAY_SLANT_FORCE` dev knob, read ONCE and memoized.
+fn awl_overlay_slant_force() -> &'static Option<SlantProbe> {
+    static ONCE: std::sync::OnceLock<Option<SlantProbe>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_OVERLAY_SLANT_FORCE")
+            .ok()
+            .and_then(|s| parse_overlay_slant_force(&s))
+    })
+}
+
+/// TEST-ONLY escape hatch for the slant probe (mirrors
+/// [`set_title_style_test_override`]; `serial()`-guarded at call sites).
+#[cfg(test)]
+static SLANT_TEST_OVERRIDE: std::sync::Mutex<Option<SlantProbe>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_slant_test_override(s: Option<SlantProbe>) {
+    *SLANT_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = s;
+}
+
+/// The EFFECTIVE slant probe for this frame — `None` (the shipped layout) on
+/// every run without the env probe / test override. There is deliberately NO
+/// `RenderCaps` fallthrough arm: the wild menu is PROBE-GATED (ships only on
+/// a later gallery win), so the data space doesn't exist yet.
+pub(crate) fn overlay_slant() -> Option<SlantProbe> {
+    #[cfg(test)]
+    {
+        if let Some(s) = *SLANT_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return Some(s);
+        }
+    }
+    *awl_overlay_slant_force()
+}
+
+/// The slant probe's per-DISPLAY-ROW x offset (row 0 = no shift, each deeper
+/// row one `px_per_row` step further right) and its WIDTH TAX — the maximum
+/// offset across `n_rows`, which the shapers subtract from the effective row
+/// span so rowlayout's elision math sees the true available width. One owner
+/// for both numbers so the draw offset and the width reduction can't drift.
+pub(crate) fn slant_offset(slant: &SlantProbe, row: usize) -> f32 {
+    slant.px_per_row * row as f32
+}
+
+pub(crate) fn slant_max_offset(slant: &SlantProbe, n_rows: usize) -> f32 {
+    slant.px_per_row * n_rows.saturating_sub(1) as f32
 }
 
 /// Remove [`BAD_FALLBACK_FAMILIES`] from the font system's database so cosmic-text
@@ -2674,6 +2947,27 @@ pub struct TextPipeline {
     /// The CALM NOTICE text mirrored from [`ViewState::notice`]; empty parks the
     /// label off-screen (nothing drawn). Live-only content by construction.
     notice: String,
+    /// MOTION-JUICE ARMING (the FIRETAIL-MAXIMALIST-SHOWCASE round's
+    /// determinism gate): `false` by default and in EVERY headless capture /
+    /// bench / test pipeline — only the live App's GPU init calls
+    /// [`Self::arm_live_juice`]. Every motion-juice kick checks this first,
+    /// so the capture path is STRUCTURALLY animation-free (the settled state
+    /// is the only state it can ever render), regardless of the world's own
+    /// `render_caps.motion` or the `AWL_MOTION_FORCE` probe.
+    juice_live: bool,
+    /// Overlay ENTRANCE progress: `1.0` = settled (the permanent value when
+    /// juice is unarmed/CALM/reduced — offset exactly `0.0`); kicked to `0.0`
+    /// by [`Self::sync_view_fields`]'s open-flip detection when the active
+    /// world's `MotionJuice::entrance` is `SpringIn` (live only). Stepped by
+    /// [`Self::step_overlay_juice`].
+    overlay_enter_t: f32,
+    /// Selection-BAND slide state: the row-top the band is easing FROM and
+    /// the ease progress (`1.0` = settled on target). `band_last` memoizes
+    /// the last TARGET row-top so a selection move is detected at the draw
+    /// seam ([`Self::overlay_band_drawn`]); `None` when no overlay is open.
+    overlay_band_from: f32,
+    overlay_band_t: f32,
+    overlay_band_last: Option<f32>,
     /// LIVE-ONLY: the pointer position (physical px) + the current measure (chars)
     /// while a page-width edge drag is in progress, or `None` when not dragging —
     /// the default, and the ONLY state a headless capture/replay ever constructs
@@ -3325,6 +3619,13 @@ impl TextPipeline {
             keybindings_tips: Vec::new(),
             whichkey_rows: None,
             notice: String::new(),
+            // MOTION JUICE: unarmed + settled — the permanent state of every
+            // headless/bench/test pipeline (only the live App arms it).
+            juice_live: false,
+            overlay_enter_t: 1.0,
+            overlay_band_from: 0.0,
+            overlay_band_t: 1.0,
+            overlay_band_last: None,
             page_drag_readout: None,
             debug_frame_cost: None,
             debug_latency_ms: None,
@@ -3785,9 +4086,33 @@ impl TextPipeline {
         self.search_replacement = view.search_replacement.clone();
         self.search_editing_replacement = view.search_editing_replacement;
         // A summoned overlay appears + disappears INSTANTLY (no rise-in / sink-out
-        // motion): the overlay content syncs verbatim from the view every frame, so a
-        // close snaps the card off the frame the App clears its logical `self.overlay`.
+        // motion) on every CALM world: the overlay content syncs verbatim from the
+        // view every frame, so a close snaps the card off the frame the App clears
+        // its logical `self.overlay`. THE ONE exception is the MOTION-JUICE
+        // entrance (FIRETAIL-MAXIMALIST-SHOWCASE round): on an OPEN flip
+        // (false→true), a live-armed pipeline whose effective `MotionJuice`
+        // asks for `SpringIn` kicks the ~200ms drop-in spring. Every headless
+        // pipeline is unarmed (`juice_live` false — see `arm_live_juice`), so
+        // this branch is STRUCTURALLY unreachable in a capture and the settled
+        // state stays byte-identical; Reduce Motion folds the kick on the very
+        // next step (`step_overlay_juice`). A CLOSE flip resets both animators
+        // to settled so a stale mid-flight state can never greet a re-summon.
+        let overlay_opened = view.overlay_active && !self.overlay_active;
+        let overlay_closed = !view.overlay_active && self.overlay_active;
         self.overlay_active = view.overlay_active;
+        if overlay_opened
+            && self.juice_live
+            && !crate::motion::reduced()
+            && crate::render::effective_motion_juice().entrance
+                == theme::OverlayEntrance::SpringIn
+        {
+            self.overlay_enter_t = 0.0;
+        }
+        if overlay_closed {
+            self.overlay_enter_t = 1.0;
+            self.overlay_band_t = 1.0;
+            self.overlay_band_last = None;
+        }
         self.overlay_crisp = view.overlay_crisp;
         self.overlay_query = view.overlay_query.clone();
         self.overlay_title = view.overlay_title;
@@ -3933,6 +4258,113 @@ impl TextPipeline {
         self.step_caret(dt)
             | self.step_caret_preview(dt)
             | self.step_copy_pulse(dt)
+            | self.step_overlay_juice(dt)
+    }
+
+    /// LIVE-APP-ONLY: arm the motion-juice animators (overlay entrance spring
+    /// + selection-band slide — the FIRETAIL-MAXIMALIST-SHOWCASE round's
+    /// [`theme::MotionJuice`] capability). Called exactly once, from the live
+    /// App's GPU init (`app/gpu.rs`); every headless capture / bench / test
+    /// pipeline never calls it, so those paths render the settled state
+    /// STRUCTURALLY (the determinism law's "live-only animation renders its
+    /// settled state in capture", enforced by construction rather than by a
+    /// per-frame check). Arming alone changes nothing: the animators also
+    /// require a non-CALM effective [`theme::MotionJuice`] (no world ships
+    /// one — the `AWL_MOTION_FORCE` probe is the only current door) and fold
+    /// to nothing under Reduce Motion.
+    pub fn arm_live_juice(&mut self) {
+        self.juice_live = true;
+    }
+
+    /// Tick the overlay ENTRANCE spring + selection-band SLIDE by `dt`
+    /// seconds. Returns true while either is still easing (keeps the live
+    /// redraw loop hot exactly as long as the juice plays — then idle).
+    ///
+    /// ACCESSIBILITY TIER 1 — REDUCE MOTION: both animators settle INSTANTLY
+    /// (same final position, zero frames of ease — `motion.rs`'s pure
+    /// time-compression contract), mirroring `step_copy_pulse`'s gate
+    /// exactly. Law-tested by `overlay_juice_folds_to_nothing_under_reduce_
+    /// motion` (render/tests/motion_juice.rs).
+    fn step_overlay_juice(&mut self, dt: f32) -> bool {
+        if crate::motion::reduced() {
+            self.overlay_enter_t = 1.0;
+            self.overlay_band_t = 1.0;
+            return false;
+        }
+        let mut hot = false;
+        if self.overlay_enter_t < 1.0 {
+            self.overlay_enter_t =
+                (self.overlay_enter_t + dt * 1000.0 / OVERLAY_ENTRANCE_MS).min(1.0);
+            hot |= self.overlay_enter_t < 1.0;
+        }
+        if self.overlay_band_t < 1.0 {
+            self.overlay_band_t =
+                (self.overlay_band_t + dt * 1000.0 / OVERLAY_BAND_SLIDE_MS).min(1.0);
+            hot |= self.overlay_band_t < 1.0;
+        }
+        hot
+    }
+
+    /// The overlay card's ENTRANCE y-offset THIS frame: exactly `0.0` when
+    /// settled (every capture, every CALM world, Reduce Motion, and every
+    /// frame after the ~200ms spring lands — `card_y + 0.0` is bit-identical
+    /// to the pre-round geometry), else the eased drop-in: the card starts
+    /// [`OVERLAY_ENTRANCE_DROP_PX`] ABOVE its resting place and springs down
+    /// with a small overshoot ([`crate::ease::out_back`]). Folded into
+    /// `card_y` at the END of both geometry owners (`overlay_geometry` /
+    /// `theme_overlay_geometry`) — after all row-fit math, so the transient
+    /// offset can never change how many rows the card shows — and because the
+    /// geometry is the ONE shared source, the card quad, rows, band, caret,
+    /// and hit-tests all ride the spring together (never desynced).
+    pub(in crate::render) fn overlay_entrance_offset(&self) -> f32 {
+        if self.overlay_enter_t >= 1.0 {
+            return 0.0;
+        }
+        -(1.0 - crate::ease::out_back(self.overlay_enter_t)) * OVERLAY_ENTRANCE_DROP_PX
+    }
+
+    /// The selection BAND's drawn row-top for a target `row_top` this frame —
+    /// the [`theme::BandResponse::Slide`] seam, called only by
+    /// `overlay_draw_card`. Snap worlds (every world today), unarmed
+    /// pipelines (every capture), and Reduce Motion all return `target`
+    /// verbatim (byte-identical). A Slide world eases from the previous row's
+    /// top with the same gentle overshoot spring as the entrance. Purely
+    /// visual: the shaped rows and the hit-test never move.
+    pub(in crate::render) fn overlay_band_drawn(&mut self, target: f32) -> f32 {
+        let slide = self.juice_live
+            && !crate::motion::reduced()
+            && crate::render::effective_motion_juice().band == theme::BandResponse::Slide;
+        if !slide {
+            self.overlay_band_last = Some(target);
+            self.overlay_band_t = 1.0;
+            return target;
+        }
+        match self.overlay_band_last {
+            Some(last) if (last - target).abs() > 0.5 => {
+                // A selection move: start the slide FROM wherever the band is
+                // drawn right now (mid-flight moves chain smoothly).
+                let cur = if self.overlay_band_t < 1.0 {
+                    let e = crate::ease::out_back(self.overlay_band_t);
+                    self.overlay_band_from + (last - self.overlay_band_from) * e
+                } else {
+                    last
+                };
+                self.overlay_band_from = cur;
+                self.overlay_band_t = 0.0;
+                self.overlay_band_last = Some(target);
+            }
+            None => {
+                // First frame of a fresh overlay: no previous row — settle.
+                self.overlay_band_last = Some(target);
+                self.overlay_band_t = 1.0;
+            }
+            _ => {}
+        }
+        if self.overlay_band_t >= 1.0 {
+            return target;
+        }
+        let e = crate::ease::out_back(self.overlay_band_t);
+        self.overlay_band_from + (target - self.overlay_band_from) * e
     }
 
     /// THE EFFECTIVE margin background this frame — the active world's own

@@ -98,8 +98,11 @@ const EXPECTED: &[(&str, usize)] = &[
     ("main/story.rs", 5),
     // `--print-menu-roster`'s hidden-flag CLI output (`scripts/smoke-menus.sh`).
     ("menu.rs", 1),
-    // `AWL_FONT` dev-only env var override diagnostic.
-    ("render.rs", 1),
+    // `AWL_FONT` + `AWL_CHROME_FACE_FILE` dev-only env var override
+    // diagnostics (the second is the Firetail-showcase round's audition-font
+    // loader: a missing/unreadable candidate file prints a note and is
+    // skipped — the same advisory class as `AWL_FONT`'s fallback note).
+    ("render.rs", 2),
     // `--bench-frame` / `--bench-theme-burst` / `--bench-zoom-burst`'s
     // tabular CLI output.
     ("render/framebench.rs", 36),

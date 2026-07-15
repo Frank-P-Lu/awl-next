@@ -9,9 +9,9 @@ use super::cjk::{
 };
 use super::color::Srgb;
 use super::model::{
-    Backdrop, Background, CardAnchor, CaretBlockStyle, DecorativeWash, Elevation, HighlightTexture,
-    ImageReveal, LavaEdge, PageFrame, PlacardCorner, PlacardInk, RenderCaps, RoleOverrides,
-    SelectionStyle, Theme, ThemeTags, TitleStyle, WashOverride,
+    Backdrop, Background, CardAnchor, CaretBlockStyle, ChromeFace, DecorativeWash, Elevation,
+    HighlightTexture, ImageReveal, LavaEdge, MotionJuice, PageFrame, PlacardCorner, PlacardInk,
+    RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags, TitleStyle, WashOverride,
 };
 use super::ornament::{
     Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, ORNAMENT_GARAMOND,
@@ -1009,6 +1009,11 @@ pub const WAGTAIL: Theme = Theme {
         // (the silent pole is still an anchored object). Listed explicitly
         // because this literal names every field (no `..DEFAULT` spread).
         card_anchor: CardAnchor::TopLeft,
+        // FIRETAIL-MAXIMALIST-SHOWCASE round: the silent pole keeps BOTH new
+        // dials at their calm defaults, deliberately — body-face chrome, zero
+        // motion (the no-personality statement, again).
+        chrome_face: ChromeFace::Body,
+        motion: MotionJuice::CALM,
     },
 };
 

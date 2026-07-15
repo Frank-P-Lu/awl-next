@@ -18,6 +18,7 @@ mod chrome_overlay;
 mod chrome_panels;
 mod cjk;
 mod dither;
+mod firetail_showcase;
 mod geometry;
 mod geometry_reshape;
 mod hud;

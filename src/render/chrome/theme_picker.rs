@@ -131,6 +131,11 @@ impl TextPipeline {
         let text_w = card_w - 2.0 * pad;
         let card_h = total_rows as f32 * lh + header_gap + 2.0 * pad;
         let card_x = self.overlay_card_x(width, card_w, margin);
+        // MOTION-JUICE ENTRANCE: folded in AFTER the `avail_px`/row-fit math
+        // above (which reads the SETTLED `card_y` — the transient drop must
+        // never change how many rows fit), mirroring `overlay_geometry`'s own
+        // placement of the same one-owner offset. `+ 0.0` when settled.
+        let card_y = card_y + self.overlay_entrance_offset();
         let text_left = card_x + pad;
         let text_top = card_y + pad;
         OverlayGeom {
@@ -358,8 +363,17 @@ impl TextPipeline {
         // gets (rowlayout owns it); today's short world names ride through whole. Rows
         // sit FLUSH-LEFT like every other picker (the live doc preview shows each
         // world's colours, so no per-row swatch chip / indent).
+        // WILD-MENU SLANT PROBE (env-gated; zero tax on every normal run —
+        // byte-identical): the deepest display line's stair offset shrinks the
+        // effective row span BEFORE the rowlayout budget, so elision respects
+        // the reduced width — the same rule the flat shaper applies (see
+        // `overlay_shape_text`'s slant note).
+        let slant = crate::render::overlay_slant();
+        let slant_tax = slant
+            .map(|s| crate::render::slant_max_offset(&s, geom.plan.len()))
+            .unwrap_or(0.0);
         let total_chars = if m.char_width > 0.0 {
-            (geom.text_w / m.char_width).floor() as usize
+            (((geom.text_w - slant_tax).max(0.0)) / m.char_width).floor() as usize
         } else {
             usize::MAX
         };
@@ -385,10 +399,14 @@ impl TextPipeline {
         // the flat shaper uses, so the two inline paths cannot diverge.
         let title_prefix = self.overlay_title_prefix();
         let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
+        // The "<title> › " prefix is CHROME — the chrome face (== the body
+        // face on every `ChromeFace::Body` world, byte-identical today); the
+        // bare sigil + the query text keep the body face (input, not chrome).
+        // Mirrors the flat shaper's own split exactly.
         if title_prefix.is_empty() {
             spans.push((sigil, mk(muted)));
         } else {
-            spans.push((title_prefix.as_str(), mk(muted)));
+            spans.push((title_prefix.as_str(), chrome_attrs().color(muted)));
         }
         spans.push((self.overlay_query.as_str(), mk(ink)));
         // Strip line: active label in full ink, others muted, separators + the "\n"
@@ -435,7 +453,14 @@ impl TextPipeline {
                 } else {
                     m.font_size * ui
                 };
-                spans.push((&strip_s[r], mk(c).metrics(GlyphMetrics::new(fs, strip_lh))));
+                // The lens-STRIP labels (+ their separators) are CHROME — the
+                // third and last surface of the closed `ChromeFace` set
+                // (placard / title prefix / strip). `chrome_attrs` ==
+                // `panel_attrs` on every Body world, byte-identical today.
+                spans.push((
+                    &strip_s[r],
+                    chrome_attrs().color(c).metrics(GlyphMetrics::new(fs, strip_lh)),
+                ));
             }
         }
         // Plan lines: faint uppercase section headers (LABEL size) + world rows (ink).
@@ -443,6 +468,16 @@ impl TextPipeline {
         // contrasting ink (`selected_ink`) so black text lands crisp on the white
         // band — the same crisp black-on-white the flat pickers get, one rule (see
         // `HighlightTreatment::InverseFill`). Byte-identical (`None`) elsewhere.
+        // WILD-MENU SLANT PROBE, italic half — row NAMES only, mirroring the
+        // flat shaper's `rk` exactly (headers/strip/query never slant).
+        let slant_italic = slant.map(|s| s.italic).unwrap_or(false);
+        let rk = |c| {
+            if slant_italic {
+                mk(c).style(glyphon::cosmic_text::Style::Italic)
+            } else {
+                mk(c)
+            }
+        };
         for (line, fit) in geom.plan.iter().zip(fitted.iter()) {
             spans.push(("\n", mk(ink)));
             match line {
@@ -454,7 +489,7 @@ impl TextPipeline {
                         Some(c) if *i == self.overlay_selected => c,
                         _ => ink,
                     };
-                    spans.push((fit.as_deref().unwrap_or(""), mk(c)));
+                    spans.push((fit.as_deref().unwrap_or(""), rk(c)));
                 }
             }
         }
