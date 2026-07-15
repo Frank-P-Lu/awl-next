@@ -1120,66 +1120,365 @@ fn lerp_interpolates_and_clamps() {
     assert_eq!(a.lerp(b, 2.0), b, "t>1 clamps to other");
 }
 
-/// `theme::placard_ink` NEVER invents a free color — `Faint` is exactly
-/// [`derive::faint`], and `Ghost` is a pure blend of two tokens already on
-/// the active world's own palette (`faint` and `base_300`), for EVERY world.
+/// `theme::placard_ink` NEVER invents a free color, and is MODE-AWARE (the
+/// personality-assignment round's dark-ground correction): LIGHT worlds keep
+/// the gallery-validated originals byte-for-byte (`Faint` = the world's own
+/// faint ink verbatim; `Ghost` = a pure `faint`/`base_300` blend); DARK
+/// worlds step the SAME two rungs UP the ladder instead (pure
+/// `faint`→`base_content` blends — one global lift constant per rung, never
+/// a per-world hand value; the legibility floor/ceiling those lifts must
+/// clear is the separate law below). `Stipple`'s pixel ink is exactly
+/// `base_content` on every world — the density, not the ink, carries its
+/// quietness (see `placard_stipple_density`'s own law).
 #[test]
 fn placard_ink_derives_from_the_ink_ladder_never_a_free_color() {
     let _g = crate::testlock::serial();
     for t in THEMES.iter() {
         set_active_by_name(t.name).unwrap();
+        let faint_rung = derive::placard_ink(model::PlacardInk::Faint);
+        let ghost = derive::placard_ink(model::PlacardInk::Ghost);
+        if t.dark {
+            // A pure blend of two rungs already on the ladder: every channel
+            // of the result must sit BETWEEN faint and base_content (a lerp
+            // can't leave its endpoints), and the two rungs must be exactly
+            // the documented one-formula lifts (re-derived here, so a future
+            // per-world special case fails loudly).
+            assert_eq!(
+                faint_rung,
+                t.faint.lerp(t.muted, 0.75),
+                "{}: dark-ground PlacardInk::Faint must be the one documented ladder lift",
+                t.name
+            );
+            assert_eq!(
+                ghost,
+                t.faint.lerp(t.muted, 0.45),
+                "{}: dark-ground PlacardInk::Ghost must be the one documented ladder lift",
+                t.name
+            );
+        } else {
+            assert_eq!(
+                faint_rung, t.faint,
+                "{}: light-ground PlacardInk::Faint must be exactly the world's own faint ink \
+                 (the gallery-validated original)",
+                t.name
+            );
+            assert_eq!(
+                ghost,
+                t.faint.lerp(t.base_300, 0.5),
+                "{}: light-ground PlacardInk::Ghost must be a pure faint/base_300 blend \
+                 (the gallery-validated original)",
+                t.name
+            );
+        }
         assert_eq!(
-            derive::placard_ink(model::PlacardInk::Faint),
-            t.faint,
-            "{}: PlacardInk::Faint must be exactly the world's own faint ink",
+            derive::placard_ink(model::PlacardInk::Stipple),
+            t.base_content,
+            "{}: PlacardInk::Stipple pixels draw in exactly the world's own full ink",
             t.name
         );
-        let ghost = derive::placard_ink(model::PlacardInk::Ghost);
-        let expected = t.faint.lerp(t.base_300, 0.5);
-        assert_eq!(ghost, expected, "{}: PlacardInk::Ghost must be a pure faint/base_300 blend", t.name);
     }
     set_active(DEFAULT_THEME);
 }
 
-/// ALL FIFTEEN worlds ship [`model::TitleStyle::InlinePrefix`] this round —
-/// the byte-identity gate the round's own spec demands (no world's rendering
-/// may change). A future round FLIPPING a world to `Placard` edits this
-/// test consciously; it can never happen by accident.
+/// THE DARK-GROUND PLACARD LEGIBILITY LAW (the user's 2026-07-15 taste note,
+/// enforced: "the dark worlds — there's not enough contrast for the placard";
+/// Undertow's Ghost was near-invisible). On every DARK world both placard
+/// rungs must clearly READ against the world's own ground — a relative-
+/// luminance floor, the same domain law (h) of the role tints uses, because
+/// the eye resolves luminance — while still RECEDING behind the rows: the
+/// louder rung (`Faint`) stays at or under the world's own `muted` ink in
+/// luminance (a legible ghost, never a competing headline), and presence
+/// ordering holds (`Faint` ≥ `Ghost`, mirroring the light-mode ordering).
+/// Light worlds are pinned byte-identical by the derivation law above, so
+/// this law binds exactly where the taste note pointed. The AMBER GUARD
+/// binds BY IDENTITY, the comment-tier way (role-tint law (e)'s own
+/// exemption): a placard ink is a pure blend of existing ink-ladder rungs —
+/// it IS the world's ink, which on a warm-laddered world (Potoroo) shares
+/// the caret's general warmth without being the accent — so the assertable
+/// half is that it is never LITERALLY `primary` (monochrome worlds exempt:
+/// their caret IS their ink by design, and none ships a placard anyway —
+/// the assignment table pins that).
 #[test]
-fn every_world_ships_inline_prefix_title_style_this_round() {
+fn placard_inks_read_on_dark_grounds_and_stay_below_muted() {
+    fn rel_lum(c: Srgb) -> f32 {
+        fn lin(u: u8) -> f32 {
+            let s = u as f32 / 255.0;
+            if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        }
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    let _g = crate::testlock::serial();
     for t in THEMES.iter() {
+        set_active_by_name(t.name).unwrap();
+        let faint_rung = derive::placard_ink(model::PlacardInk::Faint);
+        let ghost = derive::placard_ink(model::PlacardInk::Ghost);
+        // AMBER GUARD by identity: never literally the accent.
+        if !t.is_monochrome() {
+            for (label, ink) in [("Faint", faint_rung), ("Ghost", ghost)] {
+                assert_ne!(
+                    ink, t.primary,
+                    "{}: placard {label} ink must never be literally the accent",
+                    t.name
+                );
+            }
+        }
+        if !t.dark {
+            continue;
+        }
+        let ground = rel_lum(t.base_100);
+        let dy_ghost = rel_lum(ghost) - ground;
+        let dy_faint = rel_lum(faint_rung) - ground;
+        // FLOOR: the same ΔY ≥ 0.05 luminance floor the role tints carry —
+        // the quieter rung must clear it, so the louder one does a fortiori.
         assert!(
-            matches!(t.render_caps.title_style, model::TitleStyle::InlinePrefix),
-            "{}: expected InlinePrefix (no world assigns Placard yet)",
+            dy_ghost >= 0.05,
+            "{}: dark-ground Ghost placard ink {} sits only ΔY {dy_ghost:.3} above the ground \
+             (near-invisible — the Undertow gallery bug)",
+            t.name,
+            ghost.hex()
+        );
+        // ORDERING: Faint is the more-present rung, on dark exactly as on light.
+        assert!(
+            dy_faint >= dy_ghost - 1e-4,
+            "{}: placard presence ordering inverted (Faint ΔY {dy_faint:.3} < Ghost ΔY {dy_ghost:.3})",
+            t.name
+        );
+        // CEILING: a legible GHOST, not a competing headline — the louder rung
+        // stays at or under the world's own muted ink (the non-selected row
+        // ink on the card it bleeds behind). Equality is legal (Wagtail's
+        // collapsed ladder makes every ink rung the same white — moot anyway,
+        // since Wagtail ships no placard).
+        let dy_muted = rel_lum(t.muted) - ground;
+        assert!(
+            dy_faint <= dy_muted + 1e-4,
+            "{}: dark-ground Faint placard ink {} (ΔY {dy_faint:.3}) outshines the world's own \
+             muted ink (ΔY {dy_muted:.3}) — a competing headline, not a ghost",
+            t.name,
+            faint_rung.hex()
+        );
+    }
+    set_active(DEFAULT_THEME);
+}
+
+/// THE STIPPLE PLACARD LAW: `Stipple`'s two derived halves stay on the
+/// world's own ladder and stay LEGIBLE. (a) The pixel ink is exactly
+/// `base_content` (asserted per-world by the derivation law above) — so a
+/// stipple can only ever paint the ladder's full ink, never amber, never a
+/// free color; on a MONOCHROME/1-bit world that ink is its legal pure white,
+/// which is why `Stipple` is the one placard ink that would be monochrome-
+/// legal by construction (banked — Wagtail ships no placard). (b) The
+/// density is the documented perceived-tone formula, clamped to its
+/// floor/ceiling band. (c) THE LEGIBILITY FLOOR OVER THE WORLD'S OWN GROUND
+/// (the 3b taste-note assertion): the stipple's MEAN tone — ground blended
+/// toward the ink at `density` — clears the same ΔY ≥ 0.05 luminance floor
+/// the flat placard inks carry, against the flat ground AND, on a lava
+/// world, against the brightest pixel the animated margin can ever produce
+/// (`blob_hi` — captures render t=0, but the law covers every phase since
+/// `mix()` is bounded by its endpoints; the lava figure/ground law proves
+/// blob_hi is genuinely reached). Swept over EVERY world (the derivation is
+/// total), so a future stipple assignment is born covered.
+#[test]
+fn stipple_placard_density_clears_the_legibility_floor_over_its_own_ground() {
+    fn rel_lum(c: Srgb) -> f32 {
+        fn lin(u: u8) -> f32 {
+            let s = u as f32 / 255.0;
+            if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        }
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    let _g = crate::testlock::serial();
+    for t in THEMES.iter() {
+        set_active_by_name(t.name).unwrap();
+        let density = derive::placard_stipple_density();
+        assert!(
+            (0.12..=0.55).contains(&density),
+            "{}: stipple density {density:.3} escaped the floor/ceiling band",
+            t.name
+        );
+        let ink = derive::placard_ink(model::PlacardInk::Stipple);
+        let ground = rel_lum(t.base_100);
+        let mean = ground + density * (rel_lum(ink) - ground);
+        assert!(
+            (mean - ground).abs() >= 0.05,
+            "{}: stipple mean tone ΔY {:.3} vs the flat ground fails the legibility floor",
+            t.name,
+            (mean - ground).abs()
+        );
+        // The lava arm: the ONLY moving ground a stipple placard can sit
+        // over. Its brightest reachable pixel must not swallow the mark.
+        if let Some((_, _, blob_hi, _, _)) = t.background.lava_params() {
+            let worst = rel_lum(blob_hi);
+            assert!(
+                (mean - worst).abs() >= 0.05,
+                "{}: stipple mean tone ΔY {:.3} vs the worst-phase lava pixel {} fails the \
+                 legibility floor",
+                t.name,
+                (mean - worst).abs(),
+                blob_hi.hex()
+            );
+        }
+    }
+    set_active(DEFAULT_THEME);
+}
+
+/// THE PERSONALITY ASSIGNMENT TABLE (2026-07-15, the user's decided picks) —
+/// the conscious successor of the machinery round's all-InlinePrefix
+/// byte-identity gate. Every world's `render_caps` must be EXACTLY its
+/// decided value: the four placard worlds (Galah/Magpie the Ghost reference
+/// look, Mangrove the stipple — the Bayer dither is its own language,
+/// Firetail the deliberately-smooth Faint foil), the three functional-
+/// elevation borders (Currawong's OLED rim, the two lava worlds' edge over
+/// motion), the Wagtail page frame (2px, its ladder white), Wagtail's
+/// user-confirmed NO-placard silence — and, just as deliberately, DEFAULT
+/// for every world not named (byte-identity for the quiet roster). A NEW
+/// world fails the `expected()` match until it decides its personality here
+/// — the no-wildcard discipline applied to the roster.
+#[test]
+fn personality_assignments_are_exactly_the_decided_table() {
+    use model::{
+        Elevation, PageFrame, PlacardCorner, PlacardInk, RenderCaps, TitleStyle,
+    };
+    fn expected(name: &str) -> RenderCaps {
+        let bl = |ink: PlacardInk| TitleStyle::Placard {
+            corner: PlacardCorner::BL,
+            scale: 3.0,
+            ink,
+        };
+        match name {
+            "Galah" => RenderCaps { title_style: bl(PlacardInk::Ghost), ..RenderCaps::DEFAULT },
+            "Magpie" => RenderCaps { title_style: bl(PlacardInk::Ghost), ..RenderCaps::DEFAULT },
+            "Mangrove" => RenderCaps {
+                title_style: bl(PlacardInk::Stipple),
+                elevation: Elevation::Bordered,
+                ..RenderCaps::DEFAULT
+            },
+            "Firetail" => RenderCaps {
+                title_style: bl(PlacardInk::Faint),
+                elevation: Elevation::Bordered,
+                ..RenderCaps::DEFAULT
+            },
+            "Currawong" => {
+                RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT }
+            }
+            // Wagtail: the 1-bit escape hatch (every field away from default)
+            // + the page frame's first assignment + NO placard (the silent
+            // pole announces nothing — user-confirmed).
+            "Wagtail" => RenderCaps {
+                selection_style: model::SelectionStyle::InverseVideo,
+                caret_block_style: model::CaretBlockStyle::InverseVideo,
+                backdrop: model::Backdrop::Flat,
+                elevation: Elevation::Bordered,
+                decorative_wash: model::DecorativeWash::Off,
+                image_reveal: model::ImageReveal::Opaque,
+                highlight_texture: model::HighlightTexture::Stipple {
+                    color: Srgb::rgb(0xFF, 0xFF, 0xFF),
+                    density: crate::render::dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY,
+                },
+                title_style: TitleStyle::InlinePrefix,
+                page_frame: PageFrame::Line { weight_px: 2.0 },
+            },
+            "Tawny" | "Mopoke" | "Potoroo" | "Gumtree" | "Bilby" | "Saltpan" | "Quokka"
+            | "Undertow" | "Kingfisher" | "Outback" => RenderCaps::DEFAULT,
+            other => panic!(
+                "{other}: a NEW world must decide its personality here (placard? border? \
+                 frame? or deliberately DEFAULT) — the assignment table is conscious data, \
+                 never an accident"
+            ),
+        }
+    }
+    for t in THEMES.iter() {
+        assert_eq!(
+            t.render_caps,
+            expected(t.name),
+            "{}: render_caps drifted from the decided personality table",
             t.name
         );
     }
+    // Corner discipline (a gallery finding, pinned): every shipped placard is
+    // BOTTOM-LEFT — TR/BR clip long picker titles against the canvas edge.
+    for t in THEMES.iter() {
+        if let TitleStyle::Placard { corner, .. } = t.render_caps.title_style {
+            assert_eq!(
+                corner,
+                PlacardCorner::BL,
+                "{}: shipped placards are bottom-left (the TR/BR clipping finding)",
+                t.name
+            );
+        }
+    }
 }
 
-/// REPAIR ROUND 2's flagged gap, closed structurally: a `TitleStyle::Placard`
-/// paired with `PlacardInk::Ghost` on a TRUE 1-BIT world (`Theme::is_one_bit`)
-/// would render a plain mid-grey wordmark — a `faint`/`base_300` blend is an
-/// ordinary intermediate grey on every world today, and a 1-bit world's own
+/// THE PAGE-FRAME THEME LAW: the frame can never invent a color — its ink is
+/// derived in ONE owner (`page_frame_ink` = the world's own `base_content`,
+/// the full-ink ladder rung) for EVERY world, assigned or not; an assigned
+/// frame's weight is a real positive width. The AMBER GUARD binds here BY
+/// IDENTITY, the same way the comment tiers' does (role-tint law (e)): the
+/// frame ink IS an existing ink rung — definitionally the ink, never the
+/// accent, even on a warm-inked world whose ink shares the caret's general
+/// warmth (Mopoke) — so the assertable half is that it is never LITERALLY
+/// `primary` (the WYSIWYG value-step law's own shape). The frame's PIXEL
+/// half — actually drawn, in bounds, pure ink, absent on every None world —
+/// is `render::tests::page_frame`.
+#[test]
+fn page_frame_ink_is_the_ladder_and_assigned_weights_are_real() {
+    let _g = crate::testlock::serial();
+    for t in THEMES.iter() {
+        set_active_by_name(t.name).unwrap();
+        assert_eq!(
+            derive::page_frame_ink(),
+            t.base_content,
+            "{}: page_frame_ink must be exactly the world's own base_content",
+            t.name
+        );
+        // A MONOCHROME world's caret IS its ink (value + motion carry it —
+        // Wagtail's pure white), so "never literally primary" is structurally
+        // inapplicable there; every chromatic world must keep them distinct.
+        if !t.is_monochrome() {
+            assert_ne!(
+                derive::page_frame_ink(),
+                t.primary,
+                "{}: the page-frame ink must never be literally the accent",
+                t.name
+            );
+        }
+        if let model::PageFrame::Line { weight_px } = t.render_caps.page_frame {
+            assert!(
+                weight_px > 0.0 && weight_px.is_finite(),
+                "{}: an assigned page frame must carry a real positive weight (got {weight_px})",
+                t.name
+            );
+        }
+    }
+    set_active(DEFAULT_THEME);
+}
+
+/// REPAIR ROUND 2's flagged gap, closed structurally — and extended by the
+/// personality-assignment round to cover EVERY grey placard ink: a
+/// `TitleStyle::Placard` whose ink is `Faint` OR `Ghost` on a TRUE 1-BIT
+/// world (`Theme::is_one_bit`) would render an ordinary intermediate-grey
+/// wordmark (and antialiased glyph fringes besides), which that world's own
 /// law (`render::tests::syntax_roles::every_one_bit_world_renders_only_pure_
-/// black_or_white`) permits ONLY pure black or pure white, no grey rung at
-/// all. No world ships `Placard` yet (the test above pins that), so this is
-/// a BANKED guard against a future assignment, not a live bug — but the
-/// guard itself is real: it fails loudly the moment any world's
-/// `render_caps.title_style` becomes `Placard { ink: Ghost, .. }` while that
-/// same world is `is_one_bit()`. Lives in `theme::`, deliberately never
-/// `render::`, where a bare `.is_one_bit()` call is banned outright
-/// (`render::tests::theme_caps_law`) — this is exactly the "pin an identity,
+/// black_or_white`) forbids outright. `Stipple` is deliberately EXEMPT: its
+/// pixels are hard-thresholded pure `base_content` at full alpha or nothing
+/// (the same 1-bit-legality argument as the highlight stipple) — though no
+/// one-bit world ships ANY placard today (Wagtail is the user-confirmed
+/// silent pole; the assignment-table law pins that). Lives in `theme::`,
+/// deliberately never `render::`, where a bare `.is_one_bit()` call is
+/// banned outright (`render::tests::theme_caps_law`) — the "pin an identity,
 /// not a render mechanism" carve-out that grep-law's own doc describes.
 #[test]
-fn a_placard_ghost_title_style_would_violate_a_one_bit_worlds_own_law() {
+fn a_placard_grey_ink_would_violate_a_one_bit_worlds_own_law() {
     for t in THEMES.iter() {
-        if let model::TitleStyle::Placard { ink: model::PlacardInk::Ghost, .. } = t.render_caps.title_style {
+        if let model::TitleStyle::Placard {
+            ink: ink @ (model::PlacardInk::Faint | model::PlacardInk::Ghost),
+            ..
+        } = t.render_caps.title_style
+        {
             assert!(
                 !t.is_one_bit(),
-                "{}: TitleStyle::Placard{{ink: Ghost}} on a true 1-bit world renders an \
-                 illegal intermediate grey — pick PlacardInk::Faint isn't legal there either \
-                 (still an ordinary grey); a 1-bit world needs its own render_caps escape hatch \
-                 (mirroring Wagtail's own render_caps overrides) before it can ship a placard at all",
+                "{}: TitleStyle::Placard{{ink: {ink:?}}} on a true 1-bit world renders an \
+                 illegal intermediate grey — of the placard inks only Stipple (hard pure-ink \
+                 pixels) is 1-bit-legal by construction",
                 t.name
             );
         }

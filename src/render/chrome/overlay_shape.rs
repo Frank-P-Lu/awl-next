@@ -12,12 +12,28 @@ use super::*;
 /// margin every other element does.
 const PLACARD_INSET: f32 = 12.0;
 
+/// The glyph-coverage cut for a STIPPLE placard ([`theme::PlacardInk::Stipple`]):
+/// a rasterized wordmark pixel joins the stipple's candidate set iff its swash
+/// coverage clears this (≥ 50%). A HARD threshold, deliberately — the stipple's
+/// whole contract is "individual full-ink pixels or nothing" (Bayer-legal by
+/// construction, like the Wagtail highlight stipple), so the glyph's
+/// antialiased fringe is CUT rather than half-drawn.
+const STIPPLE_COVERAGE_THRESHOLD: u8 = 0x80;
+
 /// Pure corner placement: the wordmark's `(x, y)` top-left, given its own
 /// shaped `(w, h)` and the ANCHOR rect `(x, y, w, h)` (the full canvas — see
-/// `overlay_shape_placard`). `TR`/`BR` anchor the wordmark's RIGHT edge to the
-/// anchor's right edge (never past `ax`, so a wordmark wider than the anchor
-/// degrades to hugging the LEFT edge rather than reporting a negative origin);
-/// `BL`/`BR` anchor the BOTTOM edge likewise.
+/// `overlay_shape_placard`). Each axis clamps BOTH bounds, symmetrically: the
+/// anchored edge sits one `inset` in from its anchor edge; the OPPOSITE bound
+/// clamps first (a too-wide/too-tall mark degrades to hugging the far edge
+/// flush, dropping that side's inset); the anchored bound clamps last (never
+/// past the anchor's own origin, so a mark wider than the whole anchor pins
+/// to the near edge rather than reporting a negative origin). The audit-found
+/// minimum-window overflow lived in the OLD asymmetry here: `TR`/`BR`
+/// carried the `.max(ax)` guard while `BL`/`TL` had no `.min(...)` — a
+/// LEFT-anchored mark's RIGHT bound was unprotected, and every shipped
+/// placard is BL. (In practice `overlay_shape_placard`'s fit-to-canvas
+/// shrink keeps `w` inside the anchor, so these clamps are the float-noise
+/// backstop, not the primary mechanism.)
 fn placard_origin(
     corner: theme::PlacardCorner,
     anchor: (f32, f32, f32, f32),
@@ -27,14 +43,29 @@ fn placard_origin(
 ) -> (f32, f32) {
     let (ax, ay, aw, ah) = anchor;
     let x = match corner {
-        theme::PlacardCorner::TL | theme::PlacardCorner::BL => ax + inset,
+        theme::PlacardCorner::TL | theme::PlacardCorner::BL => {
+            (ax + inset).min((ax + aw - w).max(ax))
+        }
         theme::PlacardCorner::TR | theme::PlacardCorner::BR => (ax + aw - inset - w).max(ax),
     };
     let y = match corner {
-        theme::PlacardCorner::TL | theme::PlacardCorner::TR => ay + inset,
+        theme::PlacardCorner::TL | theme::PlacardCorner::TR => {
+            (ay + inset).min((ay + ah - h).max(ay))
+        }
         theme::PlacardCorner::BL | theme::PlacardCorner::BR => (ay + ah - inset - h).max(ay),
     };
     (x, y)
+}
+
+/// The widest laid-out run (px) of a just-shaped buffer — the wordmark's
+/// natural width. Shared by [`TextPipeline::overlay_shape_placard`]'s two
+/// measure points (natural, then post-shrink) so they can never disagree.
+fn widest_run(buffer: &GlyphBuffer) -> f32 {
+    let mut w = 0.0f32;
+    for run in buffer.layout_runs() {
+        w = w.max(run.line_w);
+    }
+    w
 }
 
 /// Build the RIGHT-column text lines for [`TextPipeline::shape_overlay_right`]:
@@ -68,7 +99,9 @@ impl TextPipeline {
     /// `placard_buffer` — sized by `scale` over the document body's own font
     /// size × the markdown heading TITLE rung
     /// (`markdown::type_scale::TITLE`), so a world dials how loud its
-    /// wordmark reads with ONE number, never a second magic constant.
+    /// wordmark reads with ONE number, never a second magic constant — and
+    /// CAPPED by the canvas itself (the fit-to-canvas shrink below): the
+    /// window's own width is the ceiling the dial can never shout past.
     /// Uppercased (a taste call, flagged — a display wordmark reads as a
     /// title card, not running prose).
     ///
@@ -121,7 +154,7 @@ impl TextPipeline {
         let font_size = self.metrics.font_size * crate::markdown::type_scale::TITLE * scale;
         // A generous plain leading — no body text ever sits inside a
         // single-line wordmark box to match against.
-        let line_height = font_size * 1.1;
+        let mut line_height = font_size * 1.1;
         let metrics = GlyphMetrics::new(font_size, line_height);
         self.placard_buffer.set_metrics(&mut self.font_system, metrics);
         self.placard_buffer.set_size(&mut self.font_system, None, None);
@@ -137,10 +170,7 @@ impl TextPipeline {
         );
         self.placard_buffer
             .shape_until_scroll(&mut self.font_system, false);
-        let mut w = 0.0f32;
-        for run in self.placard_buffer.layout_runs() {
-            w = w.max(run.line_w);
-        }
+        let mut w = widest_run(&self.placard_buffer);
         if w <= 0.0 {
             return None;
         }
@@ -153,8 +183,101 @@ impl TextPipeline {
         // is the plain (0, 0, window_w, window_h) canvas.
         let reserve = self.menubar_reserve();
         let anchor = (0.0, reserve, self.window_w, self.window_h - reserve);
+        // FIT THE CANVAS (the minimum-window overflow fix — found live by the
+        // standing-policy audit): `scale` is a per-world LOUDNESS dial, not a
+        // fit guarantee — a long title ("version history") at the app's own
+        // enforced minimum window shapes ~2.6x wider than the whole canvas
+        // and hard-clipped off the right edge. When the natural width exceeds
+        // the anchor minus BOTH insets, shrink the font size proportionally
+        // and re-lay out: cosmic-text shapes normalized (per-em) advances and
+        // multiplies by the buffer metrics' font size at LAYOUT time, so ONE
+        // linear re-metric lands the width at the target (residual float
+        // noise is absorbed by `placard_origin`'s clamps). A comfortable
+        // window never enters this branch — byte-identical. An ADAPTIVE
+        // policy with no config knob, the `adaptive_column_left` idiom; the
+        // stipple rasterizer reads the same re-shaped buffer, so it fits for
+        // free.
+        let avail = anchor.2 - 2.0 * PLACARD_INSET;
+        if avail > 0.0 && w > avail {
+            let shrink = avail / w;
+            line_height *= shrink;
+            self.placard_buffer.set_metrics(
+                &mut self.font_system,
+                GlyphMetrics::new(font_size * shrink, line_height),
+            );
+            self.placard_buffer
+                .shape_until_scroll(&mut self.font_system, false);
+            w = widest_run(&self.placard_buffer);
+        }
         let (x, y) = placard_origin(corner, anchor, w, line_height, PLACARD_INSET);
         Some((x, y, w, line_height))
+    }
+
+    /// THE STIPPLE PLACARD's rasterizer: the coverage RUNS of the just-shaped
+    /// `placard_buffer`'s glyphs, as 1px-tall rects positioned at the
+    /// wordmark's draw origin — fed to the `placard_stipple` pipeline, whose
+    /// dither branch then keeps only the Bayer-selected pixels (the SAME
+    /// matrix + shader branch as the Wagtail highlight stipple — one pattern
+    /// language, per the round's rule). CPU-rasterized off the SAME swash
+    /// cache glyphon itself uses (the morph caret's established idiom —
+    /// `render/caret.rs`'s mask rasterization), so the letterforms are the
+    /// real shaped glyphs, deterministic across captures (no clock, no
+    /// random: coverage is pure shaping, the Bayer cut is pure position).
+    /// Emitting RUNS (not per-pixel rects) keeps the instance count at
+    /// O(rows × glyphs), not O(pixels). Color-glyph (emoji) images are
+    /// skipped — a wordmark title has none, and a coverage mask is the only
+    /// content the stipple contract can honor.
+    pub(in crate::render) fn placard_stipple_rects(&mut self, origin: (f32, f32)) -> Vec<[f32; 4]> {
+        let (px, py) = origin;
+        // Collect (cache_key, pen_x, baseline_y) first: `get_image` needs
+        // `&mut font_system` while `layout_runs` borrows the buffer.
+        let mut glyphs: Vec<(CacheKey, f32, f32)> = Vec::new();
+        for run in self.placard_buffer.layout_runs() {
+            let baseline_y = py + run.line_y;
+            for g in run.glyphs.iter() {
+                glyphs.push((g.physical((0.0, 0.0), 1.0).cache_key, px + g.x, baseline_y));
+            }
+        }
+        let Self {
+            swash_cache,
+            font_system,
+            ..
+        } = self;
+        let mut rects: Vec<[f32; 4]> = Vec::new();
+        for (key, pen_x, baseline_y) in glyphs {
+            let Some(img) = swash_cache.get_image(font_system, key).as_ref() else {
+                continue;
+            };
+            if img.placement.width == 0
+                || img.placement.height == 0
+                || img.content != SwashContent::Mask
+            {
+                continue;
+            }
+            let gw = img.placement.width as usize;
+            // Box top-left = (pen_x + placement.left, baseline - placement.top)
+            // — the same placement convention the morph caret's masks use.
+            let x0 = pen_x + img.placement.left as f32;
+            let y0 = baseline_y - img.placement.top as f32;
+            for (row, cols) in img.data.chunks_exact(gw).enumerate() {
+                let y = y0 + row as f32;
+                let mut start: Option<usize> = None;
+                for (col, &alpha) in cols.iter().enumerate() {
+                    match (alpha >= STIPPLE_COVERAGE_THRESHOLD, start) {
+                        (true, None) => start = Some(col),
+                        (false, Some(s)) => {
+                            rects.push([x0 + s as f32, y, (col - s) as f32, 1.0]);
+                            start = None;
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(s) = start {
+                    rects.push([x0 + s as f32, y, (gw - s) as f32, 1.0]);
+                }
+            }
+        }
+        rects
     }
 
     /// Compose + shape the overlay text into the shared buffers: the query line +

@@ -183,6 +183,52 @@ impl TextPipeline {
             );
     }
 
+    /// THE PAGE FRAME (`theme::PageFrame`, the personality-assignment round's
+    /// graduated capability — the `AWL_PAGE_BORDER` gallery probe's geometry,
+    /// now driven by per-world DATA instead of an env var): four thin quads
+    /// framing the writing column over the document's vertical extent, or
+    /// ZERO rects for every `PageFrame::None` world (all but Wagtail — a
+    /// byte-identical no-op there). The column bounds come from the SAME
+    /// `column_left()`/`column_width()` owners every other layer reads; the
+    /// vertical extent is the top of the first visual row to the bottom of
+    /// the last, clamped so a tall doc's frame still closes on-canvas. The
+    /// frame straddles the column boundary OUTWARD (into the margin), so it
+    /// never sits under the text. Ink comes from `theme::page_frame_ink()`
+    /// (re-tinted in `sync_theme_colors`); the pipeline draws hard-edged
+    /// (dither 1.0 — see the field's own doc). Deliberately NOT gated on
+    /// page mode, mirroring the probe the taste pick was made on: page-off,
+    /// the column is the full writing area and the frame hugs the window's
+    /// own inset — the "page as a deliberate object" read either way.
+    pub(super) fn prepare_page_frame(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
+        let theme::PageFrame::Line { weight_px } = crate::render::effective_page_frame()
+        else {
+            self.page_frame_pipeline
+                .prepare(device, queue, width, height, &[]);
+            return;
+        };
+        let t = weight_px.max(0.1);
+        let left = self.column_left();
+        let w = self.column_width();
+        let top = self.doc_top().max(0.0);
+        let bottom = (self.doc_top() + self.total_doc_height()).min(height as f32 - 1.0);
+        let h = (bottom - top).max(0.0);
+        let right = left + w;
+        let rects = [
+            [left - t, top - t, w + 2.0 * t, t], // top edge
+            [left - t, bottom, w + 2.0 * t, t],  // bottom edge
+            [left - t, top - t, t, h + 2.0 * t], // left edge
+            [right, top - t, t, h + 2.0 * t],    // right edge
+        ];
+        self.page_frame_pipeline
+            .prepare(device, queue, width, height, &rects);
+    }
+
     /// Upload the document text layer with the full-ink default color — the one
     /// glyphon `prepare` per frame (the caret is a quad drawn underneath).
     pub(super) fn prepare_text_layer(

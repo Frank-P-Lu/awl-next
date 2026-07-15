@@ -55,9 +55,28 @@ impl TextPipeline {
         let geom = self.overlay_geometry(width);
         // THE PLACARD RENDERER: shaped BEFORE the name/chord columns so its
         // upload (below) can be the FIRST `TextArea` — drawn behind the rows,
-        // never over them (legibility first). `None` on every world today
-        // (all `InlinePrefix`) — see `overlay_shape_placard`'s own doc.
+        // never over them (legibility first). `None` on every `InlinePrefix`
+        // world — see `overlay_shape_placard`'s own doc.
         let placard = self.overlay_shape_placard(&geom);
+        // THE STIPPLE PLACARD (`PlacardInk::Stipple` — Mangrove's assignment):
+        // the SAME shaped wordmark renders as Bayer-stippled pixel runs
+        // through the `placard_stipple` pipeline instead of an ordinary
+        // antialiased text area — so the TextArea upload is withheld and the
+        // coverage runs go to the quad pipeline (drawn in the same
+        // behind-the-rows slot, `draw_overlay_card`). Every other ink keeps
+        // the text path byte-identically, and the stipple pipeline parks.
+        let stipple = matches!(
+            crate::render::effective_title_style(),
+            theme::TitleStyle::Placard { ink: theme::PlacardInk::Stipple, .. }
+        );
+        let (placard, stipple_rects) = match placard {
+            // The (w, h) extent lives in the shaped buffer itself; the
+            // rasterizer only needs the draw origin.
+            Some((x, y, _w, _h)) if stipple => (None, self.placard_stipple_rects((x, y))),
+            other => (other, Vec::new()),
+        };
+        self.placard_stipple
+            .prepare(device, queue, width, height, &stipple_rects);
         let has_right = self.overlay_shape_text(&geom, ink, muted);
         self.overlay_upload_text(
             device, queue, width, height, &geom, has_right, ink, muted, placard,
@@ -98,6 +117,10 @@ impl TextPipeline {
         self.overlay_rows_invert
             .prepare(device, queue, width, height, &[]);
         self.overlay_lens_underline
+            .prepare(device, queue, width, height, &[]);
+        // The stipple placard: parked (zero instances) — the frame after a
+        // stipple-world overlay closes carries zero stale wordmark pixels.
+        self.placard_stipple
             .prepare(device, queue, width, height, &[]);
         // The amber query caret: parked (nothing drawn).
         self.panel_caret.prepare_empty();

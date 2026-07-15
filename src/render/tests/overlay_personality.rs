@@ -64,8 +64,12 @@ fn parse_overlay_style_force_placard_every_corner_and_ink() {
         ("placard:TR:1.5:ghost", theme::PlacardCorner::TR, 1.5, theme::PlacardInk::Ghost),
         ("placard:BL:3.0:ghost", theme::PlacardCorner::BL, 3.0, theme::PlacardInk::Ghost),
         ("placard:BR:0.5:faint", theme::PlacardCorner::BR, 0.5, theme::PlacardInk::Faint),
+        // The personality-assignment round's stipple variant joins the grammar
+        // (the Magpie STIPPLE PROBE the taste gallery shoots is exactly this).
+        ("placard:BL:3.0:stipple", theme::PlacardCorner::BL, 3.0, theme::PlacardInk::Stipple),
         // case-insensitive corner/ink, mixed case command word
         ("Placard:bl:2.25:Ghost", theme::PlacardCorner::BL, 2.25, theme::PlacardInk::Ghost),
+        ("placard:bl:3.0:Stipple", theme::PlacardCorner::BL, 3.0, theme::PlacardInk::Stipple),
     ];
     for (input, corner, scale, ink) in cases {
         let parsed = parse_overlay_style_force(input);
@@ -226,6 +230,28 @@ fn forced_placard_shapes_a_wordmark_inside_the_canvas_corner() {
     assert!(y >= 0.0 && y + h <= canvas_h, "wordmark sits within the canvas vertically");
     assert!((x - 12.0).abs() < 0.01, "BL anchors the wordmark's left edge at the inset");
     assert!(y > canvas_h * 0.5, "BL sits in the bottom half of the canvas");
+
+    // BLEED IS THE CONTRACT (the personality-assignment round's pinned
+    // semantics — the stale "clipped to the card" doc claim is the thing
+    // this assertion retires): the wordmark anchors to the CANVAS corner and
+    // MAY extend past the centered card — here the BL wordmark's box starts
+    // at the canvas inset, well LEFT of the card's own left edge, and hangs
+    // BELOW the card's bottom edge (the card is vertically centered; the
+    // wordmark hugs the canvas foot).
+    let [card_x, card_y, _card_w, card_h] =
+        p.overlay_card_rect().expect("the overlay card must be open");
+    assert!(
+        x < card_x,
+        "bleed contract: the BL wordmark (x {x:.1}) starts left of the centered card \
+         (card_x {card_x:.1}) — outside the card, over the scrim"
+    );
+    assert!(
+        y + h > card_y + card_h,
+        "bleed contract: the BL wordmark's box (bottom {:.1}) hangs below the centered \
+         card's bottom edge ({:.1})",
+        y + h,
+        card_y + card_h
+    );
 
     set_title_style_test_override(None); // leave no override behind for later tests
 }
@@ -594,4 +620,265 @@ fn forced_placard_suppresses_the_inline_title_prefix_on_both_shapers() {
     );
 
     set_title_style_test_override(None);
+}
+
+// --- THE PERSONALITY-ASSIGNMENT ROUND: the STIPPLE placard's pixel laws ---
+
+/// THE STIPPLE INK LAW, at REAL PIXELS (the placard-ink law extended to
+/// `Stipple`, as the round demands): on Mangrove — the world that actually
+/// SHIPS the stipple placard, running its own `render_caps`, no override —
+/// diffing an overlay frame against the same frame with the placard forced
+/// `InlinePrefix` isolates exactly the wordmark's contribution. Within the
+/// wordmark's own box, every changed pixel must be the world's own
+/// `placard_ink(Stipple)` ink (= `base_content`, ±1 LSB of sRGB round-trip)
+/// — INDIVIDUAL LADDER-INK PIXELS ONLY, never amber, never a blend (a
+/// fractional-alpha regression would show as intermediate tints here) — and
+/// there must be genuinely MANY of them (a parked/transparent regression —
+/// the Wagtail-invisible-row bug shape — fails the count floor, not just a
+/// mechanism assert). Determinism rides for free: coverage is pure shaping,
+/// the Bayer cut is pure position.
+#[test]
+fn mangrove_stipple_placard_paints_only_ladder_ink_pixels_at_real_density() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping mangrove_stipple_placard_paints_only_ladder_ink_pixels_at_real_density: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+    theme::set_active_by_name("Mangrove").unwrap();
+    p.sync_theme();
+
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "commands";
+    v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+    p.set_view(&v);
+
+    // Frame A: the placard silenced (InlinePrefix forced) — everything else
+    // identical. NOTE the query line also changes ("commands › " vs "› "),
+    // which is why the assertion below is scoped to the wordmark's own box,
+    // far from the centered card's query row.
+    set_title_style_test_override(Some(theme::TitleStyle::InlinePrefix));
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let a = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    // Frame B: Mangrove's OWN caps (Placard BL 3.0 Stipple).
+    set_title_style_test_override(None);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let geom = p.overlay_geometry(1200);
+    let (bx, by, bw, bh) = p
+        .overlay_shape_placard(&geom)
+        .expect("Mangrove's own caps ship a placard");
+    let b = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    let ink = theme::placard_ink(theme::PlacardInk::Stipple).rgba_bytes();
+    let (w, h) = (1200i64, 800i64);
+    let (x0, y0) = (bx.floor() as i64, by.floor() as i64);
+    let (x1, y1) = ((bx + bw).ceil() as i64, (by + bh).ceil() as i64);
+    let mut changed = 0usize;
+    let mut off_ink = 0usize;
+    let mut worst: Option<[u8; 4]> = None;
+    for y in y0.max(0)..y1.min(h) {
+        for x in x0.max(0)..x1.min(w) {
+            let i = (y * w + x) as usize;
+            if a[i] == b[i] {
+                continue;
+            }
+            changed += 1;
+            let px = b[i];
+            let near = |got: u8, want: u8| (got as i16 - want as i16).abs() <= 1;
+            if !(near(px[0], ink[0]) && near(px[1], ink[1]) && near(px[2], ink[2])) {
+                off_ink += 1;
+                worst = Some(px);
+            }
+        }
+    }
+    assert!(
+        changed >= 200,
+        "the stipple wordmark changed only {changed} pixels in its own box — \
+         near-invisible (the parked/transparent bug shape)"
+    );
+    assert_eq!(
+        off_ink, 0,
+        "{off_ink}/{changed} changed pixels in the wordmark box are NOT the world's own \
+         stipple ink {ink:?} (worst offender {worst:?}) — the stipple contract is \
+         individual ladder-ink pixels only"
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}
+
+/// The distinguishability sweep's placard case, extended to the STIPPLE
+/// treatment (the round's own law list: "selected row findable ... over
+/// dither"): with a stipple placard forced at the loudest shipped scale, the
+/// selected picker row stays perceptibly distinguishable from an adjacent
+/// row — mirrors `selected_row_stays_distinguishable_with_a_forced_placard_
+/// behind_it` exactly, over the new ink. (The bordered-card case rides the
+/// capability-driven tier (b) of `distinguishability.rs` automatically now
+/// that Currawong/Mangrove/Firetail carry non-default caps.)
+#[test]
+fn selected_row_stays_distinguishable_with_a_forced_stipple_placard_behind_it() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping selected_row_stays_distinguishable_with_a_forced_stipple_placard_behind_it: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_title_style_test_override(Some(theme::TitleStyle::Placard {
+        corner: theme::PlacardCorner::TL,
+        scale: 3.0,
+        ink: theme::PlacardInk::Stipple,
+    }));
+
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "commands";
+    v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+    v.overlay_selected = 0;
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let region = overlay_row_region(&p, 1, 0);
+    let a = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    v.overlay_selected = 1;
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let b = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    pixeldiff::assert_perceptibly_different(
+        &a,
+        &b,
+        1200,
+        800,
+        region,
+        DistinguishFloor::DEFAULT,
+        "PickerSelectedRow under a forced Placard{ink: Stipple} (row 0 selected vs row 1 selected)",
+    );
+
+    set_title_style_test_override(None);
+}
+
+// --- STANDING-POLICY AUDIT (2026-07-15): the minimum-window placard overflow ---
+//
+// Found by the personality-assignment round's OWN standing-policy audit
+// (CLAUDE.md's spot-check trigger 1: a new axis value — the four shipped
+// placard worlds — landed, so the FULL surface roster got probed, sampled
+// across states including a resized window). NOT covered by any existing
+// law: every geometry test above (`forced_placard_shapes_a_wordmark_inside_
+// the_canvas_corner`, the corner-quadrant sweep, …) fixes the canvas at the
+// standard 1200x800 capture size and a short title ("commands"). Neither
+// axis — a NARROW window, or a LONG title — was ever swept, so the gap
+// survived every existing test green.
+
+/// THE MINIMUM-WINDOW PLACARD OVERFLOW — a REAL, LIVE-REACHABLE defect (now
+/// fixed, see THE FIX below), not a synthetic edge case: `placard_origin`'s
+/// BL/TL branch (`overlay_shape.rs`) anchored the wordmark's LEFT edge at
+/// `ax + inset` UNCONDITIONALLY. TR/BR's branch clamped with `.max(ax)` —
+/// but that clamp only protects the anchor's LEFT bound when the wordmark is
+/// WIDER than the anchor (it keeps a too-wide RIGHT-anchored mark from
+/// reporting a negative origin). There was NO symmetric clamp protecting the
+/// RIGHT bound for a LEFT-anchored corner — and every shipped placard is BL
+/// (`theme::tests::personality_assignments_are_exactly_the_decided_table`'s
+/// own corner-discipline pin). `scale` was a fixed per-world multiplier, not
+/// adaptive to title length or window width, so a LONG overlay title at a
+/// SMALL window overflowed the canvas outright.
+///
+/// At the app's own DOCUMENTED minimum window (`app.rs::resumed`'s
+/// `MIN_COLS(30) * CHAR_WIDTH + 2*TEXT_LEFT` by `MIN_LINES(8) * LINE_HEIGHT +
+/// 2*TEXT_TOP` = 464x288 — a size a real user CAN resize the live window
+/// down to, enforced by `with_min_inner_size`, so this is NOT an
+/// unreachable synthetic size), `OverlayKind::History`'s title ("version
+/// history") HARD-CLIPPED past the canvas's right edge — confirmed at REAL GPU
+/// pixels by the audit that added this test, on all four shipped placard
+/// worlds (Galah/Magpie/Mangrove/Firetail) alike, live: the rightmost
+/// wordmark-ink pixel lands on the canvas's OWN last column, with "RY"
+/// (Galah/Magpie/Firetail) or "ORY" (Mangrove's stipple) missing from the
+/// render entirely — not an antialiasing artifact.
+///
+/// THE FIX (same round, layered — an origin clamp alone could NOT fix this:
+/// the audit's own numbers put the wordmark's natural width at ~1205px on a
+/// 464px canvas, wider than the WHOLE anchor, so no placement can contain
+/// it): (1) `overlay_shape_placard`'s FIT-TO-CANVAS shrink — when the
+/// naturally-scaled wordmark shapes wider than the canvas minus both insets,
+/// the font size re-metrics proportionally and re-lays out (cosmic-text
+/// multiplies normalized advances by the buffer font size at layout time, so
+/// one linear pass lands the width); `scale` stays a per-world loudness
+/// DIAL, and the window's own width is the ceiling. (2) `placard_origin`
+/// grew the symmetric two-bound clamps this comment originally named
+/// (BL/TL's right bound, TL/TR's bottom bound) as the float-noise backstop.
+/// A comfortable window enters neither path — byte-identical. This test is
+/// the enforcing law; do not loosen its bound.
+#[test]
+fn placard_wordmark_stays_in_bounds_at_the_apps_own_minimum_window_size() {
+    use crate::overlay::OverlayKind;
+
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!(
+            "skipping placard_wordmark_stays_in_bounds_at_the_apps_own_minimum_window_size: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    // The app's OWN enforced floor (`app.rs::resumed`'s `MIN_COLS`/`MIN_LINES`
+    // — private consts local to that fn, so mirrored here rather than
+    // imported; a real user can resize the live window down to exactly this
+    // and no smaller, via `with_min_inner_size`).
+    const MIN_COLS: f32 = 30.0;
+    const MIN_LINES: f32 = 8.0;
+    let min_w = MIN_COLS * CHAR_WIDTH + 2.0 * TEXT_LEFT;
+    let min_h = MIN_LINES * LINE_HEIGHT + 2.0 * TEXT_TOP;
+    p.set_size(min_w, min_h);
+
+    let mut failures = Vec::new();
+    for t in theme::THEMES.iter() {
+        // Only the worlds that actually SHIP a placard (no hardcoded name
+        // list — a future assignment is swept automatically).
+        if !matches!(t.render_caps.title_style, theme::TitleStyle::Placard { .. }) {
+            continue;
+        }
+        theme::set_active_by_name(t.name).unwrap();
+        p.sync_theme();
+        // Every real overlay title this world's placard could ever be asked
+        // to draw (the no-wildcard `OverlayKind` roster), not just the
+        // short "commands"/"settings" fixtures the other tests use.
+        for kind in OverlayKind::ALL {
+            let title = kind.title();
+            let mut v = view("hello\n", 0, 0);
+            v.overlay_active = true;
+            v.overlay_title = title;
+            v.overlay_items = vec!["Row one".into(), "Row two".into()];
+            p.set_view(&v);
+            let geom = p.overlay_geometry(min_w as u32);
+            let Some((x, _y, w, _h)) = p.overlay_shape_placard(&geom) else {
+                continue;
+            };
+            if x < 0.0 {
+                failures.push(format!(
+                    "{}/{title:?}: wordmark left edge {x:.1} sits off-canvas left",
+                    t.name
+                ));
+            }
+            if x + w > min_w {
+                failures.push(format!(
+                    "{}/{title:?}: wordmark right edge {:.1} exceeds the {:.1}px-wide \
+                     minimum-window canvas by {:.1}px",
+                    t.name,
+                    x + w,
+                    min_w,
+                    x + w - min_w
+                ));
+            }
+        }
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+    assert!(
+        failures.is_empty(),
+        "placard wordmark(s) overflow the canvas at the app's own minimum window size \
+         (found by the personality-assignment round's standing-policy audit):\n{}",
+        failures.join("\n")
+    );
 }

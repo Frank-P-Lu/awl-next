@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::color::Srgb;
-use super::model::{Background, Elevation, ImageReveal, Lens, Theme};
+use super::model::{Background, ImageReveal, Lens, Theme};
 use super::worlds::{DEFAULT_THEME, THEMES};
 
 /// The active theme index. A process-global so every render call site reads the
@@ -100,19 +100,114 @@ pub fn selection() -> Srgb {
     active().selection
 }
 
+/// How far a DARK world's `Faint` placard rung steps up the ink ladder, from
+/// `faint` toward `muted` — the personality-assignment round's DARK-GROUND
+/// CONTRAST correction (the probe gallery's light-world Ghost was
+/// gallery-validated, but the same formulas were near-invisible on the dark
+/// grounds — Undertow's Ghost vanished; the user's taste note demanded the
+/// wordmark "clearly READ" there while staying a receding ghost). ONE global
+/// constant per rung, never a per-world hand value. Blending toward `muted`
+/// — the next rung UP the same ladder — rather than all the way toward
+/// `base_content` makes the "legible ghost, not a competing headline"
+/// ceiling hold BY CONSTRUCTION (a `faint`→`muted` lerp can never outshine
+/// `muted`, the very ink the card's own rows read in; the first
+/// toward-`base_content` draft overshot it on Potoroo). Floor + ordering +
+/// ceiling are law-tested by `theme::tests::
+/// placard_inks_read_on_dark_grounds_and_stay_below_muted`.
+const PLACARD_DARK_LIFT_FAINT: f32 = 0.75;
+/// The `Ghost` sibling of [`PLACARD_DARK_LIFT_FAINT`]: a shorter step up the
+/// same ladder, so `Ghost` stays the quieter rung on dark grounds exactly as
+/// it is on light ones (presence ordering is law-tested).
+const PLACARD_DARK_LIFT_GHOST: f32 = 0.45;
+
 /// THE ONE owner of a [`super::model::PlacardInk`] rung's color — always a
-/// pure blend of two tokens already on the active world's own ink ladder,
-/// never a free color (see [`super::model::PlacardInk`]'s own doc for why
-/// the enum has no raw-`Srgb` variant to smuggle one in through). `Faint` is
-/// the existing [`faint`] rung verbatim; `Ghost` steps HALFWAY further from
-/// `faint` toward `base_300` — the card's own ground, since the placard
-/// draws ON the card — reading as barely-there without inventing a THIRD
-/// authored-per-world ink field.
+/// pure blend of tokens already on the active world's own ink ladder, never
+/// a free color (see [`super::model::PlacardInk`]'s own doc for why the enum
+/// has no raw-`Srgb` variant to smuggle one in through), and MODE-AWARE
+/// since the personality-assignment round:
+///
+/// - **LIGHT grounds** keep the gallery-validated originals: `Faint` is the
+///   [`faint`] rung verbatim; `Ghost` steps HALFWAY further from `faint`
+///   toward `base_300` — barely-there, the P3R watermark read.
+/// - **DARK grounds** step the OTHER way — from `faint` UP toward [`muted`]
+///   — because on a dark world `faint` already sits close to the ground and
+///   the light formulas rendered near-invisible (the user's dark-ground
+///   taste note; Undertow's Ghost was the exhibit). One formula off the
+///   ladder ([`PLACARD_DARK_LIFT_FAINT`]/[`_GHOST`]), never a per-world
+///   constant; the result recedes behind the rows BY CONSTRUCTION (a
+///   `faint`→`muted` blend cannot outshine `muted`, the rows' own ink).
+///
+/// `Stipple` draws INDIVIDUAL PIXELS in the full-ink `base_content` rung
+/// (perceived tone is carried by DENSITY instead — see
+/// [`placard_stipple_density`], its partner owner), so this returns
+/// `base_content` for it: the pixel color half of the stipple pair.
 pub fn placard_ink(ink: super::model::PlacardInk) -> Srgb {
+    let t = active();
     match ink {
+        super::model::PlacardInk::Faint if t.dark => {
+            faint().lerp(muted(), PLACARD_DARK_LIFT_FAINT)
+        }
+        super::model::PlacardInk::Ghost if t.dark => {
+            faint().lerp(muted(), PLACARD_DARK_LIFT_GHOST)
+        }
         super::model::PlacardInk::Faint => faint(),
         super::model::PlacardInk::Ghost => faint().lerp(base_300(), 0.5),
+        super::model::PlacardInk::Stipple => base_content(),
     }
+}
+
+/// Gamma-correct Rec.709 relative luminance — the same recipe the law tests
+/// use (`theme::tests`' `rel_lum`, `render::tests::syntax_roles`'
+/// `rel_luminance`), needed at RUNTIME here because the stipple density is a
+/// perceptual-tone formula, not a channel blend.
+fn rel_lum(c: Srgb) -> f32 {
+    fn lin(u: u8) -> f32 {
+        let s = u as f32 / 255.0;
+        if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+    }
+    0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+}
+
+/// The floor/ceiling a stipple placard's DENSITY may occupy — below the floor
+/// too few pixels survive to read as letterforms at all (the legibility floor
+/// the dark-ground taste note demands, asserted over Mangrove's lava ground by
+/// `theme::tests::stipple_placard_density_clears_the_legibility_floor_over_
+/// its_own_ground`); above the ceiling the mark stops being a ghost and
+/// reads as solid text.
+const PLACARD_STIPPLE_DENSITY_FLOOR: f32 = 0.12;
+const PLACARD_STIPPLE_DENSITY_CEILING: f32 = 0.55;
+
+/// THE ONE owner of the stipple placard's DENSITY — the fraction of wordmark
+/// pixels that draw (each in the pure [`placard_ink`]`(Stipple)` ink =
+/// `base_content`, fully opaque; the Bayer matrix decides WHICH — see
+/// `render::dither`). Derived, never authored per world: the density is
+/// chosen so the stipple's MEAN tone over the ground matches the world's own
+/// strengthened `Faint` placard rung —
+/// `density = (Y(faint_rung) - Y(ground)) / (Y(ink) - Y(ground))` in
+/// relative luminance — i.e. "reads at roughly Faint tone from reading
+/// distance", the same ladder-derived loudness every other placard ink
+/// speaks, clamped to the floor/ceiling band above. (Mangrove, the first
+/// assignment, lands ≈0.24 — the same neighborhood as Wagtail's 0.25
+/// highlight stipple, a reassuring convergence of two independent
+/// derivations.)
+pub fn placard_stipple_density() -> f32 {
+    let ground = rel_lum(base_100());
+    let ink = rel_lum(base_content());
+    let target = rel_lum(placard_ink(super::model::PlacardInk::Faint));
+    let span = ink - ground;
+    let density = if span.abs() < 1e-6 { 0.0 } else { (target - ground) / span };
+    density.clamp(PLACARD_STIPPLE_DENSITY_FLOOR, PLACARD_STIPPLE_DENSITY_CEILING)
+}
+
+/// THE ONE owner of the PAGE-FRAME ink ([`super::model::PageFrame`], the
+/// writing-column frame capability): the world's own `base_content` — the
+/// full-ink ladder rung, never a free color and never the amber accent. The
+/// WORLD-ROLES "dark-line page-frame" idea IS full ink (a dark line on a
+/// light world; on Wagtail, the first assignment, this is its ladder's pure
+/// white). Weight lives on the capability; ink derivation lives here, so a
+/// frame can never invent a color (law-tested).
+pub fn page_frame_ink() -> Srgb {
+    base_content()
 }
 
 /// SELECTED-ROW value BAND for the summoned pickers (command palette / go-to /
@@ -136,17 +231,22 @@ pub(super) const SELECTED_BAND_STEPS: i32 = 2;
 
 pub fn surface_selected() -> Srgb {
     let a = active();
-    if a.render_caps.elevation == Elevation::Bordered {
-        // A true 1-bit world's elevation ladder collapses to a strict binary:
-        // the CARD FILL stays the ground value (`base_300 == base_100` ==
-        // black, so ink text drawn on it stays legible) and this BORDER-only
-        // token reads pure white instead — "a white 1px border on a black
-        // card is 1-bit-legal" (`worlds.rs::WAGTAIL`'s doc comment). The
-        // ordinary base_200->base_300 step math below would just collapse to
-        // black too (both endpoints equal on a one-bit world), which would
-        // make every float/HUD/whichkey/menu-drop panel's border invisible —
-        // so this is a DECLARED override, not a tuning of the same formula.
-        return Srgb::rgb(0xFF, 0xFF, 0xFF);
+    if a.base_200 == a.base_300 {
+        // A COLLAPSED surface ramp (Wagtail's 1-bit ladder: base_200 ==
+        // base_300 == pure black) gives the step math below no direction to
+        // move in — it would return the card's own value, making every
+        // float/HUD/whichkey/menu-drop panel's border AND the picker's
+        // selected-row band invisible. The ink pole is the only rung left:
+        // `base_content` (pure white on Wagtail — "a white 1px border on a
+        // black card is 1-bit-legal", `worlds.rs::WAGTAIL`'s doc). Keyed on
+        // the RAMP SHAPE, not on `Elevation::Bordered` as it originally was:
+        // the personality-assignment round gave three ORDINARY worlds
+        // (Currawong / Mangrove / Firetail) `Bordered` as functional
+        // elevation, and those must keep their ordinary ramp-step band —
+        // returning white for them would have filled the selected row the
+        // same value as its own text (the Wagtail invisible-row bug class,
+        // reintroduced by data). Byte-identical for Wagtail either way.
+        return a.base_content;
     }
     // hi + SELECTED_BAND_STEPS * (hi - lo), clamped to [0,255]: that many more
     // increments past base_300, in the SAME direction the base_200 -> base_300 step

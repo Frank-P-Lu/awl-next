@@ -10,8 +10,8 @@ use super::cjk::{
 use super::color::Srgb;
 use super::model::{
     Backdrop, Background, CaretBlockStyle, DecorativeWash, Elevation, HighlightTexture,
-    ImageReveal, LavaEdge, RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags, TitleStyle,
-    WashOverride,
+    ImageReveal, LavaEdge, PageFrame, PlacardCorner, PlacardInk, RenderCaps, RoleOverrides,
+    SelectionStyle, Theme, ThemeTags, TitleStyle, WashOverride,
 };
 use super::ornament::{
     Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, ORNAMENT_GARAMOND,
@@ -531,7 +531,13 @@ pub const CURRAWONG: Theme = Theme {
     // Curated: shows under Night (the darkest, most iconic) / Technical / Neutral; opts OUT of Register (Humble crowded).
     tags: ThemeTags { time: Some("Night"), register: None, voice: Some("Technical"), temperature: Some("Neutral") },
     role_overrides: RoleOverrides::NONE,
-    render_caps: RenderCaps::DEFAULT,
+    // PERSONALITY ASSIGNMENT (2026-07-15): BORDERED elevation — OLED true-black
+    // swallows a drop shadow entirely (black on black), so the raised border RIM
+    // is this world's functional elevation, not decoration. The rim ink stays
+    // the ordinary ramp-step `surface_selected` derivation (the ramp is not
+    // collapsed here — only Wagtail's is). No placard: Currawong's stark den
+    // stays quiet chrome.
+    render_caps: RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT },
 };
 
 /// Mangrove — dark tidal-teal coding den (one warm low-tide ember at the caret).
@@ -600,7 +606,23 @@ pub const MANGROVE: Theme = Theme {
     // Curated: shows under Technical / Cool (its rooted teal-mono character); opts OUT of Time (Night crowded) + Register (Humble crowded).
     tags: ThemeTags { time: None, register: None, voice: Some("Technical"), temperature: Some("Cool") },
     role_overrides: RoleOverrides::NONE,
-    render_caps: RenderCaps::DEFAULT,
+    // PERSONALITY ASSIGNMENT (2026-07-15): the STIPPLE placard — the Bayer
+    // dither IS Mangrove's own language (its lava ground is the one dithered
+    // lamp), so its wordmark speaks it too: bottom-left, scale 3.0, individual
+    // full-ink pixels at a density derived to read at ~Faint tone
+    // (`theme::placard_stipple_density`). TASTE-FLAGGED: scale 3.0 is the
+    // gallery reference start, the stipple-vs-flat call is the user's A/B.
+    // Plus BORDERED elevation: the summoned card must hold a crisp edge over
+    // the moving lava margins (a value step alone swims against motion).
+    render_caps: RenderCaps {
+        title_style: TitleStyle::Placard {
+            corner: PlacardCorner::BL,
+            scale: 3.0,
+            ink: PlacardInk::Stipple,
+        },
+        elevation: Elevation::Bordered,
+        ..RenderCaps::DEFAULT
+    },
 };
 
 /// Galah — light dusty galah-pink reading room (rose-garnet ember at the caret).
@@ -643,7 +665,18 @@ pub const GALAH: Theme = Theme {
     // Curated: shows under Dawn / Modern / Warm (its soft rosy dawn feel); opts OUT of Register (Everyday crowded).
     tags: ThemeTags { time: Some("Dawn"), register: None, voice: Some("Modern"), temperature: Some("Warm") },
     role_overrides: RoleOverrides::NONE,
-    render_caps: RenderCaps::DEFAULT,
+    // PERSONALITY ASSIGNMENT (2026-07-15): the gallery REFERENCE placard —
+    // bottom-left Ghost at scale 3.0 was the shot the whole treatment was
+    // validated on (placards read BEST on light worlds; BL because the TR/BR
+    // corners clip long picker titles against the canvas edge).
+    render_caps: RenderCaps {
+        title_style: TitleStyle::Placard {
+            corner: PlacardCorner::BL,
+            scale: 3.0,
+            ink: PlacardInk::Ghost,
+        },
+        ..RenderCaps::DEFAULT
+    },
 };
 
 /// Magpie — light stark high-contrast page (terracotta spark at the caret).
@@ -689,7 +722,18 @@ pub const MAGPIE: Theme = Theme {
     // Curated: shows under Day / Literary / Neutral (sharp black-on-white slab); opts OUT of Register (Everyday crowded).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Neutral") },
     role_overrides: RoleOverrides::NONE,
-    render_caps: RenderCaps::DEFAULT,
+    // PERSONALITY ASSIGNMENT (2026-07-15): bottom-left Ghost placard — the
+    // newsprint-headline slab EARNS a masthead wordmark. TASTE-FLAGGED: starts
+    // at the Galah-reference scale 3.0; Magpie's higher-contrast paper may
+    // want it dialed after the user's gallery pass.
+    render_caps: RenderCaps {
+        title_style: TitleStyle::Placard {
+            corner: PlacardCorner::BL,
+            scale: 3.0,
+            ink: PlacardInk::Ghost,
+        },
+        ..RenderCaps::DEFAULT
+    },
 };
 
 /// Wagtail — the FIFTEENTH world, and awl's first true MONOCHROME one — REWORKED
@@ -948,12 +992,19 @@ pub const WAGTAIL: Theme = Theme {
             color: Srgb::rgb(0xFF, 0xFF, 0xFF),
             density: crate::render::dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY,
         },
-        // THE OVERLAY-PERSONALITY-AS-DATA round: `InlinePrefix` — every world
-        // (Wagtail included) DEFAULTS to today's inline title prefix. No
-        // world ships `Placard` this round; the assignment step is the
-        // human eyeball-and-decide call this round's own probe gallery
-        // exists to feed (see `theme::model::TitleStyle`'s doc).
+        // PERSONALITY ASSIGNMENT (2026-07-15, user-confirmed): NO placard —
+        // Wagtail is the SILENT pole; announcing itself in a corner wordmark
+        // would be personality, which this world's whole statement is having
+        // none of. `InlinePrefix` (the quiet "<title> › " line) stays.
         title_style: TitleStyle::InlinePrefix,
+        // PERSONALITY ASSIGNMENT (2026-07-15): the PAGE FRAME's first (and
+        // only) assignment — a 2px frame around the writing column in this
+        // world's ladder white (`theme::page_frame_ink` = `base_content`),
+        // the WORLD-ROLES "page reads as a deliberate object" idea. Drawn
+        // hard-edged (dither-1.0 fill, no fractional-alpha AA rim) so it is
+        // 1-bit-legal by construction. Graduated from the AWL_PAGE_BORDER
+        // gallery probe (2px white was the user's pick over 1px).
+        page_frame: PageFrame::Line { weight_px: 2.0 },
     },
 };
 
@@ -1028,7 +1079,22 @@ pub const FIRETAIL: Theme = Theme {
     // roster-growth curation widening now seats as a 4-world band).
     tags: ThemeTags { time: None, register: None, voice: None, temperature: Some("Warm") },
     role_overrides: RoleOverrides::NONE,
-    render_caps: RenderCaps::DEFAULT,
+    // PERSONALITY ASSIGNMENT (2026-07-15): bottom-left FAINT placard, FLAT —
+    // deliberately NOT dithered: smooth is Firetail's contrast with Mangrove
+    // (the smooth warm lamp vs the dithered cool one), and the wordmark
+    // speaks the same split. `Faint` rides the mode-aware dark-ground
+    // derivation (`theme::placard_ink`), so it clearly reads over the deep
+    // oxblood den. Plus BORDERED elevation: the summoned card must hold a
+    // crisp edge over the moving lava margins.
+    render_caps: RenderCaps {
+        title_style: TitleStyle::Placard {
+            corner: PlacardCorner::BL,
+            scale: 3.0,
+            ink: PlacardInk::Faint,
+        },
+        elevation: Elevation::Bordered,
+        ..RenderCaps::DEFAULT
+    },
 };
 
 /// All sixteen worlds, in cycle order. `C-x t` advances through this list and

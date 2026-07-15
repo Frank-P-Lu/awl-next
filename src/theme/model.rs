@@ -76,12 +76,16 @@ impl RoleOverrides {
 // setting a field. `RenderCaps` names each of those render decisions as its
 // own field with a plain enum/number value (TOML-ready shapes — no closures,
 // no trait objects — though nothing here ships an on-disk parser; see
-// `ROADMAP.md`'s "theme capabilities as data" entry). FIFTEEN of the sixteen
-// worlds ship [`RenderCaps::DEFAULT`] byte-identically; Wagtail is simply DATA
-// that sets every field away from its default (`worlds.rs::WAGTAIL`) — no
+// `ROADMAP.md`'s "theme capabilities as data" entry). The machinery landed
+// dormant (all sixteen worlds on [`RenderCaps::DEFAULT`] except Wagtail);
+// the PERSONALITY-ASSIGNMENT round proved the design by assigning fields as
+// one-line DATA edits — placards on Galah/Magpie/Mangrove/Firetail, bordered
+// elevation on Currawong/Mangrove/Firetail, the Wagtail page frame — with no
 // world-name string comparison, no `is_one_bit()` read, anywhere in
 // `src/render/**` (a structural law test, `render::tests::theme_caps_law`,
-// bans both from ever reappearing there).
+// bans both from ever reappearing there). The per-world assignment table is
+// itself law-pinned: `theme::tests::personality_assignments_are_exactly_the_
+// decided_table`.
 ///
 /// Whether document SELECTION paints as the ordinary translucent `selection`
 /// fill, or as TRUE inverse video (`SelectionPipeline::new_invert`, an
@@ -136,14 +140,20 @@ pub enum Backdrop {
 
 /// Whether a summoned card's elevation reads as the ordinary FLAT `base_300`
 /// fill (the default — depth is carried by the surface-ramp value step
-/// alone), or must instead draw a crisp raised BORDER (`surface_selected()`'s
-/// one-bit override, pure white) because the surface ramp has collapsed
-/// (`base_200 == base_300`) and a flat fill would be an invisible card on an
-/// identical ground. Also gates the picker's selected-ROW value band
-/// (`overlay_rows`) OFF under `Bordered` — filling a whole row the SAME ink
-/// as its own text would hide the text; the row's own caret still marks the
-/// position. See `surface_selected()`, `prepare_panel_card_elevation`,
-/// `render/chrome/overlay.rs`'s `overlay_rows`.
+/// alone, and the blur/scrim backdrop supplies the card's contrast), or
+/// additionally draws the crisp raised BORDER rim + drop shadow the float
+/// panels already carry (`set_float_quads`'s `elevated` arm, border ink =
+/// `surface_selected()`). Wagtail's original motivation: its surface ramp
+/// COLLAPSES (`base_200 == base_300`, both pure black) and its backdrop blur
+/// is disabled, so a flat fill was an invisible card — `surface_selected()`
+/// detects that collapsed ramp and returns the ink pole (pure white there).
+/// The personality-assignment round widened `Bordered` to three ORDINARY
+/// worlds as functional elevation — Currawong (OLED true-black swallows the
+/// drop shadow; the rim carries the edge) and the two lava worlds Mangrove /
+/// Firetail (the card must hold an edge over a moving ground) — whose
+/// selected-row band and border rim keep the ordinary ramp-step derivation
+/// (the picker's selected-row band is gated by `SelectionStyle`, never by
+/// this field). See `surface_selected()`, `prepare_panel_card_elevation`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Elevation {
     Flat,
@@ -189,27 +199,44 @@ pub enum PlacardCorner {
 
 /// The ink a [`TitleStyle::Placard`] wordmark draws in — always DERIVED from
 /// the world's own ink ladder (never a free color; see [`super::derive::placard_ink`],
-/// the one owner). `Faint` is the existing faintest ladder rung
-/// ([`Theme::faint`]); `Ghost` steps ONE rung further toward the card's own
-/// ground (`base_300`) — barely-there, the P3R "watermark" read. Neither
-/// variant carries a raw `Srgb` — the enum itself makes "invent a placard
-/// color" unrepresentable, mirroring [`HighlightTreatment`]'s own
-/// no-absent-variant discipline.
+/// the one owner — MODE-AWARE since the personality-assignment round: on a
+/// LIGHT ground `Faint` is the faintest ladder rung verbatim and `Ghost`
+/// steps further toward the card's own ground (`base_300`) — the
+/// gallery-validated barely-there P3R "watermark" read; on a DARK ground both
+/// rungs instead step UP the ladder toward `base_content`, because the
+/// gallery's dark-world shots proved the light formulas near-invisible there
+/// — Undertow's Ghost vanished outright. One formula off the ladder per
+/// mode, never a per-world hand constant; see `placard_ink`'s own doc).
+/// `Stipple` is the personality-assignment round's texture variant: the SAME
+/// wordmark rendered as a Bayer-matrix STIPPLE of individual full-ink pixels
+/// (`base_content`, fully opaque or absent — never a fractional alpha) at a
+/// density derived so the mark reads at roughly the `Faint` rung's tone from
+/// reading distance (`super::derive::placard_stipple_density`, the density's
+/// one owner). It reuses the existing ordered-dither pattern language
+/// (`render::dither::BAYER8`, `shaders/selection.wgsl`'s dither branch — the
+/// same matrix Wagtail's highlight texture and Mangrove's lava grain speak),
+/// never a second pattern. No variant carries a raw `Srgb` — the enum itself
+/// makes "invent a placard color" unrepresentable, mirroring
+/// [`HighlightTreatment`]'s own no-absent-variant discipline.
 ///
 /// **A ONE-BIT world's own law still applies on top of this ladder** (see
 /// `Theme::is_one_bit`'s doc): a true 1-bit world may draw ONLY pure black or
 /// pure white, so neither `Faint` nor `Ghost` (both ordinary greys on every
-/// world today) is a legal choice THERE — no world ships `Placard` yet
-/// (`RenderCaps::DEFAULT` is `InlinePrefix` everywhere), so this is a banked
-/// constraint, not yet a live bug; `theme::tests::a_placard_ghost_title_style_
-/// would_violate_a_one_bit_worlds_own_law` guards the combination structurally
-/// so a FUTURE assignment can't ship it by accident (see that test's own doc
-/// for why the guard lives in `theme::`, never `render::`, where reading
-/// `is_one_bit()` is banned outright).
+/// world today, and antialiased glyph renders besides) is a legal choice
+/// THERE. `Stipple` is the one variant that WOULD be 1-bit-legal by
+/// construction (hard-thresholded pure-ink pixels, the same argument as the
+/// highlight stipple) — but Wagtail ships NO placard by the user's own call
+/// (the silent pole announces nothing), so the point stays banked.
+/// `theme::tests::a_placard_grey_ink_would_violate_a_one_bit_worlds_own_law`
+/// guards the grey combinations structurally so a FUTURE assignment can't
+/// ship one by accident (see that test's own doc for why the guard lives in
+/// `theme::`, never `render::`, where reading `is_one_bit()` is banned
+/// outright).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlacardInk {
     Faint,
     Ghost,
+    Stipple,
 }
 
 /// How a summoned overlay card announces which picker it is (see
@@ -219,25 +246,52 @@ pub enum PlacardInk {
 /// the picker's own input line (`overlay_shape.rs::shape_overlay_names`,
 /// `theme_picker.rs`'s own mirror), untouched by this round.
 ///
-/// `Placard` is the OVERLAY-PERSONALITY-AS-DATA round's new capability: a
+/// `Placard` is the OVERLAY-PERSONALITY-AS-DATA round's capability: a
 /// large, corner-anchored, DIM wordmark of the SAME title text drawn BEHIND
 /// the card's rows (Persona 3 Reload's CONFIG-screen watermark is the
 /// reference) — `scale` multiplies the markdown heading TITLE type rung
 /// (`markdown::headings::type_scale::TITLE`) over the document's own body
 /// font size, so a world can dial how loud its wordmark reads without a
-/// second magic number; `ink` picks which ink-ladder rung it draws in (see
-/// [`PlacardInk`]). **Clipped to the card, never bleeding into the scrim**
-/// (a deliberate, logged deviation from P3R's own bleed — see
-/// `render::chrome::overlay_shape`'s placard doc for the legibility
-/// reasoning); rows/text always composite OVER it. NO world ships `Placard`
-/// yet — this round is the machinery only (`RenderCaps::DEFAULT` + ALL 15
-/// worlds' literals are `InlinePrefix`, byte-identity gated); the assignment
-/// itself is the human eyeball-and-decide step this round's probe gallery
-/// exists to feed.
+/// second magic number; `ink` picks how it draws off the ink ladder (see
+/// [`PlacardInk`]). **BLEED IS THE CONTRACT** (the user-settled semantics,
+/// pinned by `render::tests::overlay_personality`'s corner-placement tests):
+/// the wordmark anchors to the FULL CANVAS corners and may bleed past the
+/// centered card — a screen-corner watermark over the scrim, exactly P3R's
+/// own bleed (an earlier draft clipped it to the card; that original is
+/// SUPERSEDED — see `render::chrome::overlay_shape::overlay_shape_placard`'s
+/// "THE SCREEN-CORNER ANCHOR" doc, the render-side owner of the settled
+/// behavior); rows/query text always composite OVER it (uploaded first in
+/// the text batch — legibility first). Assigned per-world as DATA by the
+/// personality-assignment round (Galah/Magpie/Mangrove/Firetail, all
+/// bottom-left — the TR/BR corners clip long words against the canvas edge,
+/// a gallery finding); every quiet/silent world stays `InlinePrefix`, and
+/// Wagtail deliberately announces nothing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TitleStyle {
     InlinePrefix,
     Placard { corner: PlacardCorner, scale: f32, ink: PlacardInk },
+}
+
+/// Whether a thin FRAME draws around the WRITING COLUMN — the page-frame
+/// capability the personality-assignment round graduated from the
+/// `AWL_PAGE_BORDER` gallery probe (which never shipped; this field subsumes
+/// it). DISTINCT from the summoned card's border ([`Elevation::Bordered`] —
+/// that one rims a transient overlay card; this one is document furniture in
+/// the DESIGN §5 "orientation" sense: it makes the page read as a deliberate
+/// OBJECT, the WORLD-ROLES "dark-line page-frame" idea). `Line`'s
+/// `weight_px` is the stroke weight; the INK is never carried here — it is
+/// derived in ONE owner ([`super::derive::page_frame_ink`], the world's own
+/// `base_content`, the full-ink ladder rung: a "dark line" on a light world,
+/// pure white on Wagtail) so a frame can never invent a color. `None` is a
+/// REAL state (most worlds — the frame is a statement, not a default), and
+/// the ASSIGNED state is pixel-proven by
+/// `render::tests::page_frame`. Wagtail is the first assignment (2px, its
+/// ladder white); every other world ships `None`.
+// NOTE: no `Eq` — `weight_px` is a float (same reasoning as `TitleStyle`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PageFrame {
+    None,
+    Line { weight_px: f32 },
 }
 
 /// THE ONE emphasis texture a world draws `==highlight==` spans and search
@@ -277,6 +331,9 @@ pub struct RenderCaps {
     /// combine with EITHER elevation freely (the wordmark draws behind the
     /// rows on the SAME card either way).
     pub title_style: TitleStyle,
+    /// THE PERSONALITY-ASSIGNMENT round's graduated capability: the thin
+    /// frame around the writing column (see [`PageFrame`]'s own doc).
+    pub page_frame: PageFrame,
 }
 
 impl RenderCaps {
@@ -289,6 +346,7 @@ impl RenderCaps {
         image_reveal: ImageReveal::Translucent,
         highlight_texture: HighlightTexture::Wash,
         title_style: TitleStyle::InlinePrefix,
+        page_frame: PageFrame::None,
     };
 
     /// THE ONE owner of the row/title "selected region" highlight decision —
