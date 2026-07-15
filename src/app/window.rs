@@ -116,28 +116,102 @@ impl App {
         }
     }
 
-    /// Re-arm the cross-platform live-resize settle debounce. On macOS, also
-    /// turn `presentsWithTransaction` ON if this is a FRESH drag. Re-stamp the
-    /// settle deadline either way —
+    /// Re-arm the cross-platform live-resize settle debounce and (through the
+    /// one owner `sync_present_txn`) turn `presentsWithTransaction` ON if no
+    /// live stream had it armed yet. Re-stamp the settle deadline either way —
     /// `about_to_wait`'s `RESIZE_SYNC_SETTLE` debounce flips it back off
     /// `RESIZE_SYNC_SETTLE` after the LAST tick, not the first, so a fast
     /// multi-tick drag keeps sliding the deadline forward exactly like the
     /// theme-font/zoom-persist debounces. See `resize_settle_at`'s own doc for
     /// the full mechanism + the user-reported symptom this closes.
-    fn arm_live_resize_sync(&mut self) {
-        #[cfg(target_os = "macos")]
-        if self.resize_settle_at.is_none() {
-            if let Some(gpu) = self.gpu.as_ref() {
-                gpu.set_presents_with_transaction(true);
-            }
-        }
+    pub(super) fn arm_live_resize_sync(&mut self) {
         self.resize_settle_at = Some(Instant::now());
+        self.sync_present_txn();
     }
 
+    /// `WindowEvent::Moved`: the window-server is actively moving the window —
+    /// hold the lava lamp (re-stamp the settle debounce, clear the tick arm so
+    /// the phase can't advance mid-stream) and, through `sync_present_txn`, arm
+    /// `presentsWithTransaction` for the WHOLE stream. The transaction sync is
+    /// the structural half of the move-flash fix: pausing the ambient tick
+    /// (318e1fe) stopped the ~10 fps mid-move presents, but every OTHER present
+    /// around a move — the settle redraw, a sibling debounce (spell/autosave/
+    /// toast/zoom-persist) firing mid-stream, a cross-display
+    /// `ScaleFactorChanged` redraw — still presented ASYNC and raced the
+    /// window-server's move transaction (the diagnosed compositor-flash class;
+    /// the resize path already had this cure, the move path never did). Gated
+    /// on the lava CAPABILITY: a non-lava world presents nothing around a move,
+    /// so it takes this arm as a TOTAL no-op (zero redraws scheduled — the
+    /// structural guarantee) and its `Moved` events stay byte-identical to
+    /// before the move machinery existed.
     pub(super) fn on_moved(&mut self, _position: winit::dpi::PhysicalPosition<i32>) {
         if crate::theme::background().is_lava() {
             self.move_settle_at = Some(Instant::now());
             self.lava_tick_at = None;
+            self.sync_present_txn();
+        }
+    }
+
+    /// THE ONE APPLIER of the `presentsWithTransaction` composition
+    /// (`present_sync_armed`: resize stream OR move stream — see
+    /// `App::present_sync_on`'s doc). Idempotent per state: the objc call fires
+    /// only on a real transition, so a fast `Moved`/`Resized` burst re-stamping
+    /// its debounce costs no per-event layer traffic. The shadow flag is
+    /// tracked on every platform; the layer call is macOS-only (the artifact
+    /// class is the macOS window-server transaction race).
+    pub(super) fn sync_present_txn(&mut self) {
+        let want = present_sync_armed(
+            self.resize_settle_at.is_some(),
+            self.move_settle_at.is_some(),
+        );
+        if want == self.present_sync_on {
+            return;
+        }
+        self.present_sync_on = want;
+        #[cfg(target_os = "macos")]
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.set_presents_with_transaction(want);
+        }
+    }
+
+    /// The RESIZE stream's settle (the `RESIZE_SYNC_SETTLE` debounce elapsed
+    /// with no further `Resized` tick): snap the lava field to the final
+    /// viewport, drop this stream's claim on the present-transaction sync (the
+    /// one owner keeps it armed while a MOVE stream is still live), and request
+    /// the ONE settle redraw. Clearing `resize_settle_at` first is what makes
+    /// the settle fire exactly once — the `about_to_wait` arm is gated on the
+    /// stamp being present.
+    pub(super) fn finish_resize_settle(&mut self) {
+        self.resize_settle_at = None;
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.pipeline
+                .settle_lava_field_viewport(gpu.config.width, gpu.config.height);
+        }
+        self.sync_present_txn();
+        // Route through `on_redraw_requested`'s own control-flow decision
+        // instead of leaving a now-elapsed `WaitUntil` in place (which would
+        // busy-spin `about_to_wait` until the next real input).
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// The MOVE stream's settle (the `MOVE_SETTLE` debounce elapsed with no
+    /// further `Moved` tick): clear the hold, clear the tick arm (so the lamp
+    /// re-arms FRESH rather than replaying the held gap as a catch-up dt), drop
+    /// this stream's claim on the present-transaction sync (armed stays armed
+    /// while a RESIZE stream is still live — a corner drag streams both), and
+    /// request the ONE settle redraw. The phase and the field were held for the
+    /// whole stream (`lava::lava_paused` closed the only door to
+    /// `advance_lava`; a pure move never touches `lava_field_viewport`), so
+    /// this redraw presents the SAME lava the move started with — no snap, no
+    /// flash. Clearing `move_settle_at` first makes it fire exactly once.
+    pub(super) fn finish_move_settle(&mut self) {
+        self.move_settle_at = None;
+        self.lava_tick_at = None;
+        self.sync_present_txn();
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
         }
     }
 

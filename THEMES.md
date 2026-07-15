@@ -571,7 +571,16 @@ and `lava::tests::delayed_ambient_ticks_advance_at_most_one_fixed_step`.
 Live geometry follows the same politeness rule: resize holds the last-settled
 FIELD viewport while the live viewport and page mask continue tracking the
 window, snapping the field once after the settle debounce; window movement and a
-blur-eligible overlay hold the phase without resetting it. Mangrove's Bayer
+blur-eligible overlay hold the phase without resetting it. The move hold is
+deliberately LONGER than the resize settle (a mid-drag hesitation with the title
+bar still grabbed must not un-pause the lamp), and every present around a live
+move or resize stream joins the macOS window-server transaction
+(`presentsWithTransaction`, one owner for both streams) — so a settle redraw or
+a sibling-debounce frame can never race the compositor mid-drag (the 2026-07-15
+move-flash-regression fix; tests
+`app::tests::moved_stream_holds_the_lamp_and_syncs_presents_until_settle`,
+`app::tests::one_streams_settle_never_strips_the_other_streams_present_sync`,
+`lava::tests::any_transient_live_interaction_pauses_the_lamp`). Mangrove's Bayer
 treatment is a live-document invariant, not a blur-source invariant: the
 offscreen frost capture intentionally receives the smooth form of the same
 field, preventing downsampled separable blur from turning its grid into crosses

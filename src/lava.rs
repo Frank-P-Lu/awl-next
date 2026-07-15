@@ -221,6 +221,17 @@ pub fn lava_should_tick(
     active && ambient_on && !reduced && focused && !paused
 }
 
+/// THE PAUSE COMPOSITION the cadence gate's `paused` term is fed from — ONE
+/// owner of "which transient live interactions hold the lamp": an active
+/// RESIZE stream, an active MOVE stream, or a blur-eligible overlay (frost).
+/// Any of the three holds the phase (and, since [`lava_should_tick`] is the
+/// only door to `advance_lava`, the field with it) without resetting it. Pure,
+/// so the OR-composition itself is law-testable — the live App reads its three
+/// inputs off `resize_settle_at` / `move_settle_at` / `lava_blur_active()`.
+pub fn lava_paused(resizing: bool, moving: bool, blurred: bool) -> bool {
+    resizing || moving || blurred
+}
+
 /// Choose the viewport used to lay out the metaball field. During a live resize
 /// the last-settled dimensions are held while the live viewport and column mask
 /// continue to follow the window; the new dimensions become authoritative only
@@ -824,6 +835,25 @@ mod tests {
             !lava_should_tick(true, true, false, true, true),
             "resize, move, or blur pause holds phase"
         );
+    }
+
+    #[test]
+    fn any_transient_live_interaction_pauses_the_lamp() {
+        // The OR-composition the live App feeds `lava_should_tick`'s `paused`
+        // term (previously inline in `about_to_wait`, untested in isolation):
+        // each transient interaction alone must hold the lamp.
+        assert!(
+            !lava_paused(false, false, false),
+            "truly idle: the lamp may drift"
+        );
+        assert!(lava_paused(true, false, false), "a live RESIZE stream holds it");
+        assert!(lava_paused(false, true, false), "a live MOVE stream holds it");
+        assert!(
+            lava_paused(false, false, true),
+            "a blur-eligible overlay (frost) holds it"
+        );
+        // And composed pauses (a corner drag streams resize AND move) hold too.
+        assert!(lava_paused(true, true, false));
     }
 
     #[test]

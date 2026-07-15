@@ -155,7 +155,20 @@ const LAVA_TICK: Duration = Duration::from_millis(crate::lava::LAVA_TICK_MS);
 /// only while actually dragging, long enough that a brief pause mid-drag
 /// doesn't flap it on/off.
 const RESIZE_SYNC_SETTLE: Duration = Duration::from_millis(150);
-const MOVE_SETTLE: Duration = Duration::from_millis(150);
+
+/// Quiet period after the last `Moved` tick before the MOVE stream is considered
+/// settled: the lamp resumes, ONE settle redraw fires, and presents go back to
+/// async (`App::finish_move_settle`). DELIBERATELY LONGER than
+/// `RESIZE_SYNC_SETTLE`: a resize stream's ticks stop exactly when the drag
+/// stops, but a MOVE stream's quiet gaps include mid-drag stationary HOLDS with
+/// the title bar still grabbed — at the old 150ms, a hesitation un-paused the
+/// lamp mid-grab, and the resumed ambient presents raced the window-server's
+/// move transaction the instant the drag continued (the "flash while moving is
+/// kinda back" report, 2026-07-15 — the same compositor-race class the
+/// resize-stretch fix closed). One second outlasts an ordinary hesitation; the
+/// lamp drifts so slowly (~67 s loop) that the longer hold is imperceptible.
+/// TASTE TUNABLE — flagged for live review.
+const MOVE_SETTLE: Duration = Duration::from_millis(1000);
 
 use glyphon::Cache;
 use winit::application::ApplicationHandler;
@@ -718,7 +731,22 @@ pub struct App {
     resize_settle_at: Option<Instant>,
     /// A stream of `Moved` events means the window-server is actively moving
     /// the window. Hold ambient lava presents until this debounce settles.
+    /// Only ever stamped on a lava world (`App::on_moved`'s gate) — a non-lava
+    /// world takes the whole move machinery as a structural no-op (zero
+    /// redraws scheduled by a move).
     move_settle_at: Option<Instant>,
+    /// Shadow of the CAMetalLayer's `presentsWithTransaction` flag — the ONE
+    /// owner of its composition is `App::sync_present_txn`, which arms it while
+    /// EITHER live stream (resize OR move) is active and disarms it only once
+    /// BOTH have settled (`present_sync_armed`). The MOVE half is the
+    /// move-flash fix's structural core: any present that happens around a
+    /// window move (the settle redraw, a sibling debounce firing mid-stream, a
+    /// cross-display `ScaleFactorChanged` redraw) now JOINS the window-server's
+    /// move transaction instead of racing it — the same cure the resize-stretch
+    /// artifact already had, extended to the move stream it never covered.
+    /// Tracked on every platform (the objc call itself is macOS-only), so the
+    /// state machine stays unit-testable everywhere.
+    present_sync_on: bool,
     /// The loaded persistent config (keybinding overrides + folder defaults + the
     /// Settings-open path). Re-loaded when the config file is SAVED in the editor,
     /// which live-reapplies the keymap + folders.
@@ -1012,6 +1040,7 @@ impl App {
             focused: true,
             resize_settle_at: None,
             move_settle_at: None,
+            present_sync_on: false,
             config,
             cli_notes_root,
             cli_workspace,
@@ -1610,39 +1639,18 @@ impl ApplicationHandler<AwlEvent> for App {
         // above — the same single-`WaitUntil` shape, so a still window costs nothing.
         if let Some(dirty) = self.resize_settle_at {
             match debounce_due(dirty, RESIZE_SYNC_SETTLE, Instant::now()) {
-                true => {
-                    self.resize_settle_at = None;
-                    if let Some(gpu) = self.gpu.as_mut() {
-                        gpu.pipeline
-                            .settle_lava_field_viewport(gpu.config.width, gpu.config.height);
-                    }
-                    #[cfg(target_os = "macos")]
-                    if let Some(gpu) = self.gpu.as_ref() {
-                        gpu.set_presents_with_transaction(false);
-                    }
-                    // Same reason as the sibling debounces above: route through
-                    // `on_redraw_requested`'s own control-flow decision instead of
-                    // leaving this now-elapsed `WaitUntil` in place (which would
-                    // busy-spin `about_to_wait` until the next real input).
-                    if let Some(gpu) = self.gpu.as_ref() {
-                        gpu.window.request_redraw();
-                    }
-                }
+                true => self.finish_resize_settle(),
                 false if self.last_frame.is_none() => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + RESIZE_SYNC_SETTLE));
                 }
                 false => {}
             }
         }
+        // MOVE-stream settle (mirrors the resize debounce above; see
+        // `MOVE_SETTLE`'s doc for why its window is deliberately longer).
         if let Some(dirty) = self.move_settle_at {
             match debounce_due(dirty, MOVE_SETTLE, Instant::now()) {
-                true => {
-                    self.move_settle_at = None;
-                    self.lava_tick_at = None;
-                    if let Some(gpu) = self.gpu.as_ref() {
-                        gpu.window.request_redraw();
-                    }
-                }
+                true => self.finish_move_settle(),
                 false if self.last_frame.is_none() => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + MOVE_SETTLE));
                 }
@@ -1659,12 +1667,13 @@ impl ApplicationHandler<AwlEvent> for App {
         // every other world has a static background, so `is_lava()` is false and
         // schedules ZERO ambient frames — preserving 0% idle CPU there.
         let lava_active = crate::theme::background().is_lava();
-        let lava_paused = self.resize_settle_at.is_some()
-            || self.move_settle_at.is_some()
-            || self
-                .gpu
+        let lava_paused = crate::lava::lava_paused(
+            self.resize_settle_at.is_some(),
+            self.move_settle_at.is_some(),
+            self.gpu
                 .as_ref()
-                .is_some_and(|gpu| gpu.pipeline.lava_blur_active());
+                .is_some_and(|gpu| gpu.pipeline.lava_blur_active()),
+        );
         if crate::lava::lava_should_tick(
             lava_active,
             self.config.ambient_motion_on(),
@@ -1740,6 +1749,16 @@ impl ApplicationHandler<AwlEvent> for App {
 /// the debounce decision is unit-testable without an event loop.
 fn debounce_due(dirty: Instant, window: Duration, now: Instant) -> bool {
     now.saturating_duration_since(dirty) >= window
+}
+
+/// Should the CAMetalLayer's `presentsWithTransaction` be armed? ONE owner of
+/// the composition: armed while EITHER live window-server stream — a RESIZE
+/// drag or a MOVE drag — is active, disarmed only once BOTH have settled (a
+/// corner drag streams both; the settle of one must not strip the other's
+/// protection). Pure, so the composition is unit-testable without a window;
+/// `App::sync_present_txn` is the sole applier.
+fn present_sync_armed(resize_active: bool, move_active: bool) -> bool {
+    resize_active || move_active
 }
 
 /// Compose one idle deadline with the event loop's current intent. A hot `Poll`
@@ -1956,6 +1975,127 @@ mod tests {
         // Once a FULL quiet window has passed since the last step, it fires.
         assert!(debounce_due(dirty, win, dirty + win));
         assert!(debounce_due(dirty, win, dirty + win + Duration::from_millis(1)));
+    }
+
+    #[test]
+    fn present_transaction_sync_composes_over_both_live_streams() {
+        // The ONE-owner composition `App::sync_present_txn` applies: armed
+        // while either window-server stream is live, off only when both idle.
+        assert!(!present_sync_armed(false, false), "idle: async presents");
+        assert!(present_sync_armed(true, false), "live resize arms it");
+        assert!(present_sync_armed(false, true), "live move arms it");
+        assert!(present_sync_armed(true, true), "corner drag: both live");
+    }
+
+    /// THE MOVE-FLASH REGRESSION PIN (user report 2026-07-15, "kinda back"):
+    /// a `Moved` burst must hold the lamp — phase AND field — for the whole
+    /// stream, keep presents transaction-synced (the structural gap 318e1fe
+    /// left: only the ambient tick was gated; the settle redraw and every
+    /// sibling-debounce present still raced the window-server's move
+    /// transaction async), and settle exactly once. Drives the REAL `App`
+    /// state machine through the real `on_moved` / `finish_move_settle`
+    /// bodies (`about_to_wait`'s debounce arm is just `debounce_due`, pinned
+    /// separately above).
+    #[test]
+    fn moved_stream_holds_the_lamp_and_syncs_presents_until_settle() {
+        let _g = crate::testlock::serial();
+        let prev = crate::theme::active_index();
+        crate::theme::set_active_by_name("Mangrove").unwrap();
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+        // An ambient tick was armed before the drag started.
+        app.lava_tick_at = Some(Instant::now());
+        assert!(!app.present_sync_on, "idle: presents run async");
+
+        // The burst: every event re-stamps the hold and clears the tick arm;
+        // the first arms the present-transaction sync for the whole stream.
+        for _ in 0..5 {
+            app.on_moved(winit::dpi::PhysicalPosition::new(40, 40));
+            assert!(app.move_settle_at.is_some(), "the stream holds the stamp");
+            assert!(
+                app.lava_tick_at.is_none(),
+                "no ambient tick may be armed mid-stream"
+            );
+            assert!(
+                app.present_sync_on,
+                "every present around the move joins the window-server transaction"
+            );
+            // Phase (and with it the field — `advance_lava`'s ONLY caller is
+            // the tick-due arm) is held: the pause composition closes the gate.
+            assert!(
+                !crate::lava::lava_should_tick(
+                    true,
+                    true,
+                    false,
+                    true,
+                    crate::lava::lava_paused(false, app.move_settle_at.is_some(), false),
+                ),
+                "the tick gate is closed while the stream is live: phase held"
+            );
+        }
+
+        // The settle: flags cleared, sync disarmed. Clearing `move_settle_at`
+        // is what makes the `about_to_wait` arm (gated on the stamp) unable to
+        // fire again — exactly ONE settle redraw per stream.
+        app.finish_move_settle();
+        assert!(app.move_settle_at.is_none(), "settle clears the hold once");
+        assert!(
+            app.lava_tick_at.is_none(),
+            "the tick re-arms fresh after settle (no catch-up dt)"
+        );
+        assert!(
+            !app.present_sync_on,
+            "presents return to async once genuinely settled"
+        );
+        crate::theme::set_active(prev);
+    }
+
+    /// A corner drag streams BOTH `Resized` and `Moved`: the settle of ONE
+    /// stream must not strip the other's present-transaction protection (the
+    /// disarm belongs to the composition's one owner, not to either stream).
+    #[test]
+    fn one_streams_settle_never_strips_the_other_streams_present_sync() {
+        let _g = crate::testlock::serial();
+        let prev = crate::theme::active_index();
+        crate::theme::set_active_by_name("Mangrove").unwrap();
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+
+        app.arm_live_resize_sync();
+        assert!(app.present_sync_on, "resize stream arms the sync");
+        app.on_moved(winit::dpi::PhysicalPosition::new(12, 12));
+        assert!(app.present_sync_on, "still armed with both streams live");
+
+        // Resize settles first (its window is the shorter one): the move
+        // stream is still live, so presents STAY transaction-synced.
+        app.finish_resize_settle();
+        assert!(app.resize_settle_at.is_none());
+        assert!(
+            app.present_sync_on,
+            "the move stream still owns a claim on the sync"
+        );
+        app.finish_move_settle();
+        assert!(!app.present_sync_on, "both settled: async presents again");
+        crate::theme::set_active(prev);
+    }
+
+    /// STRUCTURAL: a non-lava world takes the whole move machinery as a total
+    /// no-op — no hold stamped, so the settle arm can never fire and a window
+    /// move schedules ZERO redraws (byte-identical to before the machinery
+    /// existed).
+    #[test]
+    fn a_non_lava_world_takes_a_moved_stream_as_a_total_no_op() {
+        let _g = crate::testlock::serial();
+        let prev = crate::theme::active_index();
+        crate::theme::set_active_by_name("Tawny").unwrap();
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+        for _ in 0..3 {
+            app.on_moved(winit::dpi::PhysicalPosition::new(40, 40));
+        }
+        assert!(
+            app.move_settle_at.is_none(),
+            "no hold: the settle arm can never fire, zero redraws scheduled"
+        );
+        assert!(!app.present_sync_on, "no stream, no transaction sync");
+        crate::theme::set_active(prev);
     }
 
     #[test]
