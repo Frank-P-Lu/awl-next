@@ -31,10 +31,11 @@ struct Globals {
     field_viewport: vec2<f32>,
     blob_count: u32,
     dither: u32,
-    // THE OUTLINE-RAIL CARVE: 1 when the margin outline is actually DRAWN this
-    // frame (`TextPipeline::lava_rail_carved`), making the whole LEFT margin
-    // its rail — another no-lava zone, so the outline's dim entries sit on the
-    // flat ground instead of inside the lamp. 0 (outline hidden) reclaims the
+    // THE LEFT-MARGIN RAIL CARVE: 1 when left-margin INK — the margin outline
+    // or the bottom-left gutter — is actually DRAWN this frame
+    // (`TextPipeline::lava_rail_carved`), making the whole LEFT margin its
+    // rail — another no-lava zone, so the ink's dim entries sit on the flat
+    // ground instead of inside the lamp. 0 (both surfaces hidden) reclaims the
     // full margin. MUST match `lava::rail_dist_outside` (the Rust mirror).
     rail: u32,
     // MARGINS-ONLY mask, packed as one vec4 (16-byte aligned per WGSL's
@@ -162,10 +163,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let mode = g.margin.w;
     // `dist_outside`: positive in a lava-bearing margin, <= 0 inside a no-lava
     // zone. Ordinarily the one zone is the writing column (both edges via
-    // max()); with the OUTLINE RAIL carved (`g.rail == 1u`) the whole LEFT
-    // margin joins it — only the RIGHT margin's distance counts, so the rail
-    // renders the flat ground (and, through `could_glow` below, sheds the
-    // left-edge bleed a flat rail would make read as an unexplained tint).
+    // max()); with the LEFT-MARGIN RAIL carved (`g.rail == 1u` — the outline
+    // or the gutter draws there) the whole LEFT margin joins it — only the
+    // RIGHT margin's distance counts, so the rail renders the flat ground
+    // (and, through `could_glow` below, sheds the left-edge bleed a flat rail
+    // would make read as an unexplained tint).
     // The lava is ALWAYS margins-only, so `mode` is 1.0 (hard) or 2.0
     // (glow) — never 0. `mask` = 0 at the zone edge, ramping to full strength
     // `gap` px further out into the margin, so the field fades entirely OUTSIDE

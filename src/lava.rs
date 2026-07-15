@@ -119,14 +119,15 @@ pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 /// The signed "distance outside the no-lava zones" at pixel x (px): positive out
 /// in a lava-bearing margin, <= 0 inside a zone the field must vanish from.
 /// Ordinarily the one zone is the writing column `[col_left, col_right]` (both
-/// edges via `max()`). With the OUTLINE RAIL carved (`rail_carved` — the margin
-/// outline is actually DRAWN this frame, see `TextPipeline::lava_rail_carved`)
-/// the whole LEFT margin joins the no-lava zone: only the RIGHT margin's
-/// distance counts, so the rail's dim heading entries sit on the flat ground at
-/// every phase and the lamp keeps the right margin (the outline hiding reclaims
-/// the full margin). The carve also feeds the Glow treatment's `could_glow`
-/// through this same distance, so no unexplained edge-bleed tints the page next
-/// to a flat rail. MUST match `shaders/lava.wgsl`'s `dist_outside`.
+/// edges via `max()`). With the LEFT-MARGIN RAIL carved (`rail_carved` —
+/// left-margin ink is actually DRAWN this frame: the margin outline or the
+/// bottom-left gutter, see `TextPipeline::lava_rail_carved`) the whole LEFT
+/// margin joins the no-lava zone: only the RIGHT margin's distance counts, so
+/// the rail's dim entries sit on the flat ground at every phase and the lamp
+/// keeps the right margin (both surfaces hiding reclaims the full margin). The
+/// carve also feeds the Glow treatment's `could_glow` through this same
+/// distance, so no unexplained edge-bleed tints the page next to a flat rail.
+/// MUST match `shaders/lava.wgsl`'s `dist_outside`.
 #[allow(dead_code)]
 pub fn rail_dist_outside(x: f32, col_left: f32, col_right: f32, rail_carved: bool) -> f32 {
     if rail_carved {
@@ -366,8 +367,9 @@ struct Globals {
     field_viewport: [f32; 2],
     blob_count: u32,
     dither: u32,
-    /// 1 = the margin OUTLINE is drawn this frame, so the whole LEFT margin is
-    /// its rail — carved out of the field mask (see [`rail_dist_outside`]).
+    /// 1 = left-margin INK (the margin OUTLINE or the bottom-left GUTTER) is
+    /// drawn this frame, so the whole LEFT margin is its rail — carved out of
+    /// the field mask (see [`rail_dist_outside`]).
     rail: u32,
     _pad: u32,
     /// `[col_left_px, col_right_px, gap_px, mask_mode]` — `mask_mode` from
@@ -491,11 +493,11 @@ impl LavaPipeline {
     /// Upload this frame's globals from the resolved lava `params` (`None` for
     /// every non-lava world → the pipeline goes INACTIVE and draws nothing), the
     /// live column bounds (`col_left`/`col_w` from `TextPipeline::column_left`/
-    /// `column_width`, the one geometry owner), whether the margin OUTLINE's
-    /// rail is carved out of the mask this frame (`rail_carved`, from
-    /// `TextPipeline::lava_rail_carved` — the outline's own draw gate, so the
-    /// carve can never disagree with what the frame draws), and the effective
-    /// `phase`.
+    /// `column_width`, the one geometry owner), whether the left margin's rail
+    /// is carved out of the mask this frame (`rail_carved`, from
+    /// `TextPipeline::lava_rail_carved` — the outline's and the gutter's own
+    /// draw gates, so the carve can never disagree with what the frame draws),
+    /// and the effective `phase`.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,

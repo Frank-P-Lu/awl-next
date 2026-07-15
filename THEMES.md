@@ -510,25 +510,32 @@ the exception is fenced by **measurable laws**, exactly like the monochrome and
   `theme::tests::lava_blob_hues_stay_clear_of_the_amber_caret` (the same guard
   the syntax role tints already carry, one owner's worth of discipline applied to
   the ground).
-- **The outline-rail carve (lava follow-ups, 2026-07-15).** The margin
-  OUTLINE's dim (`faint`) entries drowned inside Mangrove's dithered blob
-  (user-reported; the lava probe had flagged the collision), so while the
-  outline is actually DRAWN on a lava world, the whole left margin — the
-  outline's rail — joins the field mask's no-lava zones: the rail renders the
-  flat `ground` (== `base_100`) at EVERY phase, the lamp keeps the right
-  margin (byte-identical mask there), and the outline hiding (narrowest
-  regime / no headings / toggled off / non-markdown) reclaims the full margin
-  the same frame. The Glow edge-bleed rides the same carved distance, so no
-  under-glass tint sits beside a flat rail. Keyed off the lava CAPABILITY +
-  the outline's own draw gate (`TextPipeline::lava_rail_carved` →
-  `outline_visible` → the ONE `outline_layout` owner), never a world name
-  (`theme_caps_law`). Because the carved rail IS `base_100`, the ink-ladder
-  laws govern the outline's legibility there directly. Tests:
+- **The left-margin rail carve (lava follow-ups, 2026-07-15; extended to the
+  gutter by the same round's audit repair).** The margin OUTLINE's dim
+  (`faint`) entries drowned inside Mangrove's dithered blob (user-reported;
+  the lava probe had flagged the collision) — and the trigger-3 neighborhood
+  audit then found the bottom-left page-mode GUTTER (filename/project stack,
+  the same margin real estate) drowning identically on every buffer the
+  outline never draws for (non-markdown, heading-free markdown). One rule
+  covers both: while left-margin INK — the outline OR the gutter — is
+  actually DRAWN on a lava world, the whole left margin — the ink's rail —
+  joins the field mask's no-lava zones: the rail renders the flat `ground`
+  (== `base_100`) at EVERY phase, the lamp keeps the right margin
+  (byte-identical mask there), and both surfaces hiding (scratch buffer /
+  narrowest regime / edge-to-edge) reclaims the full margin the same frame.
+  The Glow edge-bleed rides the same carved distance, so no under-glass tint
+  sits beside a flat rail. Keyed off the lava CAPABILITY + the surfaces' own
+  draw gates (`TextPipeline::lava_rail_carved` → `outline_visible` ∪
+  `gutter_visible` → the ONE `outline_layout`/`gutter_layout` owners), never
+  a world name (`theme_caps_law`). Because the carved rail IS `base_100`,
+  the ink-ladder laws govern both surfaces' legibility there directly. Tests:
   `theme::tests::outline_rail_band_is_flat_ground_and_outline_ink_clears_it_on_every_lava_world`
+  and `theme::tests::gutter_rail_band_is_flat_ground_and_gutter_ink_clears_it_on_every_lava_world`
   (phase-independent no-lava-pixels over composited bytes + the ink-ladder
-  floor against the rail's LOCAL ground),
-  `render::tests::outline::lava_rail_carve_follows_outline_visibility` (the
-  render-seam wiring), and the pure mask laws in `lava::tests`
+  floors against the rail's LOCAL ground),
+  `render::tests::outline::lava_rail_carve_follows_outline_visibility` and
+  `render::tests::outline::lava_rail_carve_follows_gutter_visibility` (the
+  render-seam wiring, one per gate), and the pure mask laws in `lava::tests`
   (`rail_carve_flattens_the_left_margin_and_keeps_the_right_byte_identical`,
   `rail_carve_moves_the_glow_distance_off_the_left_edge`).
 - **Firetail's authored character + numeric distinctness.** Firetail's

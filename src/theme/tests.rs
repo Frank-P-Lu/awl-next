@@ -357,44 +357,44 @@ fn outline_rail_band_is_flat_ground_and_outline_ink_clears_it_on_every_lava_worl
     }
 }
 
-/// KNOWN GAP, PINNED (lava follow-ups audit, 2026-07-15): the bottom-left page-mode
-/// GUTTER (`TextPipeline::prepare_gutter` — the filename/project stack, same left
-/// margin real estate the outline's rail carve now protects) has **no analogous
-/// protection**. `lava::rail_dist_outside`'s carve is keyed ONLY off
-/// `TextPipeline::lava_rail_carved` (outline visibility), so whenever the outline is
-/// NOT drawn — any NON-MARKDOWN buffer, or a heading-free markdown doc, both
-/// completely ordinary page-mode states — the gutter's `faint`/`muted` ink sits on
-/// the UNCARVED margin, exposed to the full animated lava field exactly like the
-/// outline was before this round's fix.
+/// THE GUTTER-RAIL CARVE LAW (lava follow-ups audit repair, 2026-07-15 — closes
+/// the gap the retired regression pin `gutter_ink_has_no_rail_carve_protection_
+/// unlike_the_outline_a_known_gap` documented): the bottom-left page-mode GUTTER
+/// (`TextPipeline::prepare_gutter` — the filename/project stack) shares the
+/// outline's left-margin real estate, and now shares its rail carve too.
+/// `TextPipeline::lava_rail_carved` reads BOTH left-margin ink gates
+/// (`outline_visible` OR `gutter_visible`), so whenever the gutter draws on a
+/// lava world — including the states the audit flagged, any NON-MARKDOWN buffer
+/// and heading-free markdown, where the outline alone never triggered the carve
+/// — the whole left margin renders the flat ground. (Before the fix, Mangrove's
+/// `faint` cleared only ~68 redmean against `blob_hi`, and 74-92% of the real
+/// PNG pixels around the rendered gutter glyphs fell under the 100-redmean floor
+/// the outline is held to.)
 ///
-/// This test PINS the CURRENT numeric reality (not an aspiration) using the exact
-/// same redmean floor `outline_rail_band_is_flat_ground_and_outline_ink_clears_it_
-/// on_every_lava_world` holds the outline to: Mangrove's `faint` (the gutter's
-/// project-line ink) clears only 68.0 redmean against `blob_hi` (the brightest
-/// reachable lava core tone) — under the 100 floor the outline is held to one test
-/// above this one. A live-pixel audit corroborates this isn't a pure-math
-/// worst-case fluke: sampling the ACTUAL rendered PNG bytes around the gutter's
-/// real glyph position (`plain.rs` / a heading-free `.md` fixture, page mode,
-/// `--measure 40`, both lava worlds) found 74-92% of the local backdrop pixels
-/// immediately around the gutter text below this same 100-redmean floor (median
-/// ~57-63, worst ~26-33) — though the SAME crops still read legibly to the eye at
-/// this capture's fixed phase (a single frozen animation moment; the field sweeps
-/// continuously through every phase live, so a worse moment is plausible, not
-/// proven).
+/// Two halves, mirroring the outline's own law one test above:
 ///
-/// **This test is a REGRESSION PIN, not a law**: if a future round extends the
-/// carve to the gutter (or gives it its own), Mangrove's number will cross 100 and
-/// this assertion will fail — that's the intended trip-wire forcing a conscious
-/// update instead of a silent revert. Until then, this documents the gap so it
-/// can't be re-discovered as a surprise. Follow-up: extend `TextPipeline::
-/// lava_rail_carved` (or a sibling) to also carve while `gutter_layout` reports
-/// `Some` — `rail_dist_outside` is already a pure function of `x` alone, so the
-/// SAME whole-left-margin carve the outline uses would cover the gutter's y band
-/// for free; the open design question is whether that widens the no-lava zone too
-/// often (gutter is visible in most ordinary page-mode viewing, unlike the
-/// heading-gated outline).
+/// (1) STRUCTURAL, PHASE-INDEPENDENT: with the rail carved, the gutter's own y
+///     band (the bottom rows of the left margin) contains NO lava pixel at ANY
+///     animation phase — the composited pixel is bit-exactly the world's flat
+///     ground. Proven over COMPOSITED PIXELS via the pure-Rust shader mirror,
+///     with a non-vacuous WITNESS (the uncarved mask genuinely paints a blob at
+///     some sampled gutter-band pixel, so the law can never pass over a band the
+///     lamp never touched). The render-side decision these samples assume —
+///     "gutter drawn => carved" — is pinned at its own seam by
+///     `render::tests::outline::lava_rail_carve_follows_gutter_visibility`.
+///
+/// (2) LEGIBILITY FLOOR: the gutter's two inks clear the repo's perceptible-
+///     difference floors against that LOCAL rail ground — the `faint` project
+///     line at the ink-ladder law (c) redmean >= 100 (the same floor the
+///     outline's dim entries carry), the `muted` filename line at >= 150 —
+///     with `ground == base_100` asserted, so the ink-ladder laws govern the
+///     gutter's legibility directly and no lava world can drown its own
+///     orientation gutter again.
+///
+/// The `Background` match is NO-WILDCARD: a future ground variant must decide
+/// its rail story here or fail to compile.
 #[test]
-fn gutter_ink_has_no_rail_carve_protection_unlike_the_outline_a_known_gap() {
+fn gutter_rail_band_is_flat_ground_and_gutter_ink_clears_it_on_every_lava_world() {
     fn redmean(a: Srgb, b: Srgb) -> f32 {
         let rbar = (a.r as f32 + b.r as f32) * 0.5;
         let dr = a.r as f32 - b.r as f32;
@@ -403,17 +403,99 @@ fn gutter_ink_has_no_rail_carve_protection_unlike_the_outline_a_known_gap() {
         ((2.0 + rbar / 256.0) * dr * dr + 4.0 * dg * dg + (2.0 + (255.0 - rbar) / 256.0) * db * db)
             .sqrt()
     }
-    let mangrove = THEMES.iter().find(|t| t.name == "Mangrove").expect("Mangrove ships");
-    let Background::Lava { blob_hi, .. } = mangrove.background else {
-        panic!("Mangrove must carry a Lava background");
-    };
-    let contrast = redmean(mangrove.faint, blob_hi);
-    assert!(
-        contrast < 100.0,
-        "Mangrove's gutter-ink/blob_hi contrast is {contrast:.1} — if this now \
-         clears the 100 floor, the gap this test pins has been fixed: update or \
-         remove this pin (see the doc comment) rather than silently deleting it",
-    );
+    // Representative page geometry (the 1600x1000 gallery canvas at the default
+    // 70-char prose measure); the carve is independent of the exact numbers.
+    // The gutter is BOTTOM-anchored in the left margin (two LABEL-scale rows a
+    // small margin up from the canvas bottom — `prepare_gutter`), so the y
+    // samples cover that bottom band.
+    let vp = (1600.0f32, 1000.0f32);
+    let (col_left, col_right) = (296.0f32, 1304.0f32);
+    let gap = crate::lava::MARGIN_GAP_PX;
+    for t in THEMES.iter() {
+        // NO-WILDCARD: the composite below uses blob_hi — the BRIGHTEST tone the
+        // shader can reach — so proving the worst case covers blob_lo too.
+        let (ground, blob_hi) = match t.background {
+            // The five static grounds carry no lava to carve.
+            Background::Gradient { .. }
+            | Background::Dots { .. }
+            | Background::Starfield { .. }
+            | Background::Pinstripe { .. }
+            | Background::Stripes { .. } => continue,
+            Background::Lava { ground, blob_hi, .. } => (ground, blob_hi),
+        };
+        // The rail IS the page's own ground — the ink-ladder laws govern it.
+        assert_eq!(ground, t.base_100, "{}: rail ground must be base_100", t.name);
+
+        // (1) Phase sweep x gutter-band grid: the carved mask is exactly zero,
+        //     so the straight-alpha composite over the flat ground is bit-exactly
+        //     the ground — even against the brightest reachable lava tone.
+        let mut witnessed = false;
+        for step in 0..64 {
+            let phase = step as f32 * crate::lava::LAVA_LOOP_CYCLES / 64.0;
+            for xi in 0..30 {
+                let x = col_left * (xi as f32 + 0.5) / 30.0;
+                // The gutter's own bottom band (its two stacked label rows sit
+                // ~8px up from the canvas bottom).
+                for y in [930.0, 955.0, 985.0] {
+                    let a = crate::lava::lava_mask(x, col_left, col_right, gap, true);
+                    assert_eq!(
+                        a, 0.0,
+                        "{}: lava coverage in the gutter band at x={x} y={y} phase={phase}",
+                        t.name
+                    );
+                    let over = |gc: u8, bc: u8| -> u8 {
+                        (bc as f32 * a + gc as f32 * (1.0 - a)).round() as u8
+                    };
+                    let px = Srgb {
+                        r: over(ground.r, blob_hi.r),
+                        g: over(ground.g, blob_hi.g),
+                        b: over(ground.b, blob_hi.b),
+                        a: 0xFF,
+                    };
+                    assert_eq!(
+                        (px.r, px.g, px.b),
+                        (ground.r, ground.g, ground.b),
+                        "{}: gutter-band pixel is not the flat ground at x={x} y={y} phase={phase}",
+                        t.name
+                    );
+                    // WITNESS: the uncarved mask would have painted a real blob
+                    // pixel at at least one of these samples (never vacuous).
+                    if crate::lava::lava_mask(x, col_left, col_right, gap, false) >= 1.0
+                        && crate::lava::metaball_field(
+                            (x, y),
+                            vp,
+                            &crate::lava::BACKDROP_BLOBS,
+                            phase,
+                        ) >= 0.5
+                    {
+                        witnessed = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            witnessed,
+            "{}: no sampled gutter-band pixel would have carried lava without the \
+             carve — the law is asserting over a band the lamp never touched (vacuous)",
+            t.name
+        );
+        // (2) The gutter's inks clear the rail's LOCAL ground (== base_100):
+        //     the faint project line at the ink-ladder law (c) floor, the muted
+        //     filename line higher.
+        let project = redmean(t.faint, ground);
+        assert!(
+            project >= 100.0,
+            "{}: the gutter's faint project line only {project:.1} redmean from \
+             the rail ground (under the ink-ladder perceptibility floor)",
+            t.name
+        );
+        let name = redmean(t.muted, ground);
+        assert!(
+            name >= 150.0,
+            "{}: the gutter's muted filename only {name:.1} redmean from the rail ground",
+            t.name
+        );
+    }
 }
 
 /// FIRETAIL PALETTE CHARACTER law: the sixteenth world is an ORIGINAL deep

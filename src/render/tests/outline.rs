@@ -845,16 +845,20 @@ fn outline_hit_test_agrees_with_the_shifted_geometry_when_bar_shown() {
     crate::page::set_measure(80);
 }
 
-/// THE OUTLINE-RAIL CARVE wiring ([`TextPipeline::lava_rail_carved`], the one
-/// owner `prepare_lava_layer` uploads into the lava shader's `rail` global):
-/// the field mask carves the outline's rail EXACTLY when a lava ground is
-/// active (the CAPABILITY — picked from `THEMES` by `Background::is_lava`,
-/// never a world name) AND the outline is actually drawn (the SAME
-/// `outline_layout` gate the outline's own pixels ride, via
-/// [`TextPipeline::outline_visible`]). Outline hidden — heading-free doc,
-/// toggled off, or the narrowest regime — or a static-ground world => no
-/// carve, and the lamp reclaims the full margin the same frame. The mask
-/// math itself is law-tested at its pure seam (`lava::tests`, plus
+/// THE LEFT-MARGIN RAIL CARVE wiring, OUTLINE half ([`TextPipeline::
+/// lava_rail_carved`], the one owner `prepare_lava_layer` uploads into the lava
+/// shader's `rail` global): the field mask carves the rail EXACTLY when a lava
+/// ground is active (the CAPABILITY — picked from `THEMES` by
+/// `Background::is_lava`, never a world name) AND left-margin ink is actually
+/// drawn — here the OUTLINE (the SAME `outline_layout` gate the outline's own
+/// pixels ride, via [`TextPipeline::outline_visible`]); the GUTTER half of the
+/// OR is pinned by [`lava_rail_carve_follows_gutter_visibility`] below, and
+/// every fixture in THIS test keeps the gutter hidden (`gutter_name` empty —
+/// asserted as a control) so each arm isolates the outline gate. Outline
+/// hidden — heading-free doc, toggled off, or the narrowest regime — or a
+/// static-ground world => no carve, and the lamp reclaims the full margin the
+/// same frame. The mask math itself is law-tested at its pure seam
+/// (`lava::tests`, plus
 /// `theme::tests::outline_rail_band_is_flat_ground_and_outline_ink_clears_it_
 /// on_every_lava_world`); THIS test pins the render-side decision those laws
 /// assume.
@@ -882,6 +886,11 @@ fn lava_rail_carve_follows_outline_visibility() {
     let text = "# Title\n\nprose\n\n## Section A\n\nbody\n\n### Deep\n";
     p.set_view(&view_md(text, 0, 0));
     assert!(p.outline_visible(height), "control: the outline draws");
+    assert!(
+        !p.gutter_visible(),
+        "control: every fixture here keeps the gutter hidden (empty name), so \
+         each arm isolates the OUTLINE gate"
+    );
     assert!(
         p.lava_rail_carved(height),
         "lava world + drawn outline => the rail is carved"
@@ -911,6 +920,93 @@ fn lava_rail_carve_follows_outline_visibility() {
     // A static-ground world NEVER carves, outline drawn or not (capability-keyed).
     crate::theme::set_active(static_idx);
     assert!(p.outline_visible(height), "control: the outline still draws");
+    assert!(
+        !p.lava_rail_carved(height),
+        "a non-lava world has nothing to carve"
+    );
+
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}
+
+/// THE LEFT-MARGIN RAIL CARVE wiring, GUTTER half (the lava follow-ups audit's
+/// finding, repaired: the bottom-left gutter shares the outline's margin real
+/// estate but had no carve of its own, so its `muted`/`faint` stack swam in the
+/// lamp on every buffer the outline never draws for). [`TextPipeline::
+/// lava_rail_carved`] now reads the gutter's own draw gate too
+/// ([`TextPipeline::gutter_visible`] — the SAME `gutter_layout` owner
+/// `prepare_gutter`/`gutter_report` ride), so a lava world + a drawn gutter
+/// carves the rail even with the outline hidden — exactly the audit's flagged
+/// states (a NON-markdown buffer here; heading-free markdown rides the same
+/// `outline_visible == false` arm). An unnamed (scratch) buffer hides the
+/// gutter and — with no outline either — the lamp reclaims the full margin the
+/// same frame; a static-ground world never carves (capability-keyed). The
+/// composited-pixel + ink-floor law lives at the pure seam
+/// (`theme::tests::gutter_rail_band_is_flat_ground_and_gutter_ink_clears_it_
+/// on_every_lava_world`); THIS test pins the render-side decision that law
+/// assumes. The OUTLINE half of the OR is
+/// [`lava_rail_carve_follows_outline_visibility`] above.
+#[test]
+fn lava_rail_carve_follows_gutter_visibility() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping lava_rail_carve_follows_gutter_visibility: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let lava_idx = crate::theme::THEMES
+        .iter()
+        .position(|t| t.background.is_lava())
+        .expect("a lava world ships");
+    let static_idx = crate::theme::THEMES
+        .iter()
+        .position(|t| !t.background.is_lava())
+        .expect("a static-ground world ships");
+    crate::theme::set_active(lava_idx);
+    crate::outline::set_outline_on(true);
+    crate::page::set_page_on(true);
+    crate::page::set_measure(40);
+    let height = 900u32;
+    p.set_size(1900.0, height as f32);
+
+    // A NAMED NON-MARKDOWN buffer: the outline can never draw (no headings
+    // distilled), the gutter does — the exact state the audit flagged.
+    let mut named = view("plain text, not markdown\n", 0, 0);
+    named.gutter_name = "notes.txt".to_string();
+    named.gutter_project = "awl".to_string();
+    p.set_view(&named);
+    assert!(
+        !p.outline_visible(height),
+        "control: a non-markdown buffer has no outline"
+    );
+    assert!(p.gutter_visible(), "control: the gutter draws");
+    assert!(
+        p.lava_rail_carved(height),
+        "lava world + drawn gutter => the rail is carved even with the outline hidden"
+    );
+
+    // An UNNAMED (scratch) buffer hides the gutter; with no outline either,
+    // the lamp reclaims the full margin.
+    let blank = view("plain text, not markdown\n", 0, 0);
+    p.set_view(&blank);
+    assert!(!p.gutter_visible(), "no name => no gutter");
+    assert!(
+        !p.lava_rail_carved(height),
+        "no left-margin ink at all => no carve, the lamp reclaims"
+    );
+
+    // EDGE-TO-EDGE (page off): the gutter hides with the margins themselves.
+    crate::page::set_page_on(false);
+    p.set_view(&named);
+    assert!(!p.gutter_visible(), "edge-to-edge hides the gutter");
+    assert!(!p.lava_rail_carved(height), "no margins, no carve");
+    crate::page::set_page_on(true);
+
+    // A static-ground world NEVER carves, gutter drawn or not (capability-keyed).
+    crate::theme::set_active(static_idx);
+    p.set_view(&named);
+    assert!(p.gutter_visible(), "control: the gutter still draws");
     assert!(
         !p.lava_rail_carved(height),
         "a non-lava world has nothing to carve"
