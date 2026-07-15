@@ -61,12 +61,47 @@ riding it) never leaves a later motion on stale wrap geometry.
 - **Save writes to disk.** Replaying `C-x C-s` actually saves the target file
   during a headless capture. Don't replay save/quit chords against files you
   don't want mutated.
-- **Search-query input is not yet faithful.** With isearch active (`C-s`),
-  typing currently inserts into the *buffer* instead of the search query (the
-  routing still lives in `App::apply`, not `apply_core`), so `--keys` cannot yet
-  drive a non-empty isearch query. Known gap.
 - **Unbound chords are silent no-ops** (e.g. `C-Q` → `Ignore`, dropped); only
-  structurally invalid tokens (e.g. `frobnicate`) error.
+  structurally invalid tokens (e.g. `frobnicate`) error. (Under
+  `--strict-replay` an unbound chord aborts instead — see below.)
+
+### Search/replace is fully drivable (the isearch-input gap is retired)
+
+With isearch active, the live window routes EVERY key to the search surface
+before the keymap ever sees it. The replay loop now runs the SAME code — one
+shared interception seam, `search::keys::intercept`, consumed by both the live
+guard (`app/input/keys.rs`) and the replay guard (`main/run.rs`) — so a
+`--keys` spec drives the panel's whole operation set exactly like live typing:
+
+- **Query typing + Backspace** — `--keys "C-s h i"` searches for `hi` (the
+  buffer text is untouched; the caret lands on the current match).
+- **Find next / previous** — `C-s`/`C-r`, `Down`/`Up`, `Cmd-F`/`Cmd-S-F`,
+  `Cmd-G`/`Cmd-S-G` while the panel is open (the Emacs two-press wrap and its
+  caret recoil included; the recoil itself is live-only animation).
+- **Case toggle** — `M-c` (sidecar `search.case_sensitive`).
+- **Replace-field editing** — `Tab` reveals/flips the field, `Cmd-R` focuses
+  it, then plain chars/`Space`/`Backspace` edit the replacement (sidecar
+  `search.replacement` + `search.editing_replacement`).
+- **Replace-one / replace-all** — `Enter` (replace mode) swaps the current
+  match and advances; `s-Enter` (Cmd-Enter) swaps every match in one edit.
+- **Accept / abort** — `Enter` (plain find) closes leaving the cursor on the
+  match; `Esc`/`C-g` closes AND restores the origin cursor, exactly like live
+  (the old headless `Cancel` close that skipped the origin-restore is gone).
+
+Worked example (fold visible in the sidecar `search` block + `text`):
+
+```sh
+cargo run -- --screenshot OUT.png --keys "C-s l i n e Tab r o w Enter" notes.md
+# OUT.json: search.query "line", replace_active true, replacement "row",
+# editing_replacement true, and text shows ONE "line" already swapped to "row".
+```
+
+To make this possible, `--keys` parsing now stops at the CHORD level
+(`keyspec::parse_chords`); each chord resolves through the real keymap INSIDE
+the replay loop (`keyspec::ChordResolver`), after the search guard has had its
+chance to consume it — the exact ordering of live key dispatch. A consumed
+chord is never judged "unbound" (`M-c` is a case toggle inside the panel, a
+silent no-op outside it).
 
 ### Strict replay (`--strict-replay`, opt-in)
 
@@ -79,8 +114,11 @@ included, deliberately not performed), or **Unsupported** (live-App-only work
 whose skip would diverge the session from live). The classification is a
 no-wildcard match, so a future `Effect` variant fails to compile until
 classified. Strict mode aborts, naming the exact offender, on: an unbound
-chord or dangling prefix sequence (at parse time), any Unsupported effect (at
-replay time), or a missing layout oracle (no GPU adapter — motion would
+chord or dangling prefix sequence (at replay time, via
+`keyspec::ChordResolver` — it moved out of parse time when the search guard
+made "was this chord for the keymap at all" replay-state-dependent; a chord
+the open search panel consumes is never judged unbound), any Unsupported
+effect, or a missing layout oracle (no GPU adapter — motion would
 silently fall back to logical lines). A spec that crosses no such seam renders
 byte-identically to the permissive run. The plain `--keys` path stays
 permissive but now WARNS on stderr when it crosses an Unsupported or
@@ -633,12 +671,15 @@ gated by the same `Buffer::syntax_lang` so `syn_lang` and `syn_spans` always agr
 Schema `awl-capture/24` (was `/21`; timeline `/25`, held `/26`) adds two FIND +
 REPLACE fields to the `search` block: `replace_active` (`true` once the replace
 field has been revealed on the search panel — a MODE of the same card, bound to
-Cmd-Option-F / Tab) and `replacement` (the replace field's text). TWO `--keys`
-replays set `replace_active` headlessly: `s-M-f` (Cmd-Option-F) opens the panel
-straight into replace mode, OR — with a panel already open — a single bare `<Tab>`
-(e.g. `C-s <Tab>`) toggles the replace field on, mirroring the live single-key
-affordance. The replacement itself can't be typed in a replay (the documented
-isearch-input gap), so it stays `""`. Both are present
+Cmd-Option-F / Tab) and `replacement` (the replace field's text). `--keys`
+replays set `replace_active` headlessly: `s-M-f` (Cmd-Option-F) or `Cmd-r`
+opens the panel straight into replace mode, OR — with a panel already open — a
+single bare `Tab` toggles the replace field on, mirroring the live single-key
+affordance. (Historical note: at this schema's introduction the replacement
+could not be typed in a replay — the "isearch-input gap" — so it stayed `""`;
+the shared search-key seam later retired that gap, and a replay now fills
+`replacement`/`editing_replacement` exactly like live typing — see
+"Search/replace is fully drivable" above.) Both are present
 on every path (`false` / `""` for a non-search capture), so a plain `--screenshot`
 stays byte-stable apart from the two new keys.
 

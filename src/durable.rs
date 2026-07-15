@@ -380,7 +380,7 @@ mod tests {
     //     it are built out of — they cannot recursively route through
     //     themselves.
     //   src/app.rs, src/app/daemon.rs, src/buffers.rs, src/daemon.rs,
-    //   src/history/tests.rs, src/index.rs, src/main/run.rs (25 combined)
+    //   src/history/tests.rs, src/index.rs, src/main/run.rs (26 combined)
     //     — every one of these is INSIDE a `#[cfg(test)]` module, seeding a
     //     real temp-dir fixture file directly (never a durable app store) or
     //     (in `history/tests.rs`) deliberately planting garbage to exercise
@@ -404,7 +404,7 @@ mod tests {
             // Two of these are the fresh-oracle Goto regression's own fixture
             // seeds (`goto_switch_mid_replay_reshapes_the_oracle_to_the_
             // arriving_buffer`) — temp-dir test files, never a durable store.
-            ("main/run.rs", 14),
+            ("main/run.rs", 15),
         ];
         let expected_map: std::collections::BTreeMap<String, usize> =
             expected.iter().map(|(f, n)| (f.to_string(), *n)).collect();

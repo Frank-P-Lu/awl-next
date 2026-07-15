@@ -1,9 +1,12 @@
 //! Parse a headless `--keys` spec — a space-separated list of emacs chords —
-//! into the same `Action`s the live keymap produces. Each chord is turned into a
-//! winit `(Key, Modifiers)` and fed THROUGH `KeymapState::resolve`, so replay
-//! goes down the exact dispatch table live keys use (including the `C-x` two-key
-//! prefix state, which is why one persistent `KeymapState` drives the whole
-//! sequence). An unrecognized chord is a clear `anyhow::Error`, never a panic.
+//! into the winit `(Key, Modifiers)` CHORD stream the replay loop consumes
+//! ([`parse_chords`] → [`Chord`]), and resolve each chord through the REAL
+//! keymap one press at a time ([`ChordResolver`] wraps `KeymapState::resolve`,
+//! including the `C-x` two-key prefix state — one persistent keymap drives the
+//! whole sequence). Parsing and resolution are deliberately SEPARATE steps:
+//! the replay loop interleaves the search guard between them, exactly like
+//! live key dispatch, so a chord the open search panel consumes never reaches
+//! the keymap. An unrecognized token is a clear `anyhow::Error`, never a panic.
 //!
 //! Grammar:
 //!   spec  := chord (WS+ chord)*
@@ -25,41 +28,97 @@ use winit::keyboard::{Key, ModifiersState, NamedKey, SmolStr};
 
 use crate::keymap::{Action, KeymapState};
 
-/// Parse a whole `--keys` spec into the resolved `Action` stream. Chords are
-/// split on ASCII whitespace and resolved in order through ONE `KeymapState`, so
-/// prefix sequences like `C-x C-s` compose into a single `Save`. Two action
-/// kinds are dropped because they carry no work for the apply seam: `Ignore`
-/// (lone modifiers / unbound combos) and `BeginPrefix` (the FIRST half of a
-/// `C-x` sequence, whose only job is to flip the keymap's prefix state — already
-/// captured because we resolve through one persistent `KeymapState`). Dropping
-/// both keeps the replay stream tight and the unit tests readable.
-/// Parse a `--keys` spec with the DEFAULT keymap (no config overrides). Retained
-/// as the simple entry point + the unit-test surface; `main` uses
-/// [`parse_keys_with`] to honour config rebinds.
+/// One parsed `--keys` CHORD — the raw token exactly as the spec spelled it
+/// (kept so a strict refusal can name the offender verbatim) plus the winit
+/// key + modifiers every downstream seam consumes. This is the replay's
+/// CURRENCY: chords stay UNRESOLVED until the replay loop feeds them through
+/// [`ChordResolver`] one press at a time, mirroring the live window's
+/// per-press `KeymapState::resolve` — which is what lets the SEARCH GUARD
+/// (`crate::search::keys::intercept`) consume a chord BEFORE the keymap ever
+/// sees it, the live guard's exact position. A pre-resolved `Action` stream
+/// could not express "the open panel ate this key" (`M-c` would drop as
+/// unbound, `C-x` would falsely arm the prefix).
+#[derive(Clone, Debug)]
+pub struct Chord {
+    /// The raw token as written in the spec (`"C-s"`, `"Cmd-S-f"`, `"h"`).
+    pub spec: String,
+    pub key: Key,
+    pub mods: Modifiers,
+}
+
+/// Parse a whole `--keys` spec into its CHORD stream — STRUCTURAL validation
+/// only (modifier prefixes + key tokens; an unrecognized token is a clear
+/// `anyhow::Error`, never a panic). No keymap is consulted here: resolution
+/// happens chord-by-chord inside the replay loop (see [`ChordResolver`]),
+/// interleaved with the search guard, exactly like live key dispatch.
+pub fn parse_chords(spec: &str) -> Result<Vec<Chord>> {
+    spec.split_whitespace()
+        .map(|tok| {
+            let (key, mods) = parse_chord(tok)?;
+            Ok(Chord { spec: tok.to_string(), key, mods })
+        })
+        .collect()
+}
+
+/// The stateful chord→action resolver the headless replay drives: ONE
+/// persistent `KeymapState` across the whole stream (so `C-x` prefix sequences
+/// and config rebinds compose exactly as live), plus the STRICT refusals —
+/// which moved HERE from parse time when the search guard made resolution
+/// replay-state-dependent (a chord the open search panel consumes — `M-c`, a
+/// bare `C-x` — never reaches the keymap and must not be judged "unbound").
+/// Two action kinds are dropped (`Ok(None)`) because they carry no work for
+/// the apply seam: `Ignore` (unbound combos, permissive's silent drop) and
+/// `BeginPrefix` (the first half of a `C-x` sequence, whose only job is to
+/// flip the keymap's prefix state). Under STRICT, an unbound chord or a
+/// non-cancel chord dangling off an armed prefix is an error NAMING that
+/// exact chord (`Esc`/`C-g` stay a legal explicit prefix-cancel), so a typo'd
+/// scenario aborts instead of replaying a fiction.
+pub struct ChordResolver<'a> {
+    km: &'a mut KeymapState,
+    strict: bool,
+    /// The chord that ARMED a still-pending prefix (`C-x`), for the strict
+    /// dangling-sequence error's wording. `None` outside a prefix.
+    pending_prefix: Option<String>,
+}
+
+impl<'a> ChordResolver<'a> {
+    pub fn new(km: &'a mut KeymapState, strict: bool) -> Self {
+        Self { km, strict, pending_prefix: None }
+    }
+
+    /// Resolve one chord through the persistent keymap. `Ok(Some(action))` is
+    /// work for the apply seam; `Ok(None)` is a dropped `Ignore`/`BeginPrefix`;
+    /// `Err` is a strict refusal naming the offending chord.
+    pub fn resolve(&mut self, chord: &Chord) -> Result<Option<Action>> {
+        let action = self.km.resolve(&chord.key, &chord.mods);
+        if self.strict {
+            if matches!(action, Action::Ignore) {
+                bail!("strict replay: chord {:?} is unbound (resolves to no action)", chord.spec);
+            }
+            if let Some(pfx) = &self.pending_prefix {
+                if matches!(action, Action::Cancel)
+                    && !is_explicit_cancel(&chord.key, chord.mods.state())
+                {
+                    bail!(
+                        "strict replay: chord {:?} does not complete the {pfx:?} prefix (unbound sequence)",
+                        chord.spec
+                    );
+                }
+            }
+        }
+        self.pending_prefix = matches!(action, Action::BeginPrefix).then(|| chord.spec.clone());
+        Ok((!matches!(action, Action::Ignore | Action::BeginPrefix)).then_some(action))
+    }
+}
+
+/// Parse a whole `--keys` spec straight into the resolved `Action` stream with
+/// the DEFAULT keymap — [`parse_chords`] + [`ChordResolver`] composed. Retained
+/// as the unit-test surface (this module's own resolution tests and the pinned
+/// sibling below); the real replay resolves inside its own loop so the search
+/// guard can intercept first.
 #[allow(dead_code)]
 pub fn parse_keys(spec: &str) -> Result<Vec<Action>> {
     parse_keys_through(spec, KeymapState::new())
-}
-
-/// Like [`parse_keys`], but resolve through a keymap carrying the config `[keys]`
-/// OVERRIDES AND the `linux_keep_emacs` per-chord door, so a `--keys` replay
-/// exercises rebound/kept chords exactly as live editing would. `cfg` supplies
-/// the `(action-name, chord)` rebinds + the keep-list; with an empty config
-/// this is identical to [`parse_keys`].
-pub fn parse_keys_with(spec: &str, cfg: &crate::config::Config) -> Result<Vec<Action>> {
-    parse_keys_through(spec, KeymapState::with_overrides_and_keep(&cfg.keys, &cfg.effective_linux_keep()))
-}
-
-/// STRICT sibling of [`parse_keys_with`] — the scenario-runner door (see
-/// [`crate::replay`]'s module doc): every chord must RESOLVE to a real action.
-/// A chord that parses but binds to nothing (`Action::Ignore` — the permissive
-/// path's silent drop) or dangles off an unfinished prefix (`C-x <unbound>`,
-/// which the keymap resolves to a quiet `Cancel`) is an error NAMING that exact
-/// chord, so a typo'd scenario aborts instead of replaying a fiction. An
-/// EXPLICIT cancel chord mid-prefix (`Esc` / `C-g`) stays legal — cancelling a
-/// prefix on purpose is a real thing a scenario can say.
-pub fn parse_keys_strict_with(spec: &str, cfg: &crate::config::Config) -> Result<Vec<Action>> {
-    parse_keys_mode(spec, KeymapState::with_overrides_and_keep(&cfg.keys, &cfg.effective_linux_keep()), true)
 }
 
 /// TEST-ONLY: like [`parse_keys`], but resolve through a keymap PINNED to
@@ -70,7 +129,7 @@ pub fn parse_keys_strict_with(spec: &str, cfg: &crate::config::Config) -> Result
 /// happens to be ambient when the test runs (a dev Mac vs. CI's linux runner —
 /// see `keymap.rs`'s collision-table doc for the displacement this sidesteps).
 /// Every real (non-test) caller — the actual `--keys` CLI replay — correctly
-/// wants the ambient convention via [`parse_keys`]/[`parse_keys_with`]; this
+/// wants the ambient convention via [`parse_keys`] / the replay keymap; this
 /// pinned sibling exists only so hardcoded-literal unit tests can say exactly
 /// which convention they mean.
 #[cfg(test)]
@@ -84,34 +143,16 @@ fn parse_keys_through(spec: &str, km: KeymapState) -> Result<Vec<Action>> {
     parse_keys_mode(spec, km, false)
 }
 
-/// The one resolve loop both doors share. `strict: false` is the legacy
-/// permissive behavior verbatim (unbound chords drop silently); `strict: true`
-/// errors on any chord that resolves to nothing — a bare `Ignore`, or a
-/// non-cancel chord that dangles off an armed prefix (the keymap's quiet
-/// `Cancel`) — naming the exact chord (and, for a dangling sequence, the
-/// prefix chord it failed to complete).
+/// The one spec→actions loop the test doors share: [`parse_chords`] then a
+/// [`ChordResolver`] driven chord-by-chord — the SAME two primitives the real
+/// replay loop composes (with its search guard between them), so a resolution
+/// asserted here is the resolution a replay performs.
 fn parse_keys_mode(spec: &str, mut km: KeymapState, strict: bool) -> Result<Vec<Action>> {
+    let chords = parse_chords(spec)?;
+    let mut resolver = ChordResolver::new(&mut km, strict);
     let mut actions = Vec::new();
-    // The chord that ARMED a still-pending prefix (`C-x` / `C-c`), for the
-    // strict dangling-sequence error's wording. `None` outside a prefix.
-    let mut pending_prefix: Option<&str> = None;
-    for chord in spec.split_whitespace() {
-        let (key, mods) = parse_chord(chord)?;
-        let action = km.resolve(&key, &mods);
-        if strict {
-            if matches!(action, Action::Ignore) {
-                bail!("strict replay: chord {chord:?} is unbound (resolves to no action)");
-            }
-            if let Some(pfx) = pending_prefix {
-                if matches!(action, Action::Cancel) && !is_explicit_cancel(&key, mods.state()) {
-                    bail!(
-                        "strict replay: chord {chord:?} does not complete the {pfx:?} prefix (unbound sequence)"
-                    );
-                }
-            }
-        }
-        pending_prefix = matches!(action, Action::BeginPrefix).then_some(chord);
-        if !matches!(action, Action::Ignore | Action::BeginPrefix) {
+    for chord in &chords {
+        if let Some(action) = resolver.resolve(chord)? {
             actions.push(action);
         }
     }

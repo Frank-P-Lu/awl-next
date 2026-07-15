@@ -89,10 +89,17 @@ struct ReplayResult {
     selection: Option<((usize, usize), (usize, usize))>,
     search_query: Option<String>,
     search_case: bool,
-    /// Whether the replay left the search panel in REPLACE mode (Cmd-Option-F).
+    /// Whether the replay left the search panel in REPLACE mode (Cmd-R / Tab /
+    /// Cmd-Option-F — all drivable through the shared search-key seam).
     replace_active: bool,
-    /// The replacement field text (empty headlessly — the isearch-input gap).
+    /// The replacement field text, typed through the SAME interception seam the
+    /// live panel uses (the old "isearch-input gap" — where this could only
+    /// ever be empty — is retired).
     replacement: String,
+    /// Whether typing currently edits the REPLACEMENT field (vs. the query) —
+    /// folded into the sidecar's `search.editing_replacement` so a replayed
+    /// Tab/Cmd-R focus move is assertable.
+    editing_replacement: bool,
     /// The overlay left open at the end of the replay (if any), for the sidecar.
     overlay: Option<crate::overlay::OverlayState>,
     /// If the replay ACCEPTED a go-to item (Enter), the chosen value so the
@@ -136,22 +143,25 @@ fn park_active(buffer: &mut Buffer, registry: &mut crate::buffers::BufferRegistr
     }
 }
 
-/// Replay a parsed `--keys` action stream against `buffer` THROUGH the shared
-/// `actions::apply_core` seam, so headless replay is byte-for-byte identical to
-/// live editing. `corpus` is the active project's file index (Goto), `root`
-/// scopes the Browse navigator, and `workspace` supplies the switch-project
-/// children — so a replayed Cmd-O / Cmd-Shift-P / Browse summons a real overlay
-/// the rest of the key-spec can filter / move / descend / accept. Returns the
-/// post-replay App-level state.
+/// Replay a parsed `--keys` CHORD stream against `buffer` — each chord either
+/// consumed by the SEARCH GUARD (the shared `crate::search::keys::intercept`
+/// seam, while the isearch panel is open) or resolved through `km` and applied
+/// THROUGH the shared `actions::apply_core` seam, so headless replay is
+/// byte-for-byte identical to live editing. `corpus` is the active project's
+/// file index (Goto), `root` scopes the Browse navigator, and `workspace`
+/// supplies the switch-project children — so a replayed Cmd-O / Cmd-Shift-P /
+/// Browse summons a real overlay the rest of the key-spec can filter / move /
+/// descend / accept. Returns the post-replay App-level state.
 fn replay_keys(
     buffer: &mut Buffer,
-    keys: &[Action],
+    keys: &[crate::keyspec::Chord],
     corpus: &[String],
     root: &std::path::Path,
     workspace: Option<&std::path::Path>,
     notes_root: &std::path::Path,
     config: &Config,
     oracle: Option<&mut capture::OraclePipeline>,
+    km: &mut crate::keymap::KeymapState,
 ) -> ReplayResult {
     match replay_keys_mode(
         crate::replay::Mode::Permissive,
@@ -163,6 +173,7 @@ fn replay_keys(
         notes_root,
         config,
         oracle,
+        km,
     ) {
         Ok(res) => res,
         // Every abort in the loop is Strict-gated, so the permissive door is
@@ -179,7 +190,7 @@ fn replay_keys(
 fn replay_keys_mode(
     mode: crate::replay::Mode,
     buffer: &mut Buffer,
-    keys: &[Action],
+    keys: &[crate::keyspec::Chord],
     corpus: &[String],
     root: &std::path::Path,
     workspace: Option<&std::path::Path>,
@@ -194,6 +205,12 @@ fn replay_keys_mode(
     // geometry. `None` in the unit tests / GPU-less paths, where motion falls
     // back to LOGICAL lines.
     mut oracle: Option<&mut capture::OraclePipeline>,
+    // The keymap the chords resolve through, chord by chord INSIDE this loop
+    // (config `[keys]` rebinds + keep-list applied by the caller) — resolution
+    // is interleaved with the search guard exactly like live key dispatch, and
+    // held `&mut` so the `C-x` prefix state survives a caller that replays a
+    // split spec in two calls (the timeline's origin/glide halves).
+    km: &mut crate::keymap::KeymapState,
 ) -> Result<ReplayResult> {
     let mut intercepts: Vec<crate::replay::Intercept> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -212,13 +229,44 @@ fn replay_keys_mode(
     // The spell engine for the Cmd-`;` picker, loaded once (None if the dictionary
     // failed to parse — the summon then no-ops, like the live path with no checker).
     let spell = crate::spell::SpellChecker::new(crate::spell::active_variant()).ok();
-    for key in keys {
+    // The chord→action resolver: ONE persistent keymap across the stream (prefix
+    // sequences + rebinds compose exactly as live), with the STRICT
+    // unbound/dangling-prefix refusals armed under `Mode::Strict` (they moved
+    // here from parse time — only the replay knows whether the search guard
+    // consumed a chord before the keymap could judge it).
+    let mut resolver =
+        crate::keyspec::ChordResolver::new(km, mode == crate::replay::Mode::Strict);
+    for chord in keys {
+        // SEARCH GUARD — the live `App::on_keyboard_input` guard's exact position,
+        // now the exact same code: while the isearch panel is open EVERY chord is
+        // consumed by the ONE interception seam (`crate::search::keys::intercept`)
+        // and never reaches the keymap — query/replacement typing, Backspace,
+        // C-s/C-r/arrow steps, M-c case toggle, Tab/Cmd-R field moves, Enter
+        // accept / replace-one, Cmd-Enter replace-all, Esc/C-g abort. The returned
+        // recoil is a LIVE-only caret flourish, dropped here exactly like
+        // `Effect::Recoil` (no clock, settled frame unchanged). Strict never
+        // judges a consumed chord "unbound" — the panel owning it IS its binding.
+        if search.is_some() {
+            let _ = crate::search::keys::intercept(
+                &mut search,
+                buffer,
+                &chord.key,
+                chord.mods.state(),
+            );
+            continue;
+        }
+        // Resolve THIS chord through the persistent keymap; a dropped
+        // `Ignore`/`BeginPrefix` yields no action, and a strict refusal aborts
+        // naming the offending chord.
+        let Some(resolved) = resolver.resolve(chord)? else {
+            continue;
+        };
         // A tiny worklist so the COMMAND PALETTE's run-on-Enter chains: Enter on a
         // command writes `run_action`, which we then feed back through the core
         // (slot now empty) so an overlay-opening command opens its sub-overlay as
         // the final captured state. At most one chained action, so this drains in
         // one extra pass.
-        let mut current: Option<Action> = Some(key.clone());
+        let mut current: Option<Action> = Some(resolved);
         // BREADCRUMB: when the palette's Enter re-dispatches a `RunAction` (below),
         // stamp `return_to = Command` onto whatever overlay that command opens, so a
         // later POP (Esc / value-pick) re-summons the palette — mirroring the live
@@ -626,6 +674,7 @@ fn replay_keys_mode(
     let search_case = search.as_ref().map(|s| s.is_case_sensitive()).unwrap_or(false);
     let replace_active = search.as_ref().map(|s| s.is_replace_active()).unwrap_or(false);
     let replacement = search.as_ref().map(|s| s.replacement().to_string()).unwrap_or_default();
+    let editing_replacement = search.as_ref().map(|s| s.is_editing_replacement()).unwrap_or(false);
     Ok(ReplayResult {
         zoom: zoom_out,
         selection: sel,
@@ -633,6 +682,7 @@ fn replay_keys_mode(
         search_case,
         replace_active,
         replacement,
+        editing_replacement,
         overlay,
         accept,
         buffers_open,
@@ -649,12 +699,14 @@ fn capture_screenshot(
     out: PathBuf,
     file: Option<PathBuf>,
     mut opts: CaptureOpts,
-    keys: Vec<Action>,
+    keys: Vec<crate::keyspec::Chord>,
+    mut km: crate::keymap::KeymapState,
     root: Option<PathBuf>,
     workspace: Option<PathBuf>,
     notes_root: PathBuf,
     config: Config,
-    // STRICT REPLAY (`--strict-replay`): abort on any Unsupported effect or a
+    // STRICT REPLAY (`--strict-replay`): abort on any Unsupported effect, an
+    // unbound/dangling chord (the resolver refuses at replay time), or a
     // missing layout oracle instead of degrading quietly — see `crate::replay`.
     strict: bool,
 ) -> Result<()> {
@@ -721,6 +773,7 @@ fn capture_screenshot(
                 &notes_root,
                 &config,
                 oracle.as_mut(),
+                &mut km,
             )?;
             if opts.zoom.is_none() {
                 opts.zoom = res.zoom;
@@ -731,10 +784,14 @@ fn capture_screenshot(
             if opts.search.is_none() {
                 opts.search = res.search_query;
                 opts.search_case_sensitive = opts.search_case_sensitive || res.search_case;
-                // REPLACE mode the replay opened (Cmd-Option-F) — surfaced so the
-                // panel's replace row renders + the sidecar reports it.
+                // REPLACE mode the replay opened (Cmd-R / Tab / Cmd-Option-F) —
+                // surfaced so the panel's replace row renders + the sidecar
+                // reports it, along with the replayed replacement TEXT and which
+                // field currently has focus (all typed/moved through the shared
+                // search-key seam).
                 opts.search_replace_active = res.replace_active;
                 opts.search_replacement = res.replacement;
+                opts.search_editing_replacement = res.editing_replacement;
             }
             // If the replay ACCEPTED an overlay item, reflect it in the capture.
             // Goto is handled ALREADY, INLINE inside `replay_keys` (the
@@ -894,32 +951,33 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             file,
             opts,
             keys,
+            km,
             root,
             workspace,
             notes_root,
             config,
             strict,
-        } => capture_screenshot(out, file, opts, keys, root, workspace, notes_root, config, strict),
-        Mode::ScreenshotMotion { out, file, keys } => {
+        } => capture_screenshot(out, file, opts, keys, km, root, workspace, notes_root, config, strict),
+        Mode::ScreenshotMotion { out, file, keys, mut km } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file, None);
-            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None, &mut km);
             capture::capture_motion(&out, &buffer)?;
             println!("wrote {} (mid-glide, + sidecar .json)", out.display());
             Ok(())
         }
-        Mode::ScreenshotMotionVertical { out, file, keys } => {
+        Mode::ScreenshotMotionVertical { out, file, keys, mut km } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file, None);
-            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None, &mut km);
             capture::capture_motion_vertical(&out, &buffer)?;
             println!("wrote {} (mid-glide vertical, + sidecar .json)", out.display());
             Ok(())
         }
-        Mode::ScreenshotMotionDiagonal { out, file, keys } => {
+        Mode::ScreenshotMotionDiagonal { out, file, keys, mut km } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file, None);
-            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+            replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None, &mut km);
             capture::capture_motion_diagonal(&out, &buffer)?;
             println!("wrote {} (mid-glide diagonal, + sidecar .json)", out.display());
             Ok(())
@@ -928,6 +986,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             out,
             file,
             keys,
+            mut km,
             steps,
             root,
             canvas,
@@ -960,6 +1019,9 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
                 Some((last, init)) => (Some(last.clone()), init.to_vec()),
                 None => (None, Vec::new()),
             };
+            // ONE keymap across both halves, so a prefix armed by the origin
+            // replay still resolves the glide chord (the split is at CHORD
+            // boundaries now that resolution lives inside the replay loop).
             if !init.is_empty() {
                 replay_keys(
                     &mut buffer,
@@ -970,6 +1032,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
                     &notes_root,
                     &Config::empty(),
                     None,
+                    &mut km,
                 );
             }
             let origin = buffer.cursor_line_col();
@@ -983,6 +1046,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
                     &notes_root,
                     &Config::empty(),
                     None,
+                    &mut km,
                 );
             }
             capture::capture_timeline(&out, &buffer, origin, &steps, &opts)?;
@@ -997,6 +1061,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             out,
             file,
             keys,
+            mut km,
             dir,
             steps,
             root,
@@ -1027,7 +1092,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             // (e.g. C-n's + C-f's to land mid-line); the held re-targeting then
             // drives the motion deterministically from there.
             if !keys.is_empty() {
-                replay_keys(&mut buffer, &keys, &corpus, &active_root, None, &notes_root, &Config::empty(), None);
+                replay_keys(&mut buffer, &keys, &corpus, &active_root, None, &notes_root, &Config::empty(), None, &mut km);
             }
             let origin = buffer.cursor_line_col();
             capture::capture_held(&out, &buffer, origin, dir, &steps, &opts)?;
@@ -1067,18 +1132,67 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
 mod tests {
     use super::*;
 
-    // CONVENTION-PROOF SHADOW: this whole file's `--keys` replay tests hardcode
+    // CONVENTION-PROOF SHADOWS: this whole file's `--keys` replay tests hardcode
     // MAC-form literal specs ("Cmd-S-h", "s-p", a bare "C-n"/"C-x" whose letter
     // Linux's collision table displaces, …) — pinning resolution to
     // `Convention::Mac` is the honest fix (these tests document specifically
     // what a MAC-convention chord does; Linux's own displacement/collision
-    // behavior is separately, exhaustively law-tested in `keymap.rs`). This
-    // local `keyspec` module SHADOWS the real `crate::keyspec` module for every
-    // `keyspec::parse_keys(...)` call below, so none of the ~30 hardcoded specs
-    // needed individual rewriting.
+    // behavior is separately, exhaustively law-tested in `keymap.rs`). Chord
+    // PARSING is now convention-free (`parse_chords` never touches the keymap),
+    // so the pinning moved WITH resolution into the replay loop: these local
+    // `replay_keys`/`replay_keys_mode` wrappers SHADOW the module-level fns
+    // (a local item wins over a glob import) and supply a Mac-pinned
+    // `KeymapState`, so none of the ~60 call sites below needed rewriting. The
+    // local `keyspec` module keeps the old call shape for the same reason.
     mod keyspec {
-        pub fn parse_keys(spec: &str) -> anyhow::Result<Vec<crate::keymap::Action>> {
-            crate::keyspec::parse_keys_pinned(spec, crate::convention::Convention::Mac)
+        pub fn parse_keys(spec: &str) -> anyhow::Result<Vec<crate::keyspec::Chord>> {
+            crate::keyspec::parse_chords(spec)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn replay_keys_mode(
+        mode: crate::replay::Mode,
+        buffer: &mut Buffer,
+        keys: &[crate::keyspec::Chord],
+        corpus: &[String],
+        root: &std::path::Path,
+        workspace: Option<&std::path::Path>,
+        notes_root: &std::path::Path,
+        config: &Config,
+        oracle: Option<&mut capture::OraclePipeline>,
+    ) -> Result<ReplayResult> {
+        let mut km =
+            crate::keymap::KeymapState::new_with_convention(crate::convention::Convention::Mac);
+        super::replay_keys_mode(
+            mode, buffer, keys, corpus, root, workspace, notes_root, config, oracle, &mut km,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn replay_keys(
+        buffer: &mut Buffer,
+        keys: &[crate::keyspec::Chord],
+        corpus: &[String],
+        root: &std::path::Path,
+        workspace: Option<&std::path::Path>,
+        notes_root: &std::path::Path,
+        config: &Config,
+        oracle: Option<&mut capture::OraclePipeline>,
+    ) -> ReplayResult {
+        match replay_keys_mode(
+            crate::replay::Mode::Permissive,
+            buffer,
+            keys,
+            corpus,
+            root,
+            workspace,
+            notes_root,
+            config,
+            oracle,
+        ) {
+            Ok(res) => res,
+            Err(e) => unreachable!("permissive replay never aborts: {e}"),
         }
     }
 
@@ -1133,10 +1247,13 @@ mod tests {
         let mut buffer = Buffer::from_str("[a](https://awl.example/doc) tail");
         buffer.set_cursor(1); // inside the link
         let root = PathBuf::from("/tmp");
+        // Follow link's real chord (the emacs slot, `C-c C-o`) — resolution now
+        // happens inside the replay loop, so the spec drives the same door.
+        let keys = keyspec::parse_keys("C-c C-o").unwrap();
         let res = replay_keys_mode(
             crate::replay::Mode::Strict,
             &mut buffer,
-            &[Action::FollowLink],
+            &keys,
             &[],
             &root,
             None,
@@ -1163,7 +1280,7 @@ mod tests {
         // key AFTER the Quit still applies, today's documented behavior).
         let mut buffer = Buffer::from_str("[a](https://awl.example/x) tail");
         buffer.set_cursor(1);
-        let keys = vec![Action::Quit, Action::FollowLink, Action::BufferEnd];
+        let keys = keyspec::parse_keys("s-q C-c C-o s-Down").unwrap();
         let root = PathBuf::from("/tmp");
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         assert_eq!(res.warnings.len(), 2, "one warning per crossing: {:?}", res.warnings);
@@ -1193,6 +1310,157 @@ mod tests {
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         assert!(res.warnings.is_empty(), "{:?}", res.warnings);
         assert!(res.intercepts.is_empty());
+    }
+
+    // ── SHARED SEARCH/REPLACE INPUT ROUTING: the replay-side search guard ──
+    //
+    // While the isearch panel is open the replay loop consumes EVERY chord
+    // through the ONE interception seam the live window uses
+    // (`crate::search::keys::intercept`), BEFORE keymap resolution — so the
+    // whole in-panel operation set is `--keys`-drivable. The seam itself is
+    // unit-tested in `search::keys::tests`; these pin the replay WIRING.
+
+    #[test]
+    fn replay_search_typing_extends_the_query_never_the_buffer() {
+        // THE search-typing regression (the retired isearch-input gap): typing
+        // after C-s used to insert into the BUFFER because in-panel chars
+        // resolved through the keymap to `InsertChar`. Now the guard routes
+        // them to the query, and the caret lands on the current match.
+        let mut buffer = Buffer::from_str("say hi twice: hi");
+        let keys = keyspec::parse_keys("C-s h i").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(buffer.text(), "say hi twice: hi", "the document is untouched");
+        assert_eq!(res.search_query.as_deref(), Some("hi"));
+        assert_eq!(buffer.cursor_char(), 4, "the caret sits on the first match");
+    }
+
+    #[test]
+    fn replay_search_steps_case_toggle_and_prefix_chords_stay_in_the_panel() {
+        // STEP next/previous while open: C-s/arrows advance the current match
+        // (they used to RESTART the search through `start_search`).
+        let mut buffer = Buffer::from_str("x.x.x");
+        let keys = keyspec::parse_keys("C-s x Down C-s").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(res.search_query.as_deref(), Some("x"));
+        assert_eq!(buffer.cursor_char(), 4, "two steps advanced 0 -> 2 -> 4");
+
+        // CASE TOGGLE (M-c) — a chord with NO keymap binding at all, reachable
+        // only because the guard consumes it before resolution.
+        let mut buffer = Buffer::from_str("Hello HELLO hello");
+        let keys = keyspec::parse_keys("C-s h e l l o M-c").unwrap();
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.search_case, "M-c toggled case sensitivity inside the panel");
+        assert_eq!(res.search_query.as_deref(), Some("hello"));
+
+        // A `C-x` while searching is CONSUMED (a no-op), never a prefix arm —
+        // the following `r` extends the QUERY instead of resolving to the
+        // `C-x r` ToggleDebug sequence. (The old parse-time resolution got
+        // this wrong by construction.)
+        let _g = crate::testlock::serial();
+        let debug_before = crate::debug::debug_on();
+        let mut buffer = Buffer::from_str("xr marks");
+        let keys = keyspec::parse_keys("C-s x C-x r").unwrap();
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(res.search_query.as_deref(), Some("xr"), "C-x was eaten; r joined the query");
+        assert_eq!(crate::debug::debug_on(), debug_before, "C-x r never reached the keymap");
+    }
+
+    #[test]
+    fn replay_search_replacement_typing_replace_one_and_replace_all() {
+        // Tab reveals + focuses the replace field; typed chars fill it; Enter
+        // replaces the CURRENT match and advances (panel stays open).
+        let mut buffer = Buffer::from_str("line one\nline two\nline three");
+        let keys = keyspec::parse_keys("C-s l i n e Tab r o w Enter").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(buffer.text(), "row one\nline two\nline three");
+        assert_eq!(res.search_query.as_deref(), Some("line"));
+        assert!(res.replace_active);
+        assert_eq!(res.replacement, "row");
+        assert!(res.editing_replacement, "focus stayed in the replace field");
+        assert_eq!(buffer.cursor_char(), 8, "the caret advanced to the next match");
+
+        // Cmd-Enter (s-Enter) REPLACES ALL remaining matches in one edit.
+        let mut buffer = Buffer::from_str("line one\nline two\nline three");
+        let keys = keyspec::parse_keys("C-s l i n e Tab r o w s-Enter").unwrap();
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(buffer.text(), "row one\nrow two\nrow three");
+        assert!(res.replace_active, "the panel is still open after replace-all");
+    }
+
+    #[test]
+    fn replay_search_enter_accepts_and_esc_restores_origin() {
+        // ENTER on a plain find ACCEPTS: the panel closes, the cursor stays on
+        // the match, and the query is remembered (a process global -> serial()).
+        let _g = crate::testlock::serial();
+        crate::search::clear_last_query();
+        let mut buffer = Buffer::from_str("alpha beta alpha");
+        let keys = keyspec::parse_keys("C-s b e t a Enter").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(res.search_query, None, "Enter closed the panel");
+        assert_eq!(buffer.cursor_char(), 6, "the cursor stays on the accepted match");
+        assert_eq!(crate::search::last_query(), "beta");
+
+        // ESC aborts: the panel closes AND the origin cursor is restored —
+        // live behavior (the old headless-only `Cancel` close skipped the
+        // origin restore; that divergence is gone with the shared seam).
+        let mut buffer = Buffer::from_str("alpha beta alpha");
+        let keys = keyspec::parse_keys("C-f C-f C-s b e t a Esc").unwrap();
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(res.search_query, None, "Esc closed the panel");
+        assert_eq!(buffer.cursor_char(), 2, "the origin cursor is restored");
+        assert_eq!(buffer.text(), "alpha beta alpha");
+        crate::search::clear_last_query();
+    }
+
+    #[test]
+    fn strict_replay_allows_panel_consumed_chords_but_rejects_them_outside() {
+        // `s-l` (Cmd-L) is deliberately unbound (the unbound-Super swallow
+        // guard): OUTSIDE a search, strict refuses it — the relocated
+        // parse-time check. (`M-c` is NOT the contrast chord: outside a panel
+        // the retired Option-letter layer lets it fall through to self-insert.)
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-l").unwrap();
+        let root = PathBuf::from("/tmp");
+        let err = replay_keys_mode(
+            crate::replay::Mode::Strict,
+            &mut buffer,
+            &keys,
+            &[],
+            &root,
+            None,
+            &root,
+            &Config::empty(),
+            None,
+        )
+        .err()
+        .expect("strict refuses an unbound chord outside the panel")
+        .to_string();
+        assert!(err.contains("\"s-l\"") && err.contains("unbound"), "{err}");
+
+        // …but INSIDE the panel the guard owns every chord (`s-l` is a
+        // consumed no-op, `M-c` a case toggle, `C-x` never arms the prefix),
+        // so the same spec is legal under strict — the reason strictness had
+        // to move from parse time to replay time.
+        let mut buffer = Buffer::from_str("Hello HELLO hello");
+        let keys = keyspec::parse_keys("C-s h s-l M-c C-x").unwrap();
+        let res = replay_keys_mode(
+            crate::replay::Mode::Strict,
+            &mut buffer,
+            &keys,
+            &[],
+            &root,
+            None,
+            &root,
+            &Config::empty(),
+            None,
+        )
+        .expect("panel-consumed chords are legal under strict");
+        assert!(res.search_case, "the M-c actually toggled case");
+        assert_eq!(res.search_query.as_deref(), Some("h"));
     }
 
     // ── SAVE-FEEDBACK round: Cmd-S on a scratch buffer is headless-reachable ──
@@ -1769,10 +2037,10 @@ mod tests {
     #[test]
     fn replay_keys_page_reset_restores_default_measure() {
         // The "no easy way back" fix: mirror `--measure 40` (the flag writes the
-        // process-global directly, exactly like this), then replay the "Reset Page
-        // Width" Action (no default chord — palette/double-click only, so it's
-        // constructed directly here rather than parsed from a `--keys` chord,
-        // matching how `replay_keys` already takes a resolved `Action` stream). The
+        // process-global directly, exactly like this), then replay "Reset page
+        // width" (no default chord — palette/double-click only) through a config
+        // `[keys]` rebind, the real door a chord-driven replay has for a
+        // defaultless command now that resolution lives inside the loop. The
         // sidecar's `page.measure` field reads this SAME global, so this is the
         // capture-level half of the reset (the config-file override removal is
         // App-only + unit-tested separately in `config/`). Holds the process-wide
@@ -1781,8 +2049,16 @@ mod tests {
         crate::page::set_measure(40);
         let mut buffer = Buffer::scratch();
         let root = PathBuf::from("/tmp");
-        let keys = vec![Action::PageReset];
-        let _ = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let keys = keyspec::parse_keys("C-j").unwrap();
+        let mut km = crate::keymap::KeymapState::with_overrides_and_convention(
+            &[("reset_page_width".into(), vec!["C-j".into()])],
+            crate::convention::Convention::Mac,
+        );
+        let _ = super::replay_keys_mode(
+            crate::replay::Mode::Permissive,
+            &mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None, &mut km,
+        )
+        .unwrap();
         assert_eq!(
             crate::page::measure(),
             crate::page::DEFAULT_MEASURE,
@@ -1803,8 +2079,17 @@ mod tests {
         let mut buffer = Buffer::from_str("fn main() {}\n");
         buffer.set_path(PathBuf::from("/tmp/main.rs"));
         let root = PathBuf::from("/tmp");
-        let keys = vec![Action::PageReset];
-        let _ = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        // Same rebind door as the prose sibling above (palette-only command).
+        let keys = keyspec::parse_keys("C-j").unwrap();
+        let mut km = crate::keymap::KeymapState::with_overrides_and_convention(
+            &[("reset_page_width".into(), vec!["C-j".into()])],
+            crate::convention::Convention::Mac,
+        );
+        let _ = super::replay_keys_mode(
+            crate::replay::Mode::Permissive,
+            &mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None, &mut km,
+        )
+        .unwrap();
         assert_eq!(
             crate::page::measure(),
             crate::page::DEFAULT_MEASURE_CODE,
@@ -2335,6 +2620,7 @@ mod tests {
             None, // no file argument: a bare launch
             CaptureOpts::default(),
             Vec::new(),
+            crate::keymap::KeymapState::new(),
             None, // no explicit --root
             None,
             notes_root,
@@ -2349,6 +2635,52 @@ mod tests {
             dir.to_string_lossy(),
             "sidecar project.root reflects the restored sticky project, not cwd"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn capture_scenario_search_replace_replay_lands_in_the_sidecar_search_block() {
+        // SIDECAR EVIDENCE for the shared search/replace routing: one `--keys`
+        // spec drives open + query typing + replace-field reveal + replacement
+        // typing + replace-one through the REAL `capture_screenshot` seam, and
+        // every operation's outcome is assertable from the sidecar `search`
+        // block + `text` — the round's done-criteria witness. Real disk +
+        // capture -> hold the fs TEST_LOCK like the sticky-root test above.
+        let _fs = crate::testlock::serial();
+        let dir = std::env::temp_dir().join(format!("awl-search-replay-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixture = dir.join("doc.txt");
+        std::fs::write(&fixture, "line one\nline two\nline three\n").unwrap();
+        let out = dir.join("cap.png");
+        let keys = keyspec::parse_keys("C-s l i n e Tab r o w Enter").unwrap();
+        capture_screenshot(
+            out.clone(),
+            Some(fixture),
+            CaptureOpts::default(),
+            keys,
+            crate::keymap::KeymapState::new_with_convention(crate::convention::Convention::Mac),
+            Some(dir.clone()),
+            None,
+            dir.join("notes"),
+            Config::empty(),
+            true, // strict: the whole spec must ride real seams
+        )
+        .expect("capture succeeds");
+        let json = std::fs::read_to_string(out.with_extension("json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let s = &v["search"];
+        assert_eq!(s["query"].as_str().unwrap(), "line", "typed query");
+        assert_eq!(s["active"].as_bool().unwrap(), true);
+        assert_eq!(s["replace_active"].as_bool().unwrap(), true, "Tab revealed the row");
+        assert_eq!(s["replacement"].as_str().unwrap(), "row", "typed replacement");
+        assert_eq!(s["editing_replacement"].as_bool().unwrap(), true, "focus is in the field");
+        assert_eq!(s["hit_count"].as_u64().unwrap(), 2, "one of three matches was replaced");
+        assert!(
+            v["text"].as_str().unwrap().starts_with("row one\nline two"),
+            "replace-one swapped exactly the first match"
+        );
+        assert_eq!(v["cursor"]["line"].as_u64().unwrap(), 1, "caret advanced to the next match");
+        assert_eq!(v["cursor"]["col"].as_u64().unwrap(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2380,6 +2712,7 @@ mod tests {
                 None,
                 opts,
                 Vec::new(),
+                crate::keymap::KeymapState::new(),
                 Some(dir.clone()),
                 Some(dir.clone()),
                 dir.clone(),
@@ -2698,10 +3031,13 @@ mod tests {
         };
         // Type 30 chars at the head of line 0 (it now wraps at the 15-char
         // measure), return to the buffer start, then move DOWN one visual row.
-        let mut keys: Vec<Action> =
-            "the quick brown fox jumps over".chars().map(Action::InsertChar).collect();
-        keys.push(Action::BufferStart);
-        keys.push(Action::NextLine);
+        let mut spec: Vec<String> = "the quick brown fox jumps over"
+            .chars()
+            .map(|c| if c == ' ' { "Space".to_string() } else { c.to_string() })
+            .collect();
+        spec.push("s-Up".to_string()); // BufferStart (mac native)
+        spec.push("C-n".to_string()); // NextLine
+        let keys = keyspec::parse_keys(&spec.join(" ")).unwrap();
         let root = PathBuf::from("/tmp");
         replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), Some(&mut op));
         let (line, col) = buffer.cursor_line_col();

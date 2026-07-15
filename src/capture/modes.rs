@@ -228,14 +228,16 @@ async fn capture_async(
     vstate.search_query = opts.search.clone().unwrap_or_default();
     vstate.search_active = search_active;
     vstate.search_case_sensitive = opts.search_case_sensitive;
-    // REPLACE mode: `--search-replace` (or a `--keys` replay of Cmd-R / Cmd-Option-F)
-    // reveals the labeled replace row + the key-hint line, surfaced here so both are
-    // verifiable. A fresh Cmd-R open keeps focus on the FIND field (the amber caret
-    // rides the query), matching the live open; the replacement can't be typed
-    // headlessly (the isearch-input gap), so it stays empty.
+    // REPLACE mode: `--search-replace` (or a `--keys` replay of Cmd-R / Tab /
+    // Cmd-Option-F) reveals the labeled replace row + the key-hint line, surfaced
+    // here so both are verifiable. A `--keys` replay drives the panel through the
+    // SAME interception seam the live window uses (`crate::search::keys`), so the
+    // replayed replacement TEXT and the focused field fold in too; the bare
+    // `--search-replace` flag keeps its fresh-open shape (find field focused,
+    // empty replacement).
     vstate.search_replace_active = opts.search_replace_active;
     vstate.search_replacement = opts.search_replacement.clone();
-    vstate.search_editing_replacement = false;
+    vstate.search_editing_replacement = opts.search_editing_replacement;
     vstate.overlay_active = opts.overlay.as_ref().map(|o| o.active).unwrap_or(false);
     // CRISP-BACKDROP exception: the THEME / CARET / HISTORY pickers keep the doc
     // crisp (no frosted blur) — the theme/caret cards preview live document state,

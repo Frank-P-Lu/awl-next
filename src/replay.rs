@@ -36,9 +36,12 @@
 //! byte-identically apart from stderr). STRICT is the scenario-runner default
 //! the later phases plumb through — exposed today via the opt-in
 //! `--strict-replay` flag on `--screenshot --keys`. Strict also refuses an
-//! unbound/unparseable chord at parse time (`keyspec::parse_keys_strict_with`)
-//! and a missing layout oracle before the first key ([`missing_oracle_error`]),
-//! so a strict run's motion verdicts always rode the real wrap geometry.
+//! unbound chord or dangling prefix sequence at replay time
+//! (`keyspec::ChordResolver` — resolution moved INTO the replay loop so the
+//! search guard can consume a chord first; an unparseable token still errors
+//! at parse time via `keyspec::parse_chords`) and a missing layout oracle
+//! before the first key ([`missing_oracle_error`]), so a strict run's motion
+//! verdicts always rode the real wrap geometry.
 
 use crate::actions::Effect;
 use crate::keymap::Action;

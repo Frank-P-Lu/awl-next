@@ -451,38 +451,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         return overlay_intercept(ctx, action);
     }
 
-    // SEARCH PANEL single-key REPLACE toggle. While a search is live, a bare Tab
-    // reveals the replace field (first press) then flips focus between the query
-    // and replacement fields — the SAME single-key affordance `handle_search_key`
-    // gives the windowed editor (where in-panel keys never reach `apply_core`),
-    // mirrored here so a `--keys "C-s <Tab>"` replay drives it and the sidecar's
-    // `replace_active` is assertable WITHOUT the Cmd-Option-F chord. Routed
-    // through the core like the overlay keys above; it intercepts ONLY Tab (the
-    // panel's query typing still arrives via `--search`, the documented headless
-    // input gap), so every other action falls through unchanged.
-    if ctx.search.is_some() {
-        match action {
-            // Tab is the one FIELD-SWITCH key: flip focus find↔replace (revealing the
-            // replace row the first time). `--keys "C-s <Tab>"` drives it headlessly.
-            Action::InsertTab => {
-                if let Some(st) = ctx.search.as_mut() {
-                    st.toggle_replace();
-                }
-                return Effect::None;
-            }
-            // Cmd-R while the panel is ALREADY open focuses the replace field (the
-            // fresh open revealed it with focus on find; a second Cmd-R jumps in).
-            // Mirrors `handle_search_key`'s live Cmd-R, so `--keys "C-s Cmd-r"` drives
-            // it and the sidecar's `replace_active` / focus is assertable.
-            Action::OpenReplace => {
-                if let Some(st) = ctx.search.as_mut() {
-                    st.focus_replacement();
-                }
-                return Effect::None;
-            }
-            _ => {}
-        }
-    }
+    // NOTE — there is deliberately NO search intercept here. While the isearch
+    // panel is open, EVERY key is consumed BEFORE keymap resolution by the ONE
+    // shared interception seam (`crate::search::keys::intercept`) — the live
+    // window's search guard (`app/input/keys.rs`) and the headless replay's
+    // guard (`main/run.rs::replay_keys_mode`) are the same code — so no key
+    // path can reach `apply_core` with `ctx.search` still `Some`. The old
+    // Action-level Tab/OpenReplace intercept that lived here (the partial
+    // headless mirror from before the seam existed) was retired with it:
+    // same behavior must be same code, not an aligned copy.
 
     // Selection-on-motion, two distinct modes:
     //   * Shift+motion = TRANSIENT (GUI style): extends only while Shift is
@@ -605,31 +582,26 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             }
         }
         Action::Quit => effect = Effect::Quit,
-        // C-g / Escape / Cmd-. : cancel clears any active selection (and any
-        // search). REMEMBER the query first (P2) — a non-empty in-progress
-        // search term survives the close so a LATER bare Cmd-G re-finds it.
-        // This is the ONE search-close door headless `--keys` replay can
-        // reach (the live search guard intercepts Escape before it ever
-        // reaches this arm — see `search_abort`/the Enter-accept branch in
-        // `app/input/keys.rs`, which remember it too).
+        // C-g / Escape / Cmd-. : cancel clears any active selection. A live
+        // search can never still be open here — the shared search-key seam
+        // (`crate::search::keys::intercept`) consumes Escape/C-g on BOTH the
+        // live and replay paths and closes the panel itself (restoring the
+        // origin cursor + remembering the query), so this arm no longer
+        // carries a search-close copy of that rule.
         Action::Cancel => {
-            if let Some(q) = ctx.search.as_ref().map(|s| s.query()) {
-                crate::search::set_last_query(q);
-            }
             ctx.buffer.clear_mark();
             *ctx.shift_selecting = false;
-            *ctx.search = None;
         }
-        // C-s / C-r: open an incremental search anchored at the cursor. (While a
-        // search is already live the windowed app routes keys elsewhere; here we
-        // only model the OPEN, which is all a one-frame capture needs.)
+        // C-s / C-r: open an incremental search anchored at the cursor. While a
+        // search is already live neither driver reaches this arm — the shared
+        // search guard consumes C-s/C-r as STEP next/previous first — so this
+        // only ever models the OPEN.
         Action::SearchForward => start_search(ctx, Direction::Forward),
         Action::SearchBackward => start_search(ctx, Direction::Backward),
         // Cmd-R (or the legacy Cmd-Option-F): open the SAME isearch panel with the
         // labeled REPLACE row revealed — but focus stays on the FIND field so you
-        // type the needle first (Cmd-R again / Tab moves into the replacement). While
-        // a search is already live this arm is unreachable — the search intercept
-        // above focuses the replace field instead — so both doors are `--keys`-drivable.
+        // type the needle first (Cmd-R again / Tab moves into the replacement,
+        // consumed by the search guard once the panel is open).
         Action::OpenReplace => {
             start_search(ctx, Direction::Forward);
             if let Some(st) = ctx.search.as_mut() {

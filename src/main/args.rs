@@ -12,7 +12,7 @@ use anyhow::{bail, Result};
 
 use crate::capture::{self, CaptureOpts};
 use crate::config::{self, Config};
-use crate::keymap::Action;
+use crate::keymap::KeymapState;
 use crate::{caret, debug, hud, keyspec, lifetime, page, theme, whichkey};
 
 pub(crate) enum Mode {
@@ -44,7 +44,12 @@ pub(crate) enum Mode {
         out: PathBuf,
         file: Option<PathBuf>,
         opts: CaptureOpts,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        /// The keymap the replay loop resolves `keys` through, chord by chord
+        /// (config `[keys]` rebinds + the `linux_keep_emacs` door applied) —
+        /// resolution happens INSIDE the replay so the search guard can
+        /// intercept a chord before the keymap ever sees it.
+        km: KeymapState,
         /// The active project root for the capture (`--root`); scopes the go-to
         /// overlay and populates the sidecar `project` block.
         root: Option<PathBuf>,
@@ -58,10 +63,12 @@ pub(crate) enum Mode {
         /// the palette's effective bindings, and the Settings-open target.
         config: Config,
         /// STRICT REPLAY (`--strict-replay`, opt-in): abort on any unbound
-        /// chord (checked at parse time), any Unsupported effect, or a missing
-        /// layout oracle — naming the exact offender — instead of the legacy
-        /// permissive warn-and-continue. The scenario-runner default the later
-        /// harness phases plumb through; see `crate::replay`'s module doc.
+        /// chord (checked at replay time by `keyspec::ChordResolver`, AFTER
+        /// the search guard has had its chance to consume the chord), any
+        /// Unsupported effect, or a missing layout oracle — naming the exact
+        /// offender — instead of the legacy permissive warn-and-continue. The
+        /// scenario-runner default the later harness phases plumb through;
+        /// see `crate::replay`'s module doc.
         strict: bool,
     },
     /// Deterministic one-frame capture of a caret MID-GLIDE (dropped to the
@@ -70,21 +77,24 @@ pub(crate) enum Mode {
     ScreenshotMotion {
         out: PathBuf,
         file: Option<PathBuf>,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        km: KeymapState,
     },
     /// Like [`Mode::ScreenshotMotion`] but a VERTICAL glide: the caret slid to a
     /// thin bar on the cell's left edge, trailing up the lines it passed.
     ScreenshotMotionVertical {
         out: PathBuf,
         file: Option<PathBuf>,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        km: KeymapState,
     },
     /// Like [`Mode::ScreenshotMotion`] but a DIAGONAL glide (different row AND
     /// column): the trail is a true slanted tracer from source to target.
     ScreenshotMotionDiagonal {
         out: PathBuf,
         file: Option<PathBuf>,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        km: KeymapState,
     },
     /// DETERMINISTIC TIMELINE capture: after the `--keys` replay sets up a
     /// NAVIGATION caret move (a glide, not an edit-snap), advance a VIRTUAL clock
@@ -95,7 +105,8 @@ pub(crate) enum Mode {
     CaptureTimeline {
         out: PathBuf,
         file: Option<PathBuf>,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        km: KeymapState,
         /// Cumulative ms since the move started; the dt for step i is `t[i]-t[i-1]`.
         steps: Vec<u32>,
         root: Option<PathBuf>,
@@ -113,7 +124,8 @@ pub(crate) enum Mode {
     CaptureHeld {
         out: PathBuf,
         file: Option<PathBuf>,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        km: KeymapState,
         dir: capture::HeldDir,
         /// Cumulative ms; the dt for step i is `t[i]-t[i-1]`. One held re-target is
         /// applied per entry.
@@ -543,8 +555,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
             }
             "--search-replace" => {
                 // Reveal the labeled REPLACE row + the key-hint line on the panel (the
-                // Cmd-R open state), deterministically — the replacement itself can't
-                // be typed headlessly (the isearch-input gap), so it renders empty.
+                // fresh Cmd-R open state: find field focused, empty replacement). A
+                // `--keys` replay can drive the panel further — typing the replacement,
+                // replacing — through the shared search-key seam (`search::keys`).
                 opts.search_replace_active = true;
             }
             "--theme" => {
@@ -838,13 +851,19 @@ pub(crate) fn parse_args() -> Result<Mode> {
             bail!("--strict-replay only applies to --screenshot (not motion/timeline/held captures)");
         }
     }
-    let keys: Vec<Action> = match &keys_spec {
-        // The STRICT door: an unbound chord (or a dangling prefix sequence) is
-        // an error naming the exact chord, instead of the permissive silent drop.
-        Some(spec) if strict_replay => keyspec::parse_keys_strict_with(spec, &config)?,
-        Some(spec) => keyspec::parse_keys_with(spec, &config)?,
+    // STRUCTURAL parse only — a garbled token still errors right here. The
+    // chords stay UNRESOLVED: the replay loop resolves them one press at a time
+    // through `km` below (`keyspec::ChordResolver`), interleaved with the
+    // search guard, so a chord an open search panel consumes never reaches the
+    // keymap — and the STRICT unbound/dangling-prefix refusals fire there,
+    // where "was this chord for the keymap at all" is actually decidable.
+    let keys: Vec<keyspec::Chord> = match &keys_spec {
+        Some(spec) => keyspec::parse_chords(spec)?,
         None => Vec::new(),
     };
+    // The keymap every capture replay resolves through: config `[keys]`
+    // rebinds + the `linux_keep_emacs` door, exactly what live `App::new` builds.
+    let km = KeymapState::with_overrides_and_keep(&config.keys, &config.effective_linux_keep());
     // PRECEDENCE: explicit flag > config > built-in default. Fold the config value in
     // BEHIND the flag (the flag wins via `.or`) before the existing resolvers add the
     // built-in default. The Windowed path keeps the RAW flag + config so a live reload
@@ -867,6 +886,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 out,
                 file,
                 keys,
+                km,
                 dir,
                 steps,
                 root,
@@ -878,19 +898,21 @@ pub(crate) fn parse_args() -> Result<Mode> {
             out,
             file,
             keys,
+            km,
             steps: timeline_steps.unwrap(),
             root,
             canvas: capture_size,
             dpi: capture_dpi,
         },
-        Some(out) if motion_d => Mode::ScreenshotMotionDiagonal { out, file, keys },
-        Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file, keys },
-        Some(out) if motion => Mode::ScreenshotMotion { out, file, keys },
+        Some(out) if motion_d => Mode::ScreenshotMotionDiagonal { out, file, keys, km },
+        Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file, keys, km },
+        Some(out) if motion => Mode::ScreenshotMotion { out, file, keys, km },
         Some(out) => Mode::Screenshot {
             out,
             file,
             opts,
             keys,
+            km,
             root,
             workspace: workspace_folded,
             notes_root: notes_root_resolved,

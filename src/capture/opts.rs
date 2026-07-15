@@ -155,12 +155,18 @@ pub struct CaptureOpts {
     /// Case-sensitive toggle for the headless search (default false).
     pub search_case_sensitive: bool,
     /// REPLACE mode revealed on the search panel (default false). A `--keys`
-    /// replay of Cmd-Option-F (`s-M-f`) opens the panel into replace mode, so this
-    /// is verifiable from the capture; the replacement itself can't be typed
-    /// headlessly (the documented isearch-input gap), so it stays empty.
+    /// replay of Cmd-R / Tab / Cmd-Option-F opens it through the SAME
+    /// interception seam the live panel uses (`crate::search::keys`), so this
+    /// is verifiable from the capture.
     pub search_replace_active: bool,
-    /// The replacement string (always empty headlessly; present for symmetry).
+    /// The replacement string — typed headlessly through the shared search-key
+    /// seam (a `--keys "Cmd-r <needle> Tab <text>"` replay fills it; the old
+    /// always-empty "isearch-input gap" is retired).
     pub search_replacement: String,
+    /// Whether typing currently edits the REPLACEMENT field (vs. the query) —
+    /// a replayed Tab/Cmd-R focus move folds in here so the panel's focused
+    /// row + the sidecar's `editing_replacement` reflect it (default false).
+    pub search_editing_replacement: bool,
     /// The active project (`--root`-derived) for the sidecar `project` block.
     /// None (default) -> `project: null` so a plain `--screenshot` is unchanged.
     pub project: Option<ProjectInfo>,
