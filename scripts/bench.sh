@@ -4,11 +4,13 @@
 # honest in release — CLAUDE.md), runs the unified `--bench-suite` matrix
 # (deterministic corpus tiers x witnessed interaction scenarios), and diffs
 # the fresh run against the checked-in machine-keyed baseline
-# (benches/baseline.json). Exits NON-ZERO when any cell's median regresses
-# more than ~20% (over a 0.5ms floor), when a baseline cell vanishes, or when
-# a cell's witness counters drift (the workload itself changed) — so the
-# merge-day ritual notices. A machine without a baseline entry (different
-# hostname/arch) gets a calm note and a clean exit, never a false alarm.
+# (benches/baseline.json). Exits NON-ZERO when any cell's MIN sample regresses
+# more than ~20% (over a 0.5ms floor — the min, not the median, shrugs off
+# concurrent-build noise; see benches/README.md), when a baseline cell
+# vanishes, or when a cell's witness counters drift (the workload itself
+# changed) — so the merge-day ritual notices. A machine without a baseline
+# entry (different hostname/arch) gets a calm note and a clean exit, never a
+# false alarm.
 #
 # The suite writes its machine-readable report to ./bench.json (gitignored);
 # the checked-in reference is benches/baseline.json. Updating the baseline is

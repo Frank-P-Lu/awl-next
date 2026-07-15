@@ -9,9 +9,10 @@
 //!
 //! The BASELINE is machine-keyed (hostname + arch, per the spec): a diff on a
 //! foreign machine prints a calm note and exits clean — never a false alarm —
-//! while on the baseline's own machine a >20% median regression (over a small
-//! absolute floor), a vanished cell, or a WITNESS drift (the workload itself
-//! changed) fails loudly so the merge-day ritual notices.
+//! while on the baseline's own machine a >20% regression of the MIN sample
+//! (over a small absolute floor; the median only reports — see [`WARN_RATIO`]),
+//! a vanished cell, or a WITNESS drift (the workload itself changed) fails
+//! loudly so the merge-day ritual notices.
 
 use std::path::Path;
 
@@ -258,7 +259,7 @@ pub(super) fn parse(text: &str) -> Result<BenchDoc> {
 /// What a baseline comparison concluded — pure data, printable + testable.
 #[derive(Debug, Default, PartialEq)]
 pub(super) struct Diff {
-    /// (tier, scenario, base median, current median) over the warn threshold.
+    /// (tier, scenario, base min, current min) over the warn threshold.
     pub regressions: Vec<(String, String, f64, f64)>,
     /// Cells the baseline has that the current run lacks.
     pub missing: Vec<(String, String)>,

@@ -3,7 +3,7 @@
 //! XMD/CODE, generated deterministically from a fixed seed — see [`corpus`])
 //! crossed with interaction SCENARIOS (cold open, typing burst, scroll +
 //! jump-to-end, search, palette open, zoom burst, theme burst, wrap/resize —
-//! see [`scenarios`]), every cell reporting median/p90 wall times AND the
+//! see [`scenarios`]), every cell reporting min/median/p90 wall times AND the
 //! witness counters that prove the work happened (the bench-witness law:
 //! a cell that can silently measure nothing is a defect, enforced with
 //! `ensure!`s, not comments).
@@ -295,6 +295,34 @@ mod tests {
             "a different-face theme switch must actually reshape"
         );
         crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    }
+
+    /// The scroll cell's OUTCOME witness leans on `row_top_px(scroll_lines)`
+    /// as its oracle; this pins the oracle itself — exactly 0 at the top,
+    /// strictly positive once the viewport really moves — so a pinned
+    /// viewport (the vacuous-witness sabotage the repair round fixed: a
+    /// no-op'd scroll passing on caret animation alone) can never satisfy
+    /// the cell's per-step ensure.
+    #[test]
+    fn scroll_offset_oracle_moves_with_the_viewport() {
+        let _g = crate::testlock::serial();
+        let Some((_d, _q, mut p, mut view)) = shaped_pipeline() else {
+            eprintln!("skipping scroll_offset_oracle_moves_with_the_viewport: no wgpu adapter");
+            return;
+        };
+        assert_eq!(
+            p.row_top_px(p.scroll_lines),
+            0.0,
+            "the top of the document must resolve offset 0"
+        );
+        let rows = p.total_visual_rows();
+        assert!(rows > 1, "the S corpus must shape more than one visual row");
+        view.scroll_lines = rows - 1;
+        p.set_view(&view);
+        assert!(
+            p.row_top_px(p.scroll_lines) > 0.0,
+            "a scrolled viewport must resolve a strictly positive offset"
+        );
     }
 
     /// The matrix has NO silent holes: every tier x scenario cell is either

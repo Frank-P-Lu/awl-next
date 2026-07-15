@@ -34,11 +34,11 @@ only the legacy flags.
 | --------- | --------------------------------------- | ------- |
 | cold_open | document swap → first settled frame     | exactly 2 reshapes/sample; whole doc shaped; corpus fingerprint |
 | typing    | 30 keystrokes at the caret, frame each  | exactly 1 reshape/keystroke; pixels changed |
-| scroll    | page-through + jump-to-end (M-> shape)  | ZERO reshapes while scrolling (the O(visible) law); pixels changed |
+| scroll    | page-through + jump-to-end (M-> shape)  | resolved viewport offset strictly advances per step (+ the jump leaves the top); ZERO reshapes while scrolling (the O(visible) law); pixels changed |
 | search    | type the query + next x 6, frame each   | engine count == independent `str::matches` count |
 | palette   | build + draw the real command palette   | rows exist; row instances uploaded; pixels changed |
 | zoom      | eager 5-level burst + first frame       | exactly 1 reshape per level (the zoom-burst law) |
-| theme     | 6 switches Gumtree<->Tawny (face+mono differ) + first frame | >=1 reshape per switch; pixels re-tinted |
+| theme     | 8 switches Gumtree<->Tawny (face+mono differ) + first frame | >=1 reshape per switch; pixels re-tinted |
 | resize    | canvas 2910 <-> 1500 px, re-wrap in frame | visual row count really moved |
 
 Canvas: 2910x1720 @2x (the live-report geometry), page mode ON, debug OFF,
@@ -67,8 +67,8 @@ cargo run --release -- --bench-suite --bench-baseline benches/baseline.json
 ```
 
 Output: the printed table plus `./bench.json` (gitignored; shape
-`awl-bench/1` — machine + toolchain identity, per-cell median/p90 AND witness
-counts). Total wall time is ~2.5 minutes, dominated by the XPARA search cell
+`awl-bench/1` — machine + toolchain identity, per-cell min/median/p90 AND
+witness counts). Total wall time is ~2.5 minutes, dominated by the XPARA search cell
 (~2 min by itself — a real pathology, see below).
 
 ## Baseline + diff

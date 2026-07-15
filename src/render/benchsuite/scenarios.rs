@@ -210,9 +210,15 @@ fn typing(cx: &mut Cx) -> Result<CellOut> {
 
 /// SCROLL page-through + jump-to-end (M-> semantics): step the viewport a page
 /// of visual rows at a time, then land the caret at the end of the document.
-/// WITNESS: the scroll phase reshapes ZERO times (the O(visible) law — a pure
-/// scroll must never reshape), the end frame differs from the top frame, and
-/// the jump really landed on the last line.
+/// WITNESS the OUTCOME, not the loop: after every timed step the pixel offset
+/// the renderer RESOLVED for the applied scroll row (`row_top_px` — the same
+/// number `doc_top()` positions the document by) must have strictly advanced,
+/// the page-through reshapes ZERO times (the O(visible) law — a pure scroll
+/// must never reshape), the jump must move the viewport off the top, and the
+/// end frame differs from the top frame. A no-op'd scroll (viewport pinned at
+/// row 0) fails the first ensure — frame-to-frame caret animation can never
+/// satisfy an offset witness (the vacuous-witness defect this cell shipped
+/// with: its pixel diff passed on caret motion alone).
 fn scroll(cx: &mut Cx) -> Result<CellOut> {
     const PAGE: usize = 24;
     const MAX_STEPS: usize = 16;
@@ -230,15 +236,26 @@ fn scroll(cx: &mut Cx) -> Result<CellOut> {
 
     let before = cx.p.reshape_count;
     let mut samples = Vec::with_capacity(steps * passes + 1);
+    let mut deepest_px = 0.0f32;
     for _ in 0..passes {
         cx.view.scroll_lines = 0;
         cx.sync_frame()?; // rewind to the top, untimed
+        let mut prev_px = cx.p.row_top_px(cx.p.scroll_lines);
         for i in 1..=steps {
             cx.view.scroll_lines = (i * PAGE).min(rows.saturating_sub(1));
             let t0 = Instant::now();
             cx.sync_frame()?;
             samples.push(ms(t0));
+            let px = cx.p.row_top_px(cx.p.scroll_lines);
+            ensure!(
+                px > prev_px,
+                "every scroll step must advance the resolved viewport offset \
+                 (row {} resolves {px}px; the previous step held {prev_px}px)",
+                cx.p.scroll_lines
+            );
+            prev_px = px;
         }
+        deepest_px = prev_px;
     }
     let scroll_reshapes = cx.p.reshape_count - before;
     ensure!(
@@ -256,6 +273,11 @@ fn scroll(cx: &mut Cx) -> Result<CellOut> {
     let t0 = Instant::now();
     cx.sync_frame()?;
     samples.push(ms(t0));
+    let jump_px = cx.p.row_top_px(cx.p.scroll_lines);
+    ensure!(
+        jump_px > 0.0,
+        "the jump to end must move the viewport off the top (resolved {jump_px}px)"
+    );
 
     let end = cx.snapshot()?;
     let changed = differing_pixels(&top, &end);
@@ -271,6 +293,10 @@ fn scroll(cx: &mut Cx) -> Result<CellOut> {
         witness: vec![
             ("pages", (steps * passes) as u64),
             ("scroll_reshapes", scroll_reshapes),
+            // The OUTCOME counter: the deepest resolved offset the page-through
+            // reached (deterministic per corpus + wrap — a workload/geometry
+            // change shows up as baseline witness drift, not a silent no-op).
+            ("scrolled_px", deepest_px.round() as u64),
             ("pixels_changed", changed),
         ],
     })
