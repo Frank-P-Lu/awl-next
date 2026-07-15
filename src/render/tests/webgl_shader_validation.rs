@@ -96,3 +96,22 @@ fn selection_wgsl_fs_invert_targets_webgl2() {
     let src = include_str!("../../../shaders/selection.wgsl");
     validate_and_glsl(src, naga::ShaderStage::Fragment, "fs_invert");
 }
+
+// ── lava.wgsl (the animated blob backdrop) ─────────────────────────────────
+// Closes a logged gap: lava's WGSL was validated only implicitly at native
+// runtime (`create_shader_module` against Metal/Vulkan), never against the
+// WebGL2/GLSL-ES-300 downlevel target its browser fallback would take. Its
+// fragment `fs_main` is the risk-bearer here — a per-pixel loop summing the
+// animated blob field (branches, `for`, transcendentals) is exactly the kind
+// of body a GLSL-ES backend can choke on where the simple fills above do not.
+#[test]
+fn lava_wgsl_vs_main_targets_webgl2() {
+    let src = include_str!("../../../shaders/lava.wgsl");
+    validate_and_glsl(src, naga::ShaderStage::Vertex, "vs_main");
+}
+
+#[test]
+fn lava_wgsl_fs_main_targets_webgl2() {
+    let src = include_str!("../../../shaders/lava.wgsl");
+    validate_and_glsl(src, naga::ShaderStage::Fragment, "fs_main");
+}

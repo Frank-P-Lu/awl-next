@@ -66,11 +66,28 @@ fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
 /// override wins over the target default (see `Convention::current`), exactly
 /// like the suite's convention-parametric tests pin their expectations.
 fn run_awl(home: &Path, args: &[&str]) {
+    // Third-party CACHE writes belong OUTSIDE the watched tree. On Linux, font
+    // enumeration (cosmic-text -> fontdb -> the system fontconfig library)
+    // builds/refreshes a font cache; with XDG_CACHE_HOME unset it defaults to
+    // `$HOME/.cache/fontconfig`, i.e. straight into the canary HOME we snapshot
+    // -- a write awl neither makes nor controls. awl NEVER touches
+    // XDG_CACHE_HOME (its own state lives under XDG_DATA_HOME + XDG_CONFIG_HOME,
+    // both still INSIDE the watched tree and still fully asserted below), so
+    // pointing the cache at a sibling of `home` diverts only the legitimate
+    // library write and keeps the assertion honest about AWL's own writes.
+    // (mac's fontconfig-free CoreText path never hit this -- green on mac, red
+    // only on the linux CI runner.)
+    let cache = home
+        .parent()
+        .expect("canary home has a parent dir")
+        .join("xdg-cache");
+    std::fs::create_dir_all(&cache).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_awl"))
         .args(args)
         .env("HOME", home)
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("XDG_DATA_HOME", home.join(".local").join("share"))
+        .env("XDG_CACHE_HOME", &cache)
         .env("AWL_CONVENTION_FORCE", "mac")
         .env_remove("AWL_CONFIG")
         .env_remove("AWL_CJK_FORCE")
