@@ -154,6 +154,17 @@ impl TextPipeline {
             (0.0, width as f32)
         };
         let rail_carved = self.lava_rail_carved(height);
+        let gutter_rect = self.lava_gutter_carve_rect(height);
+        let probe = crate::lava::probe_both();
+        // PROBE-ONLY (env `AWL_LAVA_BOTH`): the outline band the plate/band
+        // auditions carve/plate. `None` in every ship frame (probe Off), so the
+        // uploaded rect stays all-zero and the shader's probe path is inert.
+        let outline_rect = match probe {
+            crate::lava::LavaBoth::Plate | crate::lava::LavaBoth::Band => {
+                self.lava_outline_probe_rect(height)
+            }
+            _ => None,
+        };
         let params = self.effective_background().lava_params().map(
             |(ground, lo, hi, edge, dithered)| {
                 // A Bayer-posterized source and the downsampled separable blur
@@ -180,9 +191,21 @@ impl TextPipeline {
                 bg_left,
                 bg_w,
                 rail_carved,
+                gutter_rect,
+                probe,
+                outline_rect,
                 params,
                 phase,
             );
+    }
+
+    /// PROBE-ONLY (env `AWL_LAVA_BOTH=plate|band`, gallery-only): the OUTLINE
+    /// rail's own band rect `[left, top, right, bottom]` (px) the `plate`/`band`
+    /// auditions carve or plate, derived from the SAME `outline_layout` owner the
+    /// outline's own pixels ride. `None` off a headed lava doc. Nothing ships:
+    /// this is only ever consulted when the env knob forces a probe treatment.
+    pub(super) fn lava_outline_probe_rect(&self, height: u32) -> Option<[f32; 4]> {
+        self.outline_band_rect(height)
     }
 
     /// THE PAGE FRAME (`theme::PageFrame`, the personality-assignment round's
@@ -231,25 +254,42 @@ impl TextPipeline {
             .prepare(device, queue, width, height, &rects);
     }
 
-    /// THE LEFT-MARGIN RAIL CARVE decision for this frame: a lava ground is
-    /// active (the CAPABILITY — [`crate::theme::Background::lava_params`],
-    /// never a world name, per `theme_caps_law`) AND left-margin INK is
-    /// actually DRAWN — the margin OUTLINE ([`Self::outline_visible`], the same
-    /// `outline_layout` gate the outline's own pixels ride) or the bottom-left
-    /// GUTTER ([`Self::gutter_visible`], the same `gutter_layout` gate — the
-    /// lava follow-ups audit's finding: the gutter shares the outline's margin
-    /// real estate and drowned identically whenever the outline alone gated the
-    /// carve, e.g. any non-markdown buffer). While true, the lava field mask
-    /// treats the whole left margin as the ink's rail — another no-lava zone,
-    /// so the dim `faint`/`muted` entries sit on the flat ground instead of
-    /// inside the dithered blob (the user-reported drown). Both surfaces hiding
-    /// (scratch buffer / narrowest regime / edge-to-edge) reclaims the full
-    /// margin the same frame. The ONE owner [`Self::prepare_lava_layer`]
+    /// THE FULL LEFT-MARGIN RAIL CARVE decision for this frame: a lava ground is
+    /// active (the CAPABILITY — [`crate::theme::Background::lava_params`], never a
+    /// world name, per `theme_caps_law`) AND the margin OUTLINE is actually DRAWN
+    /// ([`Self::outline_visible`], the same `outline_layout` gate the outline's
+    /// own pixels ride). While true, the lava field mask treats the WHOLE left
+    /// margin as the outline's rail — a no-lava zone, so the dim `faint`/`muted`
+    /// entries sit on the flat ground instead of inside the dithered blob (the
+    /// user-reported drown). This is the CONSERVATIVE default for a HEADED doc.
+    ///
+    /// The bottom-left GUTTER no longer gates this full carve (it used to, and it
+    /// drowned both margins on nearly every page-mode buffer). It now drives a
+    /// bounded LOCAL corner carve instead ([`Self::lava_gutter_carve_rect`]), so
+    /// an ordinary (gutter-only) doc gets BOTH margins their lamp back. The
+    /// outline hiding (scratch buffer / narrowest regime / edge-to-edge) reclaims
+    /// the full margin the same frame. The ONE owner [`Self::prepare_lava_layer`]
     /// uploads and the law tests assert, so the carve can never disagree with
     /// what the frame draws.
     pub(super) fn lava_rail_carved(&self, height: u32) -> bool {
-        self.effective_background().lava_params().is_some()
-            && (self.outline_visible(height) || self.gutter_visible())
+        self.effective_background().lava_params().is_some() && self.outline_visible(height)
+    }
+
+    /// THE GUTTER'S LOCAL CORNER CARVE rect for this frame: `Some([left, top,
+    /// right, bottom])` (px) exactly when a lava ground is active AND the
+    /// bottom-left GUTTER is actually DRAWN ([`Self::gutter_visible`]), else
+    /// `None`. The bounded bottom-left region around the gutter block is carved
+    /// out of the field mask (so its `muted`/`faint` stack never swims in the
+    /// lamp) while the rest of both margins keep their lamp — the fix for the
+    /// gutter gating the WHOLE-margin carve on nearly every page-mode buffer.
+    /// Geometry comes from the SAME [`Self::gutter_carve_rect`] owner
+    /// `prepare_gutter`/`gutter_layout` ride, so the carve can never disagree
+    /// with the drawn gutter block.
+    pub(super) fn lava_gutter_carve_rect(&self, height: u32) -> Option<[f32; 4]> {
+        if self.effective_background().lava_params().is_none() || !self.gutter_visible() {
+            return None;
+        }
+        self.gutter_carve_rect(height)
     }
 
     /// Upload the document text layer with the full-ink default color — the one

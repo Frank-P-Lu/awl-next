@@ -401,44 +401,41 @@ fn outline_rail_band_is_flat_ground_and_outline_ink_clears_it_on_every_lava_worl
     }
 }
 
-/// THE GUTTER-RAIL CARVE LAW (lava follow-ups audit repair, 2026-07-15 — closes
-/// the gap the retired regression pin `gutter_ink_has_no_rail_carve_protection_
-/// unlike_the_outline_a_known_gap` documented): the bottom-left page-mode GUTTER
-/// (`TextPipeline::prepare_gutter` — the filename/project stack) shares the
-/// outline's left-margin real estate, and now shares its rail carve too.
-/// `TextPipeline::lava_rail_carved` reads BOTH left-margin ink gates
-/// (`outline_visible` OR `gutter_visible`), so whenever the gutter draws on a
-/// lava world — including the states the audit flagged, any NON-MARKDOWN buffer
-/// and heading-free markdown, where the outline alone never triggered the carve
-/// — the whole left margin renders the flat ground. (Before the fix, Mangrove's
-/// `faint` cleared only ~68 redmean against `blob_hi`, and 74-92% of the real
-/// PNG pixels around the rendered gutter glyphs fell under the 100-redmean floor
-/// the outline is held to.)
+/// THE GUTTER LOCAL CORNER CARVE LAW (the "lava both sides" round — re-scoped
+/// from the old whole-margin gutter carve). The bottom-left page-mode GUTTER
+/// (`TextPipeline::prepare_gutter` — the filename/project stack) used to gate the
+/// WHOLE-margin `lava_rail_carved` carve, which flattened both margins on nearly
+/// every page-mode buffer (the gutter shows almost always), so the lamp was
+/// right-only. It now drives only a BOUNDED corner carve around its own block
+/// (`TextPipeline::lava_gutter_carve_rect` → the shader's `gutter_rect`), so its
+/// `muted`/`faint` stack sits on flat ground while the REST of both margins keep
+/// the lamp — an ordinary doc goes both-sides.
 ///
-/// Two halves, mirroring the outline's own law one test above:
+/// Three halves:
 ///
-/// (1) STRUCTURAL, PHASE-INDEPENDENT: with the rail carved, the gutter's own y
-///     band (the bottom rows of the left margin) contains NO lava pixel at ANY
-///     animation phase — the composited pixel is bit-exactly the world's flat
-///     ground. Proven over COMPOSITED PIXELS via the pure-Rust shader mirror,
-///     with a non-vacuous WITNESS (the uncarved mask genuinely paints a blob at
-///     some sampled gutter-band pixel, so the law can never pass over a band the
-///     lamp never touched). The render-side decision these samples assume —
-///     "gutter drawn => carved" — is pinned at its own seam by
-///     `render::tests::outline::lava_rail_carve_follows_gutter_visibility`.
+/// (1) STRUCTURAL, PHASE-INDEPENDENT — FLAT INSIDE THE CORNER: with the gutter
+///     rect carved (`lava_mask_2d` with `Some(rect)`), the gutter's own corner
+///     band contains NO lava pixel at ANY animation phase — the composited pixel
+///     is bit-exactly the world's flat ground. Proven over COMPOSITED PIXELS via
+///     the pure-Rust shader mirror, with a non-vacuous WITNESS.
 ///
-/// (2) LEGIBILITY FLOOR: the gutter's two inks clear the repo's perceptible-
-///     difference floors against that LOCAL rail ground — the `faint` project
-///     line at the ink-ladder law (c) redmean >= 100 (the same floor the
-///     outline's dim entries carry), the `muted` filename line at >= 150 —
-///     with `ground == base_100` asserted, so the ink-ladder laws govern the
-///     gutter's legibility directly and no lava world can drown its own
-///     orientation gutter again.
+/// (2) BOTH MARGINS RECLAIMED — LOCAL, not whole-margin: OUTSIDE the corner rect
+///     (the left margin ABOVE the band, and the whole right margin) the 2-D mask
+///     is byte-for-byte the un-carved column mask — the lamp is untouched, so an
+///     ordinary doc keeps both sides. Witnessed: some sampled reclaimed pixel
+///     genuinely carries a blob. The corner BOUNDS (a bottom-left box) are pinned
+///     at the render seam by
+///     `render::tests::outline::lava_gutter_carve_follows_gutter_visibility`.
+///
+/// (3) LEGIBILITY FLOOR: the gutter's two inks clear the repo's perceptible-
+///     difference floors against that LOCAL corner ground (== base_100) — the
+///     `faint` project line at the ink-ladder law (c) redmean >= 100, the
+///     `muted` filename line at >= 150 — so the gutter can never drown again.
 ///
 /// The `Background` match is NO-WILDCARD: a future ground variant must decide
 /// its rail story here or fail to compile.
 #[test]
-fn gutter_rail_band_is_flat_ground_and_gutter_ink_clears_it_on_every_lava_world() {
+fn gutter_corner_carve_is_local_flat_ground_and_keeps_both_margins_on_every_lava_world() {
     fn redmean(a: Srgb, b: Srgb) -> f32 {
         let rbar = (a.r as f32 + b.r as f32) * 0.5;
         let dr = a.r as f32 - b.r as f32;
@@ -448,13 +445,14 @@ fn gutter_rail_band_is_flat_ground_and_gutter_ink_clears_it_on_every_lava_world(
             .sqrt()
     }
     // Representative page geometry (the 1600x1000 gallery canvas at the default
-    // 70-char prose measure); the carve is independent of the exact numbers.
-    // The gutter is BOTTOM-anchored in the left margin (two LABEL-scale rows a
-    // small margin up from the canvas bottom — `prepare_gutter`), so the y
-    // samples cover that bottom band.
+    // 70-char prose measure). The gutter's local corner rect [left, top, right,
+    // bottom]: left 0, right a small gap shy of the column, a BOTTOM band (the
+    // two stacked LABEL rows ~8px up from the canvas bottom — `prepare_gutter` /
+    // `gutter_carve_rect`).
     let vp = (1600.0f32, 1000.0f32);
     let (col_left, col_right) = (296.0f32, 1304.0f32);
     let gap = crate::lava::MARGIN_GAP_PX;
+    let gutter_rect = [0.0f32, 900.0, 260.0, 1000.0];
     for t in THEMES.iter() {
         // NO-WILDCARD: the composite below uses blob_hi — the BRIGHTEST tone the
         // shader can reach — so proving the worst case covers blob_lo too.
@@ -467,24 +465,35 @@ fn gutter_rail_band_is_flat_ground_and_gutter_ink_clears_it_on_every_lava_world(
             | Background::Stripes { .. } => continue,
             Background::Lava { ground, blob_hi, .. } => (ground, blob_hi),
         };
-        // The rail IS the page's own ground — the ink-ladder laws govern it.
-        assert_eq!(ground, t.base_100, "{}: rail ground must be base_100", t.name);
+        // The corner ground IS the page's own ground — the ink-ladder laws govern it.
+        assert_eq!(ground, t.base_100, "{}: corner ground must be base_100", t.name);
 
-        // (1) Phase sweep x gutter-band grid: the carved mask is exactly zero,
-        //     so the straight-alpha composite over the flat ground is bit-exactly
-        //     the ground — even against the brightest reachable lava tone.
-        let mut witnessed = false;
+        // (1) Phase sweep x corner-band grid: the 2-D carved mask is exactly zero
+        //     INSIDE the rect, so the straight-alpha composite over the flat
+        //     ground is bit-exactly the ground — even against the brightest tone.
+        // (2) The RECLAIMED margin (left margin ABOVE the band + the right
+        //     margin) stays byte-identical to the un-carved column mask.
+        let mut witnessed_carve = false;
+        let mut witnessed_reclaim = false;
         for step in 0..64 {
             let phase = step as f32 * crate::lava::LAVA_LOOP_CYCLES / 64.0;
-            for xi in 0..30 {
-                let x = col_left * (xi as f32 + 0.5) / 30.0;
-                // The gutter's own bottom band (its two stacked label rows sit
-                // ~8px up from the canvas bottom).
+            // CARVE samples: x strictly INSIDE the corner rect (past its 28px
+            // right-face feather: rect right 260 → interior ends ~232).
+            for &x in &[10.0f32, 60.0, 120.0, 180.0, 225.0] {
+                // Corner-band y samples (inside the rect), well past its feather.
                 for y in [930.0, 955.0, 985.0] {
-                    let a = crate::lava::lava_mask(x, col_left, col_right, gap, true);
+                    let a = crate::lava::lava_mask_2d(
+                        x,
+                        y,
+                        col_left,
+                        col_right,
+                        gap,
+                        false,
+                        Some(gutter_rect),
+                    );
                     assert_eq!(
                         a, 0.0,
-                        "{}: lava coverage in the gutter band at x={x} y={y} phase={phase}",
+                        "{}: lava coverage in the gutter corner at x={x} y={y} phase={phase}",
                         t.name
                     );
                     let over = |gc: u8, bc: u8| -> u8 {
@@ -499,12 +508,11 @@ fn gutter_rail_band_is_flat_ground_and_gutter_ink_clears_it_on_every_lava_world(
                     assert_eq!(
                         (px.r, px.g, px.b),
                         (ground.r, ground.g, ground.b),
-                        "{}: gutter-band pixel is not the flat ground at x={x} y={y} phase={phase}",
+                        "{}: gutter-corner pixel is not the flat ground at x={x} y={y} phase={phase}",
                         t.name
                     );
-                    // WITNESS: the uncarved mask would have painted a real blob
-                    // pixel at at least one of these samples (never vacuous).
-                    if crate::lava::lava_mask(x, col_left, col_right, gap, false) >= 1.0
+                    // WITNESS the carve: the un-carved mask WOULD paint here.
+                    if crate::lava::column_mask(x, col_left, col_right, gap) >= 1.0
                         && crate::lava::metaball_field(
                             (x, y),
                             vp,
@@ -512,31 +520,60 @@ fn gutter_rail_band_is_flat_ground_and_gutter_ink_clears_it_on_every_lava_world(
                             phase,
                         ) >= 0.5
                     {
-                        witnessed = true;
+                        witnessed_carve = true;
                     }
+                }
+            }
+            // RECLAIMED: the left margin ABOVE the corner band (both sides back)
+            // AND the whole right margin are byte-identical to the plain column
+            // mask — the carve is LOCAL, the lamp elsewhere is untouched.
+            let reclaim: [(f32, f32); 6] = [
+                (60.0, 120.0),   // left margin, above the band
+                (180.0, 300.0),  // left margin, above the band
+                (120.0, 520.0),  // left margin, above the band
+                (1320.0, 930.0), // right margin, at the band's y (still lit)
+                (1400.0, 500.0), // right margin
+                (1560.0, 970.0), // right margin, deep
+            ];
+            for (x, y) in reclaim {
+                let carved =
+                    crate::lava::lava_mask_2d(x, y, col_left, col_right, gap, false, Some(gutter_rect));
+                let plain = crate::lava::column_mask(x, col_left, col_right, gap);
+                assert_eq!(
+                    carved, plain,
+                    "{}: a reclaimed margin pixel lost its lamp at x={x} y={y} (carve not local)",
+                    t.name
+                );
+                if plain >= 1.0
+                    && crate::lava::metaball_field((x, y), vp, &crate::lava::BACKDROP_BLOBS, phase)
+                        >= 0.5
+                {
+                    witnessed_reclaim = true;
                 }
             }
         }
         assert!(
-            witnessed,
-            "{}: no sampled gutter-band pixel would have carried lava without the \
-             carve — the law is asserting over a band the lamp never touched (vacuous)",
+            witnessed_carve,
+            "{}: no sampled corner pixel would have carried lava without the carve (vacuous)",
             t.name
         );
-        // (2) The gutter's inks clear the rail's LOCAL ground (== base_100):
-        //     the faint project line at the ink-ladder law (c) floor, the muted
-        //     filename line higher.
+        assert!(
+            witnessed_reclaim,
+            "{}: no sampled reclaimed pixel carries a blob — the both-sides claim is vacuous",
+            t.name
+        );
+        // (3) The gutter's inks clear the corner's LOCAL ground (== base_100).
         let project = redmean(t.faint, ground);
         assert!(
             project >= 100.0,
             "{}: the gutter's faint project line only {project:.1} redmean from \
-             the rail ground (under the ink-ladder perceptibility floor)",
+             the corner ground (under the ink-ladder perceptibility floor)",
             t.name
         );
         let name = redmean(t.muted, ground);
         assert!(
             name >= 150.0,
-            "{}: the gutter's muted filename only {name:.1} redmean from the rail ground",
+            "{}: the gutter's muted filename only {name:.1} redmean from the corner ground",
             t.name
         );
     }

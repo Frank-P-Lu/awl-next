@@ -394,6 +394,24 @@ impl TextPipeline {
         self.outline_layout(height).is_some()
     }
 
+    /// PROBE-ONLY (env `AWL_LAVA_BOTH=plate|band`, gallery-only): the OUTLINE
+    /// rail's own band rect `[left, top, right, bottom]` (px) — the block the
+    /// `plate` audition plates and the `band` audition locally carves, so a
+    /// headed lava doc can be auditioned both-sides. Derived from the SAME
+    /// [`Self::outline_layout`] owner the outline's pixels ride (its `right_edge`,
+    /// `avail`, `top`, and stacked row heights incl. group gaps). `None` when the
+    /// outline is hidden. NOTHING SHIPS — only consulted under the env knob.
+    pub(in crate::render) fn outline_band_rect(&self, height: u32) -> Option<[f32; 4]> {
+        let layout = self.outline_layout(height)?;
+        let label = crate::markdown::type_scale::LABEL;
+        let row_h = self.metrics.line_height * label;
+        let gap_count = layout.lines.iter().filter(|r| r.gap_before).count();
+        let block_h =
+            layout.lines.len() as f32 * row_h + gap_count as f32 * row_h * OUTLINE_GAP_ROWS + 1.0;
+        let left = (layout.right_edge - layout.avail).max(0.0);
+        Some([left, layout.top, layout.right_edge, layout.top + block_h])
+    }
+
     /// PERSISTENT MARGIN OUTLINE: the CURRENT heading's [`ancestor_chain`] — the
     /// indices (into [`Self::outline_headings`]) of the headings the caret is nested
     /// inside, EMPTY when the caret sits above the first heading or the current
