@@ -12,7 +12,7 @@ use anyhow::{bail, Result};
 
 use crate::capture::{self, CaptureOpts};
 use crate::config::{self, Config};
-use crate::keymap::Action;
+use crate::keymap::KeymapState;
 use crate::{caret, debug, hud, keyspec, lifetime, page, theme, whichkey};
 
 pub(crate) enum Mode {
@@ -44,7 +44,12 @@ pub(crate) enum Mode {
         out: PathBuf,
         file: Option<PathBuf>,
         opts: CaptureOpts,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        /// The keymap the replay loop resolves `keys` through, chord by chord
+        /// (config `[keys]` rebinds + the `linux_keep_emacs` door applied) —
+        /// resolution happens INSIDE the replay so the search guard can
+        /// intercept a chord before the keymap ever sees it.
+        km: KeymapState,
         /// The active project root for the capture (`--root`); scopes the go-to
         /// overlay and populates the sidecar `project` block.
         root: Option<PathBuf>,
@@ -57,6 +62,17 @@ pub(crate) enum Mode {
         /// The loaded persistent config: supplies the `[keys]` overrides reflected in
         /// the palette's effective bindings, and the Settings-open target.
         config: Config,
+        /// STRICT REPLAY (`--strict-replay`, opt-in): abort on any unbound
+        /// chord (checked at replay time by `keyspec::ChordResolver`, AFTER
+        /// the search guard has had its chance to consume the chord), any
+        /// Unsupported effect, or a missing layout oracle — naming the exact
+        /// offender — instead of the legacy permissive warn-and-continue. The
+        /// scenario-runner default the later harness phases plumb through;
+        /// see `crate::replay`'s module doc. Also HERMETIC: by the time this
+        /// Mode exists the process fs has been swapped to the seeded sandbox
+        /// (`crate::scenario::install_hermetic_fs`, called before the config
+        /// loaded), so the whole run never touches the user's real files.
+        strict: bool,
     },
     /// Deterministic one-frame capture of a caret MID-GLIDE (dropped to the
     /// baseline and stretched into a trailing underline streak), so the temporal
@@ -64,21 +80,24 @@ pub(crate) enum Mode {
     ScreenshotMotion {
         out: PathBuf,
         file: Option<PathBuf>,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        km: KeymapState,
     },
     /// Like [`Mode::ScreenshotMotion`] but a VERTICAL glide: the caret slid to a
     /// thin bar on the cell's left edge, trailing up the lines it passed.
     ScreenshotMotionVertical {
         out: PathBuf,
         file: Option<PathBuf>,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        km: KeymapState,
     },
     /// Like [`Mode::ScreenshotMotion`] but a DIAGONAL glide (different row AND
     /// column): the trail is a true slanted tracer from source to target.
     ScreenshotMotionDiagonal {
         out: PathBuf,
         file: Option<PathBuf>,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        km: KeymapState,
     },
     /// DETERMINISTIC TIMELINE capture: after the `--keys` replay sets up a
     /// NAVIGATION caret move (a glide, not an edit-snap), advance a VIRTUAL clock
@@ -89,7 +108,8 @@ pub(crate) enum Mode {
     CaptureTimeline {
         out: PathBuf,
         file: Option<PathBuf>,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        km: KeymapState,
         /// Cumulative ms since the move started; the dt for step i is `t[i]-t[i-1]`.
         steps: Vec<u32>,
         root: Option<PathBuf>,
@@ -107,7 +127,8 @@ pub(crate) enum Mode {
     CaptureHeld {
         out: PathBuf,
         file: Option<PathBuf>,
-        keys: Vec<Action>,
+        keys: Vec<keyspec::Chord>,
+        km: KeymapState,
         dir: capture::HeldDir,
         /// Cumulative ms; the dt for step i is `t[i]-t[i-1]`. One held re-target is
         /// applied per entry.
@@ -117,6 +138,27 @@ pub(crate) enum Mode {
         canvas: Option<(u32, u32)>,
         /// `--capture-dpi` renderer scale factor (None = 1.0).
         dpi: Option<f32>,
+    },
+    /// STORYBOARD run (`--storyboard <file.toml>`): a checked-in scenario file
+    /// drives one HERMETIC, STRICT replay session end-to-end (see
+    /// `crate::storyboard` + `crate::story`), emitting per-step PNG+sidecar
+    /// artifacts, deterministic film frames on the virtual clock, a byte-stable
+    /// `trace.json`, and (via a local ffmpeg, when present) a WebM/MP4 film.
+    /// Like `--strict-replay`, by the time this Mode exists the process fs has
+    /// been swapped to the seeded sandbox (`crate::scenario`).
+    Storyboard {
+        board: crate::storyboard::Storyboard,
+        /// The board's document resolved against the storyboard file's own
+        /// directory (`None` = scratch); already seeded into the sandbox.
+        file: Option<PathBuf>,
+        /// Where the run's artifacts land (`--storyboard-out`, defaulting to
+        /// `<storyboard-stem>.run/` beside the storyboard file — gitignored).
+        out_dir: PathBuf,
+        root: Option<PathBuf>,
+        workspace: Option<PathBuf>,
+        notes_root: PathBuf,
+        config: Config,
+        km: KeymapState,
     },
     /// Hidden performance harness: time the per-keystroke update path (append a
     /// char -> reshape) on documents of 100/1000/5000 lines, BEFORE (whole-buffer
@@ -418,6 +460,15 @@ pub(crate) fn parse_args() -> Result<Mode> {
     // `--wait` (single-instance daemon; `EDITOR=awl --wait` for git): only
     // meaningful for the windowed editor — see `crate::daemon`'s module doc.
     let mut wait_flag = false;
+    // `--strict-replay`: the strict replay gate on `--screenshot --keys` — see
+    // `crate::replay`'s module doc. Parsed keys go through the STRICT door
+    // (unbound chords error) and the replay aborts on Unsupported effects.
+    let mut strict_replay = false;
+    // `--storyboard <file.toml>` (+ optional `--storyboard-out <dir>`): the
+    // scenario runner — always strict, always hermetic. Kept as the raw path
+    // here; parsed after the loop (its named file seeds the sandbox).
+    let mut storyboard_arg: Option<PathBuf> = None;
+    let mut storyboard_out: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -505,6 +556,19 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 out = Some(PathBuf::from(p));
                 capture_modes.push("--capture-held");
             }
+            "--storyboard" => {
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--storyboard requires a storyboard .toml path")
+                })?;
+                storyboard_arg = Some(PathBuf::from(p));
+                capture_modes.push("--storyboard");
+            }
+            "--storyboard-out" => {
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--storyboard-out requires an output directory")
+                })?;
+                storyboard_out = Some(PathBuf::from(p));
+            }
             "--sel" => {
                 let v = args
                     .next()
@@ -553,8 +617,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
             }
             "--search-replace" => {
                 // Reveal the labeled REPLACE row + the key-hint line on the panel (the
-                // Cmd-R open state), deterministically — the replacement itself can't
-                // be typed headlessly (the isearch-input gap), so it renders empty.
+                // fresh Cmd-R open state: find field focused, empty replacement). A
+                // `--keys` replay can drive the panel further — typing the replacement,
+                // replacing — through the shared search-key seam (`search::keys`).
                 opts.search_replace_active = true;
             }
             "--theme" => {
@@ -679,6 +744,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
                     .ok_or_else(|| anyhow::anyhow!("--keys requires a key-spec string"))?;
                 keys_spec = Some(v);
             }
+            "--strict-replay" => {
+                strict_replay = true;
+            }
             "--config" => {
                 let v = args
                     .next()
@@ -737,7 +805,10 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
                      \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\
                      \x20 --wait              windowed editor only: single-instance daemon — hand `file` to an already-running awl and block until C-x # finishes it (EDITOR=awl --wait for git)\n\
-                     \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"
+                     \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture\n\
+                     \x20 --strict-replay     with --screenshot --keys: abort (naming the offender) on an unbound chord, a live-only effect the replay can't perform, or a missing layout oracle; runs HERMETIC (an in-memory fs seeded from the named file + --config — a replayed save never touches the real file, the user's own config/notes/history are never read or written)\n\
+                     \x20 --storyboard TOML   run a scenario storyboard (press/type/pause/run_for/expect steps — see scenarios/): strict + hermetic, emitting per-step PNG+JSON, deterministic film frames, a byte-stable trace.json, and (with ffmpeg on PATH) film.webm/film.mp4\n\
+                     \x20 --storyboard-out DIR where the storyboard run's artifacts land (default: <storyboard>.run/ beside the .toml)"
                 );
                 std::process::exit(0);
             }
@@ -807,9 +878,86 @@ pub(crate) fn parse_args() -> Result<Mode> {
             unused.join(", ")
         );
     }
-    // Load the persistent CONFIG (flag/$AWL_CONFIG/XDG path). Absent file = all
-    // defaults, so this is purely additive. Parse `--keys` THROUGH the config's
-    // keybinding overrides so a replay exercises rebound chords.
+    // `--strict-replay` gates a `--keys` replay, and only the plain
+    // `--screenshot` mode threads the strict engine (the motion/timeline/held
+    // variants stay permissive one-offs); refuse the combinations that would
+    // silently ignore it. Validated BEFORE the hermetic install below so a
+    // refused flag combination never swaps the process filesystem first.
+    if strict_replay {
+        if keys_spec.is_none() {
+            bail!("--strict-replay requires --keys (there is no replay to be strict about)");
+        }
+        if kind != CaptureKind::Screenshot {
+            bail!("--strict-replay only applies to --screenshot (not motion/timeline/held captures)");
+        }
+    }
+    // `--storyboard` drives its own input/document; refuse the flags it would
+    // silently ignore, then parse the scenario file NOW (std::fs — the one
+    // boundary crossing before the sandbox exists) so its named document can
+    // seed the hermetic sandbox below, exactly like `--strict-replay`'s file.
+    if storyboard_arg.is_some() {
+        if keys_spec.is_some() {
+            bail!("--storyboard drives its own steps; --keys does not apply");
+        }
+        if file.is_some() {
+            bail!("--storyboard takes its document from the storyboard file; drop the file argument");
+        }
+        if wait_flag {
+            bail!("--wait only applies to the windowed editor (no capture mode)");
+        }
+        if strict_replay {
+            bail!("--storyboard is always strict; --strict-replay does not apply");
+        }
+    } else if storyboard_out.is_some() {
+        bail!("--storyboard-out requires --storyboard");
+    }
+    let storyboard: Option<(crate::storyboard::Storyboard, PathBuf)> = match &storyboard_arg {
+        Some(p) => {
+            let src = std::fs::read_to_string(p)
+                .map_err(|e| anyhow::anyhow!("reading storyboard {}: {e}", p.display()))?;
+            let stem = p
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "storyboard".to_string());
+            let board = crate::storyboard::parse(&src, &stem)
+                .map_err(|e| e.context(format!("parsing storyboard {}", p.display())))?;
+            Some((board, p.clone()))
+        }
+        None => None,
+    };
+    // The board's document, resolved against the storyboard file's own directory
+    // (so a checked-in `scenarios/demo.toml` names its fixture as `demo.md`).
+    let storyboard_file: Option<PathBuf> = storyboard.as_ref().and_then(|(b, p)| {
+        b.file.as_ref().map(|f| match p.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir.join(f),
+            _ => PathBuf::from(f),
+        })
+    });
+    // HERMETIC SCENARIO FILESYSTEM — the ONE production door (`crate::scenario`'s
+    // module doc is the contract): a strict (scenario) run swaps the process fs
+    // to an in-memory sandbox seeded from exactly the CLI-named inputs BEFORE
+    // the config loads, so the load below — and every fs consumer after it —
+    // reads the sandbox, never the user's real files. The legacy permissive
+    // paths never install it (real-fs behavior kept byte-for-byte). A
+    // storyboard run is hermetic UNCONDITIONALLY, through its own door (the
+    // same sandbox, plus the document's parent-directory marker).
+    #[cfg(not(target_arch = "wasm32"))]
+    if strict_replay {
+        crate::scenario::install_hermetic_fs(file.as_deref(), config_arg.as_deref(), root.as_deref());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if storyboard.is_some() {
+        crate::scenario::install_hermetic_fs(
+            storyboard_file.as_deref(),
+            config_arg.as_deref(),
+            root.as_deref(),
+        );
+    }
+    // Load the persistent CONFIG (flag/$AWL_CONFIG/XDG path — resolved inside
+    // the hermetic sandbox for a strict run, where an un-seeded path degrades
+    // to pure defaults). Absent file = all defaults, so this is purely
+    // additive. Parse `--keys` THROUGH the config's keybinding overrides so a
+    // replay exercises rebound chords.
     let config = Config::load(config::config_path(config_arg));
     // STICKY PREFERENCES: restore the remembered THEME / PAGE / CARET onto the
     // process-globals (the same globals the flags set), honouring flag > config —
@@ -824,7 +972,8 @@ pub(crate) fn parse_args() -> Result<Mode> {
     // `file` argument (no `Buffer` exists yet here) so the very first frame reads
     // the right one; a later buffer switch re-resolves against whichever kind is
     // then active (`App::sync_page_measure` / the headless `--keys` Goto switch).
-    let initial_page_class = page::PageClass::of_path(file.as_deref());
+    let initial_page_class =
+        page::PageClass::of_path(storyboard_file.as_deref().or(file.as_deref()));
     config.apply_sticky_globals(theme_flag, page_flag, caret_flag, measure_flag, initial_page_class);
     // `--keys` only makes sense with a capture mode (it mutates the buffer for a
     // one-frame capture); refuse it for the windowed editor where live typing is
@@ -838,10 +987,19 @@ pub(crate) fn parse_args() -> Result<Mode> {
     if wait_flag && out.is_some() {
         bail!("--wait only applies to the windowed editor (no capture mode)");
     }
-    let keys: Vec<Action> = match &keys_spec {
-        Some(spec) => keyspec::parse_keys_with(spec, &config)?,
+    // STRUCTURAL parse only — a garbled token still errors right here. The
+    // chords stay UNRESOLVED: the replay loop resolves them one press at a time
+    // through `km` below (`keyspec::ChordResolver`), interleaved with the
+    // search guard, so a chord an open search panel consumes never reaches the
+    // keymap — and the STRICT unbound/dangling-prefix refusals fire there,
+    // where "was this chord for the keymap at all" is actually decidable.
+    let keys: Vec<keyspec::Chord> = match &keys_spec {
+        Some(spec) => keyspec::parse_chords(spec)?,
         None => Vec::new(),
     };
+    // The keymap every capture replay resolves through: config `[keys]`
+    // rebinds + the `linux_keep_emacs` door, exactly what live `App::new` builds.
+    let km = KeymapState::with_overrides_and_keep(&config.keys, &config.effective_linux_keep());
     // PRECEDENCE: explicit flag > config > built-in default. Fold the config value in
     // BEHIND the flag (the flag wins via `.or`) before the existing resolvers add the
     // built-in default. The Windowed path keeps the RAW flag + config so a live reload
@@ -857,6 +1015,22 @@ pub(crate) fn parse_args() -> Result<Mode> {
     if opts.zoom.is_none() {
         opts.zoom = config.zoom;
     }
+    // STORYBOARD mode: everything below the sandbox install composes normally
+    // (config from the sandbox, km with its rebinds); the run outputs land in
+    // `--storyboard-out`, defaulting to `<storyboard>.run/` beside the board.
+    if let Some((board, board_path)) = storyboard {
+        let out_dir = storyboard_out.unwrap_or_else(|| board_path.with_extension("run"));
+        return Ok(Mode::Storyboard {
+            board,
+            file: storyboard_file,
+            out_dir,
+            root,
+            workspace: workspace_folded,
+            notes_root: notes_root_resolved,
+            config,
+            km,
+        });
+    }
     Ok(match out {
         Some(out) if held.is_some() => {
             let (dir, steps) = held.unwrap();
@@ -864,6 +1038,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 out,
                 file,
                 keys,
+                km,
                 dir,
                 steps,
                 root,
@@ -875,23 +1050,26 @@ pub(crate) fn parse_args() -> Result<Mode> {
             out,
             file,
             keys,
+            km,
             steps: timeline_steps.unwrap(),
             root,
             canvas: capture_size,
             dpi: capture_dpi,
         },
-        Some(out) if motion_d => Mode::ScreenshotMotionDiagonal { out, file, keys },
-        Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file, keys },
-        Some(out) if motion => Mode::ScreenshotMotion { out, file, keys },
+        Some(out) if motion_d => Mode::ScreenshotMotionDiagonal { out, file, keys, km },
+        Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file, keys, km },
+        Some(out) if motion => Mode::ScreenshotMotion { out, file, keys, km },
         Some(out) => Mode::Screenshot {
             out,
             file,
             opts,
             keys,
+            km,
             root,
             workspace: workspace_folded,
             notes_root: notes_root_resolved,
             config,
+            strict: strict_replay,
         },
         None => Mode::Windowed {
             file,

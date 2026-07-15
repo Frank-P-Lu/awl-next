@@ -5,6 +5,11 @@
 //! the rope. All offsets are CHAR indices (not bytes) so they map directly to
 //! `Buffer::set_cursor` / `char_to_line_col` even for multibyte text.
 
+// The ONE search/replace key-interception seam (`keys::intercept`) — shared by
+// the live window's `App::handle_search_key` and the headless `--keys` replay
+// guard, so the two drivers cannot drift.
+pub mod keys;
+
 /// A single match as a half-open CHAR range `[start, end)` into the document.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Match {

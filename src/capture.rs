@@ -279,6 +279,7 @@ pub fn schema_held() -> String {
 }
 
 mod animated;
+mod film;
 // `pub(crate)`: the render bench suite (`render::benchsuite`) drives frames
 // through the SAME headless device / offscreen target / pixel readback this
 // module owns — one owner of the wgpu plumbing, not an aligned copy.
@@ -289,11 +290,16 @@ mod oracle;
 mod sidecar;
 
 pub use animated::{capture_held, capture_timeline, HeldDir};
+pub use film::{FilmRenderer, FRAME_MS};
 pub use modes::{
     capture_motion, capture_motion_diagonal, capture_motion_vertical, capture_with,
 };
 pub use opts::{BuffersInfo, CaptureInfo, CaptureOpts, OverlayInfo, ProjectInfo};
 pub use oracle::build_oracle;
+// The sidecar module stays private (write-only); its JSON-string escaper is the
+// crate's ONE escaper, shared with the storyboard trace so the two artifacts
+// can never disagree on escaping.
+pub(crate) use sidecar::json_string;
 
 // The [`OraclePipeline`] type is part of the module's public surface but is not
 // named at a call site today (the oracle is returned only as `Option<_>`), so

@@ -15,8 +15,10 @@
 //!   * [`NativeFs`] — the std::fs backing. BEHAVIOUR-PRESERVING: each method does
 //!     EXACTLY what the inlined `std::fs::…` call did (same paths, same `io::Result`
 //!     errors, same bytes), so a native capture is byte-identical to before.
-//!   * [`InMemoryFs`] — a HashMap-backed fake for tests: no real disk, deterministic,
-//!     so fs-touching unit tests prove the seam works without littering temp dirs.
+//!   * [`InMemoryFs`] — a HashMap-backed fake: no real disk, deterministic. Serves
+//!     fs-touching unit tests AND the hermetic scenario sandbox (`crate::scenario`
+//!     installs a seeded one for a strict `--keys` replay, so a scenario run never
+//!     touches the user's real files).
 //!
 //! INJECTION follows awl's existing process-global idiom (mirroring `page`/`fps`/
 //! `caret` — one app-wide setting reached without threading a handle through every
@@ -170,25 +172,31 @@ impl FileSystem for NativeFs {
     }
 }
 
-// --- In-memory backend (tests) --------------------------------------------
+// --- In-memory backend (tests + the hermetic scenario sandbox) -------------
 //
-// Test-only: the fake + its helpers exist solely so fs-touching unit tests run
-// against an in-memory backend (no real disk). Gated behind `#[cfg(test)]` so a
-// release build doesn't carry — or warn about — never-constructed test scaffolding.
+// Two consumers: fs-touching unit tests (no real disk, no temp-dir litter) and
+// — since the hermetic-scenario round — the PRODUCTION strict-replay sandbox
+// (`crate::scenario`), which seeds one of these from the CLI-named storyboard
+// inputs and installs it so a scenario run never touches the user's real
+// files. Gated `any(test, not(wasm32))`: native builds carry it for the
+// scenario door; a wasm release build (whose sandbox is `WebFs`) doesn't.
 
-/// A HashMap-backed fake filesystem for tests: files + their bytes live in memory,
+/// A HashMap-backed fake filesystem: files + their bytes live in memory,
 /// directories are tracked as a set, so fs-touching logic runs deterministically
 /// with NO real disk (no temp-dir litter, no cross-test interference). Paths are
 /// stored verbatim (the keys callers pass), and the ops model the native ones
 /// closely enough that the inventoried code behaves identically. Cloneable +
 /// shareable (`Arc<RwLock<…>>`) so a test can seed it, install it, then assert.
-#[cfg(test)]
+/// Doubles as the HERMETIC SCENARIO SANDBOX (see `crate::scenario`): a strict
+/// replay installs a seeded instance as the active backend, so every in-app
+/// read and write of a scenario run stays in memory.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryFs {
     inner: Arc<RwLock<MemState>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, not(target_arch = "wasm32")))]
 #[derive(Debug, Default)]
 struct MemState {
     /// path → (bytes, modified).
@@ -197,14 +205,14 @@ struct MemState {
     dirs: std::collections::BTreeSet<PathBuf>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, not(target_arch = "wasm32")))]
 #[derive(Debug, Clone)]
 struct MemFile {
     bytes: Vec<u8>,
     modified: SystemTime,
 }
 
-#[cfg(test)]
+#[cfg(any(test, not(target_arch = "wasm32")))]
 impl InMemoryFs {
     /// A fresh, empty in-memory filesystem (root `/` implicitly present).
     pub fn new() -> Self {
@@ -214,13 +222,16 @@ impl InMemoryFs {
     }
 
     /// Seed a text file (creating its parent dirs), for arranging a test. Returns
-    /// `self` so seeds can chain.
+    /// `self` so seeds can chain. (Test-only sugar — the production scenario
+    /// sandbox seeds raw bytes through the trait's own `write`.)
+    #[cfg(test)]
     pub fn with_file(self, path: impl AsRef<Path>, contents: &str) -> Self {
         self.write(path.as_ref(), contents.as_bytes()).unwrap();
         self
     }
 
     /// Seed a directory (and its parents), for arranging a test.
+    #[cfg(test)]
     pub fn with_dir(self, path: impl AsRef<Path>) -> Self {
         self.create_dir_all(path.as_ref()).unwrap();
         self
@@ -236,7 +247,7 @@ impl InMemoryFs {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, not(target_arch = "wasm32")))]
 impl FileSystem for InMemoryFs {
     fn read_to_string(&self, path: &Path) -> io::Result<String> {
         let bytes = self.read(path)?;
@@ -354,7 +365,7 @@ impl FileSystem for InMemoryFs {
 
 /// The leaf file name of `path` as an owned lossy string (matches what the native
 /// `entry.file_name().to_string_lossy()` yields for a `read_dir` entry).
-#[cfg(test)]
+#[cfg(any(test, not(target_arch = "wasm32")))]
 fn leaf_name(path: &Path) -> String {
     path.file_name()
         .map(|s| s.to_string_lossy().to_string())
@@ -807,9 +818,10 @@ pub fn active() -> Arc<dyn FileSystem> {
     global().read().unwrap().clone()
 }
 
-/// Install `fs` as the active backend (the future browser entrypoint would call
-/// this once with its OPFS backend; tests call it to inject an [`InMemoryFs`]).
-#[allow(dead_code)]
+/// Install `fs` as the active backend. Three callers: the wasm entrypoint
+/// ([`install_web_fs`]), the HERMETIC SCENARIO door (`crate::scenario` — a
+/// strict replay swaps in a seeded [`InMemoryFs`] once, at startup, before any
+/// other fs consumer runs), and tests (via [`with_fs`] / [`FsGuard`]).
 pub fn set_active(fs: Arc<dyn FileSystem>) {
     *global().write().unwrap() = fs;
 }

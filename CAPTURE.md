@@ -48,19 +48,105 @@ Spec grammar — space-separated emacs chords:
 - `C-x` two-chord prefixes compose: `"C-x C-s"` → save.
 
 Because replay drives the same keymap + `apply_core` seam as live editing, a
-capture exercises the real edit logic — not a parallel mock.
+capture exercises the real edit logic — not a parallel mock. The visual-line
+LAYOUT ORACLE (the offscreen-shaped pipeline wrapped motion consults) is
+RE-SHAPED from the current buffer / zoom / page-measure state before every
+action (`capture::OraclePipeline::refresh` — one seam), mirroring the live
+window's between-keystrokes re-sync — so an edit that re-wraps a line, a
+replayed zoom change, or a Goto buffer switch (and the sticky-measure re-apply
+riding it) never leaves a later motion on stale wrap geometry.
 
 **Caveats — know these before trusting a replay:**
 
 - **Save writes to disk.** Replaying `C-x C-s` actually saves the target file
   during a headless capture. Don't replay save/quit chords against files you
-  don't want mutated.
-- **Search-query input is not yet faithful.** With isearch active (`C-s`),
-  typing currently inserts into the *buffer* instead of the search query (the
-  routing still lives in `App::apply`, not `apply_core`), so `--keys` cannot yet
-  drive a non-empty isearch query. Known gap.
+  don't want mutated. (Under `--strict-replay` the save lands in the hermetic
+  in-memory sandbox instead and the real file keeps every byte — see below.)
 - **Unbound chords are silent no-ops** (e.g. `C-Q` → `Ignore`, dropped); only
-  structurally invalid tokens (e.g. `frobnicate`) error.
+  structurally invalid tokens (e.g. `frobnicate`) error. (Under
+  `--strict-replay` an unbound chord aborts instead — see below.)
+
+### Search/replace is fully drivable (the isearch-input gap is retired)
+
+With isearch active, the live window routes EVERY key to the search surface
+before the keymap ever sees it. The replay loop now runs the SAME code — one
+shared interception seam, `search::keys::intercept`, consumed by both the live
+guard (`app/input/keys.rs`) and the replay guard (`main/run.rs`) — so a
+`--keys` spec drives the panel's whole operation set exactly like live typing:
+
+- **Query typing + Backspace** — `--keys "C-s h i"` searches for `hi` (the
+  buffer text is untouched; the caret lands on the current match).
+- **Find next / previous** — `C-s`/`C-r`, `Down`/`Up`, `Cmd-F`/`Cmd-S-F`,
+  `Cmd-G`/`Cmd-S-G` while the panel is open (the Emacs two-press wrap and its
+  caret recoil included; the recoil itself is live-only animation).
+- **Case toggle** — `M-c` (sidecar `search.case_sensitive`).
+- **Replace-field editing** — `Tab` reveals/flips the field, `Cmd-R` focuses
+  it, then plain chars/`Space`/`Backspace` edit the replacement (sidecar
+  `search.replacement` + `search.editing_replacement`).
+- **Replace-one / replace-all** — `Enter` (replace mode) swaps the current
+  match and advances; `s-Enter` (Cmd-Enter) swaps every match in one edit.
+- **Accept / abort** — `Enter` (plain find) closes leaving the cursor on the
+  match; `Esc`/`C-g` closes AND restores the origin cursor, exactly like live
+  (the old headless `Cancel` close that skipped the origin-restore is gone).
+
+Worked example (fold visible in the sidecar `search` block + `text`):
+
+```sh
+cargo run -- --screenshot OUT.png --keys "C-s l i n e Tab r o w Enter" notes.md
+# OUT.json: search.query "line", replace_active true, replacement "row",
+# editing_replacement true, and text shows ONE "line" already swapped to "row".
+```
+
+To make this possible, `--keys` parsing now stops at the CHORD level
+(`keyspec::parse_chords`); each chord resolves through the real keymap INSIDE
+the replay loop (`keyspec::ChordResolver`), after the search guard has had its
+chance to consume it — the exact ordering of live key dispatch. A consumed
+chord is never judged "unbound" (`M-c` is a case toggle inside the panel, a
+silent no-op outside it).
+
+### Strict replay (`--strict-replay`, opt-in)
+
+`--screenshot --keys "SPEC" --strict-replay` turns the permissive replay into a
+truthfulness gate (the scenario-runner default the harness phases build on —
+`src/replay.rs` is the one owner). Every `actions::Effect` is classified
+**Applied** (performed for real headlessly), **Intercepted** (an external
+handoff — URL open, mailto, Trash, download — observed and recorded, payload
+included, deliberately not performed), or **Unsupported** (live-App-only work
+whose skip would diverge the session from live). The classification is a
+no-wildcard match, so a future `Effect` variant fails to compile until
+classified. Strict mode aborts, naming the exact offender, on: an unbound
+chord or dangling prefix sequence (at replay time, via
+`keyspec::ChordResolver` — it moved out of parse time when the search guard
+made "was this chord for the keymap at all" replay-state-dependent; a chord
+the open search panel consumes is never judged unbound), any Unsupported
+effect, or a missing layout oracle (no GPU adapter — motion would
+silently fall back to logical lines). A spec that crosses no such seam renders
+byte-identically to the permissive run. The plain `--keys` path stays
+permissive but now WARNS on stderr when it crosses an Unsupported or
+Intercepted seam; intercepted handoffs are recorded in the replay result under
+both modes (the future trace file's seam).
+
+**Hermetic by default (the scenario filesystem).** A strict run swaps the
+process filesystem seam (`fs::active()`) to an in-memory SANDBOX before its
+config even loads — `src/scenario.rs` is the one owner, with exactly one
+production door (`args::parse_args`'s strict arm). The sandbox is seeded from
+exactly the inputs the command line names: the launch file's bytes and an
+explicitly-passed config (`--config` / `$AWL_CONFIG`). Everything downstream
+routes through it — the config load, the buffer open, the `.git` probe (so the
+read-only `git` subprocesses never spawn), the index walk, a replayed save, a
+History read, a Settings open. A strict scenario therefore NEVER reads the
+user's implicit `~/.config/awl/config.toml` (an un-seeded path degrades to
+pure defaults) and NEVER writes any real file besides the PNG + JSON it was
+asked to produce: a replayed `Cmd-S` lands in the sandbox and the real file
+keeps every byte. External handoffs stay observed-not-performed (Intercepted,
+above), so a scenario run's only real side effects are its own artifacts.
+`tests/hermetic_canary.rs` proves the whole contract on the real binary: a
+save-bearing strict scenario under a canary HOME/XDG leaves the entire canary
+tree byte-identical, while the legacy leg (no `--strict-replay`) still reads
+the user's config off the real disk — hermeticity is the SCENARIO default,
+never a regression of the one-off permissive harness. Storyboards (the later
+phase) seed MORE files — fixtures, config, history — through the same
+`scenario::build_sandbox` door, not a new seam.
 
 ## Deterministic timeline capture (`--capture-timeline`)
 
@@ -126,6 +212,67 @@ the trajectory is machine-readable without eyeballing the PNG:
 So an agent asserts e.g. `pos.x` strictly increases t0→t150 and `settle_factor`
 rises toward 1, proving the glide progressed origin → mid → settled. The plain
 `--screenshot` path emits no `caret` block and stays schema `awl-capture/30`.
+
+## Storyboards (`--storyboard`) — scenario runs with a film
+
+A **storyboard** is a checked-in TOML file (`scenarios/*.toml`) that drives one
+whole scenario end-to-end — typing, search, selection, pickers — through the
+SAME strict replay session a `--strict-replay` capture uses, rendering as it
+goes:
+
+```sh
+cargo run -- --storyboard scenarios/demo.toml            # outputs → scenarios/demo.run/
+cargo run -- --storyboard scenarios/demo.toml --storyboard-out /tmp/run
+```
+
+Steps (exactly one key per `[[step]]`; parsing is STRICT — a typo'd key or a
+garbled chord aborts at parse time, never silently skips):
+
+- `press = "<chord spec>"` — replay chords through the real keymap (the
+  `--keys` grammar; the open search panel consumes them first, exactly live).
+- `type = "text"` — literal typing, each char the chord a spec would spell
+  (`keyspec::text_chords`; whitespace via the named `Space`/`Enter`/`Tab`).
+- `pause = ms` / `run_for = ms` — advance the VIRTUAL clock in fixed 20 ms
+  frame steps (`capture::FRAME_MS`), one film frame per tick — this is where a
+  caret glide or settle actually plays out on film.
+- `expect` (a sub-table) — assert basic state: `cursor = [line, col]`,
+  `overlay = "command"|"none"|…`, `search_active`, `search_query`,
+  `selection`, `text_contains`. A failed expectation aborts the run.
+
+Header keys: `name` (defaults to the file stem), `file` (the document to open,
+relative to the storyboard's own directory; absent = scratch), `theme` (a
+world name).
+
+One run emits, into `--storyboard-out` (default `<board>.run/` beside the
+TOML, gitignored):
+
+- `step-NNN.png` + `step-NNN.json` — one frame + ordinary plain-schema sidecar
+  per action step (an `expect` step renders nothing). The PNG is a byte-copy
+  of the step's LAST film frame — a step artifact can never diverge from the
+  film.
+- `frames/frame-NNNNN.png` — every film frame, ALWAYS retained (the
+  byte-deterministic deliverable).
+- `trace.json` (`awl-trace/1`) — every chord's resolved action + effect
+  classification (`applied` / `intercepted` / `unsupported`, plus the
+  keymap-free `search_input` / `prefix` outcomes), every assertion outcome,
+  and the `abort` record (if any) with the exact error text stderr shows.
+- `film.webm` + `film.mp4` — encoded FROM the frames by a local `ffmpeg` when
+  one is on PATH (`-bitexact`, 50 fps). No/broken ffmpeg only skips the encode
+  (a note is printed; the frames remain) — never fails the run.
+
+**Guarantees.** A storyboard run is STRICT (an unbound chord, a dangling
+prefix, an Unsupported live-only effect, or a failed `expect` aborts, naming
+the offender in both stderr and the partial trace — the film never silently
+crosses a seam the headless driver does not implement) and HERMETIC (the
+in-memory sandbox from `src/scenario.rs`, seeded with the storyboard's own
+`file` + an explicit `--config`; the only real writes are the artifacts
+above). Repeated runs of the same storyboard produce a **byte-identical
+`trace.json` and frames** (`tests/storyboard_film.rs` pins this on the real
+binary, along with the abort fixture `scenarios/abort-unsupported.toml`).
+Determinism is only claimed for trace + frames — the encoded films depend on
+the local ffmpeg build. The film is deterministic VISUAL REVIEW of motion on
+the virtual clock, NOT a claim about real compositor cadence (that stays a
+live-only boundary, as above).
 
 All bundled fixtures at once (the canonical command):
 
@@ -608,12 +755,15 @@ gated by the same `Buffer::syntax_lang` so `syn_lang` and `syn_spans` always agr
 Schema `awl-capture/24` (was `/21`; timeline `/25`, held `/26`) adds two FIND +
 REPLACE fields to the `search` block: `replace_active` (`true` once the replace
 field has been revealed on the search panel — a MODE of the same card, bound to
-Cmd-Option-F / Tab) and `replacement` (the replace field's text). TWO `--keys`
-replays set `replace_active` headlessly: `s-M-f` (Cmd-Option-F) opens the panel
-straight into replace mode, OR — with a panel already open — a single bare `<Tab>`
-(e.g. `C-s <Tab>`) toggles the replace field on, mirroring the live single-key
-affordance. The replacement itself can't be typed in a replay (the documented
-isearch-input gap), so it stays `""`. Both are present
+Cmd-Option-F / Tab) and `replacement` (the replace field's text). `--keys`
+replays set `replace_active` headlessly: `s-M-f` (Cmd-Option-F) or `Cmd-r`
+opens the panel straight into replace mode, OR — with a panel already open — a
+single bare `Tab` toggles the replace field on, mirroring the live single-key
+affordance. (Historical note: at this schema's introduction the replacement
+could not be typed in a replay — the "isearch-input gap" — so it stayed `""`;
+the shared search-key seam later retired that gap, and a replay now fills
+`replacement`/`editing_replacement` exactly like live typing — see
+"Search/replace is fully drivable" above.) Both are present
 on every path (`false` / `""` for a non-search capture), so a plain `--screenshot`
 stays byte-stable apart from the two new keys.
 

@@ -85,8 +85,17 @@ const EXPECTED: &[(&str, usize)] = &[
     ("main.rs", 2),
     ("main/args.rs", 1),
     // `--screenshot`/`--screenshot-motion*`/`--capture-*`'s "wrote …"
-    // deliverable output — this IS the CLI's product, read by scripts/agents.
-    ("main/run.rs", 6),
+    // deliverable output — this IS the CLI's product, read by scripts/agents —
+    // plus the permissive `--keys` replay's ONE stderr warning seam (the
+    // strict-replay round: `replay::warn_line` fires when a replay crosses an
+    // Unsupported/Intercepted effect; CLI diagnostic output by design, and the
+    // same string is recorded in the replay result so tests pin it).
+    ("main/run.rs", 7),
+    // `--storyboard`'s deliverable output (the run summary + "wrote film…"),
+    // plus the BEST-EFFORT film-encode notes ("no ffmpeg on PATH", a nonzero
+    // ffmpeg exit, a non-UTF-8 output path) — CLI product + diagnostics by
+    // design; the raw frames are always retained, so each note is advisory.
+    ("main/story.rs", 5),
     // `--print-menu-roster`'s hidden-flag CLI output (`scripts/smoke-menus.sh`).
     ("menu.rs", 1),
     // `AWL_FONT` dev-only env var override diagnostic.

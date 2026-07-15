@@ -152,248 +152,30 @@ impl App {
     }
 
     /// Route a key to the active search surface (only called while `self.search`
-    /// is `Some`). Mirrors the keymap's modifier extraction. Consumes EVERY key:
-    /// printable chars extend the query, Backspace shortens it, C-s/C-r step
-    /// next/prev, Enter accepts, Esc / C-g abort, M-c toggles case. After any
-    /// change that yields a current match, the REAL buffer cursor is moved onto
-    /// it so the existing amber caret shows the current match for free.
+    /// is `Some`). A thin delegate to the ONE renderer-independent interception
+    /// seam — [`crate::search::keys::intercept`], shared verbatim with the
+    /// headless `--keys` replay's search guard (`main/run.rs`), so the live
+    /// panel and a replayed capture cannot drift. The seam consumes EVERY key
+    /// (query/replacement typing, Backspace, C-s/C-r/arrow steps, M-c case
+    /// toggle, Tab/Cmd-R field moves, Enter accept/replace, Cmd-Enter
+    /// replace-all, Esc/C-g abort) and moves the REAL buffer cursor onto the
+    /// current match, so the existing amber caret shows it for free. The
+    /// returned recoil is the one LIVE-only consequence — a boundary step's
+    /// failing-I-search bump — armed here on the visual caret.
     pub(in crate::app) fn handle_search_key(
         &mut self,
         logical: &Key,
         mods: &Modifiers,
         _event_loop: &ActiveEventLoop,
     ) {
-        use winit::keyboard::NamedKey;
-        let state = mods.state();
-        let ctrl = state.contains(ModifiersState::CONTROL);
-        let alt = state.contains(ModifiersState::ALT);
-        let sup = state.contains(ModifiersState::SUPER);
-        let shift = state.contains(ModifiersState::SHIFT);
-        // Which field a self-insert / Backspace edits: the replacement (true) or
-        // the search query (false). A bool copy, so the immutable borrow is dropped
-        // before the arms below take a mutable borrow of `self.search`.
-        let editing_replacement = self
-            .search
-            .as_ref()
-            .map(|s| s.is_editing_replacement())
-            .unwrap_or(false);
-
-        match logical {
-            Key::Character(s) => {
-                let Some(c) = s.chars().next() else { return };
-                // Cmd-based Find/Replace chords WITHIN the panel: Cmd-F skips to the
-                // next match, Cmd-Shift-F the previous (so you can pass a match without
-                // replacing it), Cmd-Option-F reveals+toggles the replace field, Cmd-R
-                // focuses the replace field (the headline door — a fresh Cmd-R opened
-                // the panel on the find field), and Cmd-G / Cmd-Shift-G MIRROR Cmd-F /
-                // Cmd-Shift-F's plain step (P2 — the deeper macOS find-next/previous
-                // idiom, alongside Cmd-F's own in-panel step; Cmd-Option-G has no
-                // Option-toggle counterpart, so it is simply consumed, no-op). Other
-                // Super combos are consumed.
-                if sup && !ctrl {
-                    if c.eq_ignore_ascii_case(&'f') {
-                        if alt {
-                            if let Some(st) = self.search.as_mut() {
-                                st.toggle_replace();
-                            }
-                        } else if shift {
-                            self.search_step(Direction::Backward);
-                        } else {
-                            self.search_step(Direction::Forward);
-                        }
-                    } else if c.eq_ignore_ascii_case(&'g') && !alt {
-                        if shift {
-                            self.search_step(Direction::Backward);
-                        } else {
-                            self.search_step(Direction::Forward);
-                        }
-                    } else if c.eq_ignore_ascii_case(&'r') && !alt {
-                        if let Some(st) = self.search.as_mut() {
-                            st.focus_replacement();
-                        }
-                    }
-                    return;
-                }
-                if ctrl && !alt {
-                    match c.to_ascii_lowercase() {
-                        's' => self.search_step(Direction::Forward),
-                        'r' => self.search_step(Direction::Backward),
-                        'g' => self.search_abort(),
-                        _ => {} // other ctrl combos: consumed, no-op
-                    }
-                } else if alt && !ctrl {
-                    if matches!(c, 'c' | 'C') {
-                        // M-c / Alt+c toggles case sensitivity.
-                        let hay = self.buffer.text();
-                        if let Some(st) = self.search.as_mut() {
-                            st.toggle_case(&hay);
-                        }
-                        self.search_jump_to_current();
-                    }
-                } else if !c.is_control() {
-                    // Self-insert into the FOCUSED field. The replacement is not
-                    // searched, so typing it never moves a match; query edits do.
-                    if editing_replacement {
-                        if let Some(st) = self.search.as_mut() {
-                            st.push_replace_char(c);
-                        }
-                    } else {
-                        let hay = self.buffer.text();
-                        if let Some(st) = self.search.as_mut() {
-                            st.push_char(c, &hay);
-                        }
-                        self.search_jump_to_current();
-                    }
-                }
-            }
-            // Tab is the one FIELD-SWITCH key: flip focus find↔replace (revealing the
-            // replace row the first time). No longer overloaded — Enter replaces, Tab
-            // only moves between the two fields of the one warm panel.
-            Key::Named(NamedKey::Tab) => {
-                if let Some(st) = self.search.as_mut() {
-                    st.toggle_replace();
-                }
-            }
-            // Down / Up SKIP to the next / previous match without replacing (alongside
-            // Cmd-F / Cmd-Shift-F), so you can pass over a match you don't want changed.
-            Key::Named(NamedKey::ArrowDown) => self.search_step(Direction::Forward),
-            Key::Named(NamedKey::ArrowUp) => self.search_step(Direction::Backward),
-            Key::Named(NamedKey::Backspace) => {
-                if editing_replacement {
-                    if let Some(st) = self.search.as_mut() {
-                        st.pop_replace_char();
-                    }
-                } else {
-                    let hay = self.buffer.text();
-                    if let Some(st) = self.search.as_mut() {
-                        st.pop_char(&hay);
-                    }
-                    self.search_jump_to_current();
-                }
-            }
-            Key::Named(NamedKey::Enter) => {
-                // The clarified core loop: once replace is active, Enter ALWAYS
-                // replaces the current match + advances to the next (regardless of
-                // which field has focus) — Cmd-Enter replaces ALL. In a PLAIN find
-                // (no replace row), Enter ACCEPTS (closes, leaving the cursor on the
-                // current match). Esc / C-g is the "done" door out of replace.
-                let replace_active = self
-                    .search
-                    .as_ref()
-                    .map(|s| s.is_replace_active())
-                    .unwrap_or(false);
-                if sup && replace_active {
-                    self.search_replace_all();
-                } else if replace_active {
-                    self.search_replace_current();
-                } else {
-                    // ACCEPT: remember the query (P2) before closing, so a
-                    // LATER bare Cmd-G re-finds it.
-                    if let Some(st) = self.search.as_ref() {
-                        crate::search::set_last_query(st.query());
-                    }
-                    self.search = None;
-                    self.buffer.seal_undo_group();
-                }
-            }
-            Key::Named(NamedKey::Space) if !ctrl && !alt && !sup => {
-                // Space arrives as a Named key (not a Character), so without this
-                // arm it would fall through to the no-op below and never reach the
-                // focused field. Ctrl/Alt/Cmd+Space stay no-ops.
-                if editing_replacement {
-                    if let Some(st) = self.search.as_mut() {
-                        st.push_replace_char(' ');
-                    }
-                } else {
-                    let hay = self.buffer.text();
-                    if let Some(st) = self.search.as_mut() {
-                        st.push_char(' ', &hay);
-                    }
-                    self.search_jump_to_current();
-                }
-            }
-            Key::Named(NamedKey::Escape) => self.search_abort(),
-            _ => {} // any other named key: consumed, no-op
+        if let Some(dir) = crate::search::keys::intercept(
+            &mut self.search,
+            &mut self.buffer,
+            logical,
+            mods.state(),
+        ) {
+            self.caret_recoil = Some(dir);
         }
-    }
-
-    /// C-s / C-r while searching: advance to the next/previous match (wrapping)
-    /// and move the real cursor onto it.
-    pub(in crate::app) fn search_step(&mut self, dir: Direction) {
-        let outcome = self.search.as_mut().map(|st| st.step(dir));
-        // A forward step that FAILS at the last match (backward at the first) does
-        // NOT advance — it recoils the caret and arms the two-press wrap. Bump the
-        // caret away from the search-travel wall (forward travels toward the end ->
-        // bump UP; backward -> DOWN), mirroring the blocked-motion recoil.
-        if let Some(crate::search::StepOutcome::RecoiledAtBoundary(d)) = outcome {
-            self.caret_recoil = Some(match d {
-                Direction::Forward => crate::caret::RecoilDir::Up,
-                Direction::Backward => crate::caret::RecoilDir::Down,
-            });
-        }
-        self.search_jump_to_current();
-    }
-
-    /// Move the real buffer cursor onto the current match (if any) so the amber
-    /// document caret lands on it. No-op (cursor unchanged) when there is no
-    /// current match — we don't jump on a no-match query.
-    pub(in crate::app) fn search_jump_to_current(&mut self) {
-        if let Some(st) = self.search.as_ref() {
-            if let Some(m) = st.current_match() {
-                self.buffer.set_cursor(m.start);
-            }
-        }
-    }
-
-    /// Esc / C-g: restore the cursor to where search began and close the panel.
-    /// REMEMBERS the query first (P2) — a non-empty abandoned search still
-    /// survives the close so a later bare Cmd-G re-finds it.
-    pub(in crate::app) fn search_abort(&mut self) {
-        if let Some(st) = self.search.as_ref() {
-            crate::search::set_last_query(st.query());
-            let origin = st.origin();
-            self.buffer.set_cursor(origin);
-        }
-        self.buffer.clear_mark();
-        self.search = None;
-    }
-
-    /// REPLACE-CURRENT (Enter in the replace field): swap the active match for the
-    /// replacement text, write the new document back as one atomic edit, and ADVANCE
-    /// the search to the next match (the cursor follows). The panel stays open so a
-    /// repeated Enter walks forward replacing. A no-op unless replace mode is active
-    /// and there is a current match.
-    pub(in crate::app) fn search_replace_current(&mut self) {
-        let hay = self.buffer.text();
-        let new_text = match self.search.as_mut() {
-            Some(st) if st.is_replace_active() => st.replace_current_text(&hay),
-            _ => return,
-        };
-        if let Some(t) = new_text {
-            self.buffer.set_text(&t);
-            self.search_jump_to_current();
-        }
-    }
-
-    /// REPLACE-ALL (Cmd-Enter): swap EVERY current-query match for the replacement
-    /// in one atomic, undoable edit, then re-anchor the (now usually empty) match
-    /// set at the search origin. A no-op unless replace mode is active and the text
-    /// actually changes.
-    pub(in crate::app) fn search_replace_all(&mut self) {
-        let hay = self.buffer.text();
-        let (new_text, origin) = match self.search.as_ref() {
-            Some(st) if st.is_replace_active() => (st.replace_all_text(&hay), st.origin()),
-            _ => return,
-        };
-        if new_text == hay {
-            return;
-        }
-        self.buffer.set_text(&new_text);
-        let new_hay = self.buffer.text();
-        if let Some(st) = self.search.as_mut() {
-            st.refind(origin, &new_hay);
-        }
-        self.search_jump_to_current();
     }
 
     /// Set the zoom factor (clamped) and reset glyph metrics on next sync. The

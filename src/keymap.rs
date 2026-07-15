@@ -91,8 +91,8 @@ pub enum Action {
     /// — the SAME panel as isearch, with the labeled REPLACE row revealed (a MODE of
     /// the one panel, no separate chrome). A fresh open shows the replace row but
     /// keeps focus on the FIND field; pressing Cmd-R again while the panel is open
-    /// jumps focus into the replacement (handled in `App::handle_search_key` +
-    /// `apply_core`'s search intercept). Tab switches fields.
+    /// jumps focus into the replacement (consumed by the shared search-key seam,
+    /// `crate::search::keys::intercept`, on both drivers). Tab switches fields.
     OpenReplace,
     /// C-g / Escape: cancel — clears any active selection / prefix.
     Cancel,
@@ -628,7 +628,8 @@ impl KeymapState {
     /// [`Self::with_overrides`], ALSO applying the config `linux_keep_emacs` list
     /// (see [`Self::apply_linux_keep`]) — the real production door every live/
     /// headless call site should use once it has a [`crate::config::Config`] in
-    /// hand (`App::new`, `keyspec::parse_keys_with`); `with_overrides` alone
+    /// hand (`App::new`, the `--keys` replay keymap built in `main/args.rs`);
+    /// `with_overrides` alone
     /// stays as the simpler door for the many call sites (mostly tests) that
     /// never touch the keep-list.
     pub fn with_overrides_and_keep(keys: &[(String, Vec<String>)], keep: &[String]) -> Self {

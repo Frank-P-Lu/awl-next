@@ -8,69 +8,38 @@ use crate::overlay::OverlayKind;
 use super::{browse_level, drive, drive_search, drive_shift, all_actions, smoke_command_kind, rich_markdown_buffer, SmokeKind};
 
 #[test]
-fn search_tab_toggles_replace_field_through_core() {
-    // With NO search live, Tab is a plain soft-tab insert (byte-identical to
-    // before this feature) — the intercept only fires inside the panel.
+fn tab_without_a_search_is_a_plain_soft_tab_through_core() {
+    // With NO search live, Tab is a plain soft-tab insert. The IN-PANEL Tab
+    // (reveal / flip the replace field) deliberately no longer lives in
+    // `apply_core` at all: while the panel is open EVERY key is consumed
+    // BEFORE keymap resolution by the ONE shared interception seam
+    // (`crate::search::keys::intercept` — the live guard and the headless
+    // replay guard are the same code, and its own tests cover the panel's
+    // whole operation set), so `apply_core` can never see an in-panel key.
     let mut b = Buffer::from_str("alpha beta alpha");
     b.set_cursor(0);
     let mut search = None;
     drive_search(&mut b, &mut search, &Action::InsertTab);
     assert!(search.is_none());
     assert!(b.text().starts_with(' '), "Tab without a search inserts a soft tab");
-
-    // Open isearch (C-s), then a SINGLE Tab reveals the replace field and
-    // focuses it — the same affordance App::handle_search_key gives the live
-    // editor, now drivable through the core so `--keys "C-s <Tab>"` sets the
-    // sidecar's `replace_active`.
-    let mut b = Buffer::from_str("alpha beta alpha");
-    b.set_cursor(0);
-    let mut search = None;
-    drive_search(&mut b, &mut search, &Action::SearchForward);
-    assert!(!search.as_ref().unwrap().is_replace_active());
-    drive_search(&mut b, &mut search, &Action::InsertTab);
-    {
-        let st = search.as_ref().unwrap();
-        assert!(st.is_replace_active());
-        assert!(st.is_editing_replacement());
-    }
-    // A second Tab flips focus back to the query field (one warm panel, no new
-    // chrome) — the replace row stays revealed.
-    drive_search(&mut b, &mut search, &Action::InsertTab);
-    {
-        let st = search.as_ref().unwrap();
-        assert!(st.is_replace_active());
-        assert!(!st.is_editing_replacement());
-    }
-    // The in-panel Tabs never leaked a soft tab into the document.
-    assert_eq!(b.text(), "alpha beta alpha");
 }
 
 #[test]
-fn cmd_r_opens_replace_on_find_then_focuses_replace_through_core() {
+fn cmd_r_opens_replace_revealed_with_focus_on_find_through_core() {
     // Cmd-R with NO search open (Action::OpenReplace) opens the panel with the
     // replace row REVEALED but focus on the FIND field — the redesigned headline
     // door, drivable through the core so `--keys "Cmd-r"` sets the sidecar.
+    // (Cmd-R / Tab WITHIN the already-open panel are the search-key seam's job
+    // — `crate::search::keys::tests::tab_and_cmd_r_move_between_the_two_fields`
+    // — never `apply_core`'s: the shared guard consumes them first.)
     let mut b = Buffer::from_str("alpha beta alpha");
     b.set_cursor(0);
     let mut search = None;
     drive_search(&mut b, &mut search, &Action::OpenReplace);
-    {
-        let st = search.as_ref().expect("Cmd-R opens the search panel");
-        assert!(st.is_replace_active(), "the replace row is revealed on open");
-        assert!(!st.is_editing_replacement(), "focus opens on the find field");
-    }
-    // Cmd-R AGAIN (panel already open) jumps focus into the replacement field —
-    // the search intercept focuses it instead of resetting the search.
-    drive_search(&mut b, &mut search, &Action::OpenReplace);
-    {
-        let st = search.as_ref().unwrap();
-        assert!(st.is_replace_active() && st.is_editing_replacement());
-    }
-    // Tab switches focus back to the find field (the one field-switch key).
-    drive_search(&mut b, &mut search, &Action::InsertTab);
-    assert!(!search.as_ref().unwrap().is_editing_replacement());
-    // None of this leaked into the document.
-    assert_eq!(b.text(), "alpha beta alpha");
+    let st = search.as_ref().expect("Cmd-R opens the search panel");
+    assert!(st.is_replace_active(), "the replace row is revealed on open");
+    assert!(!st.is_editing_replacement(), "focus opens on the find field");
+    assert_eq!(b.text(), "alpha beta alpha", "opening never touches the document");
 }
 
 #[test]

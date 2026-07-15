@@ -191,7 +191,6 @@ use crate::buffer::Buffer;
 use crate::config::Config;
 use crate::keymap::{Action, KeymapState};
 use crate::render::{self, TextPipeline, ViewState};
-use crate::search::Direction;
 
 /// Max interval between clicks to count as a multi-click (double/triple).
 const MULTICLICK_MS: u64 = 400;
