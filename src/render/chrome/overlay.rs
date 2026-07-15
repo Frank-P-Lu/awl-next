@@ -51,6 +51,16 @@ impl TextPipeline {
         match crate::render::effective_card_anchor() {
             theme::CardAnchor::TopLeft => margin,
             theme::CardAnchor::TopCenter => (width as f32 - card_w) * 0.5,
+            // FIRETAIL-MAXIMALIST-SHOWCASE round's statement dial: the left
+            // edge sits `x_frac` of the free span in from the left margin —
+            // 0.0 IS TopLeft, 1.0 pins the card's right edge one margin in,
+            // 0.5 IS TopCenter (see `theme::CardAnchor::Inset`'s doc). The
+            // free span floors at 0 (a card as wide as the window clamps to
+            // the margin rather than reporting a negative origin).
+            theme::CardAnchor::Inset { x_frac } => {
+                let free = (width as f32 - card_w - 2.0 * margin).max(0.0);
+                margin + x_frac.clamp(0.0, 1.0) * free
+            }
         }
     }
 
@@ -342,7 +352,13 @@ impl TextPipeline {
         // panel already fold in, so the palette can never disagree with its siblings
         // about the bar's bottom edge (a shown bar draws LAST, `draw_chrome_tail`,
         // straight over an unyielding card's own top rows).
-        let card_y = margin + 40.0 + self.menubar_reserve();
+        // MOTION-JUICE ENTRANCE (live-only; exactly `+ 0.0` when settled, i.e.
+        // in every capture and on every CALM world — see
+        // `overlay_entrance_offset`'s doc): folded in AFTER all row-fit math,
+        // so the transient drop can never change what the card shows, and
+        // BEFORE `text_top`, so the card quad, rows, band, caret, and
+        // hit-tests all ride the spring together through this ONE geometry.
+        let card_y = margin + 40.0 + self.menubar_reserve() + self.overlay_entrance_offset();
         let text_left = card_x + pad;
         let text_top = card_y + pad;
         OverlayGeom {
@@ -727,9 +743,70 @@ impl TextPipeline {
                 custom_glyphs: &[],
             });
         }
-        // The right-aligned label column shares the panel origin; its own right edge
-        // lands at `text_left + text_w` = the card's right text edge → chords flush.
-        areas.push(panel_area);
+        // WILD-MENU SLANT PROBE (env-gated; `None` on every normal run, which
+        // keeps the single verbatim `panel_area` push below — byte-identical):
+        // the SAME shaped buffer uploads as one area per candidate DISPLAY
+        // row, each clipped to its own row band and shifted right by its
+        // stair offset — a pure DRAW-TIME row-origin transform (the shaping,
+        // rowlayout elision, geometry, and hit-tests all read the settled
+        // layout; the shaper already paid the width tax so a shifted row
+        // still clips inside the card's right text edge). The header
+        // (query/strip) and tail (hint/footer/empty) slices stay unshifted.
+        let slant = crate::render::overlay_slant();
+        match slant {
+            None => {
+                // The right-aligned label column shares the panel origin; its own right
+                // edge lands at `text_left + text_w` = the card's right text edge →
+                // chords flush.
+                areas.push(panel_area);
+            }
+            Some(s) => {
+                let lh = self.overlay_lh();
+                let n_lines = if geom.theme { geom.plan.len() } else { geom.visible };
+                let first_top =
+                    overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, 0, lh);
+                let clip = |top: f32, bottom: f32| TextBounds {
+                    left: bounds.left,
+                    top: top.max(0.0) as i32,
+                    right: bounds.right,
+                    bottom: (bottom.min(height as f32)) as i32,
+                };
+                // Header slice (query + strip lines), unshifted.
+                areas.push(TextArea {
+                    buffer: &self.panel_buffer,
+                    left: text_left,
+                    top: text_top,
+                    scale: 1.0,
+                    bounds: clip(0.0, first_top),
+                    default_color: ink,
+                    custom_glyphs: &[],
+                });
+                // One shifted slice per candidate display row.
+                for k in 0..n_lines {
+                    let row_top = first_top + k as f32 * lh;
+                    areas.push(TextArea {
+                        buffer: &self.panel_buffer,
+                        left: text_left + crate::render::slant_offset(&s, k),
+                        top: text_top,
+                        scale: 1.0,
+                        bounds: clip(row_top, row_top + lh),
+                        default_color: ink,
+                        custom_glyphs: &[],
+                    });
+                }
+                // Tail slice (empty message / hint / footer), unshifted.
+                let tail_top = first_top + n_lines as f32 * lh;
+                areas.push(TextArea {
+                    buffer: &self.panel_buffer,
+                    left: text_left,
+                    top: text_top,
+                    scale: 1.0,
+                    bounds: clip(tail_top, height as f32),
+                    default_color: ink,
+                    custom_glyphs: &[],
+                });
+            }
+        }
         if has_right {
             areas.push(TextArea {
                 buffer: &self.panel_bind_buffer,
@@ -828,29 +905,46 @@ impl TextPipeline {
             theme::HighlightTreatment::InverseFill { band, .. } => band,
         };
         self.overlay_rows.set_color(band_color.rgba_bytes());
-        let sel_rects: Vec<[f32; 4]> = if geom.n_items == 0 {
-            Vec::new()
+        // The selected row's DISPLAY index + settled row-top, per layout family.
+        let sel_disp: Option<usize> = if geom.n_items == 0 {
+            None
         } else if geom.theme {
             // THEME PICKER: the selected world's DISPLAY row = its position in the plan
             // (headers push it down), offset past the query + strip lines (`header_rows`).
-            let disp = geom
-                .plan
-                .iter()
-                .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
-                .unwrap_or(0);
-            let row_top = overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, disp, lh);
-            vec![[geom.card_x, row_top, geom.card_w, lh]]
+            Some(
+                geom.plan
+                    .iter()
+                    .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
+                    .unwrap_or(0),
+            )
         } else {
             // 0-based row among the visible window. `OverlayState` keeps the selection
             // inside `[top_idx, top_idx+visible)`; saturate + clamp defensively so a
             // transient mismatch (e.g. the list just shrank) can never underflow/overflow.
-            let sel_row = self
-                .overlay_selected
-                .saturating_sub(geom.top_idx)
-                .min(geom.visible.saturating_sub(1)); // 0-based among visible
-            let row_top =
-                overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, sel_row, lh);
-            vec![[geom.card_x, row_top, geom.card_w, lh]]
+            Some(
+                self.overlay_selected
+                    .saturating_sub(geom.top_idx)
+                    .min(geom.visible.saturating_sub(1)),
+            )
+        };
+        let sel_rects: Vec<[f32; 4]> = match sel_disp {
+            None => Vec::new(),
+            Some(disp) => {
+                let target =
+                    overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, disp, lh);
+                // MOTION-JUICE BAND SLIDE (live-only; returns `target` verbatim
+                // on every Snap world / capture / Reduce Motion — see
+                // `overlay_band_drawn`'s doc). Purely visual: the shaped rows
+                // and the hit-test read the settled geometry.
+                let row_top = self.overlay_band_drawn(target);
+                // WILD-MENU SLANT PROBE (env-gated, `None` on every normal
+                // run): the band's left edge follows the selected row's own
+                // stair offset so the highlight hugs its slanted row.
+                let dx = crate::render::overlay_slant()
+                    .map(|s| crate::render::slant_offset(&s, disp))
+                    .unwrap_or(0.0);
+                vec![[geom.card_x + dx, row_top, geom.card_w - dx, lh]]
+            }
         };
         self.overlay_rows
             .prepare(device, queue, width, height, &sel_rects);

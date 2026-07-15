@@ -54,6 +54,7 @@ mod daemon;
 mod debug;
 mod durable;
 mod ease;
+mod export;
 mod facets;
 mod frontmatter;
 mod fs;

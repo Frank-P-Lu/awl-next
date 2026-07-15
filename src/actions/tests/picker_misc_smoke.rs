@@ -478,6 +478,10 @@ fn every_catalog_command_dispatches_without_panicking() {
                     Action::DownloadFile => eff == Effect::None,
                     Action::CheckForUpdates => eff == Effect::CheckForUpdates,
                     Action::DuplicateNote => eff == Effect::DuplicateNote,
+                    // The smoke fixture is a markdown buffer, so export signals
+                    // its format for the live App to render + write.
+                    Action::ExportWord => eff == Effect::Export(crate::export::Format::Docx),
+                    Action::ExportHtml => eff == Effect::Export(crate::export::Format::Html),
                     other => panic!("{other:?} classified Deferred but has no effect check"),
                 };
                 assert!(ok, "{}: unexpected deferred effect {:?}", c.name, eff);

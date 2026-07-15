@@ -42,11 +42,11 @@ pub enum MdKind {
     /// A heading's CONTENT text. Drives a larger font SIZE per [`heading_scale`]
     /// (applied per-line in `render.rs`) — no bold/color by DESIGN call: size + value
     /// carry the hierarchy on their own. (Inline [`Bold`](Self::Bold) does shape real
-    /// bold on proportional worlds now; a heading just doesn't spend it.)
+    /// bold on every world now; a heading just doesn't spend it.)
     Heading(u8),
     /// `**bold**` / `__bold__` content → Bold weight. Resolves to the world's real
-    /// bundled 700 face on a proportional world (`render::FONT_THEME_BOLD_FACES`),
-    /// graceful Regular fallback on a mono-display world.
+    /// bundled 700 face on EVERY world — proportional and mono alike
+    /// (`render::FONT_THEME_BOLD_FACES`).
     Bold,
     /// `*italic*` / `_italic_` content → Italic style.
     Italic,

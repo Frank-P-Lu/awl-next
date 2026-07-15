@@ -541,6 +541,8 @@ pub(super) fn delete_flinch_fixture(
         | Action::InlineCode
         | Action::Highlight
         | Action::Strikethrough
+        | Action::ExportWord
+        | Action::ExportHtml
         | Action::Ignore => None,
     }
 }
@@ -734,6 +736,8 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::InlineCode
             | Action::Highlight
             | Action::Strikethrough
+            | Action::ExportWord
+            | Action::ExportHtml
             | Action::Ignore => {}
         }
     }
@@ -834,6 +838,8 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::InlineCode,
         Action::Highlight,
         Action::Strikethrough,
+        Action::ExportWord,
+        Action::ExportHtml,
         Action::Ignore,
     ]
 }
@@ -901,6 +907,10 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::ReportProblem
         | Action::DownloadFile
         | Action::CheckForUpdates
+        // EXPORT: the smoke fixture is a markdown buffer, so both signal
+        // `Effect::Export` for the live App to render + write.
+        | Action::ExportWord
+        | Action::ExportHtml
         | Action::DuplicateNote => SmokeKind::Deferred,
 
         // Real catalog commands that mutate locally (buffer / globals / zoom /
