@@ -382,6 +382,18 @@ impl TextPipeline {
         Some(OutlineLayout { right_edge, avail, top, lines })
     }
 
+    /// Whether the margin OUTLINE is actually DRAWN this frame — THE one
+    /// visibility rule, read straight off [`Self::outline_layout`]'s own full
+    /// gate (on + page mode + markdown + headings + horizontal room + vertical
+    /// room), never a re-derivation. Exposed for the LAVA rail carve
+    /// ([`TextPipeline::lava_rail_carved`], `render/layers.rs`): the lava field
+    /// mask treats a visible outline's rail as another no-lava zone, and
+    /// reclaims the margin the instant the outline hides — reading the SAME
+    /// owner means the carve can never disagree with what the frame draws.
+    pub(in crate::render) fn outline_visible(&self, height: u32) -> bool {
+        self.outline_layout(height).is_some()
+    }
+
     /// PERSISTENT MARGIN OUTLINE: the CURRENT heading's [`ancestor_chain`] — the
     /// indices (into [`Self::outline_headings`]) of the headings the caret is nested
     /// inside, EMPTY when the caret sits above the first heading or the current

@@ -153,6 +153,7 @@ impl TextPipeline {
         } else {
             (0.0, width as f32)
         };
+        let rail_carved = self.lava_rail_carved(height);
         let params = self.effective_background().lava_params().map(
             |(ground, lo, hi, edge, dithered)| {
                 // A Bayer-posterized source and the downsampled separable blur
@@ -178,9 +179,26 @@ impl TextPipeline {
                 self.lava_field_viewport,
                 bg_left,
                 bg_w,
+                rail_carved,
                 params,
                 phase,
             );
+    }
+
+    /// THE OUTLINE-RAIL CARVE decision for this frame: a lava ground is active
+    /// (the CAPABILITY — [`crate::theme::Background::lava_params`], never a
+    /// world name, per `theme_caps_law`) AND the margin OUTLINE is actually
+    /// DRAWN ([`Self::outline_visible`] — the same `outline_layout` gate the
+    /// outline's own pixels ride). While true, the lava field mask treats the
+    /// whole left margin as the outline's rail — another no-lava zone, so the
+    /// dim `faint` heading entries sit on the flat ground instead of inside the
+    /// dithered blob (the user-reported drown). The outline hiding
+    /// (narrowest regime / no headings / toggled off / non-markdown) reclaims
+    /// the full margin the same frame. The ONE owner [`Self::prepare_lava_layer`]
+    /// uploads and the law tests assert, so the carve can never disagree with
+    /// what the frame draws.
+    pub(super) fn lava_rail_carved(&self, height: u32) -> bool {
+        self.effective_background().lava_params().is_some() && self.outline_visible(height)
     }
 
     /// Upload the document text layer with the full-ink default color — the one

@@ -844,3 +844,80 @@ fn outline_hit_test_agrees_with_the_shifted_geometry_when_bar_shown() {
     crate::page::set_page_on(false);
     crate::page::set_measure(80);
 }
+
+/// THE OUTLINE-RAIL CARVE wiring ([`TextPipeline::lava_rail_carved`], the one
+/// owner `prepare_lava_layer` uploads into the lava shader's `rail` global):
+/// the field mask carves the outline's rail EXACTLY when a lava ground is
+/// active (the CAPABILITY — picked from `THEMES` by `Background::is_lava`,
+/// never a world name) AND the outline is actually drawn (the SAME
+/// `outline_layout` gate the outline's own pixels ride, via
+/// [`TextPipeline::outline_visible`]). Outline hidden — heading-free doc,
+/// toggled off, or the narrowest regime — or a static-ground world => no
+/// carve, and the lamp reclaims the full margin the same frame. The mask
+/// math itself is law-tested at its pure seam (`lava::tests`, plus
+/// `theme::tests::outline_rail_band_is_flat_ground_and_outline_ink_clears_it_
+/// on_every_lava_world`); THIS test pins the render-side decision those laws
+/// assume.
+#[test]
+fn lava_rail_carve_follows_outline_visibility() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping lava_rail_carve_follows_outline_visibility: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let lava_idx = crate::theme::THEMES
+        .iter()
+        .position(|t| t.background.is_lava())
+        .expect("a lava world ships");
+    let static_idx = crate::theme::THEMES
+        .iter()
+        .position(|t| !t.background.is_lava())
+        .expect("a static-ground world ships");
+    crate::theme::set_active(lava_idx);
+    crate::outline::set_outline_on(true);
+    crate::page::set_page_on(true);
+    crate::page::set_measure(40);
+    let height = 900u32;
+    p.set_size(1900.0, height as f32);
+    let text = "# Title\n\nprose\n\n## Section A\n\nbody\n\n### Deep\n";
+    p.set_view(&view_md(text, 0, 0));
+    assert!(p.outline_visible(height), "control: the outline draws");
+    assert!(
+        p.lava_rail_carved(height),
+        "lava world + drawn outline => the rail is carved"
+    );
+
+    // A heading-free markdown doc hides the outline => the lamp reclaims.
+    p.set_view(&view_md("no headings here\n", 0, 0));
+    assert!(!p.outline_visible(height));
+    assert!(!p.lava_rail_carved(height), "no outline, no carve");
+    p.set_view(&view_md(text, 0, 0));
+
+    // Outline toggled off => reclaim.
+    crate::outline::set_outline_on(false);
+    assert!(!p.lava_rail_carved(height), "outline off, no carve");
+    crate::outline::set_outline_on(true);
+
+    // The NARROWEST regime: no horizontal room for even the stub rail => the
+    // outline hides itself => the carve lifts with it (the same-frame degrade).
+    p.set_size(300.0, height as f32);
+    assert!(!p.outline_visible(height), "narrowest: the outline yields");
+    assert!(
+        !p.lava_rail_carved(height),
+        "narrowest: the lamp reclaims the full margin"
+    );
+    p.set_size(1900.0, height as f32);
+
+    // A static-ground world NEVER carves, outline drawn or not (capability-keyed).
+    crate::theme::set_active(static_idx);
+    assert!(p.outline_visible(height), "control: the outline still draws");
+    assert!(
+        !p.lava_rail_carved(height),
+        "a non-lava world has nothing to carve"
+    );
+
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}
