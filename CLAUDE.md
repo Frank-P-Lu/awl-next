@@ -54,7 +54,7 @@ cargo run -- --screenshot OUT.png [file]   # writes OUT.png AND OUT.json (sideca
 ```
 Flags compose:
 - `--keys "C-n C-n M->"` — replay chords through the **real keymap** before capture.
-- `--theme <World>` — Tawny | Mopoke | Currawong | Potoroo | Outback | Undertow | Kingfisher | Gumtree | Bilby | Saltpan | Quokka | Mangrove | Galah | Magpie | Wagtail.
+- `--theme <World>` — Tawny | Mopoke | Currawong | Potoroo | Outback | Undertow | Kingfisher | Gumtree | Bilby | Saltpan | Quokka | Mangrove | Firetail | Galah | Magpie | Wagtail.
 - `--caret-mode block|morph|ibeam|auto`
 - `--measure <chars>` — page-mode column width (NARROW, e.g. 40, to see margins on the 1200px canvas).
 - `--screenshot-motion[-v|-d]` — one mid-glide frame (horizontal | vertical | diagonal).
@@ -179,7 +179,7 @@ The philosophy (tonsky.me/blog/alabaster) is the whole point — **do NOT rainbo
 - macOS only (`cfg(target_os = "macos")`); Linux/wasm have none (logged v1 trim). **The law:** every item fires an existing `Action` via `App::apply` — never a menu-only path. `menu::roster` + `menu::resolve` share ONE id→command table (`menu::SECTIONS`), law-tested against the catalog (a typo'd name fails a test).
 - **TRIPWIRE — Quit + Edit items are ROUTED, not muda predefined.** Predefined Quit sends `terminate:` (bypasses `App::exiting` → skips autosave/session/daemon teardown); predefined Cut/Copy/Undo send responder-chain selectors a raw wgpu `NSView` doesn't implement (silent no-op). Don't "simplify" them back to predefined.
 - **TRIPWIRE — `install()` must keep the returned `muda::Menu` alive** (`App._menu_bar`) for the app's lifetime: native `NSMenuItem`s hold non-retaining pointers back into the Rust `Menu`; dropping it = use-after-free on the next click (the menu-click crash). Menu labels stylize "Awl"; the App-menu title is forced to the process name by AppKit (needs a real `.app` bundle — banked).
-- **Icons (`menu_icons.rs`):** `safe_icon` validates dims + buffer length BEFORE `muda::Icon::from_rgba`, NEVER `.unwrap()`s (the literal guard against the crash class). Small procedural set (New note, Save, Switch theme).
+- [ ] - **Icons (`menu_icons.rs`):** `safe_icon` validates dims + buffer length BEFORE `muda::Icon::from_rgba`, NEVER `.unwrap()`s (the literal guard against the crash class). Small procedural set (New note, Save, Switch theme).
 - `build_menu()` + icons are LIVE-ONLY (main-thread muda panics off-thread); `roster()` data is unit-tested; menu install is on `resumed()` only (capture-gated). **Live-smoke:** `scripts/smoke-menus.sh` (`--print-menu-roster`; never runs the test instance under the name `awl` — two same-named procs resolve unreliably through the Accessibility API and could drive your REAL instance).
 
 ## Session restore (`session.rs` + `app/session.rs`) — native only
@@ -234,7 +234,7 @@ User-facing docs (CREDITS, GUIDE, welcome/tour, site pages) are **matter-of-fact
 
 ## Branches, worktrees & pushing
 - **The development branch is LOCAL `main`** (origin's default is `main` since 2026-07-10). `git remote show origin` is the source of truth for the default (the cached `origin/HEAD` symref can lag). Base new work on local `main`, which may run ahead of `origin/main`.
-- **PUSH POLICY:** once a merge train lands GREEN on local `main` (full suite, both conventions, wasm), pushing `main` to origin is AUTHORIZED and expected — batch per train, not per-commit (each push burns a CI run; mac runners bill 10× on the private repo). **TAGS and RELEASES require the user's explicit word every time.** Worktree branches are never pushed.
+- **PUSH POLICY:** once a merge train lands GREEN on local `main` (full suite, both conventions, wasm), pushing `main` to origin is AUTHORIZED and expected — batch per train, not per-commit (repo is PUBLIC since 2026-07-15, runner minutes free; batching is about keeping CI signal per-train, not cost). **TAGS and RELEASES require the user's explicit word every time.** Worktree branches are never pushed.
 - **A worktree agent MUST verify its base:** `git merge --ff-only main` inside the worktree. If it won't fast-forward, STOP and report (a stale-base worktree diverges or dumps an avoidable conflict on the merge train).
 - **Integration is the merge train's job.** Merge one branch at a time, gate on `cargo build && cargo test` (full suite), land only on green. For any struct with per-call-site initializers, grep its `"Struct {"` sites before declaring a merge done (git auto-merges a missing field cleanly and only fails to compile later). A genuine product/taste conflict is grounds to `git merge --abort` and hand back.
 
@@ -242,4 +242,4 @@ User-facing docs (CREDITS, GUIDE, welcome/tour, site pages) are **matter-of-fact
 - **CRLF / lone-CR / U+2028 (RESOLVED — the VS Code model, see Line endings):** the buffer-vs-render divergence is gone. ropey counts LF-only; load normalizes, save restores; a lone `\r`/NEL/LS/PS is content.
 - **History ownership (SETTLED):** a git-managed file's timeline is `git log` alone — awl records NO snapshot for it from any path. Loose files snapshot on every save, pruned by the aged ladder. Autosave still WRITES git files (writing ≠ version-meddling).
 - **Shift-PageDown/PageUp** deliberately do not extend a selection (documented non-movers in the `is_motion` test); promoting them is a conscious follow-up, not a bug.
-- **Shared orchestration board:** concrete build queues, dependencies, handoffs, and status live in `.orchestrator/queue.md` — the ONE tool-neutral source of truth shared by Codex and Claude Code. `ROADMAP.md` is product direction; the board is execution state. Never create a tool-specific second queue.
+- **Shared orchestration board:** concrete build queues, dependencies, handoffs, and status live in `.orchestrator/queue.md` — the ONE tool-neutral source of truth shared by Codex and Claude Code. `ROADMAP.md` is product direction; the board is execution state. Never create a tool-specific second queue. **Claiming protocol** (multi-tool, `.orchestrator/README.md`): claim an item on the board and COMMIT the claim before writing code; work in a worktree branch named on the claim line; re-read the board at HEAD before starting anything; flip to ✅ LANDED @ sha on merge. **Board writes are ORCHESTRATOR-ONLY** (user rule 2026-07-15): delegated subagents/workflow workers never edit `.orchestrator/` — they return shas + outcomes; the orchestrator commits claims before dispatch and flips statuses after processing results (full rule in README).

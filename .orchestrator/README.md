@@ -26,3 +26,26 @@ The board only prevents double-work if claims are visible BEFORE work starts. An
 4. **Land = suite-gated merge to local main** (full `cargo test`, both conventions for keymap-adjacent work) + flip the board line to `✅ LANDED @ <sha>` in the same session. Push per the push policy (public repo — push after green trains).
 5. **Conflicts are normal, not a coordination failure.** If two branches collide on merge, reconcile via a merge pass (Claude dispatches a merge agent; Codex resolves inline) — never serialize the whole queue out of fear.
 6. **Stale claims:** an IN PROGRESS line older than ~a day with no branch activity may be reclaimed — note the takeover on the line.
+
+## Board writes are ORCHESTRATOR-ONLY (added 2026-07-15, user rule)
+
+Within each tool, the top-level ORCHESTRATOR session is the board's only
+writer. Delegated subagents / workflow workers NEVER edit anything under
+`.orchestrator/` — they return structured results, and the orchestrator
+translates those into board edits:
+
+- **Claims** are committed by the orchestrator BEFORE dispatching build work
+  (claim-first still holds; it just isn't delegated).
+- **Status flips** (`✅ LANDED @ sha`, defect notes, morning-review entries)
+  happen when the orchestrator processes the workers' results — a worker only
+  knows its own slice, so letting it flip status invites premature or
+  wrong-altitude entries; the orchestrator holds the cross-workstream truth.
+- **Why:** one writer serializes the shared file — no same-file races between
+  concurrent workers and the live session (the exact race dodged 2026-07-15:
+  a spec log held back because two merge-train agents had queue.md edits in
+  flight); and the board keeps one consistent voice and altitude.
+- **Corollary:** board edits happen only in the MAIN working tree, never in a
+  worktree — a worktree's `queue.md` edit dumps a guaranteed conflict on the
+  merge train.
+- Worker briefs must therefore NOT include "edit the board / flip the claim"
+  steps; they report shas + outcomes instead.
