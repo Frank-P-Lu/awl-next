@@ -67,6 +67,10 @@ URL) — the authoritative ground truth, not an assumption.
 | `Literata-Bold.ttf` | Literata | The Literata Project Authors | — | SIL OFL 1.1 | github.com/googlefonts/literata (variable, instanced `wght=700 opsz=12`) |
 | `Newsreader-Bold.ttf` | Newsreader | The Newsreader Project Authors | — | SIL OFL 1.1 | github.com/productiontype/Newsreader (variable, instanced `wght=700 opsz=16`) |
 | `ZillaSlab-Bold.ttf` | Zilla Slab | The Mozilla Foundation | Zilla (trademark) | SIL OFL 1.1 | github.com/typotheque/zilla-slab (static Bold) |
+| `IBMPlexMono-Bold.ttf` | IBM Plex Mono | IBM Corp. | IBM Plex (trademark) | SIL OFL 1.1 | github.com/IBM/plex (Google Fonts ofl/ibmplexmono, static Bold) |
+| `JetBrainsMono-Bold.ttf` | JetBrains Mono | The JetBrains Mono Project Authors | JetBrains Mono (trademark) | SIL OFL 1.1 | github.com/JetBrains/JetBrainsMono (Google Fonts ofl/jetbrainsmono, variable, instanced `wght=700`) |
+| `Iosevka-Bold.ttf` | Iosevka | Renzhi Li (aka. Belleve Invis) | — | SIL OFL 1.1 | github.com/be5invis/Iosevka (PkgTTF-Iosevka, static Bold) |
+| `MonaspaceXenon-Bold.ttf` | Monaspace Xenon | GitHub, Inc. (copyright in name ID 7) | Monaspace, Monaspace Xenon (+ Argon/Neon/Radon/Krypton) | SIL OFL 1.1 | github.com/githubnext/monaspace (variable, instanced `wght=700 wdth=100 slnt=0`) |
 | `AwlMarks.ttf` | Awl Marks | EB Garamond, Noto (Adobe), Iosevka (Renzhi Li), Junicode (Peter S. Baker) — Project Authors, per glyph source | — | SIL OFL 1.1 (composed from OFL sources — see note below) | github.com/octaviopardo/EBGaramond12; github.com/notofonts (Noto Sans Symbols 2); github.com/be5invis/Iosevka; github.com/psb1558/Junicode-font |
 
 Most faces here are single-weight instances (Regular, except IBM Plex Mono which
@@ -78,23 +82,29 @@ permitted modifications under the OFL (the fonts remain OFL, unsold by
 themselves, reserved names untouched).
 
 The **`*-Bold.ttf`** faces (Bitter, EB Garamond, Figtree, Fira Sans, Fraunces 9pt,
-iA Writer Quattro S, IBM Plex Sans, Literata, Newsreader, Zilla Slab) are the
-700-weight companions to the 10 proportional display faces, so `**bold**`
-renders as real bold instead of falling into cosmic-text's monospace fallback
-(the `weight_diff == 0` trap). Each was sourced exactly like the CJK faces: the
-static upstream Bold where one ships (Fira Sans, IBM Plex Sans, Zilla Slab, iA
-Writer Quattro S), else instanced from the OFL variable source at `wght=700`
-(`fonttools varLib.instancer --update-name-table`, pinning the Regular's optical
-size — Literata `opsz=12`, Newsreader `opsz=16`, Fraunces `opsz=9`), then subset
-to the SAME code-point set as its Regular. Each registers under the IDENTICAL
-family name its Regular uses (the `name` table's family/subfamily forced to
-`<family>`/`Bold`, usWeightClass 700). The four monospace display faces (IBM
-Plex Mono, JetBrains Mono, Monaspace Xenon, Iosevka) stay Regular-only by design
-— code rarely bolds and the uniform grid matters more. `Fraunces9pt-Bold.ttf`
-covers 624 of its Regular's 637 code-points: 13 rare transliteration/combining
-marks (Ṅ Ṡ Ṧ Ṩ Ẏ + combining hook/ring-above, dot-below) are absent from the
-upstream Fraunces variable source itself, so no `wght=700` instance can carry
-them; every other bold matches its Regular's coverage exactly.
+iA Writer Quattro S, IBM Plex Sans, Literata, Newsreader, Zilla Slab — plus the
+four monospace display faces IBM Plex Mono, JetBrains Mono, Monaspace Xenon,
+Iosevka) are the 700-weight companions to every bundled display face, so
+`**bold**` renders as real bold instead of falling into cosmic-text's monospace
+fallback (the `weight_diff == 0` trap — a Regular-only family drops the 700
+request during fallback filtering and it lands in the ugly `.SF NS` / mono
+substitute). Each was sourced exactly like the CJK faces: the static upstream
+Bold where one ships (Fira Sans, IBM Plex Sans, Zilla Slab, iA Writer Quattro S,
+IBM Plex Mono, Iosevka), else instanced from the OFL variable source at
+`wght=700` (`fonttools varLib.instancer`, pinning the Regular's optical size —
+Literata `opsz=12`, Newsreader `opsz=16`, Fraunces `opsz=9` — and, for Monaspace
+Xenon, its width/slant axes to the Regular's `wdth=100 slnt=0`; JetBrains Mono
+has a lone `wght` axis), then subset to the SAME code-point set as its Regular.
+Each registers under the IDENTICAL family name its Regular uses (the `name`
+table's family/subfamily forced to `<family>`/`Bold`, usWeightClass 700, the
+bold `fsSelection`/`macStyle` bits set). IBM Plex Mono is the notable pair: awl
+ships its Regular as the Light/300 weight (`mono_safe_weight`), but its Bold is
+the genuine upstream 700, so a `**bold**` span jumps Light→Bold for clear
+emphasis. `Fraunces9pt-Bold.ttf` covers 624 of its Regular's 637 code-points: 13
+rare transliteration/combining marks (Ṅ Ṡ Ṧ Ṩ Ẏ + combining hook/ring-above,
+dot-below) are absent from the upstream Fraunces variable source itself, so no
+`wght=700` instance can carry them; every other bold matches its Regular's
+coverage exactly.
 
 **`AwlMarks.ttf` provenance (composed from OFL sources):** the rebuilt symbol /
 ornament face is a hand-merged subset — decomposed glyph outlines copied from

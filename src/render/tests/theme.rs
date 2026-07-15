@@ -404,14 +404,15 @@ fn mono_world_shapes_uniform_pitch() {
     p.sync_theme();
 }
 
-/// The 10 proportional display families each ship in `render::FONT_THEME_BOLD_FACES`,
-/// but a bold face only fixes the `weight_diff == 0` fallback trap if it registers
-/// under the SAME family name its Regular uses AND declares usWeightClass 700 — a
-/// subsetting/name-fixup mistake (the exact failure the CJK round guards against for
-/// its faces) that renamed the face or left it at weight 400 would silently keep the
-/// mono-fallback bug. This asserts the font-DB fact directly for all 10 (including
-/// Fira Sans / Bitter, which are registered but not yet assigned to any world, so the
-/// resolution test below can't reach them through a theme switch).
+/// Every bundled display family ships a bold in `render::FONT_THEME_BOLD_FACES` —
+/// the 10 proportional faces PLUS the 4 monospace display faces (the mono-bolds
+/// round). A bold face only fixes the `weight_diff == 0` fallback trap if it
+/// registers under the SAME family name its Regular uses AND declares usWeightClass
+/// 700 — a subsetting/name-fixup mistake (the exact failure the CJK round guards
+/// against for its faces) that renamed the face or left it at weight 400 would
+/// silently keep the fallback bug. This asserts the font-DB fact directly for all
+/// 14 (including Fira Sans / Bitter, registered but not yet assigned to any world,
+/// so the resolution tests below can't reach them through a theme switch).
 #[test]
 fn bold_display_faces_register_under_their_family_names_at_weight_700() {
     let Some(p) = headless_pipeline() else {
@@ -429,6 +430,11 @@ fn bold_display_faces_register_under_their_family_names_at_weight_700() {
         "EB Garamond",
         "Fira Sans",
         "Bitter",
+        // Mono display faces (the mono-bolds round).
+        "IBM Plex Mono",
+        "JetBrains Mono",
+        "Monaspace Xenon",
+        "Iosevka",
     ] {
         let has_bold = p.font_system.db().faces().any(|f| {
             f.weight.0 == 700 && f.families.iter().any(|(n, _)| n == expected)
@@ -514,6 +520,91 @@ fn markdown_bold_resolves_to_a_real_bold_face_never_the_mono_fallback() {
         checked += 1;
     }
     assert!(checked >= 8, "expected to check all 8 assigned bold worlds, checked {checked}");
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}
+
+/// THE MONO-BOLDS REGRESSION (user report 2026-07-15, Firetail). The five
+/// mono-display worlds — a world whose display face IS its own monospace companion
+/// (`t.font == t.mono`): Tawny (IBM Plex Mono), Mangrove (JetBrains Mono),
+/// Firetail + Potoroo (Monaspace Xenon), Currawong (Iosevka), and the one-bit
+/// Wagtail (JetBrains Mono) as a bonus — used to shape `**bold**` in a FOREIGN
+/// proportional sans (the "weird fi-ligature" bug): a `Weight::BOLD` request in a
+/// Regular-only mono family tripped the `weight_diff == 0` fallback and dropped the
+/// family entirely, landing in `.SF NS`. The mono-bolds round bundles a real 700
+/// under each mono family. This is the OUTCOME sweep: an EXHAUSTIVE, no-skip pass
+/// over every world whose display face resolves as monospaced (a data predicate —
+/// a NEW mono world is automatically swept, no wildcard exclusion), asserting each
+/// bold-content glyph resolves to (a) the world's OWN display family, never a
+/// foreign face; (b) weight 700; (c) STILL MONOSPACED — the grid is kept, which is
+/// the whole reason option (b) beat pinning to the Regular weight.
+#[test]
+fn markdown_bold_on_mono_worlds_keeps_the_grid_never_a_foreign_face() {
+    let _t = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping markdown_bold_on_mono_worlds_keeps_the_grid_never_a_foreign_face: no wgpu adapter");
+        return;
+    };
+    // A world is mono-display iff its display family has a registered monospaced
+    // face — derived from the font DB, not a hand-list, so a new mono world can't
+    // slip the sweep.
+    let is_mono_family = |p: &crate::render::TextPipeline, family: &str| -> bool {
+        p.font_system
+            .db()
+            .faces()
+            .any(|f| f.monospaced && f.families.iter().any(|(n, _)| n == family))
+    };
+    let mut checked = 0usize;
+    let mut names = Vec::new();
+    for t in theme::THEMES.iter() {
+        if !is_mono_family(&p, t.font) {
+            continue; // proportional-display world — covered by the sweep above
+        }
+        theme::set_active_by_name(t.name).unwrap();
+        p.sync_theme();
+        p.set_view(&view_md("\n**bold**", 0, 0));
+        let mut saw_glyph = false;
+        for run in p.buffer.layout_runs() {
+            if run.line_i != 1 {
+                continue;
+            }
+            for g in run.glyphs.iter() {
+                if g.start < 2 || g.start >= 6 {
+                    continue; // only the "bold" content, not the `**` delimiters
+                }
+                let face = p
+                    .font_system
+                    .db()
+                    .face(g.font_id)
+                    .expect("shaped glyph maps to a registered face");
+                assert_eq!(
+                    face.families[0].0, t.font,
+                    "{}: bold content glyph resolved to {:?}, not the world's own mono face {:?} \
+                     (the foreign-sans fallback bug)",
+                    t.name, face.families[0].0, t.font
+                );
+                assert_eq!(
+                    face.weight.0, 700,
+                    "{}: bold content glyph resolved to weight {}, not 700",
+                    t.name, face.weight.0
+                );
+                assert!(
+                    face.monospaced,
+                    "{}: bold content glyph is NOT monospaced — the mono bold must keep the fixed grid",
+                    t.name
+                );
+                saw_glyph = true;
+            }
+        }
+        assert!(saw_glyph, "{}: found no bold content glyph to check", t.name);
+        checked += 1;
+        names.push(t.name);
+    }
+    assert!(
+        checked >= 5,
+        "expected at least the 5 mono-display worlds (Tawny/Mangrove/Firetail/Potoroo/Currawong), \
+         checked {checked}: {names:?}"
+    );
     theme::set_active(theme::DEFAULT_THEME);
     p.sync_theme();
 }

@@ -488,25 +488,39 @@ pub const FONT_THEME_FACES: &[&[u8]] = &[
 /// request, so it survives name-matching and resolves to the bold FILE — no new
 /// family, no wiring beyond this list (the `MdKind::Bold` arm is unchanged).
 ///
-/// Only the 10 PROPORTIONAL display faces get a bold; the monos (IBM Plex Mono,
-/// JetBrains Mono, Monaspace Xenon, Iosevka) stay Regular-only — code rarely
-/// bolds and the uniform grid matters more. Each face is sourced exactly like the
-/// bundled CJK faces: a static upstream Bold where one ships (Fira Sans, IBM Plex
-/// Sans, Zilla Slab, iA Writer Quattro S), else instanced from the OFL variable
-/// source at `wght=700` (`fonttools varLib.instancer --update-name-table`, pinning
-/// the optical-size axis to the Regular's — Literata `opsz=12`, Newsreader
-/// `opsz=16`, Fraunces `opsz=9`), then name-fixed so family(1) EXACTLY matches the
-/// Regular's registered family (fontdb keys off name 1/2 with the typographic
-/// family/subfamily records dropped) and subset to that Regular's own code-point
-/// set. All OFL 1.1 (see `assets/fonts/LICENSES.md`).
+/// EVERY bundled display face now gets a bold — the 10 PROPORTIONAL faces plus,
+/// as of the mono-bolds round, the 4 MONOSPACE display faces (IBM Plex Mono,
+/// JetBrains Mono, Monaspace Xenon, Iosevka). The monos were the last Regular-only
+/// families, so a `**bold**` span in the five mono-display worlds (Tawny = Plex
+/// Mono, Mangrove = JetBrains, Firetail/Potoroo = Monaspace Xenon, Currawong =
+/// Iosevka) tripped the SAME trap and fell into a FOREIGN proportional sans (the
+/// user's "weird fi-ligature" report) — worse than the proportional case. A real
+/// 700 mono keeps the fixed grid (same advance) AND gives true emphasis. Each face
+/// is sourced exactly like the bundled CJK faces: a static upstream Bold where one
+/// ships (Fira Sans, IBM Plex Sans, Zilla Slab, iA Writer Quattro S, IBM Plex Mono,
+/// Iosevka), else instanced from the OFL variable source at `wght=700`
+/// (`fonttools varLib.instancer`, pinning the Regular's optical size — Literata
+/// `opsz=12`, Newsreader `opsz=16`, Fraunces `opsz=9` — and, for Monaspace Xenon,
+/// its width/slant axes to the Regular's `wdth=100 slnt=0`; JetBrains Mono has a
+/// lone `wght` axis), then name-fixed so family(1) EXACTLY matches the Regular's
+/// registered family and subset to that Regular's own code-point set. All OFL 1.1
+/// (see `assets/fonts/LICENSES.md`).
+///
+/// IBM Plex Mono is the one weight-asymmetric pair: awl ships its Regular as the
+/// Light/300 weight (`mono_safe_weight` — the documented Plex-Light trap), but its
+/// Bold is the genuine upstream 700. The `MdKind::Bold` arm requests a plain
+/// `Weight::BOLD` (700), NOT the mono-safe weight, so it resolves to this 700 file
+/// with `weight_diff == 0` and a bold span visibly jumps Light→Bold. A code buffer
+/// still requests `mono_safe_weight` (300) and matches the Light face exactly (the
+/// 700 is farther, never wins the 300 request), so code shaping is untouched.
 ///
 /// DOCUMENTED GAP: `Fraunces9pt-Bold.ttf` covers 624 of the Regular's 637
 /// code-points — 13 rare transliteration/combining marks (Ṅ Ṡ Ṧ Ṩ Ẏ + combining
 /// hook/ring-above, dot-below) are absent from the upstream Fraunces VARIABLE
 /// source itself (the shipped Regular was built from a fuller source), so no
 /// `wght=700` instance can carry them; a bold occurrence of one of those 13
-/// characters falls back like any missing glyph. Every other bold matches its
-/// Regular's coverage exactly.
+/// characters falls back like any missing glyph. Every other bold (including all
+/// four monos) matches its Regular's coverage exactly.
 pub const FONT_THEME_BOLD_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/Literata-Bold.ttf"),
     include_bytes!("../assets/fonts/Newsreader-Bold.ttf"),
@@ -518,6 +532,13 @@ pub const FONT_THEME_BOLD_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/EBGaramond-Bold.ttf"),
     include_bytes!("../assets/fonts/FiraSans-Bold.ttf"),
     include_bytes!("../assets/fonts/Bitter-Bold.ttf"),
+    // Mono display faces — the mono-bolds round. Same-family 700 companions so a
+    // `**bold**` span in a mono-display world keeps its grid instead of falling
+    // into a foreign proportional sans (see the module doc above).
+    include_bytes!("../assets/fonts/IBMPlexMono-Bold.ttf"),
+    include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"),
+    include_bytes!("../assets/fonts/MonaspaceXenon-Bold.ttf"),
+    include_bytes!("../assets/fonts/Iosevka-Bold.ttf"),
 ];
 
 /// BUNDLED ORNAMENT faces — tiny ornament-only subsets registered under their

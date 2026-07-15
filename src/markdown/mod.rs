@@ -11,9 +11,8 @@
 //! NO bold — figure/ground by value + size, so the amber stays the caret's alone
 //! (DESIGN.md §3, the one-organic-element law) and the title renders in the world's
 //! own face at any size — a DESIGN call: size alone carries the hierarchy. (Inline
-//! `**bold**` DOES shape in a real bold face on proportional worlds — the 10
-//! display faces bundle a 700 weight, `render::FONT_THEME_BOLD_FACES`; the mono
-//! worlds stay Regular-only and bold falls back gracefully there.)
+//! `**bold**` DOES shape in a real bold face on EVERY world — all display faces,
+//! proportional and mono, bundle a 700 weight, `render::FONT_THEME_BOLD_FACES`.)
 //!
 //! This is PURE: the spans are a deterministic function of the text (no clock,
 //! no layout), so a headless capture renders the settled styled state and the

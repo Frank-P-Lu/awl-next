@@ -286,25 +286,28 @@ pub(super) fn md_attrs(
             //    caret; figure/ground is by VALUE + size, not by spending the accent.
             //  - BOLD weight: a DESIGN call, not a font limitation — headings read
             //    as headings by SIZE alone. (Inline `**bold**` DOES now shape in a
-            //    real bold face: the 10 proportional display faces bundle a 700
-            //    weight, see `FONT_THEME_BOLD_FACES`. A heading could take it too, but
-            //    the 1.8x size is plenty of hierarchy on its own, so it stays Regular.)
+            //    real bold face: every display face — proportional AND mono — bundles
+            //    a 700 weight, see `FONT_THEME_BOLD_FACES`. A heading could take it too,
+            //    but the 1.8x size is plenty of hierarchy on its own, so it stays Regular.)
         }
         MdKind::Bold => {
-            // Resolves to the world's real bundled BOLD (700) face on a proportional
-            // world (`FONT_THEME_BOLD_FACES`, registered under the SAME family name as
-            // the Regular). On a MONO-display world (Potoroo/Tawny/Mangrove/Currawong —
-            // still Regular-only, code rarely bolds + the grid matters more) there is
-            // no 700 face, so this falls back gracefully — the mono renders unbolded
-            // rather than in the world's own weight, an accepted, documented trade.
+            // Resolves to the world's real bundled BOLD (700) face — for EVERY world,
+            // proportional AND mono. Each display family ships a 700 companion under
+            // the SAME family name as its Regular (`FONT_THEME_BOLD_FACES`), so this
+            // plain `Weight::BOLD` request matches `weight_diff == 0` and lands on the
+            // bold FILE. The five mono-display worlds (Tawny = IBM Plex Mono, Mangrove
+            // = JetBrains Mono, Firetail/Potoroo = Monaspace Xenon, Currawong =
+            // Iosevka) used to have no 700, so this request tripped the trap and fell
+            // into a FOREIGN proportional sans (the "weird fi-ligature" bug); the mono
+            // bolds keep the fixed grid AND give true emphasis.
             a = a.weight(glyphon::Weight::BOLD);
         }
         MdKind::Italic => {
             a = a.style(glyphon::Style::Italic);
         }
         MdKind::BoldItalic => {
-            // Same as `Bold` above (real bold on proportional worlds, graceful on the
-            // mono worlds) plus glyphon's synthesized slant.
+            // Same as `Bold` above (real bundled 700 on every world, proportional AND
+            // mono) plus glyphon's synthesized slant (no bundled italic face).
             a = a.weight(glyphon::Weight::BOLD).style(glyphon::Style::Italic);
         }
         MdKind::Code { .. } => {
