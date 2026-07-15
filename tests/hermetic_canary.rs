@@ -58,13 +58,20 @@ fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
 }
 
 /// Spawn the real binary with the canary HOME/XDG environment, panicking (with
-/// the child's stderr) if it exits non-zero.
+/// the child's stderr) if it exits non-zero. The child's CONVENTION is pinned
+/// to Mac: this test's `--keys` spec speaks the repo's advertised
+/// Mac-convention chords (`s-s` = Cmd-S), so the chords must resolve the same
+/// way regardless of the host's `cfg(target_os)` or an ambient
+/// `AWL_CONVENTION_FORCE=linux` sweep leaking into the child — the env
+/// override wins over the target default (see `Convention::current`), exactly
+/// like the suite's convention-parametric tests pin their expectations.
 fn run_awl(home: &Path, args: &[&str]) {
     let out = Command::new(env!("CARGO_BIN_EXE_awl"))
         .args(args)
         .env("HOME", home)
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("XDG_DATA_HOME", home.join(".local").join("share"))
+        .env("AWL_CONVENTION_FORCE", "mac")
         .env_remove("AWL_CONFIG")
         .env_remove("AWL_CJK_FORCE")
         .env_remove("AWL_FAULT_DELAY_MS")

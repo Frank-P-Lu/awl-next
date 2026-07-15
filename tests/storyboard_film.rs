@@ -13,10 +13,12 @@
 //!      stub `ffmpeg` on PATH (arg plumbing + success handling), so the seam
 //!      is pinned without depending on a real encoder being installed.
 //!
-//! macOS-gated: the checked-in storyboards speak the Mac-convention chords
-//! (`s-Down`, `s-p`, `s-w` — the advertised keymap), and the film renderer
-//! needs a real GPU adapter (a GPU-less host is detected and skipped, the
-//! repo's "no wgpu adapter" pattern).
+//! macOS-gated: the film renderer needs a real GPU adapter (a GPU-less host
+//! is detected and skipped, the repo's "no wgpu adapter" pattern). The
+//! checked-in storyboards speak the Mac-convention chords (`s-Down`, `s-p`,
+//! `s-w` — the advertised keymap), so the spawned child is pinned to
+//! `AWL_CONVENTION_FORCE=mac` regardless of the parent suite's own convention
+//! sweep (see `run_awl`).
 
 #![cfg(target_os = "macos")]
 
@@ -35,10 +37,18 @@ fn tmp_dir(tag: &str) -> PathBuf {
 }
 
 /// Spawn the real binary from the repo root (so `scenarios/…` resolves), with
-/// `$AWL_CONFIG` scrubbed (a pointed-at config would seed the sandbox).
+/// `$AWL_CONFIG` scrubbed (a pointed-at config would seed the sandbox) and the
+/// child's CONVENTION pinned to Mac: the checked-in storyboards speak
+/// Mac-convention chords (scenarios/demo.toml's own header says so), so the
+/// child must read them under `Convention::Mac` even when the parent suite is
+/// swept under `AWL_CONVENTION_FORCE=linux` (the parent's env would otherwise
+/// leak into the child and unbind `s-Down`/`s-w`/`s-p`).
 fn run_awl(args: &[&str], extra_path: Option<&Path>) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_awl"));
-    cmd.args(args).current_dir(env!("CARGO_MANIFEST_DIR")).env_remove("AWL_CONFIG");
+    cmd.args(args)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env("AWL_CONVENTION_FORCE", "mac")
+        .env_remove("AWL_CONFIG");
     if let Some(dir) = extra_path {
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mut parts = vec![dir.to_path_buf()];
