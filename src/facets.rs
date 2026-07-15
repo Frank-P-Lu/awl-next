@@ -8,10 +8,13 @@
 //! faceting picker plugs in its own lenses + bucketing WITHOUT any picker-specific
 //! code path in [`crate::overlay`] / the renderer / the sidecar.
 //!
-//! The theme picker is the first (and today only) consumer: its lens scheme lives
-//! in `theme/` (it names Time/Register/Voice/Temperature — genuinely theme-domain
-//! concepts) but is expressed through the generic [`FacetScheme`] here. A future
-//! picker registers its own [`FacetScheme`] and adds one arm to [`scheme`].
+//! Consumers today: the file pickers (Go-to / Browse / Switch-project), the
+//! Command palette, the History timeline, and the Settings menu — each registers
+//! its own [`FacetScheme`] in its domain module and adds one arm to [`scheme`].
+//! (The theme picker RETIRED its runtime lens strip — user decision, 2026-07-15,
+//! WORLD-ROLES.md "DECIDED — retire the runtime LENS picker; the axes become a
+//! build-time ruler": it is now a FLAT browsable list, and its axis data survives
+//! only as the `theme::tests::axis_coverage_ruler` build-time coverage check.)
 //!
 //! CONVENTION (settled): **"All" is HOME** — the flat, unfaceted list. It is the
 //! FIRST entry of every [`FacetScheme::strip`] (strip index 0), the lens a
@@ -129,7 +132,6 @@ impl FacetScheme {
 /// the same single-owner discipline as `rowlayout::plan` / `role_style_for`.
 pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
     match kind {
-        OverlayKind::Theme => Some(&crate::theme::THEME_FACETS),
         // The FILE pickers: lens the flat corpus by recency / folder / type (Goto)
         // or by dir / file / git (Browse). Their schemes live in the file-index
         // domain module ([`crate::index`]), keyed here through the one owner.
@@ -149,8 +151,11 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         // Appearance / Writing / Files / Keybindings / Advanced). Scheme lives in
         // its domain module ([`crate::settings`]).
         OverlayKind::Settings => Some(&crate::settings::SETTINGS_FACETS),
-        // Non-faceting pickers: the flat type-to-filter list, no lens strip.
-        OverlayKind::Caret
+        // Non-faceting pickers: the flat type-to-filter list, no lens strip. The
+        // THEME picker is one of these — its runtime lens strip was retired (see the
+        // module doc); it opens as a flat browsable world list with live preview.
+        OverlayKind::Theme
+        | OverlayKind::Caret
         | OverlayKind::Dictionary
         | OverlayKind::CjkLang
         | OverlayKind::MoveDest

@@ -857,23 +857,28 @@ fn stamp_return_to_fills_only_an_empty_breadcrumb() {
 }
 
 #[test]
-fn theme_lens_switch_keeps_world_and_previews() {
+fn theme_arrows_move_the_selection_and_preview() {
     let _g = crate::testlock::serial();
-    // Currawong is shown under Time (Night), so RIGHT into the Time lens keeps it.
-    crate::theme::set_active_by_name("Currawong");
+    // The theme picker is FLAT now (lens strip retired 2026-07-15): ←/→ MOVE the
+    // selection row like every other flat picker, with live preview on each move —
+    // NOT a lens switch. Open with Tawny (THEMES index 0) active + selected.
+    crate::theme::set_active(0);
     let mut overlay = theme_overlay();
     let mut accept = None;
-    assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
-    // RIGHT switches the LENS (not the row) and keeps Currawong highlighted; the
-    // preview is a no-op (same world), so the active theme is unchanged.
+    assert!(!overlay.as_ref().unwrap().is_faceting(), "the theme picker is flat");
+    assert_eq!(overlay.as_ref().unwrap().active_facet_id(), None, "no lens");
+    let first = overlay.as_ref().unwrap().selected_value().unwrap().to_string();
+    // RIGHT moves the selection DOWN a row and previews the newly-highlighted world.
     drive(&mut overlay, &mut accept, &Action::ForwardChar);
-    assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("time"));
-    assert_eq!(overlay.as_ref().unwrap().selected_value(), Some("Currawong"));
-    assert_eq!(crate::theme::active().name, "Currawong");
-    // LEFT switches back to All.
+    let second = overlay.as_ref().unwrap().selected_value().unwrap().to_string();
+    assert_ne!(first, second, "→ moved to the next world (not a lens switch)");
+    assert_eq!(overlay.as_ref().unwrap().active_facet_id(), None, "still no lens");
+    assert_eq!(crate::theme::active().name, second, "the moved-to world is previewed live");
+    // LEFT moves back UP to the first world (and previews it).
     drive(&mut overlay, &mut accept, &Action::BackwardChar);
-    assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));
-    // Nothing was accepted by a lens switch.
+    assert_eq!(overlay.as_ref().unwrap().selected_value().as_deref(), Some(first.as_str()));
+    assert_eq!(crate::theme::active().name, first);
+    // A move never accepts.
     assert_eq!(accept, None);
     crate::theme::set_active(0);
 }

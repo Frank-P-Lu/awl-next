@@ -53,7 +53,7 @@ pub use color::Srgb;
 pub use derive::{
     active, active_index, background, base_100, base_200, base_300, base_content, error, faint,
     image_reveal_scrim, muted, page_frame_ink, placard_ink, placard_stipple_density, primary,
-    selection, set_active, set_active_by_name, surface_selected, THEME_FACETS,
+    selection, set_active, set_active_by_name, surface_selected,
 };
 #[allow(unused_imports)] // cycle/overlay_scrim/primary_content/tag_for: public API
 // surface, no NON-TEST in-crate caller today (tag_for's real callers all live

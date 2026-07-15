@@ -300,12 +300,13 @@ impl OverlayKind {
     /// render pipeline's drawn window (threaded via
     /// [`crate::render::ViewState::overlay_window_rows`]), so the two can never disagree
     /// about which rows are on screen. The contextual SPELL popup stays compact (8); the
-    /// faceted THEME picker shows every world (a cap past the world count — the render
-    /// path then reduces it to fit the canvas); every other centered picker shows up to 12.
+    /// flat THEME picker sizes to the whole world roster so every world is browsable
+    /// without a scroll (the render path then reduces it to fit the canvas); every other
+    /// centered picker shows up to 12.
     pub fn window_rows(self) -> usize {
         match self {
             OverlayKind::Spell => 8,
-            OverlayKind::Theme => 64,
+            OverlayKind::Theme => crate::theme::THEMES.len(),
             _ => 12,
         }
     }
@@ -363,14 +364,11 @@ impl OverlayKind {
             ],
             // Go-to is a FACETED flat picker: ↵ opens, ←/→ switch the lens.
             OverlayKind::Goto => vec![enter("open"), key("\u{2190}/\u{2192}", "lens")],
-            // The faceted theme picker: ↵ keeps, ←/→ switch the lens, esc reverts to
-            // the opening theme. (↑/↓ moves the world with live preview — taught by the
-            // shared universal `↑/↓ move` lead, so it is not repeated here.)
-            OverlayKind::Theme => vec![
-                enter("keep"),
-                key("\u{2190}/\u{2192}", "lens"),
-                key("esc", "revert"),
-            ],
+            // The flat theme picker: ↵ keeps, esc reverts to the opening theme. (↑/↓
+            // moves the world with live preview — taught by the shared universal
+            // `↑/↓ move` lead, so it is not repeated here.) The runtime lens strip was
+            // retired (2026-07-15) — the picker is a flat browsable world list.
+            OverlayKind::Theme => vec![enter("keep"), key("esc", "revert")],
             // Caret style: Up/Down PREVIEWS the look (live), ↵ APPLIES + persists it.
             OverlayKind::Caret => vec![enter("apply")],
             // Dictionary: no live preview (a re-parse is real work) — ↵ applies +

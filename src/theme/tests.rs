@@ -5,8 +5,7 @@
 //! lives in moved.
 
 use super::*;
-use super::derive::{theme_bucket, SELECTED_BAND_STEPS, THEME_FACET_STRIP};
-use crate::facets::FacetItem;
+use super::derive::SELECTED_BAND_STEPS;
 
 
 #[test]
@@ -1028,15 +1027,17 @@ fn zh_hant_uniform_ko_splits_serif_from_sans() {
     assert_eq!(CJK_KO_SERIF[1], CJK_KO[0], "ko-serif floor == the bundled Noto Sans KR floor");
 }
 
-/// OPT-OUT faceting: a world may be `None` (hidden) on a lens, but any `Some(tag)`
-/// must be one of that lens's declared sections (so grouping can never place a world
-/// under a header that doesn't exist). Also asserts the CURATION invariant — every
-/// faceted bucket shows a curated 2–3 worlds (never empty, never crowded) — that the
-/// name-keyed accessor agrees with the inline field, that every world HEADLINES at
-/// least one faceted lens (still findable by browsing, not only by search), and that
-/// `All` groups nothing.
+/// AXIS COVERAGE RULER (the reason [`Lens`] + [`ThemeTags`] survive after the theme
+/// picker's runtime lens strip was retired, 2026-07-15): every declared axis SECTION
+/// stays covered by a curated band of worlds, so the axes remain a meaningful
+/// build-time description of the roster. A world may OPT OUT (`None`) of an axis, but
+/// any `Some(tag)` must be one of that axis's declared sections (no world under a
+/// header that doesn't exist); the name-keyed accessor [`tag_for`] agrees with the
+/// inline field; every world HEADLINES at least one axis; and `All` groups nothing.
+/// THIS is the coverage check WORLD-ROLES.md means by "the axes become a build-time
+/// ruler" — no runtime picker consults it.
 #[test]
-fn every_world_curated_into_lenses() {
+fn axis_coverage_ruler() {
     for lens in [Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature] {
         let sections = lens.sections();
         for t in THEMES.iter() {
@@ -1071,42 +1072,20 @@ fn every_world_curated_into_lenses() {
             );
         }
     }
-    // Every world headlines at least ONE faceted lens (present under some section),
-    // so it is reachable by browsing lenses, not only via All + fuzzy search.
+    // Every world headlines at least ONE axis (present under some section), so no
+    // world is invisible to the coverage ruler.
     for t in THEMES.iter() {
         let shown = [Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature]
             .iter()
             .any(|&l| t.tags.section(l).is_some());
-        assert!(shown, "{} is hidden on every lens (headlines none)", t.name);
+        assert!(shown, "{} headlines no axis", t.name);
     }
-    // All lens groups nothing (flat list).
+    // The degenerate All axis groups nothing.
     assert!(Lens::All.sections().is_empty());
     assert_eq!(THEMES[0].tags.section(Lens::All), None);
-    // The strip parks All at the far LEFT.
+    // The ruler's STRIP shape: All parked FIRST, five axes total.
     assert_eq!(*Lens::STRIP.first().unwrap(), Lens::All);
     assert_eq!(Lens::STRIP.len(), 5);
-}
-
-/// DRIFT GUARD: the generic [`THEME_FACET_STRIP`] (the `FacetScheme` the overlay
-/// consults) mirrors [`Lens::STRIP`] element-for-element — same order, labels,
-/// sidecar ids, and section lists — and [`theme_bucket`] agrees with [`tag_for`]
-/// on every world. So the theme picker's generic scheme can never diverge from
-/// the `Lens` source of truth.
-#[test]
-fn theme_facet_strip_matches_lens() {
-    assert_eq!(THEME_FACET_STRIP.len(), Lens::STRIP.len());
-    for (facet, lens) in THEME_FACET_STRIP.iter().zip(Lens::STRIP.iter()) {
-        assert_eq!(facet.label, lens.label(), "{lens:?} label drift");
-        assert_eq!(facet.id, lens.as_str(), "{lens:?} id drift");
-        assert_eq!(facet.sections, lens.sections(), "{lens:?} sections drift");
-    }
-    // theme_bucket (strip index) == tag_for (lens) for every world × every lens.
-    for (idx, lens) in Lens::STRIP.iter().enumerate() {
-        for t in THEMES.iter() {
-            let item = FacetItem::new(t.name);
-            assert_eq!(theme_bucket(item, idx), tag_for(t.name, *lens));
-        }
-    }
 }
 
 #[test]

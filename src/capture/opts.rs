@@ -85,15 +85,18 @@ pub struct OverlayInfo {
     /// Keybindings menu only: the transient NOTICE line (conflict / saved / reset).
     /// Empty otherwise; emitted as `overlay.notice`.
     pub notice: String,
-    /// THEME picker only: the ACTIVE faceting lens name (`"time"`/`"register"`/
-    /// `"voice"`/`"temperature"`/`"all"`), or `None` for every other kind. Emitted as
-    /// `overlay.lens` so a `--keys` lens switch is verifiable.
+    /// FACETING pickers (Go-to / Browse / Switch-project / Command / History /
+    /// Settings): the ACTIVE lens name (e.g. `"recent"`/`"file"`/`"session"`/`"all"`),
+    /// or `None` for a flat, non-faceting picker (the theme picker is flat — its lens
+    /// strip was retired 2026-07-15). Emitted as `overlay.lens` so a `--keys` lens
+    /// switch is verifiable.
     pub lens: Option<&'static str>,
-    /// THEME picker only: the lens STRIP — each lens label + a flag marking the active
-    /// one. Drives the rendered strip; emitted as `overlay.lens_strip`. Empty otherwise.
+    /// FACETING pickers only: the lens STRIP — each lens label + a flag marking the
+    /// active one. Drives the rendered strip; emitted as `overlay.lens_strip`. Empty
+    /// for a flat picker.
     pub lens_strip: Vec<(String, bool)>,
-    /// THEME picker only: the SECTION label per `items` row (parallel), so the grouping
-    /// is drawable + assertable. Empty for every other kind / the All lens.
+    /// FACETING pickers only: the SECTION label per `items` row (parallel), so the
+    /// grouping is drawable + assertable. Empty for a flat picker / the All lens.
     pub sections: Vec<String>,
     /// HISTORY timeline only: the restore id of the highlighted row whose VERSION
     /// the capture is previewing in the document (paired with

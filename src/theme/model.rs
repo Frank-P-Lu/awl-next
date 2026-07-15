@@ -735,10 +735,13 @@ pub struct Theme {
     /// scaled-down bullet still sits on the text's optical middle. A pure function of
     /// the active theme, read by `render::layers::prepare_ornaments`.
     pub bullet_scale: f32,
-    /// The world's FACETING coordinates for the theme picker's lens-switcher — its
-    /// value on each of the four lenses (Time / Register / Voice / Temperature),
-    /// DERIVED from this world's palette + font (see [`ThemeTags`]). Every world has
-    /// a value on every lens; the picker groups worlds by the active lens's section.
+    /// The world's AXIS coordinates — its value on each of the four axes (Time /
+    /// Register / Voice / Temperature), DERIVED from this world's palette + font (see
+    /// [`ThemeTags`]). Once the theme picker's runtime lens-switcher; that strip was
+    /// retired (user decision, 2026-07-15) and the picker is now a flat browsable
+    /// list. The axes survive as the BUILD-TIME coverage ruler (`tests::
+    /// axis_coverage_ruler`): every axis section stays covered by a curated band of
+    /// worlds, and every world headlines at least one axis.
     pub tags: ThemeTags,
     /// Optional per-world SYNTAX ROLE-STYLE overrides (see [`RoleOverrides`]).
     /// [`RoleOverrides::NONE`] on fifteen of the sixteen worlds: the quiet role
@@ -835,15 +838,22 @@ impl Theme {
     }
 }
 
-// --- The faceted THEME-PICKER lenses + per-world tags -----------------------
+// --- The THEME AXES (a build-time coverage ruler) + per-world tags -----------
 //
-// The theme picker is a FACETED lens-switcher: LEFT/RIGHT cycle a [`Lens`], each
-// grouping the worlds by ONE dimension into faint sections. Every world carries a
-// value on EACH of the four real lenses ([`ThemeTags`]); `All` is the flat list.
+// These four axes ([`Lens`]) once drove a runtime lens-switcher in the theme
+// picker (LEFT/RIGHT cycled them, grouping worlds into faint sections). That strip
+// was RETIRED (user decision, 2026-07-15 — WORLD-ROLES.md "DECIDED — retire the
+// runtime LENS picker; the axes become a build-time ruler"); the picker is now a
+// flat browsable list. The axes survive here ONLY as a BUILD-TIME coverage ruler:
+// every world carries a value on EACH of the four axes ([`ThemeTags`]), and
+// `tests::axis_coverage_ruler` asserts every section stays covered by a curated
+// band of worlds. `All` is the degenerate "no grouping" axis kept for the ruler's
+// STRIP-shape assertions.
 
-/// A faceting LENS for the theme picker. The four real dimensions group the worlds
-/// into sections; `All` is the flat, fuzzy-searchable list (today's behaviour).
-/// Ordered for the LEFT/RIGHT strip with `All` PARKED at the FAR LEFT ([`Lens::STRIP`]).
+/// A THEME AXIS. The four real dimensions each classify a world into one section;
+/// `All` is the degenerate "no grouping" axis. Retained as the source of truth for
+/// the build-time coverage ruler (`tests::axis_coverage_ruler`), no longer a runtime
+/// picker lens. [`Lens::STRIP`] keeps `All` parked FIRST (the ruler's shape check).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lens {
     /// Group by background lightness/warmth: Dawn / Day / Dusk / Night.
@@ -854,40 +864,18 @@ pub enum Lens {
     Voice,
     /// Group by ground hue: Warm / Cool / Neutral.
     Temperature,
-    /// The flat, fuzzy-filterable list of every world (no grouping).
+    /// The degenerate axis (no grouping) — every world, no sections.
     All,
 }
 
 impl Lens {
-    /// The lens STRIP order, LEFT→RIGHT, with `All` parked at the FAR LEFT end.
-    /// LEFT/RIGHT step through this (clamped at both ends); the picker opens on
-    /// [`Lens::Time`], the first faceted view.
+    /// The axis order used by the coverage ruler, with `All` parked FIRST. (Once the
+    /// LEFT/RIGHT strip order for the runtime picker; kept for the ruler's shape
+    /// assertions after the strip's retirement.)
     pub const STRIP: [Lens; 5] = [Lens::All, Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature];
 
-    /// The strip LABEL for this lens.
-    pub fn label(self) -> &'static str {
-        match self {
-            Lens::Time => "Time",
-            Lens::Register => "Register",
-            Lens::Voice => "Voice",
-            Lens::Temperature => "Temperature",
-            Lens::All => "All",
-        }
-    }
-
-    /// The short lowercase name used in the capture sidecar.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Lens::Time => "time",
-            Lens::Register => "register",
-            Lens::Voice => "voice",
-            Lens::Temperature => "temperature",
-            Lens::All => "all",
-        }
-    }
-
-    /// The SECTIONS this lens groups worlds into, in display order (the faint
-    /// uppercase section headers). `All` has none (the flat list).
+    /// The SECTIONS this axis groups worlds into, in display order. `All` has none
+    /// (the degenerate axis).
     pub fn sections(self) -> &'static [&'static str] {
         match self {
             Lens::Time => &["Dawn", "Day", "Dusk", "Night"],
@@ -899,17 +887,17 @@ impl Lens {
     }
 }
 
-/// A world's value on EACH of the four real lenses — its faceting coordinates. The
-/// faceting is now OPT-OUT per lens: a `None` axis means the world is NOT shown under
-/// that lens (still reachable via [`Lens::All`] + fuzzy search), so each lens shows
-/// only a CURATED handful (~2–3) per section rather than every world crowding in.
-/// A `Some(section)` value is DERIVED from the world's own palette + font (see the
-/// doc on each world): Time by background lightness/warmth, Register by font
-/// formality, Voice by face class, Temperature by ground hue. These are DEFAULTS the
-/// user can adjust; the curation lives in the world literals below.
+/// A world's value on EACH of the four axes — its coverage-ruler coordinates. Each
+/// axis is OPT-OUT: a `None` axis means the world does not headline that axis, so each
+/// section stays a CURATED handful (~2–4) rather than every world crowding in. A
+/// `Some(section)` value is DERIVED from the world's own palette + font (see the doc
+/// on each world): Time by background lightness/warmth, Register by font formality,
+/// Voice by face class, Temperature by ground hue. The curation lives in the world
+/// literals below; `tests::axis_coverage_ruler` asserts every section stays covered
+/// and every world headlines at least one axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ThemeTags {
-    /// Section under [`Lens::Time`] (Dawn / Day / Dusk / Night), or `None` = hidden.
+    /// Section under [`Lens::Time`] (Dawn / Day / Dusk / Night), or `None` = opted out.
     pub time: Option<&'static str>,
     /// Section under [`Lens::Register`] (Humble / Everyday / Refined), or `None`.
     pub register: Option<&'static str>,
@@ -920,9 +908,8 @@ pub struct ThemeTags {
 }
 
 impl ThemeTags {
-    /// This world's section under `lens` — `None` when the world OPTS OUT of this lens
-    /// (or for [`Lens::All`], which does not group). A `Some(section)` world appears
-    /// under that section's faint header; a `None` world is omitted from the lens.
+    /// This world's section under `lens` — `None` when the world OPTS OUT of this axis
+    /// (or for [`Lens::All`], which does not group).
     pub fn section(&self, lens: Lens) -> Option<&'static str> {
         match lens {
             Lens::Time => self.time,
