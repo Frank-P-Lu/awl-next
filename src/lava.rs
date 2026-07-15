@@ -116,15 +116,48 @@ pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// The MARGINS-ONLY column mask at pixel x (px): 0 inside the writing column
-/// `[col_left, col_right)` and at its edge, ramping to 1 a `gap` px into the
-/// margin. The lava is drawn at this coverage, so the field fades entirely
-/// OUTSIDE the column and the page stays a clean flat ground. MUST match
-/// `shaders/lava.wgsl`'s `mask`. `gap` is floored at 1.0 (matching the shader).
+/// The signed "distance outside the no-lava zones" at pixel x (px): positive out
+/// in a lava-bearing margin, <= 0 inside a zone the field must vanish from.
+/// Ordinarily the one zone is the writing column `[col_left, col_right]` (both
+/// edges via `max()`). With the LEFT-MARGIN RAIL carved (`rail_carved` —
+/// left-margin ink is actually DRAWN this frame: the margin outline or the
+/// bottom-left gutter, see `TextPipeline::lava_rail_carved`) the whole LEFT
+/// margin joins the no-lava zone: only the RIGHT margin's distance counts, so
+/// the rail's dim entries sit on the flat ground at every phase and the lamp
+/// keeps the right margin (both surfaces hiding reclaims the full margin). The
+/// carve also feeds the Glow treatment's `could_glow` through this same
+/// distance, so no unexplained edge-bleed tints the page next to a flat rail.
+/// MUST match `shaders/lava.wgsl`'s `dist_outside`.
+#[allow(dead_code)]
+pub fn rail_dist_outside(x: f32, col_left: f32, col_right: f32, rail_carved: bool) -> f32 {
+    if rail_carved {
+        x - col_right
+    } else {
+        (col_left - x).max(x - col_right)
+    }
+}
+
+/// The MARGINS-ONLY lava coverage mask at pixel x (px): 0 inside every no-lava
+/// zone ([`rail_dist_outside`] — the writing column, plus the whole left margin
+/// while the outline rail is carved) and at its edge, ramping to 1 a `gap` px
+/// further out. The lava is drawn at this coverage, so the field fades entirely
+/// outside the zones and the page (and a carved rail) stays a clean flat
+/// ground. MUST match `shaders/lava.wgsl`'s `mask`. `gap` is floored at 1.0
+/// (matching the shader).
+#[allow(dead_code)]
+pub fn lava_mask(x: f32, col_left: f32, col_right: f32, gap: f32, rail_carved: bool) -> f32 {
+    smoothstep(
+        0.0,
+        gap.max(1.0),
+        rail_dist_outside(x, col_left, col_right, rail_carved),
+    )
+}
+
+/// The plain (un-carved) column mask — [`lava_mask`] with no outline rail, kept
+/// as the named identity the page-width-invariance tests read.
 #[allow(dead_code)]
 pub fn column_mask(x: f32, col_left: f32, col_right: f32, gap: f32) -> f32 {
-    let dist_outside = (col_left - x).max(x - col_right);
-    smoothstep(0.0, gap.max(1.0), dist_outside)
+    lava_mask(x, col_left, col_right, gap, false)
 }
 
 /// The ANIMATED center (UV space) of base blob `i` at `phase` (in cycles) — the
@@ -187,6 +220,17 @@ pub fn lava_should_tick(
     paused: bool,
 ) -> bool {
     active && ambient_on && !reduced && focused && !paused
+}
+
+/// THE PAUSE COMPOSITION the cadence gate's `paused` term is fed from — ONE
+/// owner of "which transient live interactions hold the lamp": an active
+/// RESIZE stream, an active MOVE stream, or a blur-eligible overlay (frost).
+/// Any of the three holds the phase (and, since [`lava_should_tick`] is the
+/// only door to `advance_lava`, the field with it) without resetting it. Pure,
+/// so the OR-composition itself is law-testable — the live App reads its three
+/// inputs off `resize_settle_at` / `move_settle_at` / `lava_blur_active()`.
+pub fn lava_paused(resizing: bool, moving: bool, blurred: bool) -> bool {
+    resizing || moving || blurred
 }
 
 /// Choose the viewport used to lay out the metaball field. During a live resize
@@ -323,7 +367,11 @@ struct Globals {
     field_viewport: [f32; 2],
     blob_count: u32,
     dither: u32,
-    _pad: [u32; 2],
+    /// 1 = left-margin INK (the margin OUTLINE or the bottom-left GUTTER) is
+    /// drawn this frame, so the whole LEFT margin is its rail — carved out of
+    /// the field mask (see [`rail_dist_outside`]).
+    rail: u32,
+    _pad: u32,
     /// `[col_left_px, col_right_px, gap_px, mask_mode]` — `mask_mode` from
     /// [`LavaEdge::mask_mode`] (1.0 hard, 2.0 glow).
     margin: [f32; 4],
@@ -445,7 +493,11 @@ impl LavaPipeline {
     /// Upload this frame's globals from the resolved lava `params` (`None` for
     /// every non-lava world → the pipeline goes INACTIVE and draws nothing), the
     /// live column bounds (`col_left`/`col_w` from `TextPipeline::column_left`/
-    /// `column_width`, the one geometry owner), and the effective `phase`.
+    /// `column_width`, the one geometry owner), whether the left margin's rail
+    /// is carved out of the mask this frame (`rail_carved`, from
+    /// `TextPipeline::lava_rail_carved` — the outline's and the gutter's own
+    /// draw gates, so the carve can never disagree with what the frame draws),
+    /// and the effective `phase`.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
@@ -455,6 +507,7 @@ impl LavaPipeline {
         settled_field_viewport: [f32; 2],
         col_left: f32,
         col_w: f32,
+        rail_carved: bool,
         params: Option<(Srgb, Srgb, Srgb, LavaEdge, bool)>,
         phase: f32,
     ) {
@@ -478,7 +531,8 @@ impl LavaPipeline {
             ),
             blob_count: BACKDROP_BLOBS.len() as u32,
             dither: dithered as u32,
-            _pad: [0; 2],
+            rail: rail_carved as u32,
+            _pad: 0,
             margin: [col_left, col_left + col_w, MARGIN_GAP_PX, edge.mask_mode()],
             anim: [phase, 0.0, 0.0, 0.0],
             ground: srgb_u8_to_linear(ground),
@@ -663,6 +717,78 @@ mod tests {
         assert_eq!(column_mask(20.0, col_left, col_right, gap), 1.0);
     }
 
+    /// THE OUTLINE-RAIL CARVE at the mask seam: `rail_carved = false` is the
+    /// exact identity (byte-for-byte the plain column mask — every pre-carve
+    /// frame is untouched); `rail_carved = true` zeroes the ENTIRE left margin
+    /// (the rail) while the right margin stays byte-identical to the uncarved
+    /// mask — the lamp moves over, it doesn't dim. Phase never enters the mask
+    /// (a pure function of x), so the carve is phase-independent by
+    /// construction.
+    #[test]
+    fn rail_carve_flattens_the_left_margin_and_keeps_the_right_byte_identical() {
+        let (col_left, col_right, gap) = (300.0, 900.0, MARGIN_GAP_PX);
+        // OFF is the identity with the plain column mask, everywhere.
+        for x in [0.0, 20.0, 150.0, 272.0, 285.0, 300.0, 600.0, 900.0, 914.0, 928.0, 1100.0] {
+            assert_eq!(
+                lava_mask(x, col_left, col_right, gap, false),
+                column_mask(x, col_left, col_right, gap),
+                "rail off is the plain column mask at x={x}"
+            );
+        }
+        // ON: every pixel of the LEFT margin — including the deep margin where
+        // the uncarved mask is FULL strength — is a no-lava zone.
+        for x in [0.0, 5.0, 20.0, 150.0, 271.9, 285.0, 299.0] {
+            assert_eq!(
+                lava_mask(x, col_left, col_right, gap, true),
+                0.0,
+                "the rail band holds no lava at x={x}"
+            );
+        }
+        // Witness the carve does real work: the uncarved mask WOULD paint there.
+        assert_eq!(column_mask(150.0, col_left, col_right, gap), 1.0);
+        // The column itself stays clear (unchanged) ...
+        assert_eq!(lava_mask(600.0, col_left, col_right, gap, true), 0.0);
+        // ... and the RIGHT margin (edge, feather, deep) is byte-identical.
+        for x in [900.0, 910.0, 914.0, 928.0, 1000.0, 1199.0] {
+            assert_eq!(
+                lava_mask(x, col_left, col_right, gap, true),
+                column_mask(x, col_left, col_right, gap),
+                "the right margin keeps the lamp untouched at x={x}"
+            );
+        }
+    }
+
+    /// The carved distance also owns the Glow treatment's `could_glow` gate in
+    /// the shader: with the rail carved, every left-margin AND left-edge pixel
+    /// sits far below the glow bleed window (`dist_outside <= -(column width)`),
+    /// so no under-glass bleed can tint the page beside a flat rail; the right
+    /// edge's distance is byte-identical to the uncarved one.
+    #[test]
+    fn rail_carve_moves_the_glow_distance_off_the_left_edge() {
+        let (col_left, col_right) = (300.0, 900.0);
+        // Just inside the LEFT edge (the old glow window, x a shade past
+        // col_left): carved distance is nearly the full column width away —
+        // structurally outside any bleed window.
+        for x in [301.0, 330.0, 355.0] {
+            let carved = rail_dist_outside(x, col_left, col_right, true);
+            assert!(
+                carved < -100.0,
+                "left-edge glow is structurally unreachable when carved: x={x} dist={carved}"
+            );
+            // The uncarved distance sat within a plausible bleed window there.
+            let plain = rail_dist_outside(x, col_left, col_right, false);
+            assert!(plain > -60.0 && plain < 0.0, "uncarved x={x} dist={plain}");
+        }
+        // Just inside the RIGHT edge: identical either way (the right glow stays).
+        for x in [850.0, 875.0, 899.0] {
+            assert_eq!(
+                rail_dist_outside(x, col_left, col_right, true),
+                rail_dist_outside(x, col_left, col_right, false),
+                "right-edge glow distance unchanged at x={x}"
+            );
+        }
+    }
+
     #[test]
     fn column_mask_ramps_monotonically_across_the_feather() {
         let (col_left, col_right, gap) = (300.0, 900.0, 40.0);
@@ -711,6 +837,25 @@ mod tests {
             !lava_should_tick(true, true, false, true, true),
             "resize, move, or blur pause holds phase"
         );
+    }
+
+    #[test]
+    fn any_transient_live_interaction_pauses_the_lamp() {
+        // The OR-composition the live App feeds `lava_should_tick`'s `paused`
+        // term (previously inline in `about_to_wait`, untested in isolation):
+        // each transient interaction alone must hold the lamp.
+        assert!(
+            !lava_paused(false, false, false),
+            "truly idle: the lamp may drift"
+        );
+        assert!(lava_paused(true, false, false), "a live RESIZE stream holds it");
+        assert!(lava_paused(false, true, false), "a live MOVE stream holds it");
+        assert!(
+            lava_paused(false, false, true),
+            "a blur-eligible overlay (frost) holds it"
+        );
+        // And composed pauses (a corner drag streams resize AND move) hold too.
+        assert!(lava_paused(true, true, false));
     }
 
     #[test]

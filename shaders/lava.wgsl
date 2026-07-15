@@ -31,6 +31,13 @@ struct Globals {
     field_viewport: vec2<f32>,
     blob_count: u32,
     dither: u32,
+    // THE LEFT-MARGIN RAIL CARVE: 1 when left-margin INK — the margin outline
+    // or the bottom-left gutter — is actually DRAWN this frame
+    // (`TextPipeline::lava_rail_carved`), making the whole LEFT margin its
+    // rail — another no-lava zone, so the ink's dim entries sit on the flat
+    // ground instead of inside the lamp. 0 (both surfaces hidden) reclaims the
+    // full margin. MUST match `lava::rail_dist_outside` (the Rust mirror).
+    rail: u32,
     // MARGINS-ONLY mask, packed as one vec4 (16-byte aligned per WGSL's
     // uniform-address-space rules): [col_left_px, col_right_px, gap_px,
     // mask_mode] — mask_mode 1.0 = hard (fade before the edge), 2.0 = edge-glow
@@ -154,12 +161,20 @@ const GLOW_MAX: f32 = 0.16;
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let x = in.px.x;
     let mode = g.margin.w;
-    // `dist_outside`: positive in a margin, <= 0 inside the column (both edges via
-    // max()). The lava is ALWAYS margins-only, so `mode` is 1.0 (hard) or 2.0
-    // (glow) — never 0. `mask` = 0 at the column edge, ramping to full strength
+    // `dist_outside`: positive in a lava-bearing margin, <= 0 inside a no-lava
+    // zone. Ordinarily the one zone is the writing column (both edges via
+    // max()); with the LEFT-MARGIN RAIL carved (`g.rail == 1u` — the outline
+    // or the gutter draws there) the whole LEFT margin joins it — only the
+    // RIGHT margin's distance counts, so the rail renders the flat ground
+    // (and, through `could_glow` below, sheds the left-edge bleed a flat rail
+    // would make read as an unexplained tint).
+    // The lava is ALWAYS margins-only, so `mode` is 1.0 (hard) or 2.0
+    // (glow) — never 0. `mask` = 0 at the zone edge, ramping to full strength
     // `gap` px further out into the margin, so the field fades entirely OUTSIDE
-    // the column and the page stays a clean flat ground.
-    let dist_outside = max(g.margin.x - x, x - g.margin.y);
+    // the zones and the page (and a carved rail) stays a clean flat ground.
+    // MUST match `lava::rail_dist_outside`/`lava::lava_mask` (the Rust mirror).
+    let dist_all = max(g.margin.x - x, x - g.margin.y);
+    let dist_outside = select(dist_all, x - g.margin.y, g.rail == 1u);
     let gap = max(g.margin.z, 1.0);
     let mask = smoothstep(0.0, gap, dist_outside);
 

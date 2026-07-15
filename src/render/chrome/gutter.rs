@@ -181,6 +181,20 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// Whether the page-mode GUTTER is actually DRAWN this frame — THE one
+    /// visibility rule, read straight off [`Self::gutter_layout`]'s own full gate
+    /// (page mode + a buffer name + a margin past the hard floor), never a
+    /// re-derivation. Exposed for the LAVA rail carve
+    /// ([`TextPipeline::lava_rail_carved`], `render/layers.rs`) — the gutter is
+    /// the SECOND left-margin ink surface (after the outline) whose presence
+    /// flattens the rail, so its `muted`/`faint` stack never swims in the lamp
+    /// (the lava follow-ups audit's gutter finding). Reading the SAME owner
+    /// `prepare_gutter`/`gutter_report` share means the carve can never disagree
+    /// with what the frame draws.
+    pub(in crate::render) fn gutter_visible(&self) -> bool {
+        self.gutter_layout().is_some()
+    }
+
     /// The page-mode GUTTER state for the capture sidecar: `Some((name, project))`
     /// EXACTLY when the gutter is drawn (page mode on, a buffer name, a margin past
     /// the hard floor — the same gate as [`Self::prepare_gutter`]), else `None`.

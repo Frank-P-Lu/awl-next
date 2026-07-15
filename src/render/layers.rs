@@ -153,6 +153,7 @@ impl TextPipeline {
         } else {
             (0.0, width as f32)
         };
+        let rail_carved = self.lava_rail_carved(height);
         let params = self.effective_background().lava_params().map(
             |(ground, lo, hi, edge, dithered)| {
                 // A Bayer-posterized source and the downsampled separable blur
@@ -178,6 +179,7 @@ impl TextPipeline {
                 self.lava_field_viewport,
                 bg_left,
                 bg_w,
+                rail_carved,
                 params,
                 phase,
             );
@@ -227,6 +229,27 @@ impl TextPipeline {
         ];
         self.page_frame_pipeline
             .prepare(device, queue, width, height, &rects);
+    }
+
+    /// THE LEFT-MARGIN RAIL CARVE decision for this frame: a lava ground is
+    /// active (the CAPABILITY — [`crate::theme::Background::lava_params`],
+    /// never a world name, per `theme_caps_law`) AND left-margin INK is
+    /// actually DRAWN — the margin OUTLINE ([`Self::outline_visible`], the same
+    /// `outline_layout` gate the outline's own pixels ride) or the bottom-left
+    /// GUTTER ([`Self::gutter_visible`], the same `gutter_layout` gate — the
+    /// lava follow-ups audit's finding: the gutter shares the outline's margin
+    /// real estate and drowned identically whenever the outline alone gated the
+    /// carve, e.g. any non-markdown buffer). While true, the lava field mask
+    /// treats the whole left margin as the ink's rail — another no-lava zone,
+    /// so the dim `faint`/`muted` entries sit on the flat ground instead of
+    /// inside the dithered blob (the user-reported drown). Both surfaces hiding
+    /// (scratch buffer / narrowest regime / edge-to-edge) reclaims the full
+    /// margin the same frame. The ONE owner [`Self::prepare_lava_layer`]
+    /// uploads and the law tests assert, so the carve can never disagree with
+    /// what the frame draws.
+    pub(super) fn lava_rail_carved(&self, height: u32) -> bool {
+        self.effective_background().lava_params().is_some()
+            && (self.outline_visible(height) || self.gutter_visible())
     }
 
     /// Upload the document text layer with the full-ink default color — the one
