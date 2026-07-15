@@ -132,7 +132,7 @@ Spawn an adversarial audit agent (matrix probe: state × surface × world/platfo
 RULE THAT COMPOUNDS: every audit that finds something ENDS by writing the missing law test — scouts find the hole, laws close it permanently.
 PLUS THE VISION-SMOKE TIER (user's "5 screenshots" idea, 2026-07-13): every render-touching round's VERIFIER must LOOK at ~5 gallery shots drawn from the INTERACTION CHECKLIST (palette open + moved selection, search active, selection + caret, the changed feature in each state) and answer AFFORDANCE-LOCATING questions — "which row is selected? where is the caret? is any text clipped?" — never "does this look fine?" (agreeable-model trap). Failure to locate an affordance = defect signal. Vision = hypothesis-FREE noticing (catches what nobody asserted); arithmetic = hypothesis-driven proof (laws); the user = taste. Fold the checklist + question template into the distinguishability round's THEMES.md/CAPTURE.md amendments. Bake the vision-smoke requirement into future render-round verify prompts.
 
-## 🎬 PLAYWRIGHT / SHOT-SCRAPER HARNESS ROUND (2026-07-14) — 🟡 IN PROGRESS — claude, 2026-07-15, branch playwright-harness (sequential workflow off main @ 56616d8; user-approved 1–5)
+## 🎬 PLAYWRIGHT / SHOT-SCRAPER HARNESS ROUND (2026-07-14) — ✅ LANDED @ a7b38f7 (claude, 2026-07-15) (sequential workflow off main @ 56616d8; user-approved 1–5)
 
 **Goal:** turn the capture harness from a final-state key macro into a truthful,
 scriptable scenario runner that can emit fast deterministic demo films. Land in
