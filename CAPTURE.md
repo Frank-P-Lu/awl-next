@@ -213,6 +213,67 @@ So an agent asserts e.g. `pos.x` strictly increases t0→t150 and `settle_factor
 rises toward 1, proving the glide progressed origin → mid → settled. The plain
 `--screenshot` path emits no `caret` block and stays schema `awl-capture/30`.
 
+## Storyboards (`--storyboard`) — scenario runs with a film
+
+A **storyboard** is a checked-in TOML file (`scenarios/*.toml`) that drives one
+whole scenario end-to-end — typing, search, selection, pickers — through the
+SAME strict replay session a `--strict-replay` capture uses, rendering as it
+goes:
+
+```sh
+cargo run -- --storyboard scenarios/demo.toml            # outputs → scenarios/demo.run/
+cargo run -- --storyboard scenarios/demo.toml --storyboard-out /tmp/run
+```
+
+Steps (exactly one key per `[[step]]`; parsing is STRICT — a typo'd key or a
+garbled chord aborts at parse time, never silently skips):
+
+- `press = "<chord spec>"` — replay chords through the real keymap (the
+  `--keys` grammar; the open search panel consumes them first, exactly live).
+- `type = "text"` — literal typing, each char the chord a spec would spell
+  (`keyspec::text_chords`; whitespace via the named `Space`/`Enter`/`Tab`).
+- `pause = ms` / `run_for = ms` — advance the VIRTUAL clock in fixed 20 ms
+  frame steps (`capture::FRAME_MS`), one film frame per tick — this is where a
+  caret glide or settle actually plays out on film.
+- `expect` (a sub-table) — assert basic state: `cursor = [line, col]`,
+  `overlay = "command"|"none"|…`, `search_active`, `search_query`,
+  `selection`, `text_contains`. A failed expectation aborts the run.
+
+Header keys: `name` (defaults to the file stem), `file` (the document to open,
+relative to the storyboard's own directory; absent = scratch), `theme` (a
+world name).
+
+One run emits, into `--storyboard-out` (default `<board>.run/` beside the
+TOML, gitignored):
+
+- `step-NNN.png` + `step-NNN.json` — one frame + ordinary plain-schema sidecar
+  per action step (an `expect` step renders nothing). The PNG is a byte-copy
+  of the step's LAST film frame — a step artifact can never diverge from the
+  film.
+- `frames/frame-NNNNN.png` — every film frame, ALWAYS retained (the
+  byte-deterministic deliverable).
+- `trace.json` (`awl-trace/1`) — every chord's resolved action + effect
+  classification (`applied` / `intercepted` / `unsupported`, plus the
+  keymap-free `search_input` / `prefix` outcomes), every assertion outcome,
+  and the `abort` record (if any) with the exact error text stderr shows.
+- `film.webm` + `film.mp4` — encoded FROM the frames by a local `ffmpeg` when
+  one is on PATH (`-bitexact`, 50 fps). No/broken ffmpeg only skips the encode
+  (a note is printed; the frames remain) — never fails the run.
+
+**Guarantees.** A storyboard run is STRICT (an unbound chord, a dangling
+prefix, an Unsupported live-only effect, or a failed `expect` aborts, naming
+the offender in both stderr and the partial trace — the film never silently
+crosses a seam the headless driver does not implement) and HERMETIC (the
+in-memory sandbox from `src/scenario.rs`, seeded with the storyboard's own
+`file` + an explicit `--config`; the only real writes are the artifacts
+above). Repeated runs of the same storyboard produce a **byte-identical
+`trace.json` and frames** (`tests/storyboard_film.rs` pins this on the real
+binary, along with the abort fixture `scenarios/abort-unsupported.toml`).
+Determinism is only claimed for trace + frames — the encoded films depend on
+the local ffmpeg build. The film is deterministic VISUAL REVIEW of motion on
+the virtual clock, NOT a claim about real compositor cadence (that stays a
+live-only boundary, as above).
+
 All bundled fixtures at once (the canonical command):
 
 ```sh

@@ -1,0 +1,19 @@
+# scenarios/abort-unsupported.toml — the ABORT fixture: a storyboard that
+# deliberately crosses a live-App-only seam. `Cmd-W` (Finish file) defers
+# `Effect::FinishBuffer` — daemon notify + switch-away the headless replay
+# cannot perform — so the strict runner ABORTS, naming the action + effect,
+# after writing the partial trace.json with its `abort` record. This fixture
+# pins the truthfulness contract: the film never silently crosses a seam the
+# headless driver does not implement.
+
+name = "abort-unsupported"
+
+[[step]]
+type = "This step succeeds."
+
+[[step]]
+[step.expect]
+text_contains = "succeeds"
+
+[[step]]
+press = "s-w" # Finish file — live-App-only; the strict runner refuses

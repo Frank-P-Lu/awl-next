@@ -9,3 +9,8 @@
 # (.github/workflows/deploy-web.yml's "Write version.json" step), never
 # committed. See site/README.md's "Check for updates" section.
 /site/version.json
+
+# Storyboard run outputs (`--storyboard`, default `<board>.run/` beside the
+# .toml — see CAPTURE.md's storyboard section). The storyboards themselves
+# (scenarios/*.toml + fixtures) are checked in; their runs never are.
+*.run/

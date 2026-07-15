@@ -157,6 +157,65 @@ async fn capture_async(
     let (texture, view) = offscreen_target(&device, width, height);
 
     // --- Text pipeline (shared with windowed) ----------------------------
+    let cache = Cache::new(&device);
+    let mut pipeline = TextPipeline::new(&device, &queue, &cache, FORMAT);
+    pipeline.set_size(width as f32, height as f32);
+    pipeline.set_pending_crash(opts.pending_crash);
+    // DPI AFTER set_size: set_dpi re-wraps at column_width(), which reads window_w
+    // (set by set_size). No-op at the default 1.0, so the no-flag path is unchanged.
+    pipeline.set_dpi(dpi);
+
+    // Fold the buffer + capture opts into the shaped, scrolled view — the ONE
+    // owner shared with the storyboard film stepper (`super::film`).
+    let vstate = settled_viewstate(&mut pipeline, buffer, opts, height);
+    // Pose the caret deterministically for this capture.
+    match caret_mode {
+        CaretMode::Rest => pipeline.settle_caret(),
+        CaretMode::Motion => pipeline.inject_motion_demo(),
+        CaretMode::MotionVertical => pipeline.inject_motion_demo_vertical(),
+        CaretMode::MotionDiagonal => pipeline.inject_motion_demo_diagonal(),
+    }
+    // CARET-STYLE PICKER preview: pin its looping preview caret to its SETTLED look on
+    // cell 0 (the loop is live-only, so the capture renders the deterministic resting
+    // caret of the highlighted style). No-op when that picker isn't open.
+    pipeline.settle_caret_preview();
+    // WHICH-KEY panel: summon it with the derived continuation rows when `--whichkey`
+    // populated them (`None` otherwise → nothing drawn, byte-identical default).
+    pipeline.set_whichkey(opts.whichkey.clone());
+    pipeline.prepare(&device, &queue, width, height)?;
+
+    // --- Draw the frame, then read it back via the shared helper ---------
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl capture encoder"),
+    });
+    pipeline.render(&mut encoder, &view)?;
+    queue.submit(Some(encoder.finish()));
+    let img = read_frame(&device, &queue, &texture, width, height)?;
+
+    // --- Write PNG --------------------------------------------------------
+    img.save(out_png)
+        .with_context(|| format!("failed to write PNG {}", out_png.display()))?;
+
+    // --- Write JSON sidecar ----------------------------------------------
+    write_sidecar(out_png, &vstate, &pipeline, opts, None)?;
+
+    Ok(())
+}
+
+/// Fold `buffer` + `opts` into the fully-shaped, scrolled capture [`ViewState`]
+/// — the search derivation, every overlay/selection/preedit override, the
+/// history live-preview text fold, and the cursor-follow / typewriter scroll —
+/// leaving the pipeline shaped by TWO `set_view`s (shape, then scroll), the
+/// caret UNPOSED. Lifted VERBATIM out of `capture_async` so the single-frame
+/// path and the storyboard film stepper (`super::film`) share ONE owner of
+/// "what does this capture state look like"; the caller decides the caret pose
+/// (settle / motion inject / the film's free-running spring).
+pub(super) fn settled_viewstate(
+    pipeline: &mut TextPipeline,
+    buffer: &Buffer,
+    opts: &CaptureOpts,
+    height: u32,
+) -> ViewState {
     let (cursor_line, cursor_col) = buffer.cursor_line_col();
     let zoom = render::clamp_zoom(opts.zoom.unwrap_or(1.0));
     // Spell-check the buffer text for the headless capture too, so `--screenshot`
@@ -203,14 +262,6 @@ async fn capture_async(
         (Vec::new(), None, cursor_line, cursor_col)
     };
     let search_active = opts.search.is_some();
-
-    let cache = Cache::new(&device);
-    let mut pipeline = TextPipeline::new(&device, &queue, &cache, FORMAT);
-    pipeline.set_size(width as f32, height as f32);
-    pipeline.set_pending_crash(opts.pending_crash);
-    // DPI AFTER set_size: set_dpi re-wraps at column_width(), which reads window_w
-    // (set by set_size). No-op at the default 1.0, so the no-flag path is unchanged.
-    pipeline.set_dpi(dpi);
 
     // Shape the document first (at zoom 0/no-scroll) so the pipeline can report
     // wrap-aware row counts. Scroll is counted in VISUAL ROWS, so an explicit
@@ -361,36 +412,5 @@ async fn capture_async(
     };
     vstate.scroll_lines = scroll_lines;
     pipeline.set_view(&vstate);
-    // Pose the caret deterministically for this capture.
-    match caret_mode {
-        CaretMode::Rest => pipeline.settle_caret(),
-        CaretMode::Motion => pipeline.inject_motion_demo(),
-        CaretMode::MotionVertical => pipeline.inject_motion_demo_vertical(),
-        CaretMode::MotionDiagonal => pipeline.inject_motion_demo_diagonal(),
-    }
-    // CARET-STYLE PICKER preview: pin its looping preview caret to its SETTLED look on
-    // cell 0 (the loop is live-only, so the capture renders the deterministic resting
-    // caret of the highlighted style). No-op when that picker isn't open.
-    pipeline.settle_caret_preview();
-    // WHICH-KEY panel: summon it with the derived continuation rows when `--whichkey`
-    // populated them (`None` otherwise → nothing drawn, byte-identical default).
-    pipeline.set_whichkey(opts.whichkey.clone());
-    pipeline.prepare(&device, &queue, width, height)?;
-
-    // --- Draw the frame, then read it back via the shared helper ---------
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("awl capture encoder"),
-    });
-    pipeline.render(&mut encoder, &view)?;
-    queue.submit(Some(encoder.finish()));
-    let img = read_frame(&device, &queue, &texture, width, height)?;
-
-    // --- Write PNG --------------------------------------------------------
-    img.save(out_png)
-        .with_context(|| format!("failed to write PNG {}", out_png.display()))?;
-
-    // --- Write JSON sidecar ----------------------------------------------
-    write_sidecar(out_png, &vstate, &pipeline, opts, None)?;
-
-    Ok(())
+    vstate
 }

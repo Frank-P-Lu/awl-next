@@ -407,6 +407,15 @@ mod tests {
             // two more are the hermetic-scenario tests' real-disk inputs
             // (seeded precisely to prove the sandbox never writes them back).
             ("main/run.rs", 17),
+            // The storyboard runner's `trace.json` write (`write_trace`): a
+            // HARNESS DELIVERABLE, not app state — a storyboard run's active
+            // backend IS the hermetic sandbox, so routing this through
+            // `write_atomic`/`fs::active()` would swallow the artifact the
+            // caller asked for (same reason the capture PNG + film frames
+            // write with `std::fs`/`image` directly). Overwritten whole per
+            // run; a torn write costs one re-run of a deterministic scenario,
+            // never user data.
+            ("main/story.rs", 1),
             // ONE production site (`build_sandbox`: seeding the hermetic
             // in-memory sandbox INSTANCE before it becomes the active backend
             // — `write_atomic` routes through `fs::active()`, which at seed

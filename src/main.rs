@@ -28,6 +28,12 @@ mod app;
 mod args;
 #[path = "main/run.rs"]
 mod run;
+// The storyboard ORCHESTRATOR (`--storyboard`): drives one strict replay
+// session step-by-step through the film renderer. A `main/` sibling of `run`
+// (same `#[path]` reason); the storyboard MODEL/parser lives in
+// `crate::storyboard`, the GPU frame loop in `crate::capture::film`.
+#[path = "main/story.rs"]
+mod story;
 mod assets;
 mod background;
 mod bench;
@@ -101,6 +107,7 @@ mod selection;
 mod session;
 mod settings;
 mod spell;
+mod storyboard;
 mod spellunderline;
 mod stats;
 mod syntax;

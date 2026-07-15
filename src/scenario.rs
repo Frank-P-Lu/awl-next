@@ -106,6 +106,11 @@ pub fn install_hermetic_fs(file: Option<&Path>, config_arg: Option<&Path>, root:
     crate::fs::set_active(Arc::new(build_sandbox(&seeds, &roots)));
 }
 
+// NOTE (phase 5): the storyboard runner reuses THIS same door — its document
+// rides the `file` seed slot, and the sandbox's `write` already marks every
+// seeded file's parent as a directory, so the runner's root resolution + index
+// walk see the document's own directory with no extra marker.
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +167,20 @@ mod tests {
         // And the root carries no `.git`, so `Project::resolve` classifies it
         // non-git and never spawns the read-only git subprocesses.
         assert!(!fs.exists(&root.join(".git")));
+    }
+
+    #[test]
+    fn seeded_documents_parent_reads_as_a_directory_with_no_extra_marker() {
+        // The storyboard runner resolves its project root from the seeded
+        // document's own directory — the sandbox's `write` marks every seeded
+        // file's ancestors as dirs, so no storyboard-specific door is needed.
+        let doc = PathBuf::from("scenarios/demo.md");
+        let seeds = vec![Seed { path: doc.clone(), bytes: b"seeded\n".to_vec() }];
+        let fs = build_sandbox(&seeds, &[]);
+        assert!(fs.is_dir(Path::new("scenarios")), "parent implied by the seed write");
+        let names: Vec<String> =
+            fs.read_dir(Path::new("scenarios")).unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, vec!["demo.md".to_string()]);
     }
 
     #[test]

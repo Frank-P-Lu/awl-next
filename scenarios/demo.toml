@@ -1,0 +1,89 @@
+# scenarios/demo.toml — the DEMO storyboard: typing → search → selection → palette.
+#
+#   cargo run -- --storyboard scenarios/demo.toml
+#
+# Outputs land in scenarios/demo.run/ (gitignored): step-NNN.png + step-NNN.json
+# per action step, frames/frame-NNNNN.png (the deterministic film frames),
+# trace.json (byte-identical across runs), and film.webm / film.mp4 when a
+# local ffmpeg is on PATH. Chords are Mac-convention (this repo's advertised
+# keymap); the run is strict + hermetic — see CAPTURE.md's storyboard section.
+
+name = "demo"
+file = "demo.md"
+theme = "Saltpan"
+
+# ── typing ──────────────────────────────────────────────────────────────────
+[[step]]
+press = "s-Down" # buffer end (Cmd-Down, the advertised native chord)
+
+[[step]]
+type = "Typing feels immediate."
+
+[[step]]
+[step.expect]
+cursor = [4, 23]
+text_contains = "Typing feels immediate."
+
+[[step]]
+run_for = 160 # the caret settles on film
+
+# ── search ──────────────────────────────────────────────────────────────────
+[[step]]
+press = "C-s"
+
+[[step]]
+type = "fox"
+
+[[step]]
+[step.expect]
+search_active = true
+search_query = "fox"
+
+[[step]]
+pause = 120
+
+[[step]]
+press = "Enter" # accept: the panel closes, the caret lands on the match
+
+[[step]]
+[step.expect]
+search_active = false
+cursor = [2, 16]
+
+# ── selection ───────────────────────────────────────────────────────────────
+[[step]]
+press = "C-Space"
+
+[[step]]
+press = "M-Right M-Right" # extend the marked region two words
+
+[[step]]
+[step.expect]
+selection = true
+
+[[step]]
+run_for = 160
+
+# ── palette ─────────────────────────────────────────────────────────────────
+[[step]]
+press = "s-p"
+
+[[step]]
+type = "theme"
+
+[[step]]
+[step.expect]
+overlay = "command"
+
+[[step]]
+pause = 120
+
+[[step]]
+press = "Esc"
+
+[[step]]
+[step.expect]
+overlay = "none"
+
+[[step]]
+run_for = 160

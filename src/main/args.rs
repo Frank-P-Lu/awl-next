@@ -139,6 +139,27 @@ pub(crate) enum Mode {
         /// `--capture-dpi` renderer scale factor (None = 1.0).
         dpi: Option<f32>,
     },
+    /// STORYBOARD run (`--storyboard <file.toml>`): a checked-in scenario file
+    /// drives one HERMETIC, STRICT replay session end-to-end (see
+    /// `crate::storyboard` + `crate::story`), emitting per-step PNG+sidecar
+    /// artifacts, deterministic film frames on the virtual clock, a byte-stable
+    /// `trace.json`, and (via a local ffmpeg, when present) a WebM/MP4 film.
+    /// Like `--strict-replay`, by the time this Mode exists the process fs has
+    /// been swapped to the seeded sandbox (`crate::scenario`).
+    Storyboard {
+        board: crate::storyboard::Storyboard,
+        /// The board's document resolved against the storyboard file's own
+        /// directory (`None` = scratch); already seeded into the sandbox.
+        file: Option<PathBuf>,
+        /// Where the run's artifacts land (`--storyboard-out`, defaulting to
+        /// `<storyboard-stem>.run/` beside the storyboard file — gitignored).
+        out_dir: PathBuf,
+        root: Option<PathBuf>,
+        workspace: Option<PathBuf>,
+        notes_root: PathBuf,
+        config: Config,
+        km: KeymapState,
+    },
     /// Hidden performance harness: time the per-keystroke update path (append a
     /// char -> reshape) on documents of 100/1000/5000 lines, BEFORE (whole-buffer
     /// reshape) vs AFTER (incremental), and print the numbers. Opens no window.
@@ -432,6 +453,11 @@ pub(crate) fn parse_args() -> Result<Mode> {
     // `crate::replay`'s module doc. Parsed keys go through the STRICT door
     // (unbound chords error) and the replay aborts on Unsupported effects.
     let mut strict_replay = false;
+    // `--storyboard <file.toml>` (+ optional `--storyboard-out <dir>`): the
+    // scenario runner — always strict, always hermetic. Kept as the raw path
+    // here; parsed after the loop (its named file seeds the sandbox).
+    let mut storyboard_arg: Option<PathBuf> = None;
+    let mut storyboard_out: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -509,6 +535,19 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 held = Some((parse_held_dir(&d)?, parse_steps(&spec)?));
                 out = Some(PathBuf::from(p));
                 capture_modes.push("--capture-held");
+            }
+            "--storyboard" => {
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--storyboard requires a storyboard .toml path")
+                })?;
+                storyboard_arg = Some(PathBuf::from(p));
+                capture_modes.push("--storyboard");
+            }
+            "--storyboard-out" => {
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--storyboard-out requires an output directory")
+                })?;
+                storyboard_out = Some(PathBuf::from(p));
             }
             "--sel" => {
                 let v = args
@@ -747,7 +786,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\
                      \x20 --wait              windowed editor only: single-instance daemon — hand `file` to an already-running awl and block until C-x # finishes it (EDITOR=awl --wait for git)\n\
                      \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture\n\
-                     \x20 --strict-replay     with --screenshot --keys: abort (naming the offender) on an unbound chord, a live-only effect the replay can't perform, or a missing layout oracle; runs HERMETIC (an in-memory fs seeded from the named file + --config — a replayed save never touches the real file, the user's own config/notes/history are never read or written)"
+                     \x20 --strict-replay     with --screenshot --keys: abort (naming the offender) on an unbound chord, a live-only effect the replay can't perform, or a missing layout oracle; runs HERMETIC (an in-memory fs seeded from the named file + --config — a replayed save never touches the real file, the user's own config/notes/history are never read or written)\n\
+                     \x20 --storyboard TOML   run a scenario storyboard (press/type/pause/run_for/expect steps — see scenarios/): strict + hermetic, emitting per-step PNG+JSON, deterministic film frames, a byte-stable trace.json, and (with ffmpeg on PATH) film.webm/film.mp4\n\
+                     \x20 --storyboard-out DIR where the storyboard run's artifacts land (default: <storyboard>.run/ beside the .toml)"
                 );
                 std::process::exit(0);
             }
@@ -824,15 +865,67 @@ pub(crate) fn parse_args() -> Result<Mode> {
             bail!("--strict-replay only applies to --screenshot (not motion/timeline/held captures)");
         }
     }
+    // `--storyboard` drives its own input/document; refuse the flags it would
+    // silently ignore, then parse the scenario file NOW (std::fs — the one
+    // boundary crossing before the sandbox exists) so its named document can
+    // seed the hermetic sandbox below, exactly like `--strict-replay`'s file.
+    if storyboard_arg.is_some() {
+        if keys_spec.is_some() {
+            bail!("--storyboard drives its own steps; --keys does not apply");
+        }
+        if file.is_some() {
+            bail!("--storyboard takes its document from the storyboard file; drop the file argument");
+        }
+        if wait_flag {
+            bail!("--wait only applies to the windowed editor (no capture mode)");
+        }
+        if strict_replay {
+            bail!("--storyboard is always strict; --strict-replay does not apply");
+        }
+    } else if storyboard_out.is_some() {
+        bail!("--storyboard-out requires --storyboard");
+    }
+    let storyboard: Option<(crate::storyboard::Storyboard, PathBuf)> = match &storyboard_arg {
+        Some(p) => {
+            let src = std::fs::read_to_string(p)
+                .map_err(|e| anyhow::anyhow!("reading storyboard {}: {e}", p.display()))?;
+            let stem = p
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "storyboard".to_string());
+            let board = crate::storyboard::parse(&src, &stem)
+                .map_err(|e| e.context(format!("parsing storyboard {}", p.display())))?;
+            Some((board, p.clone()))
+        }
+        None => None,
+    };
+    // The board's document, resolved against the storyboard file's own directory
+    // (so a checked-in `scenarios/demo.toml` names its fixture as `demo.md`).
+    let storyboard_file: Option<PathBuf> = storyboard.as_ref().and_then(|(b, p)| {
+        b.file.as_ref().map(|f| match p.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir.join(f),
+            _ => PathBuf::from(f),
+        })
+    });
     // HERMETIC SCENARIO FILESYSTEM — the ONE production door (`crate::scenario`'s
     // module doc is the contract): a strict (scenario) run swaps the process fs
     // to an in-memory sandbox seeded from exactly the CLI-named inputs BEFORE
     // the config loads, so the load below — and every fs consumer after it —
     // reads the sandbox, never the user's real files. The legacy permissive
-    // paths never install it (real-fs behavior kept byte-for-byte).
+    // paths never install it (real-fs behavior kept byte-for-byte). A
+    // storyboard run is hermetic UNCONDITIONALLY, through its own door (the
+    // same sandbox, plus the document's parent-directory marker).
     #[cfg(not(target_arch = "wasm32"))]
     if strict_replay {
         crate::scenario::install_hermetic_fs(file.as_deref(), config_arg.as_deref(), root.as_deref());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if storyboard.is_some() {
+        crate::scenario::install_hermetic_fs(
+            storyboard_file.as_deref(),
+            config_arg.as_deref(),
+            root.as_deref(),
+        );
     }
     // Load the persistent CONFIG (flag/$AWL_CONFIG/XDG path — resolved inside
     // the hermetic sandbox for a strict run, where an un-seeded path degrades
@@ -853,7 +946,8 @@ pub(crate) fn parse_args() -> Result<Mode> {
     // `file` argument (no `Buffer` exists yet here) so the very first frame reads
     // the right one; a later buffer switch re-resolves against whichever kind is
     // then active (`App::sync_page_measure` / the headless `--keys` Goto switch).
-    let initial_page_class = page::PageClass::of_path(file.as_deref());
+    let initial_page_class =
+        page::PageClass::of_path(storyboard_file.as_deref().or(file.as_deref()));
     config.apply_sticky_globals(theme_flag, page_flag, caret_flag, measure_flag, initial_page_class);
     // `--keys` only makes sense with a capture mode (it mutates the buffer for a
     // one-frame capture); refuse it for the windowed editor where live typing is
@@ -894,6 +988,22 @@ pub(crate) fn parse_args() -> Result<Mode> {
     // wins). The windowed editor applies `config.zoom` in `App::new` instead.
     if opts.zoom.is_none() {
         opts.zoom = config.zoom;
+    }
+    // STORYBOARD mode: everything below the sandbox install composes normally
+    // (config from the sandbox, km with its rebinds); the run outputs land in
+    // `--storyboard-out`, defaulting to `<storyboard>.run/` beside the board.
+    if let Some((board, board_path)) = storyboard {
+        let out_dir = storyboard_out.unwrap_or_else(|| board_path.with_extension("run"));
+        return Ok(Mode::Storyboard {
+            board,
+            file: storyboard_file,
+            out_dir,
+            root,
+            workspace: workspace_folded,
+            notes_root: notes_root_resolved,
+            config,
+            km,
+        });
     }
     Ok(match out {
         Some(out) if held.is_some() => {

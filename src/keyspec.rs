@@ -347,6 +347,30 @@ fn key_token(key: &Key) -> String {
     }
 }
 
+/// LITERAL TEXT → its chord stream, for a storyboard's `type` step: each char
+/// becomes exactly the chord a `--keys` spec would spell for it (a bare
+/// printable self-insert; whitespace via the NAMED keys — `Space` / `Enter` /
+/// `Tab` — since a spec token cannot hold a literal space). Routed through
+/// [`parse_chord`] so the token→key mapping has ONE owner and a typed char is
+/// byte-for-byte the chord the replay loop already understands (the search
+/// guard consumes it while the panel is open, the keymap self-inserts it
+/// otherwise). A char `parse_chord` cannot express (none known — every single
+/// char is a legal token) surfaces as its clear error rather than a skip.
+pub fn text_chords(text: &str) -> Result<Vec<Chord>> {
+    text.chars()
+        .map(|ch| {
+            let tok = match ch {
+                ' ' => "Space".to_string(),
+                '\n' => "Enter".to_string(),
+                '\t' => "Tab".to_string(),
+                c => c.to_string(),
+            };
+            let (key, mods) = parse_chord(&tok)?;
+            Ok(Chord { spec: tok, key, mods })
+        })
+        .collect()
+}
+
 /// NAIVE Mac→Linux chord TRANSLATION: swap SUPER for CONTROL in every token's
 /// modifiers (leaving ALT/SHIFT untouched), re-emitting the terse canonical form.
 /// This is the DEFAULT half of the convention-resolution data design (see
@@ -666,6 +690,26 @@ mod tests {
     fn unknown_chord_errors() {
         // A multi-char token that is not a named key is an error, not a panic.
         assert!(parse_keys("frobnicate").is_err());
+    }
+
+    #[test]
+    fn text_chords_spell_each_char_as_its_keys_token() {
+        // A storyboard `type` step's text becomes the same chords a --keys spec
+        // would spell: bare printables verbatim, whitespace via the NAMED keys.
+        let chords = text_chords("Hi w,\n\t").unwrap();
+        let specs: Vec<&str> = chords.iter().map(|c| c.spec.as_str()).collect();
+        assert_eq!(specs, vec!["H", "i", "Space", "w", ",", "Enter", "Tab"]);
+        assert_eq!(chords[0].key, Key::Character(SmolStr::new("H")));
+        assert_eq!(chords[2].key, Key::Named(NamedKey::Space));
+        assert_eq!(chords[5].key, Key::Named(NamedKey::Enter));
+        assert_eq!(chords[6].key, Key::Named(NamedKey::Tab));
+        // No modifiers on any typed char (replay is unshifted by design).
+        assert!(chords.iter().all(|c| c.mods.state().is_empty()));
+        // And the chars resolve through the REAL keymap to self-inserts.
+        let mut km = KeymapState::new_with_convention(crate::convention::Convention::Mac);
+        let mut resolver = ChordResolver::new(&mut km, true);
+        assert_eq!(resolver.resolve(&chords[0]).unwrap(), Some(Action::InsertChar('H')));
+        assert_eq!(resolver.resolve(&chords[2]).unwrap(), Some(Action::InsertChar(' ')));
     }
 
     // ── STRICT REPLAY TRUTHFULNESS: the strict parse door ──
