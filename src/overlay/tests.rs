@@ -416,75 +416,30 @@ fn goto_headings_lens_is_empty_without_headings() {
 }
 
 #[test]
-fn theme_picker_groups_by_lens_and_selects_active() {
-    use crate::theme::Lens;
-    // The full world corpus (in THEMES order) + Gumtree active (its index).
+fn theme_picker_is_flat_and_lists_every_world_with_active_selected() {
+    // The theme picker's runtime lens strip was RETIRED (2026-07-15): it is now a
+    // FLAT browsable list of every world in THEMES order, no faceting, no sections.
     let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
     let gum = names.iter().position(|n| n == "Gumtree").unwrap();
-    // Open with Gumtree active -> mode "theme", opens on the flat All lens.
     let mut ov = OverlayState::new_theme(names.clone(), gum);
     assert_eq!(ov.kind.as_str(), "theme");
-    assert_eq!(ov.original_theme, Some(gum));
-    assert_eq!(ov.active_facet_id(), Some("all"), "opens on the flat All landing");
-    assert_eq!(ov.selected_value(), Some("Gumtree"));
-    // Step into the Time lens (strip index 1) to exercise the grouping (Gumtree is
-    // shown under Time).
-    ov.set_facet_lens(1);
-    assert_eq!(ov.active_facet_id(), Some("time"));
-    // The active world is highlighted (and thus previewed) wherever its section is.
-    assert_eq!(ov.selected_value(), Some("Gumtree"));
-    // Grouped by Time: rows come out in section order (Dawn, Day, Dusk, Night),
-    // and each row's parallel section label matches the world's Time tag.
-    let sections = ov.item_sections();
-    assert_eq!(sections.len(), ov.item_strings().len());
-    for (row, name) in ov.item_strings().iter().enumerate() {
-        // Every grouped row is a SHOWN world, so its Time tag is `Some`.
-        assert_eq!(
-            Some(sections[row].as_str()),
-            crate::theme::tag_for(name, Lens::Time),
-            "row {name} under wrong section"
-        );
-    }
-    // Sections appear in the lens's declared order (no interleaving).
-    let order: Vec<&str> = Lens::Time.sections().to_vec();
-    let mut last = 0usize;
-    for s in &sections {
-        let pos = order.iter().position(|o| o == s).unwrap();
-        assert!(pos >= last, "sections must be contiguous + ordered: {sections:?}");
-        last = pos;
-    }
+    assert_eq!(ov.original_theme, Some(gum), "the opening theme is remembered for revert");
+    // FLAT: no facet scheme, no lens strip, no section labels.
+    assert!(!ov.is_faceting(), "the theme picker does not facet");
+    assert!(ov.active_facet_id().is_none(), "no active lens");
+    assert!(ov.lens_strip().is_empty(), "no lens strip");
+    assert!(ov.item_sections().iter().all(|s| s.is_empty()), "no section grouping");
+    // Every world is listed, in THEMES declaration order, and the active world opens
+    // selected (so it is highlighted + previewable with no move).
+    assert_eq!(ov.item_strings(), names, "flat list = every world in THEMES order");
+    assert_eq!(ov.selected_value(), Some("Gumtree"), "active world opens selected");
     // No git / dir markers on the theme rows.
     assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
-}
-
-#[test]
-fn theme_lens_cycles_with_all_parked_left_and_keeps_world() {
-    let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
-    // Potoroo headlines ALL four faceted lenses, so it survives every regroup.
-    let potoroo = names.iter().position(|n| n == "Potoroo").unwrap();
-    let mut ov = OverlayState::new_theme(names, potoroo);
-    assert_eq!(ov.active_facet_id(), Some("all"), "opens on the far-left All landing");
-    assert_eq!(ov.selected_value(), Some("Potoroo"));
-    // The All lens is the flat corpus list (no section headers).
-    assert!(ov.item_sections().iter().all(|s| s.is_empty()));
-    // LEFT at All is a clamped no-op (nothing before it).
-    ov.cycle_lens(-1);
-    assert_eq!(ov.active_facet_id(), Some("all"), "All is the far-left floor");
-    // RIGHT steps along the strip; the highlighted world is KEPT across regroups.
-    for expect in ["time", "register", "voice", "temperature"] {
-        ov.cycle_lens(1);
-        assert_eq!(ov.active_facet_id(), Some(expect));
-        assert_eq!(ov.selected_value(), Some("Potoroo"));
-    }
-    // RIGHT at Temperature is a clamped no-op (it is now the far-right end).
+    // cycle_lens is inert on a non-faceting picker (it grew no strip to cycle).
     ov.cycle_lens(1);
-    assert_eq!(ov.active_facet_id(), Some("temperature"), "Temperature parked at the far right");
-    // The lens strip reflects the active lens (exactly one active, All FIRST).
-    let strip = ov.lens_strip();
-    assert_eq!(strip.len(), 5);
-    assert_eq!(strip.first().unwrap().0, "All");
-    assert_eq!(strip.iter().filter(|(_, a)| *a).count(), 1);
-    assert!(strip[4].1, "Temperature is active");
+    assert_eq!(ov.facet_lens, 0);
+    assert!(ov.active_facet_id().is_none());
+    assert_eq!(ov.item_strings(), names, "cycle_lens did not regroup the flat list");
 }
 
 /// The CLICKABLE lens strip's pointing counterpart to a no-op LEFT/RIGHT at an
@@ -494,11 +449,14 @@ fn theme_lens_cycles_with_all_parked_left_and_keeps_world() {
 /// list and can move `selected`/`scroll`).
 #[test]
 fn clicking_the_current_facet_is_a_calm_no_op() {
-    let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
-    let potoroo = names.iter().position(|n| n == "Potoroo").unwrap();
-    let mut ov = OverlayState::new_theme(names, potoroo);
-    ov.set_facet_lens(2); // switch to Register once, a real change
-    assert_eq!(ov.active_facet_id(), Some("register"));
+    // Driven over a still-faceting picker (the Command palette) — the theme picker
+    // retired its lens strip, so this generic law now rides a surviving faceter.
+    let mut ov = OverlayState::new_command(
+        crate::commands::names(),
+        crate::commands::effective_bindings(&[], &[]),
+    );
+    ov.set_facet_lens(2); // switch to the Edit lens once, a real change
+    assert_eq!(ov.active_facet_id(), Some("edit"));
     let (before_lens, before_selected, before_scroll, before_items) =
         (ov.facet_lens, ov.selected, ov.scroll, ov.item_strings());
     ov.set_facet_lens(2); // click the SAME facet again — a calm no-op
@@ -509,46 +467,22 @@ fn clicking_the_current_facet_is_a_calm_no_op() {
 }
 
 #[test]
-fn opted_out_world_hidden_under_its_lens_but_present_under_all() {
-    use crate::theme::Lens;
-    let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
-    let gum = names.iter().position(|n| n == "Gumtree").unwrap();
-    let mut ov = OverlayState::new_theme(names, gum);
-    // Tawny opts OUT of Voice (voice: None), so it never appears in the Voice
-    // grouping — every SHOWN row under Voice has a `Some` Voice tag.
-    ov.set_facet_lens(3); // Voice
-    assert!(
-        !ov.item_strings().iter().any(|n| n == "Tawny"),
-        "Tawny is hidden under the Voice lens"
-    );
-    for name in ov.item_strings() {
-        assert!(
-            crate::theme::tag_for(&name, Lens::Voice).is_some(),
-            "{name} shown under Voice must carry a Some tag"
-        );
-    }
-    // But the flat All lens still lists EVERY world, Tawny included (opt-out only
-    // trims the faceted lenses; nothing is unreachable).
-    ov.set_facet_lens(0); // All
-    assert_eq!(ov.item_strings().len(), crate::theme::THEMES.len());
-    assert!(ov.item_strings().iter().any(|n| n == "Tawny"));
-}
-
-#[test]
-fn theme_lens_is_flat_all_and_no_strip_for_nontheme() {
+fn flat_pickers_have_no_lens_strip() {
     // A non-faceting picker never grows a lens strip or section labels, and has no
-    // facet scheme (so `active_facet_id` is None). The Caret picker is a good flat,
-    // non-faceting example (Goto/Browse/Command/History now facet — see
-    // `facets::scheme`).
-    let ov = OverlayState::new(OverlayKind::Caret, corpus(), vec![], vec![]);
-    assert!(!ov.is_faceting());
-    assert!(ov.lens_strip().is_empty());
-    assert!(ov.active_facet_id().is_none());
-    assert!(ov.item_sections().iter().all(|s| s.is_empty()));
-    // cycle_lens on a non-faceting picker is inert (facet_lens stays 0).
-    let mut ov = ov;
-    ov.cycle_lens(1);
-    assert_eq!(ov.facet_lens, 0);
+    // facet scheme (so `active_facet_id` is None). Both the Caret picker and — since
+    // 2026-07-15 — the THEME picker are flat, non-faceting examples (Goto / Browse /
+    // Project / Command / History / Settings still facet — see `facets::scheme`).
+    let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
+    let theme = OverlayState::new_theme(names, 0);
+    for mut ov in [OverlayState::new(OverlayKind::Caret, corpus(), vec![], vec![]), theme] {
+        assert!(!ov.is_faceting(), "{:?} must not facet", ov.kind);
+        assert!(ov.lens_strip().is_empty(), "{:?} has no lens strip", ov.kind);
+        assert!(ov.active_facet_id().is_none(), "{:?} has no active lens", ov.kind);
+        assert!(ov.item_sections().iter().all(|s| s.is_empty()), "{:?} no sections", ov.kind);
+        // cycle_lens on a non-faceting picker is inert (facet_lens stays 0).
+        ov.cycle_lens(1);
+        assert_eq!(ov.facet_lens, 0, "{:?} cycle_lens is inert", ov.kind);
+    }
 }
 
 #[test]
@@ -973,12 +907,12 @@ fn hint_teaches_descend_only_for_navigable_kinds() {
     // Project ↵ SELECTS; MoveDest ↵ MOVES.
     assert!(OverlayKind::Project.hint().contains("\u{21B5} select"));
     assert!(OverlayKind::MoveDest.hint().contains("move here"));
-    // The FACETED pickers (Goto / Browse / Theme / Command / History) teach ←/→
-    // lens, not ->/C-f descend, and each starts with the ↵ Return glyph.
+    // The FACETED pickers (Goto / Browse / Command / History) teach ←/→ lens, not
+    // ->/C-f descend, and each starts with the ↵ Return glyph. (The THEME picker
+    // retired its lens strip 2026-07-15 — it is checked below as a FLAT picker.)
     for k in [
         OverlayKind::Goto,
         OverlayKind::Browse,
-        OverlayKind::Theme,
         OverlayKind::Command,
         OverlayKind::History,
     ] {
@@ -987,6 +921,13 @@ fn hint_teaches_descend_only_for_navigable_kinds() {
         assert!(h.contains("\u{2190}/\u{2192} lens"), "{k:?} hint should teach ←/→ lens: {h}");
         assert!(h.starts_with("\u{2191}/\u{2193} move"), "{k:?} hint leads with ↑/↓ move: {h}");
     }
+    // The FLAT theme picker teaches ↵ keep + esc revert, and NO lens axis (its strip
+    // was retired) — ↑/↓ move still leads.
+    let th = OverlayKind::Theme.hint();
+    assert!(th.starts_with("\u{2191}/\u{2193} move"), "theme hint leads with ↑/↓ move: {th}");
+    assert!(th.contains("\u{21B5} keep"), "theme ↵ keeps: {th}");
+    assert!(th.contains("esc") && th.contains("revert"), "theme esc reverts: {th}");
+    assert!(!th.contains("lens"), "the flat theme picker teaches no lens: {th}");
     // Browse ↵ still OPENS (a folder descends / a file opens) and ⌫ ascends.
     assert!(OverlayKind::Browse.hint().contains("\u{21B5} open"));
     assert!(OverlayKind::Browse.hint().contains("\u{232B} up"));

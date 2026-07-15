@@ -198,7 +198,8 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
         }
         Action::ForwardChar => {
             let ov = ctx.overlay.as_ref().unwrap();
-            // FACETED PICKER (goto / browse / theme): LEFT/RIGHT switch the faceting
+            // FACETED PICKER (goto / browse / project / command / history / settings):
+            // LEFT/RIGHT switch the faceting
             // LENS (keeping the same item highlighted), NOT the row selection — the
             // lens-switcher model, checked BEFORE the navigable branch so a FACETED
             // explorer (Browse) cycles its lens on ←/→ while descend rides Enter (on a
@@ -236,7 +237,8 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
         }
         Action::BackwardChar => {
             let ov = ctx.overlay.as_ref().unwrap();
-            // FACETED PICKER (goto / browse / theme): LEFT cycles the faceting lens
+            // FACETED PICKER (goto / browse / project / command / history / settings):
+            // LEFT cycles the faceting lens
             // back (keeping the item) — checked BEFORE the navigable branch so a
             // faceted explorer (Browse) cycles its lens on ←, with ascend on Backspace.
             if ov.is_faceting() {

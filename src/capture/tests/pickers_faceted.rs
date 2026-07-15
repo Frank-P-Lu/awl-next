@@ -7,15 +7,16 @@ use super::super::*;
 use super::{adapter_available};
 use crate::buffer::Buffer;
 
-/// THEME PICKER faceted lens-switcher: driving the REAL [`OverlayState`] (new_theme
-/// then a lens switch to Voice) through the capture renders its settled frame AND the
-/// sidecar surfaces the lens / lens strip / per-row section labels + the grouped items.
-/// Exercises the whole render branch (strip + section headers + selected band + the
-/// active-lens underline) end-to-end without a panic, and pins the grouping headlessly.
+/// THEME PICKER (FLAT): its runtime lens strip was RETIRED (2026-07-15) — driving the
+/// REAL [`OverlayState::new_theme`] through the capture renders its settled frame as a
+/// FLAT browsable world list, and the sidecar reports `lens: null` / an empty strip /
+/// no section labels, exactly like every other non-faceting picker. Exercises the flat
+/// render branch end-to-end without a panic and pins that the theme picker no longer
+/// draws (or reports) a lens strip.
 #[test]
-fn theme_picker_faceted_lens_renders_and_reports() {
+fn theme_picker_is_flat_and_reports_no_lens() {
     if !adapter_available() {
-        eprintln!("skipping theme_picker_faceted_lens_renders_and_reports: no wgpu adapter");
+        eprintln!("skipping theme_picker_is_flat_and_reports_no_lens: no wgpu adapter");
         return;
     }
     let _tg = crate::testlock::serial();
@@ -23,17 +24,12 @@ fn theme_picker_faceted_lens_renders_and_reports() {
     std::fs::create_dir_all(&dir).unwrap();
     let buf = Buffer::from_str("preview me\n");
 
-    // Build the REAL grouped overlay: open on Potoroo (lands on the flat All lens),
-    // cycle RIGHT three times → the Voice lens. Potoroo is shown under Time / Register /
-    // Voice, so it stays highlighted across every cycle (a world hidden on an
-    // intermediate lens would be dropped).
+    // Build the REAL flat overlay: open on Potoroo, the active world.
     crate::theme::set_active_by_name("Potoroo");
     let names: Vec<String> = crate::theme::THEMES.iter().map(|t| t.name.to_string()).collect();
-    let mut ov = crate::overlay::OverlayState::new_theme(names, crate::theme::active_index());
-    ov.cycle_lens(1); // Time
-    ov.cycle_lens(1); // Register
-    ov.cycle_lens(1); // Voice
-    assert_eq!(ov.active_facet_id(), Some("voice"));
+    let ov = crate::overlay::OverlayState::new_theme(names.clone(), crate::theme::active_index());
+    assert!(!ov.is_faceting(), "the theme picker is flat");
+    assert_eq!(ov.active_facet_id(), None);
 
     // Fold it into capture opts exactly as the live replay does (see main/run.rs).
     let mut opts = CaptureOpts::default();
@@ -66,39 +62,24 @@ fn theme_picker_faceted_lens_renders_and_reports() {
             .unwrap();
     let o = &j["overlay"];
     assert_eq!(o["mode"], serde_json::json!("theme"));
-    assert_eq!(o["lens"], serde_json::json!("voice"));
-    // The strip carries all five lenses with Voice active + All parked FIRST (far left).
-    assert_eq!(
-        o["lens_strip"],
-        serde_json::json!([
-            ["All", false],
-            ["Time", false],
-            ["Register", false],
-            ["Voice", true],
-            ["Temperature", false]
-        ])
+    // FLAT: null lens, empty strip, no section labels — the non-faceting sidecar shape
+    // (a flat picker's per-row section labels are all the empty string, like every
+    // other non-faceting picker).
+    assert_eq!(o["lens"], serde_json::json!(null), "theme picker reports no lens");
+    assert_eq!(o["lens_strip"], serde_json::json!([]), "no lens strip");
+    assert!(
+        o["sections"].as_array().unwrap().iter().all(|s| s == ""),
+        "no section grouping: {:?}",
+        o["sections"]
     );
-    // Grouped by Voice: contiguous Literary → Technical → Modern sections, one label per row.
-    let sections: Vec<String> = o["sections"]
+    // The flat list carries EVERY world in THEMES order, with Potoroo selected.
+    let items: Vec<String> = o["items"]
         .as_array()
         .unwrap()
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
-    let items = o["items"].as_array().unwrap();
-    assert_eq!(sections.len(), items.len());
-    assert_eq!(sections.first().map(|s| s.as_str()), Some("Literary"));
-    assert!(sections.contains(&"Technical".to_string()));
-    assert!(sections.contains(&"Modern".to_string()));
-    // Each row's section matches its world's Voice tag (the grouping is honest). Every
-    // grouped row is a SHOWN world, so its tag is `Some`.
-    for (row, name) in items.iter().enumerate() {
-        assert_eq!(
-            Some(sections[row].as_str()),
-            crate::theme::tag_for(name.as_str().unwrap(), crate::theme::Lens::Voice)
-        );
-    }
-    // Potoroo stayed highlighted across the lens switches (a Technical world under Voice).
+    assert_eq!(items, names, "every world in declaration order, ungrouped");
     assert_eq!(items[o["selected_index"].as_u64().unwrap() as usize], serde_json::json!("Potoroo"));
 
     crate::theme::set_active_by_name("Tawny");
