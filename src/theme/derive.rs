@@ -229,37 +229,66 @@ pub fn page_frame_ink() -> Srgb {
 /// accent. (Also nudges the HUD/word-count borders that share this owner one step.)
 pub(super) const SELECTED_BAND_STEPS: i32 = 2;
 
-pub fn surface_selected() -> Srgb {
+/// EXTRA surface-ramp increments the PICKER'S selected ROW sits past the shared
+/// [`surface_selected`] band — the PALETTE-COMPOSITION round's "clearer-but-calm
+/// selected row", strengthened by VALUE ALONE (never a hue, never the amber
+/// accent — DESIGN §3/§5; the distinguishability sweep is the law that polices
+/// it). The shared `surface_selected` (steps `2`) still drives the HUD /
+/// word-count / menu-drop borders untouched; ONLY the overlay's selected-row
+/// band ([`overlay_selected_band`]) climbs this one further increment, so the
+/// row it marks reads a touch more present without the borders moving with it.
+/// TASTE DEFAULT — `1` is the calm pick; the gallery A/Bs it against the old
+/// band (steps `2`) via `AWL_OVERLAY_SELROW_FORCE`, and the revert to the old
+/// band is one line at the `overlay_draw_card` call site (or `0` here).
+pub(super) const OVERLAY_SELROW_EXTRA_STEPS: i32 = 1;
+
+/// The shared selected/border band: `base_300` stepped `SELECTED_BAND_STEPS`
+/// ramp increments past itself. Split from [`surface_selected`] so the overlay
+/// row's stronger band ([`overlay_selected_band`]) reuses the SAME step math
+/// with one more increment — one owner, no drift, both value-only.
+fn surface_step_band(extra_steps: i32) -> Srgb {
     let a = active();
     if a.base_200 == a.base_300 {
-        // A COLLAPSED surface ramp (Wagtail's 1-bit ladder: base_200 ==
-        // base_300 == pure black) gives the step math below no direction to
-        // move in — it would return the card's own value, making every
-        // float/HUD/whichkey/menu-drop panel's border AND the picker's
-        // selected-row band invisible. The ink pole is the only rung left:
-        // `base_content` (pure white on Wagtail — "a white 1px border on a
-        // black card is 1-bit-legal", `worlds.rs::WAGTAIL`'s doc). Keyed on
-        // the RAMP SHAPE, not on `Elevation::Bordered` as it originally was:
-        // the personality-assignment round gave three ORDINARY worlds
-        // (Currawong / Mangrove / Firetail) `Bordered` as functional
-        // elevation, and those must keep their ordinary ramp-step band —
-        // returning white for them would have filled the selected row the
-        // same value as its own text (the Wagtail invisible-row bug class,
-        // reintroduced by data). Byte-identical for Wagtail either way.
+        // A COLLAPSED surface ramp (Wagtail's 1-bit ladder) — see
+        // `surface_selected`'s own doc; the ink pole is the only rung left.
+        // (Wagtail's overlay row uses `SelectionStyle::InverseVideo`, so this
+        // band color is never actually drawn there either way.)
         return a.base_content;
     }
-    // hi + SELECTED_BAND_STEPS * (hi - lo), clamped to [0,255]: that many more
-    // increments past base_300, in the SAME direction the base_200 -> base_300 step
-    // already carries (toward the ink on dark worlds, toward the ground on light).
+    let steps = SELECTED_BAND_STEPS + extra_steps;
     let step = |lo: u8, hi: u8| -> u8 {
         let d = hi as i32 - lo as i32;
-        (hi as i32 + d * SELECTED_BAND_STEPS).clamp(0, 255) as u8
+        (hi as i32 + d * steps).clamp(0, 255) as u8
     };
     Srgb::rgb(
         step(a.base_200.r, a.base_300.r),
         step(a.base_200.g, a.base_300.g),
         step(a.base_200.b, a.base_300.b),
     )
+}
+
+/// The PICKER'S selected-row VALUE band — [`surface_selected`] climbed
+/// [`OVERLAY_SELROW_EXTRA_STEPS`] further up the SAME surface ramp (value only,
+/// never a hue). The `overlay_draw_card` band reads this; the shared borders
+/// keep `surface_selected`. See [`OVERLAY_SELROW_EXTRA_STEPS`] for the A/B.
+pub fn overlay_selected_band() -> Srgb {
+    surface_step_band(OVERLAY_SELROW_EXTRA_STEPS)
+}
+
+pub fn surface_selected() -> Srgb {
+    // The shared band: `base_300` stepped `SELECTED_BAND_STEPS` further up the
+    // surface ramp, in the SAME direction `base_200 -> base_300` carries (toward
+    // the ink on dark worlds, toward the ground on light). A COLLAPSED ramp
+    // (Wagtail's 1-bit ladder: base_200 == base_300 == pure black) has no
+    // direction to move in — `surface_step_band` returns the ink pole
+    // (`base_content`, pure white on Wagtail: "a white 1px border on a black
+    // card is 1-bit-legal") so every float/HUD/whichkey/menu-drop border AND
+    // the picker's selected-row band stays visible. Keyed on the RAMP SHAPE, not
+    // `Elevation::Bordered`: Currawong/Mangrove/Firetail carry `Bordered` as
+    // functional elevation yet keep their ordinary ramp-step band (returning
+    // white there would fill the selected row the same value as its own text —
+    // the Wagtail invisible-row bug class).
+    surface_step_band(0)
 }
 
 /// Alpha of the dim DOC SCRIM (`overlay_scrim`) — a translucent veil of the canvas

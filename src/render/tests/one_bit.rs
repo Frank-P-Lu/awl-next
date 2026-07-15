@@ -459,8 +459,14 @@ fn wagtail_palette_card_real_pixels_show_a_white_border_ring_black_interior() {
     let pure_black = [0u8, 0, 0, 255];
 
     // LEFT edge: the border's true edge sits at `card_x - 1` (the reusable
-    // primitive's `set_float_quads` overhang) — sampled at its own row middle.
-    let mid_y = (card_y + card_h * 0.5) as i64;
+    // primitive's `set_float_quads` overhang) — sampled in the card's BOTTOM
+    // PADDING (a few px above the foot). Deliberately NOT the vertical middle:
+    // the selected row draws as TRUE INVERTED VIDEO on a one-bit world (white
+    // ground), so a "must be black interior" sample has to sit on plain
+    // `base_300` fill — the bottom pad below the last row always is, at any card
+    // height (the PALETTE-COMPOSITION round's header gap made the middle of a
+    // short flat card land on the inverted selected row).
+    let mid_y = (card_y + card_h - 4.0) as i64;
     let ring_x = (card_x - 1.0) as i64;
     assert!(
         is_white_ish(at(ring_x, mid_y)),

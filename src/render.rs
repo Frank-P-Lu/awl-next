@@ -1689,6 +1689,140 @@ pub(crate) fn effective_title_style() -> theme::TitleStyle {
     }
 }
 
+/// DEV-ONLY probe for the PALETTE-COMPOSITION round's overlay-ANCHOR A/B
+/// (`gallery/palette-composition/`'s top-left-vs-top-center card shots) —
+/// mirrors [`awl_overlay_style_force`]'s idiom exactly. `AWL_OVERLAY_ANCHOR_FORCE`
+/// forces the [`theme::CardAnchor`] the summoned card uses for EVERY world, so
+/// the gallery can shoot both placements without flipping any world's data.
+/// Grammar: `"tl"`/`"topleft"`/`"left"` → [`theme::CardAnchor::TopLeft`];
+/// `"center"`/`"topcenter"`/`"tc"` → [`theme::CardAnchor::TopCenter`]. Malformed
+/// → `None` (falls through to the active world's own `render_caps.card_anchor`).
+/// Total no-op unset; no config key, no CLI flag.
+fn parse_overlay_anchor_force(s: &str) -> Option<theme::CardAnchor> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "tl" | "topleft" | "left" => Some(theme::CardAnchor::TopLeft),
+        "tc" | "topcenter" | "center" | "centre" => Some(theme::CardAnchor::TopCenter),
+        _ => None,
+    }
+}
+
+/// The `AWL_OVERLAY_ANCHOR_FORCE` dev knob, read ONCE and memoized — same
+/// env-read hazard note as [`awl_overlay_style_force`].
+fn awl_overlay_anchor_force() -> &'static Option<theme::CardAnchor> {
+    static ONCE: std::sync::OnceLock<Option<theme::CardAnchor>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_OVERLAY_ANCHOR_FORCE")
+            .ok()
+            .and_then(|s| parse_overlay_anchor_force(&s))
+    })
+}
+
+/// TEST-ONLY escape hatch: force the EFFECTIVE card anchor without touching the
+/// memoized env var (mirrors [`set_title_style_test_override`]). Guarded by
+/// [`crate::testlock::serial`] at the call site. `None` clears the override.
+#[cfg(test)]
+static CARD_ANCHOR_TEST_OVERRIDE: std::sync::Mutex<Option<theme::CardAnchor>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_card_anchor_test_override(anchor: Option<theme::CardAnchor>) {
+    *CARD_ANCHOR_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = anchor;
+}
+
+/// The EFFECTIVE [`theme::CardAnchor`] for this frame: a `cfg(test)` override if
+/// set, else the `AWL_OVERLAY_ANCHOR_FORCE` dev probe if set, else the active
+/// world's own `render_caps.card_anchor` (today `TopLeft` on every world — the
+/// round's global flip). The ONE owner [`TextPipeline::overlay_card_x`] reads it.
+pub(crate) fn effective_card_anchor() -> theme::CardAnchor {
+    #[cfg(test)]
+    {
+        if let Some(a) = *CARD_ANCHOR_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return a;
+        }
+    }
+    match awl_overlay_anchor_force() {
+        Some(anchor) => *anchor,
+        None => theme::active().render_caps.card_anchor,
+    }
+}
+
+/// DEV-ONLY probe for the PALETTE-COMPOSITION round's CARD-EDGE A/B — lets the
+/// gallery force a LIGHT world's summoned card to draw the [`theme::Elevation::Bordered`]
+/// rim WITHOUT flipping any world's data (the "make a light-world border
+/// reachable, default OFF everywhere" ask). `AWL_OVERLAY_ELEVATION_FORCE`:
+/// `"bordered"`/`"border"`/`"on"` → [`theme::Elevation::Bordered`];
+/// `"flat"`/`"off"` → [`theme::Elevation::Flat`]. Malformed → `None` (the
+/// world's own `render_caps.elevation`). Total no-op unset.
+fn parse_overlay_elevation_force(s: &str) -> Option<theme::Elevation> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "bordered" | "border" | "on" => Some(theme::Elevation::Bordered),
+        "flat" | "off" => Some(theme::Elevation::Flat),
+        _ => None,
+    }
+}
+
+/// The `AWL_OVERLAY_ELEVATION_FORCE` dev knob, read ONCE and memoized.
+fn awl_overlay_elevation_force() -> &'static Option<theme::Elevation> {
+    static ONCE: std::sync::OnceLock<Option<theme::Elevation>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_OVERLAY_ELEVATION_FORCE")
+            .ok()
+            .and_then(|s| parse_overlay_elevation_force(&s))
+    })
+}
+
+/// The EFFECTIVE summoned-card [`theme::Elevation`] for this frame: the
+/// `AWL_OVERLAY_ELEVATION_FORCE` dev probe if set, else the active world's own
+/// `render_caps.elevation` — so an unset run renders exactly the assigned data
+/// (`Bordered` on Currawong/Mangrove/Firetail/Wagtail; `Flat` elsewhere).
+/// Read by `prepare_panel_card_elevation`.
+pub(crate) fn effective_card_elevation() -> theme::Elevation {
+    match awl_overlay_elevation_force() {
+        Some(e) => *e,
+        None => theme::active().render_caps.elevation,
+    }
+}
+
+/// DEV-ONLY probe for the PALETTE-COMPOSITION round's SELECTED-ROW A/B —
+/// `AWL_OVERLAY_SELROW_FORCE` selects the picker's selected-row band VALUE:
+/// `"new"`/`"strong"` → the strengthened [`theme::overlay_selected_band`] (one
+/// more ramp step, the round's calm default); `"old"`/`"weak"` → the historical
+/// shared [`theme::surface_selected`] band. Malformed → `None` (the default:
+/// the strengthened band). Value-only either way — never a hue. Total no-op
+/// unset (renders the strengthened band, same as the memoized `None` path).
+fn parse_overlay_selrow_force(s: &str) -> Option<bool> {
+    // `Some(true)` = strengthened (new); `Some(false)` = the old shared band.
+    match s.trim().to_ascii_lowercase().as_str() {
+        "new" | "strong" | "on" => Some(true),
+        "old" | "weak" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// The `AWL_OVERLAY_SELROW_FORCE` dev knob, read ONCE and memoized.
+fn awl_overlay_selrow_force() -> &'static Option<bool> {
+    static ONCE: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_OVERLAY_SELROW_FORCE")
+            .ok()
+            .and_then(|s| parse_overlay_selrow_force(&s))
+    })
+}
+
+/// The EFFECTIVE picker selected-row VALUE band for this frame: the
+/// strengthened [`theme::overlay_selected_band`] (the round's calm default),
+/// unless `AWL_OVERLAY_SELROW_FORCE=old` forces the historical shared
+/// [`theme::surface_selected`] band. Value-only, never a hue (DESIGN §3/§5).
+/// Read by `overlay_draw_card`. REVERT: to ship the old band permanently,
+/// change this default arm to `theme::surface_selected()` (or set
+/// `OVERLAY_SELROW_EXTRA_STEPS = 0` in `theme::derive`).
+pub(crate) fn effective_overlay_selrow_band() -> theme::Srgb {
+    match awl_overlay_selrow_force() {
+        Some(false) => theme::surface_selected(),
+        _ => theme::overlay_selected_band(),
+    }
+}
+
 /// Remove [`BAD_FALLBACK_FAMILIES`] from the font system's database so cosmic-text
 /// never selects them during fallback. Safe no-op if none are present (e.g. on
 /// non-macOS, or if the system set changes). Only affects fallback for glyphs the

@@ -73,18 +73,22 @@ fn spell_panel_floats_at_the_word_not_center_screen() {
     assert_eq!(p.panel_card.instance_count(), 0, "no flat centered card for the spell panel");
     assert!(!p.panel_caret.is_drawn(), "no amber query caret on the spell panel");
 
-    // CONTRAST: a centered overlay (no spell target) is a wide card near screen
-    // center, on the flat panel card — NOT the float primitive.
+    // CONTRAST: a takeover overlay (no spell target) is a WIDE card on the flat
+    // panel card — NOT the float primitive, and NOT the small word-anchored popup.
+    // The PALETTE-COMPOSITION round flipped the global card anchor to TOP-LEFT, so
+    // the takeover card's left edge now sits one margin (12) in from the canvas
+    // edge (the ONE owner `overlay_card_x`), distinct from the spell popup's
+    // word-anchored `text_left`.
     let mut c = view("teh quick brown fox\n", 0, 0);
     c.overlay_active = true;
     c.overlay_items = vec!["the".into(), "tea".into(), "ten".into()];
     p.set_view(&c);
     p.prepare(&device, &queue, 1200, 800).unwrap();
-    let [cx, _cy, cw, _ch] = p.overlay_card_rect().expect("the centered overlay has a card");
-    assert!(cw >= 360.0, "a centered overlay is a wide card: w={cw}");
-    assert!((cx - (1200.0 - cw) * 0.5).abs() < 2.0, "the centered card is horizontally centered: x={cx}");
-    assert_eq!(p.float_card.instance_count(), 0, "a centered overlay parks the float card");
-    assert_eq!(p.panel_card.instance_count(), 1, "a centered overlay uses the flat card");
+    let [cx, _cy, cw, _ch] = p.overlay_card_rect().expect("the takeover overlay has a card");
+    assert!(cw >= 360.0, "a takeover overlay is a wide card: w={cw}");
+    assert!((cx - 12.0).abs() < 2.0, "the takeover card anchors top-left, one margin in: x={cx}");
+    assert_eq!(p.float_card.instance_count(), 0, "a takeover overlay parks the float card");
+    assert_eq!(p.panel_card.instance_count(), 1, "a takeover overlay uses the flat card");
 }
 
 /// SPELL PANEL WIDTH is CONTENT-driven, not word-driven: the card sizes to the
@@ -1088,5 +1092,129 @@ fn menu_bar_row_zero_stays_pure_black_or_white_on_a_one_bit_world() {
     }
 
     crate::menubar::set_menu_bar_on(false);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+// ===== PALETTE-COMPOSITION ROUND laws ==================================
+//
+// Item 1 (FIT CONTENT): the summoned card's height is EXACTLY its drawn rows
+// plus the two padding tokens plus the header gap — the bottom padding is the
+// `pad` token, never a fixed-height reservation with a fat empty lip below the
+// last row (the Wagtail lesson: assert the OUTCOME geometry, computed
+// independently of `card_h`'s own formula). Item 2 (ANCHOR): the card's left
+// edge is the per-world `CardAnchor` through the ONE owner. Item 3 (HEADER
+// GAP): a positive divider gap is folded into the card AFTER the header, so
+// the card grows by exactly it. Flat AND faceted, both sampled.
+
+/// Independently reconstruct `(card_x, text_top, last_row_box_bottom)` for an
+/// open picker from its PUBLIC geometry (card rect + window report + the
+/// overlay-metric owners) — NOT from the private `card_h` formula, so a
+/// regression that padded the card taller than its rows is caught.
+fn card_fit_probe(
+    p: &TextPipeline,
+    header_rows: usize,
+    extra_chrome_lines: usize,
+) -> (f32, f32, f32, f32, f32) {
+    let [card_x, card_y, _cw, card_h] = p.overlay_card_rect().expect("an open card");
+    let (_top, lines, _sel, rep_h, _canvas) = p.overlay_window_report().expect("a window report");
+    assert!((rep_h - card_h).abs() < 0.01, "the two card_h sources agree");
+    let lh = p.overlay_lh();
+    let gap = p.overlay_header_gap();
+    let pad = 12.0_f32;
+    let text_top = card_y + pad;
+    // The drawn text lines: header rows + the candidate DISPLAY lines the report
+    // counts + any chrome lines the caller armed (a hint / footer). The header
+    // gap adds ONCE, between the header and the candidates.
+    let n_lines = header_rows + lines + extra_chrome_lines;
+    let last_row_box_bottom = text_top + n_lines as f32 * lh + gap;
+    let card_bottom = card_y + card_h;
+    (card_x, text_top, last_row_box_bottom, card_bottom, gap)
+}
+
+#[test]
+fn overlay_card_fits_its_content_no_fat_bottom_lip() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping overlay_card_fits_its_content_no_fat_bottom_lip: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let pad = 12.0_f32;
+
+    for world in ["Kingfisher", "Saltpan", "Firetail", "Wagtail"] {
+        theme::set_active_by_name(world).unwrap();
+        p.sync_theme();
+
+        // FLAT picker (query line only, no hint): header_rows == 1.
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+        v.overlay_selected = 0;
+        p.set_view(&v);
+        let (_x, _tt, last_bottom, card_bottom, gap) = card_fit_probe(&p, 1, 0);
+        assert!(gap > 0.0, "{world} flat: a positive header divider gap is present");
+        let below = card_bottom - last_bottom;
+        assert!(
+            (below - pad).abs() < 0.6,
+            "{world} flat: bottom padding is the `pad` token, no fat lip — \
+             card_bottom {card_bottom:.1} - last_row_bottom {last_bottom:.1} = {below:.1} (want ~{pad})"
+        );
+
+        // FACETED picker (query + lens strip): header_rows == 2.
+        let mut vt = view("hello\n", 0, 0);
+        vt.overlay_active = true;
+        vt.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+        vt.overlay_selected = 0;
+        vt.overlay_lens = ["All", "Time"]
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (l.to_string(), i == 0))
+            .collect();
+        p.set_view(&vt);
+        let (_x2, _tt2, last_bottom2, card_bottom2, gap2) = card_fit_probe(&p, 2, 0);
+        assert!(gap2 > 0.0, "{world} faceted: a positive header divider gap is present");
+        let below2 = card_bottom2 - last_bottom2;
+        assert!(
+            (below2 - pad).abs() < 0.6,
+            "{world} faceted: bottom padding is the `pad` token, no fat lip — {below2:.1} (want ~{pad})"
+        );
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+#[test]
+fn overlay_card_anchor_is_data_top_left_default_center_reachable() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping overlay_card_anchor_is_data_top_left_default_center_reachable: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let margin = 12.0_f32;
+    let width = 1200u32;
+
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+    v.overlay_selected = 0;
+
+    // DEFAULT (this round's flip): every world anchors TOP-LEFT — the card's
+    // left edge sits one margin in from the canvas edge.
+    set_card_anchor_test_override(None);
+    p.set_view(&v);
+    let [x_tl, _y, _w, _h] = p.overlay_card_rect().expect("an open card");
+    assert!((x_tl - margin).abs() < 0.01, "default anchor is top-left: x={x_tl}");
+
+    // TOP-CENTER stays reachable as a data value (the one-line revert / the
+    // gallery A/B): the card re-centers under the top third.
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopCenter));
+    p.set_view(&v);
+    let [x_tc, _y2, w_tc, _h2] = p.overlay_card_rect().expect("an open card");
+    let centered = (width as f32 - w_tc) * 0.5;
+    assert!(
+        (x_tc - centered).abs() < 0.01,
+        "top-center anchor re-centers the card: x={x_tc} want {centered}"
+    );
+    assert!(x_tc > x_tl, "top-center sits right of top-left");
+
+    set_card_anchor_test_override(None);
     theme::set_active(theme::DEFAULT_THEME);
 }

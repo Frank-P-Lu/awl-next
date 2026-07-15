@@ -293,7 +293,10 @@ fn overlay_row_region(p: &TextPipeline, row: usize) -> Region {
         p.overlay_card_rect().expect("the overlay card must be open");
     let lh = p.overlay_lh();
     let text_top = card_y + 12.0; // pad
-    let row_top = text_top + lh * (1.0 + row as f32); // +1 header row (the query line)
+    // +1 header row (the query line) + the PALETTE-COMPOSITION round's header gap
+    // (the divider space after the header), folded in through the SAME owner the
+    // renderer uses so the sampled band tracks the shaped row.
+    let row_top = text_top + lh + p.overlay_header_gap() + lh * row as f32;
     Region::new(card_x, row_top, card_w, lh)
 }
 
