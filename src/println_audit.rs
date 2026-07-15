@@ -95,6 +95,10 @@ const EXPECTED: &[(&str, usize)] = &[
     // tabular CLI output.
     ("render/framebench.rs", 36),
     ("render/perfbench.rs", 8),
+    // `--bench-suite`'s tabular CLI output + the baseline diff report — the
+    // same CLI-harness class as the four bench entries above.
+    ("render/benchsuite/mod.rs", 12),
+    ("render/benchsuite/report.rs", 9),
 ];
 
 /// The pure per-line needle counter: matches `println!(` / `eprintln!(` as a

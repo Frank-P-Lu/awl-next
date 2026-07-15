@@ -279,7 +279,10 @@ pub fn schema_held() -> String {
 }
 
 mod animated;
-mod gpu;
+// `pub(crate)`: the render bench suite (`render::benchsuite`) drives frames
+// through the SAME headless device / offscreen target / pixel readback this
+// module owns — one owner of the wgpu plumbing, not an aligned copy.
+pub(crate) mod gpu;
 mod modes;
 mod opts;
 mod oracle;

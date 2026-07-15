@@ -144,6 +144,13 @@ pub(crate) enum Mode {
     /// per-input reflow with latest-wins present-boundary coalescing. Opens no
     /// window.
     BenchZoomBurst,
+    /// Hidden performance harness: the UNIFIED BENCH SUITE — deterministic
+    /// corpus tiers x interaction scenarios, every cell witnessed, printed as
+    /// a table and written to `bench.json` beside the invocation. `baseline`
+    /// (`--bench-baseline <path>`) additionally diffs the run against a
+    /// checked-in machine-keyed baseline, exiting nonzero on a >20% cell
+    /// regression (the `scripts/bench.sh` merge-day gate). Opens no window.
+    BenchSuite { baseline: Option<PathBuf> },
 }
 
 /// Parse a `--sel L0:C0-L1:C1` argument into ordered line/col endpoints.
@@ -387,6 +394,10 @@ pub(crate) fn parse_args() -> Result<Mode> {
     let mut bench_frame = false;
     let mut bench_theme_burst = false;
     let mut bench_zoom_burst = false;
+    let mut bench_suite = false;
+    // `--bench-baseline <path>`: only meaningful with `--bench-suite` (rejected
+    // otherwise below, so it can never be silently dropped).
+    let mut bench_baseline: Option<PathBuf> = None;
     // `--keys` replay spec, kept RAW until after the arg loop so it parses THROUGH
     // the loaded config's keybinding overrides (the `--config` flag may appear after
     // `--keys` on the command line). Threaded into whichever screenshot Mode runs.
@@ -424,6 +435,15 @@ pub(crate) fn parse_args() -> Result<Mode> {
             }
             "--bench-zoom-burst" => {
                 bench_zoom_burst = true;
+            }
+            "--bench-suite" => {
+                bench_suite = true;
+            }
+            "--bench-baseline" => {
+                let v = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--bench-baseline requires a path (e.g. benches/baseline.json)")
+                })?;
+                bench_baseline = Some(PathBuf::from(v));
             }
             "--screenshot" => {
                 let p = args
@@ -726,6 +746,12 @@ pub(crate) fn parse_args() -> Result<Mode> {
         }
     }
 
+    if bench_suite {
+        return Ok(Mode::BenchSuite { baseline: bench_baseline });
+    }
+    if bench_baseline.is_some() {
+        bail!("--bench-baseline requires --bench-suite");
+    }
     if bench_typing {
         return Ok(Mode::BenchTyping);
     }

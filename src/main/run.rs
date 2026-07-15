@@ -927,6 +927,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
         Mode::BenchFrame => crate::render::framebench::run(),
         Mode::BenchThemeBurst => crate::render::framebench::run_theme_burst(),
         Mode::BenchZoomBurst => crate::render::framebench::run_zoom_burst(),
+        Mode::BenchSuite { baseline } => crate::render::benchsuite::run(baseline),
         Mode::Windowed {
             file,
             root,

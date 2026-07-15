@@ -2,6 +2,10 @@
 /gallery
 /tmp
 /dist
+
+# --bench-suite's per-run output (the checked-in reference lives at
+# benches/baseline.json; a fresh bench.json is scratch, never committed)
+/bench.json
 .claude/worktrees/
 .playwright-mcp/
 

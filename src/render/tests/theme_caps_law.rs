@@ -120,6 +120,16 @@ fn scan_dir(
             if path.file_name().and_then(|n| n.to_str()) == Some("tests") {
                 continue;
             }
+            // The unified `--bench-suite` harness (`render/benchsuite/`) is
+            // the SAME class of exemption as `framebench.rs`/`perfbench.rs`
+            // below: a CLI bench DRIVER that legitimately cycles concrete
+            // world names to force reshape-cost measurements (its theme
+            // scenario pins a different-face, different-mono world pair),
+            // never a per-theme render branch. Whole-dir skip, mirroring the
+            // per-file skips.
+            if path.file_name().and_then(|n| n.to_str()) == Some("benchsuite") {
+                continue;
+            }
             scan_dir(base, &path, out);
             continue;
         }
