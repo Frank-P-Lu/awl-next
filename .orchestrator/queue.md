@@ -1,5 +1,61 @@
 # awl — build queue
 
+## 🐛 BOLD ON MONO-DISPLAY WORLDS SHAPES IN A FOREIGN SANS (user screenshot 2026-07-15, Firetail) — 🟢 QUEUED (fix direction = user taste pick)
+
+**Evidence (verified by capture, all five mono worlds):** `**bold**` markdown on
+Firetail / Potoroo / Tawny / Currawong / Mangrove shapes in the SAME non-mono
+bold sans (closest visual match among registered 700s: Figtree Bold; exact face
+doesn't change the fix), complete with its merged-ﬁ ligature — the user's "weird
+FI ligature" report. Regular Xenon prose does NOT ligate fi (verified — the
+weirdness is entirely the foreign face). This contradicts the documented intent
+at `render/spans.rs:294-299` ("the mono renders unbolded"): requesting Weight
+700 in a Regular-only family trips the `weight_diff == 0` fallback trap the
+codebase already documents (the IBM Plex Mono Light tripwire), DROPPING the
+family instead of degrading within it. Repro:
+`cargo run --release -- --screenshot out.png --theme Firetail --measure 45 <md with **bold**>`.
+
+**Fix options (pick one):**
+- (a) Pin bold spans to the display face's REGISTERED weight on Regular-only
+  worlds — matches the documented trade (emphasis carried by the revealed `**`
+  markers); the CJK weight-pin at `spans.rs:87-124` is the existing template.
+- (b) Bundle real mono Bolds (JetBrains Mono / Iosevka / Monaspace Xenon ship
+  Bold upstream; verify licenses before claiming OFL) — mono bolds keep the
+  grid (same advance), so this gives REAL emphasis in the code-flavored worlds
+  at ~4 embedded faces of binary cost. IBM Plex Mono needs care (we ship
+  Light-300 deliberately; `mono_safe_weight`).
+
+**Done / verify:** extend the existing bold law tests
+(`render/tests/theme.rs:416` registration + `:444` regression — both currently
+cover only the 10 proportional worlds) with a NO-WILDCARD sweep over the mono
+worlds asserting the chosen OUTCOME (bold content resolves to the SAME FAMILY
+as the display face — never a foreign one); pixel probe across the five mono
+worlds; regular-prose shaping byte-identical.
+
+## 🧯 GPU OOM MUST NOT KILL THE EDITOR (user crash report 2026-07-15 morning, suspected overnight repeat) — 🟢 QUEUED
+
+**Evidence:** launch panic `wgpu error: Out of Memory` at `Queue::write_buffer`
+(wgpu-29.0.3 `wgpu_core.rs:1952`) — wgpu's DEFAULT uncaptured-error handler
+panics, so a transient Metal allocation failure kills the whole editor. The
+machine recovered within a minute (retry launched clean; memory-pressure level
+normal; awl RSS flat at 173MB over a 75s idle sample — no resident leak at
+rest). Overnight crash unconfirmed (unified log empty for awl; a Rust panic
+only reaches the launching terminal's stderr). Autosave + scratch stash mean
+small blast radius — this is robustness polish, not data loss.
+
+**Goal:** an allocation failure degrades calmly (skip/retry the frame + calm
+notice), never a dead editor. Install `device.on_uncaptured_error` (or error
+scopes around allocation-heavy paths); consider one short-backoff retry of
+device/surface creation at launch before giving up.
+
+**Also:** a bounded SOAK probe for the lava worlds — they redraw continuously
+by design, so any per-frame growth gets all night to compound; run a release
+soak sampling RSS/allocation counts and assert flat (the 75s sample was flat;
+a soak is the honest test).
+
+**Done / verify:** simulated OOM (error scope / forced-tiny device limits)
+produces the calm-notice path, not a panic; soak numbers recorded; autosave,
+daemon socket, and session teardown still clean after a degraded frame.
+
 ## 🏦 PARKED — VIEWPORT-DRIVEN TEXT SHAPING (2026-07-14 zoom-performance report)
 
 **Goal:** retire the whole-document shaping assumption behind
@@ -143,6 +199,14 @@ NEW (2026-07-14 flurry, mid-collection):
 ⛔ PREREQUISITE BEFORE FIRING WORKFLOWS A/B/C: the user's WORKING TREE IS DIRTY — 14 files uncommitted, incl. the EXACT fix targets: `src/lava.rs` (+132 lines!), `shaders/lava.wgsl`, `src/render.rs`, `src/app.rs`, `src/theme/worlds.rs`/`model.rs`/`tests.rs`, + DESIGN/THEMES/WORLDS docs. A worktree workflow branches from a REF, not the dirty tree, so it would build on a base MISSING this WIP → merge conflicts / clobber risk in lava.rs. MUST commit (or stash) the WIP first so the fixes stack on top cleanly. The personality-gallery workflow is UNAFFECTED (isolated worktree, throwaway code, only PNGs copied out — no merge).
 
 CLOBBER-GUARD RESET (user Q, answered from code files.rs:1590-1645): the sticky "changed on disk — autosave held" clears when the CONFLICT resolves — manual Cmd-S force-writes YOUR version + updates disk_mtime → notice flips to "saved" (yours wins); or reopening adopts theirs + clears (`load_path`:900). A mere edit re-checks + re-holds (correct — still diverged). DECISION: NO X BUTTON (would hide a live safety state while still unprotected); better = make the message self-explaining ("⌘S keeps yours · reopen for theirs"). Fold into the notice/toast round.
+
+## 🌋 LAVA FOLLOW-UPS: OUTLINE LEGIBILITY + MOVE-FLASH REGRESSION (user reports 2026-07-15) — 🟡 COOKING (one sequential workflow; same lava-family files)
+
+**B — MOVE-FLASH "kinda back" (user, same session):** the Mangrove flash-while-moving reappeared despite 318e1fe's Moved handling + field_viewport freeze. Diagnose-FIRST round: enumerate every path that can present a new lava frame or re-lay the field around a window move (candidates: the settle-SNAP itself reads as the flash — same quantization-jump class as the resize bug; a move_active gating gap; ScaleFactorChanged mid-move on cross-display; tick armed before settle). Live-only compositor class — unit tests witness the gating state machine (held phase+field across a simulated Moved burst, exactly one settle redraw); LIVE confirmation flagged (user's eyes are the oracle). Must not regress the landed resize/overlay freezes.
+
+**A — OUTLINE OVER LAVA (screenshot: Mangrove margin outline unreadable over the dithered blob):**
+
+Flagged twice before but never queued (lava-probe v2 finding 3 "outline rail collides with left lamp — coexistence call needed"; WORLD-ROLES.md dither watch item) — now a real round. The current/selected entry (full ink) reads; MUTED entries drown in the Bayer dither. FIX SHAPE: one owner — preferred mechanism carves the outline RAIL band out of the lava field MASK whenever the outline is visible (the same margin mask that keeps lava hugging the column; outline hidden → lava reclaims the margin), soft-edge/scrim fallback if the hard carve reads badly, builder A/Bs + flags. Keyed off the Background capability, never a world name (theme_caps_law). Both lava worlds (Firetail proven fine or fixed same mechanism). LAWS: structural (rail band lava-free when outline visible — phase-independent) + legibility floor (muted entries clear the perceptible floor over local ground). Trigger-3 NEIGHBORHOOD audit: all margin-resident chrome (gutter, word-count, drag handle, debug panel) × both lava worlds, arithmetic. Non-lava worlds byte-identical. LIVE flags: carve-edge feel during blob drift.
 
 ## 🎨 PERSONALITY THREAD (user 2026-07-14) — gallery-driven, NOT a blind build; connects to the queued "OVERLAY PERSONALITY AS DATA" item
 
