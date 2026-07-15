@@ -91,6 +91,10 @@ impl TextPipeline {
         let empty_rows = empty.is_some() as usize;
         // Line 0 = query, line 1 = lens strip, then the plan lines / empty row, then hint.
         let header_rows = 2;
+        // PALETTE-COMPOSITION round: the calm gap AFTER the query + lens-strip
+        // header, before the section-grouped rows (negative space as the divider),
+        // uniform with the flat pickers via the shared `overlay_header_gap` owner.
+        let header_gap = self.overlay_header_gap();
         // `self.menubar_reserve()` — see [`TextPipeline::overlay_geometry`]'s identical
         // note; the SAME one-owner accessor, so the theme/caret picker's card yields
         // to a shown bar exactly like the flat/nav picker's does.
@@ -107,7 +111,7 @@ impl TextPipeline {
         // keeps the drawn items a subset of the hover/keyboard item-window.
         let total_headers = full_plan.len() - n_items;
         let chrome_rows = header_rows + hint_rows + empty_rows;
-        let avail_px = (self.window_h - card_y - margin - 2.0 * pad).max(lh);
+        let avail_px = (self.window_h - card_y - margin - 2.0 * pad - header_gap).max(lh);
         let fit_lines = (avail_px / lh).floor() as usize;
         let fit_items = fit_lines
             .saturating_sub(chrome_rows)
@@ -125,8 +129,8 @@ impl TextPipeline {
         // line even on a WIDE mono world face without the far-right All clipping.
         let card_w = (width as f32 * 0.58).max(560.0).min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
-        let card_h = total_rows as f32 * lh + 2.0 * pad;
-        let card_x = (width as f32 - card_w) * 0.5;
+        let card_h = total_rows as f32 * lh + header_gap + 2.0 * pad;
+        let card_x = self.overlay_card_x(width, card_w, margin);
         let text_left = card_x + pad;
         let text_top = card_y + pad;
         OverlayGeom {
@@ -145,6 +149,7 @@ impl TextPipeline {
             strip: self.overlay_lens.clone(),
             plan,
             header_rows,
+            header_gap,
             empty,
             card_x,
             card_y,
@@ -400,7 +405,14 @@ impl TextPipeline {
                 pushes.push((r.clone(), faint));
             }
             pushes.sort_by_key(|(r, _)| r.start);
-            spans.push((&strip_s[0..1], mk(faint))); // the "\n", UI metrics
+            // The strip row's leading "\n" governs its HEIGHT (see above). The
+            // PALETTE-COMPOSITION round inflates it by `header_gap`, so the calm
+            // divider space falls after the lens strip, before the section-grouped
+            // rows — uniform with the flat pickers' query-line gap. The plan-line
+            // offsets, selected band, and underline all fold the same gap in
+            // through `overlay_row_top`, so nothing below the strip drifts.
+            let strip_nl_metrics = GlyphMetrics::new(m.font_size * ui, lh + geom.header_gap);
+            spans.push((&strip_s[0..1], mk(faint).metrics(strip_nl_metrics)));
             cursor += 1;
             for (r, c) in pushes {
                 debug_assert_eq!(r.start, cursor, "strip spans must tile the line");

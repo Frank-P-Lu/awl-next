@@ -507,13 +507,30 @@ impl TextPipeline {
         // `overlay_title_prefix` owns that ONE rule for both inline sites.
         let title_prefix = self.overlay_title_prefix();
         let sigil = "› ";
+        // PALETTE-COMPOSITION round's HEADER GAP: inflate the query line's own
+        // height by `header_gap`, so the extra negative space falls between the
+        // query header and the first candidate row (the divider is negative
+        // space, no drawn rule). The candidate rows keep their normal height and
+        // the selected-row band folds the same gap in through `overlay_row_top`,
+        // so the band still lands on each row. `hk` = the header spans' attrs
+        // (taller line only when a gap is set); the query text/caret keep the top
+        // of the line, so the amber caret (centered on the UI row) stays aligned.
+        let name_fs = self.overlay_metrics().font_size;
+        let header_lh = self.overlay_lh() + geom.header_gap;
+        let hk = |c| {
+            if geom.header_gap > 0.0 {
+                mk(c).metrics(GlyphMetrics::new(name_fs, header_lh))
+            } else {
+                mk(c)
+            }
+        };
         if has_query {
             if title_prefix.is_empty() {
-                spans.push((sigil, mk(muted)));
+                spans.push((sigil, hk(muted)));
             } else {
-                spans.push((title_prefix.as_str(), mk(muted)));
+                spans.push((title_prefix.as_str(), hk(muted)));
             }
-            spans.push((self.overlay_query.as_str(), mk(ink)));
+            spans.push((self.overlay_query.as_str(), hk(ink)));
         }
         // Every row's FILENAME is the FIGURE: content ink at BODY size. Its leading
         // DIRECTORY (through the last `/`) recedes to MUTED ink (figure/ground by value)

@@ -36,6 +36,37 @@ impl TextPipeline {
         self.metrics.line_height * OVERLAY_UI_SCALE
     }
 
+    /// THE ONE OWNER of the summoned takeover card's LEFT edge — the
+    /// PALETTE-COMPOSITION round's per-world anchor dial ([`theme::CardAnchor`],
+    /// resolved through [`crate::render::effective_card_anchor`] so the gallery
+    /// probe can A/B it). `TopLeft` (the global default this round) pins the card
+    /// one `margin` in from the canvas edge (more anchored, right side opened for
+    /// the ghost placard); `TopCenter` is the historical centered placement.
+    /// Both flat [`Self::overlay_geometry`] and faceted
+    /// [`TextPipeline::theme_overlay_geometry`] read this, so their card X can
+    /// never disagree; the width, row geometry, and the placard's own
+    /// canvas-corner anchor are untouched. The contextual spell popup does NOT
+    /// call this (it anchors at its word).
+    pub(in crate::render) fn overlay_card_x(&self, width: u32, card_w: f32, margin: f32) -> f32 {
+        match crate::render::effective_card_anchor() {
+            theme::CardAnchor::TopLeft => margin,
+            theme::CardAnchor::TopCenter => (width as f32 - card_w) * 0.5,
+        }
+    }
+
+    /// THE HEADER-GAP token (device px): the calm slab of negative space the
+    /// PALETTE-COMPOSITION round inserts after the header rows (query + optional
+    /// lens strip) and before the candidate list, on the palette AND every
+    /// faceted picker uniformly (the divider is negative space, never a drawn
+    /// rule). Sized off the overlay row height so it scales with zoom/DPI like
+    /// every other overlay metric — ~0.55 of a row reads as a clear beat without
+    /// re-opening the "fat lip" of a whole blank row. ONE tunable; both geometry
+    /// owners read it, and the shaper inflates the last header line by exactly
+    /// this. The contextual spell popup passes `0.0` (no header to divide from).
+    pub(in crate::render) fn overlay_header_gap(&self) -> f32 {
+        (self.overlay_lh() * 0.55).round()
+    }
+
     /// Shape + upload the SUMMONED navigation overlay for this frame: a tall
     /// BASE_300 card, a query line (with the one amber caret at its end), the
     /// candidate list (selected row highlighted with a surface VALUE band), all
@@ -274,6 +305,10 @@ impl TextPipeline {
         // card (see `prepare_caret_preview_panel`), so the list itself stays exactly as
         // familiar — no reserved preview strip carved out of the card.
         let header_rows = 1; // the `› query` line every flat/nav picker shows on top
+        // PALETTE-COMPOSITION round: a calm gap after the query header, before the
+        // candidate list (negative space as the divider). Grows the card by exactly
+        // this and offsets the candidate band/hit-test through `overlay_row_top`.
+        let header_gap = self.overlay_header_gap();
         // query + rows/empty + hint + the keybindings tips footer (0 unless summoned).
         let total_rows = header_rows + visible + empty_rows + hint_rows + footer_rows;
         // RESPONSIVE CARD: prefer half the window, floored at a readable width, and
@@ -284,9 +319,12 @@ impl TextPipeline {
         // byte-identical); the floor only lifts sub-1120 windows.
         let card_w = (width as f32 * 0.5).max(560.0).min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
-        let card_h = total_rows as f32 * self.overlay_lh() + 2.0 * pad;
-        // Center horizontally, anchor near the top third (summoned, transient).
-        let card_x = (width as f32 - card_w) * 0.5;
+        // The header gap adds to the card height alongside the row stack + padding,
+        // so the card still FITS its content exactly (bottom padding == `pad`).
+        let card_h = total_rows as f32 * self.overlay_lh() + header_gap + 2.0 * pad;
+        // Horizontal anchor via the ONE owner (top-left default this round, or
+        // centered); vertical anchor near the top third (summoned, transient).
+        let card_x = self.overlay_card_x(width, card_w, margin);
         // `self.menubar_reserve()` (`0.0` unless the WEB/LINUX MENU BAR is shown) —
         // the SAME accessor `doc_top`/the margin Outline/the search panel/the debug
         // panel already fold in, so the palette can never disagree with its siblings
@@ -307,6 +345,7 @@ impl TextPipeline {
             strip: Vec::new(),
             plan: Vec::new(),
             header_rows,
+            header_gap,
             empty,
             card_x,
             card_y,
@@ -454,6 +493,8 @@ impl TextPipeline {
             strip: Vec::new(),
             plan: Vec::new(),
             header_rows,
+            // The contextual popup has no header rows to divide from.
+            header_gap: 0.0,
             empty,
             card_x,
             card_y,
@@ -564,6 +605,7 @@ impl TextPipeline {
             let k = overlay_row_of(
                 geom.text_top,
                 geom.header_rows,
+                geom.header_gap,
                 self.overlay_lh(),
                 py,
             )?;
@@ -578,6 +620,7 @@ impl TextPipeline {
             geom.text_top,
             self.overlay_lh(),
             geom.header_rows,
+            geom.header_gap,
             geom.visible,
             geom.top_idx,
             geom.n_items,
@@ -761,8 +804,15 @@ impl TextPipeline {
         // — the LAW ROUND's no-absent-variant enum — so "prepare neither
         // pipeline" is structurally unreachable (see that fn's own doc for
         // the bug history this closes).
-        let treatment =
-            theme::active().render_caps.highlight_treatment(theme::surface_selected());
+        // The selected-row band VALUE is the PALETTE-COMPOSITION round's
+        // strengthened, calm-by-VALUE band (`effective_overlay_selrow_band`, one
+        // ramp step past the shared `surface_selected`; the gallery A/Bs it and
+        // the old band is one line away — see that fn's REVERT note). Never a hue
+        // (DESIGN §3/§5); the distinguishability sweep polices it. On a 1-bit
+        // world the treatment is `Invert` and this color is unused.
+        let treatment = theme::active()
+            .render_caps
+            .highlight_treatment(crate::render::effective_overlay_selrow_band());
         if let theme::HighlightTreatment::ValueBand(color) = treatment {
             self.overlay_rows.set_color(color.rgba_bytes());
         }
@@ -776,7 +826,7 @@ impl TextPipeline {
                 .iter()
                 .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
                 .unwrap_or(0);
-            let row_top = overlay_row_top(geom.text_top, geom.header_rows, disp, lh);
+            let row_top = overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, disp, lh);
             vec![[geom.card_x, row_top, geom.card_w, lh]]
         } else {
             // 0-based row among the visible window. `OverlayState` keeps the selection
@@ -787,7 +837,7 @@ impl TextPipeline {
                 .saturating_sub(geom.top_idx)
                 .min(geom.visible.saturating_sub(1)); // 0-based among visible
             let row_top =
-                overlay_row_top(geom.text_top, geom.header_rows, sel_row, lh);
+                overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, sel_row, lh);
             vec![[geom.card_x, row_top, geom.card_w, lh]]
         };
         match treatment {

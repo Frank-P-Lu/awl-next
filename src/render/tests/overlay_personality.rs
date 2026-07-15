@@ -98,6 +98,47 @@ fn parse_overlay_style_force_rejects_garbage() {
     }
 }
 
+// --- the PALETTE-COMPOSITION round's gallery A/B probes (pure) ---------
+
+#[test]
+fn parse_overlay_anchor_force_grammar() {
+    for s in ["tl", "TL", "topleft", "left", " Left "] {
+        assert_eq!(parse_overlay_anchor_force(s), Some(theme::CardAnchor::TopLeft), "{s:?}");
+    }
+    for s in ["tc", "center", "centre", "TopCenter"] {
+        assert_eq!(parse_overlay_anchor_force(s), Some(theme::CardAnchor::TopCenter), "{s:?}");
+    }
+    for bad in ["", "middle", "bottom", "tr"] {
+        assert_eq!(parse_overlay_anchor_force(bad), None, "expected None for {bad:?}");
+    }
+}
+
+#[test]
+fn parse_overlay_elevation_force_grammar() {
+    for s in ["bordered", "Border", "on"] {
+        assert_eq!(parse_overlay_elevation_force(s), Some(theme::Elevation::Bordered), "{s:?}");
+    }
+    for s in ["flat", "OFF"] {
+        assert_eq!(parse_overlay_elevation_force(s), Some(theme::Elevation::Flat), "{s:?}");
+    }
+    for bad in ["", "raised", "shadow"] {
+        assert_eq!(parse_overlay_elevation_force(bad), None, "expected None for {bad:?}");
+    }
+}
+
+#[test]
+fn parse_overlay_selrow_force_grammar() {
+    for s in ["new", "strong", "on"] {
+        assert_eq!(parse_overlay_selrow_force(s), Some(true), "{s:?}");
+    }
+    for s in ["old", "weak", "OFF"] {
+        assert_eq!(parse_overlay_selrow_force(s), Some(false), "{s:?}");
+    }
+    for bad in ["", "stronger", "2"] {
+        assert_eq!(parse_overlay_selrow_force(bad), None, "expected None for {bad:?}");
+    }
+}
+
 // --- placard corner placement, end-to-end through the real shaper -----
 
 /// The four corners place the SAME shaped wordmark in the four SCREEN
@@ -206,6 +247,12 @@ fn forced_placard_shapes_a_wordmark_inside_the_canvas_corner() {
         return;
     };
     let _g = crate::testlock::serial();
+    // Force the CENTERED card anchor so the placard's canvas-corner bleed is
+    // exercised HORIZONTALLY (the PALETTE-COMPOSITION round flipped the default to
+    // TopLeft, which would put the card AND a BL placard both at the 12px inset —
+    // the placard anchors to the CANVAS, independent of where the card sits, and
+    // that independence is exactly what a centered card demonstrates).
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopCenter));
     set_title_style_test_override(Some(theme::TitleStyle::Placard {
         corner: theme::PlacardCorner::BL,
         scale: 2.0,
@@ -254,6 +301,7 @@ fn forced_placard_shapes_a_wordmark_inside_the_canvas_corner() {
     );
 
     set_title_style_test_override(None); // leave no override behind for later tests
+    set_card_anchor_test_override(None);
 }
 
 /// A forced `Placard` on the SPELL popup draws nothing — it has no title
@@ -414,7 +462,10 @@ fn overlay_row_region(p: &TextPipeline, header_rows: usize, row: usize) -> Regio
         p.overlay_card_rect().expect("the overlay card must be open");
     let lh = p.overlay_lh();
     let text_top = card_y + 12.0; // pad
-    let row_top = text_top + lh * (header_rows as f32 + row as f32);
+    // Fold in the PALETTE-COMPOSITION round's header gap (the divider after the
+    // query/strip header) through the SAME owner the renderer uses, so the
+    // sampled band tracks the shaped selected row.
+    let row_top = text_top + lh * header_rows as f32 + p.overlay_header_gap() + lh * row as f32;
     Region::new(card_x, row_top, card_w, lh)
 }
 

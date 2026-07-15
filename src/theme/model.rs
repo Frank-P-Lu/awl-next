@@ -272,6 +272,28 @@ pub enum TitleStyle {
     Placard { corner: PlacardCorner, scale: f32, ink: PlacardInk },
 }
 
+/// WHERE the summoned overlay card ANCHORS horizontally — a per-world DATA
+/// dial (the PALETTE-COMPOSITION round, stealing Persona's off-center
+/// COMPOSITION without its volume). `TopCenter` is the historical placement
+/// (the card centered under the top-third); `TopLeft` pins the card's left
+/// edge one `margin` in from the canvas edge, which reads MORE ANCHORED (a
+/// deliberate object, not a floating dialog) AND opens the right side of the
+/// canvas for a [`TitleStyle::Placard`] wordmark — the board's "menu top-left
+/// + wordmark bottom-corner = balanced asymmetry". Only the card's X changes;
+/// its width / row geometry / the placard's own canvas-corner anchor are
+/// untouched, so every downstream reader (the selected-row band, the pointer
+/// hit-test, the query caret) composes it for free through the ONE owner
+/// [`crate::render::TextPipeline::overlay_card_x`]. The GLOBAL DEFAULT is
+/// `TopLeft` (this round's flip); `TopCenter` stays reachable as a one-line
+/// data revert (and the `AWL_OVERLAY_ANCHOR_FORCE` dev probe A/Bs the two).
+/// The contextual SPELL popup is NOT a takeover card and ignores this — it
+/// stays anchored at its misspelled word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CardAnchor {
+    TopLeft,
+    TopCenter,
+}
+
 /// Whether a thin FRAME draws around the WRITING COLUMN — the page-frame
 /// capability the personality-assignment round graduated from the
 /// `AWL_PAGE_BORDER` gallery probe (which never shipped; this field subsumes
@@ -334,6 +356,12 @@ pub struct RenderCaps {
     /// THE PERSONALITY-ASSIGNMENT round's graduated capability: the thin
     /// frame around the writing column (see [`PageFrame`]'s own doc).
     pub page_frame: PageFrame,
+    /// THE PALETTE-COMPOSITION round's dial: where the summoned overlay card
+    /// anchors horizontally (see [`CardAnchor`]'s own doc). The GLOBAL DEFAULT
+    /// is `TopLeft` (the round's flip toward a more-anchored, right-side-open
+    /// composition); every world inherits it unless it opts back to
+    /// `TopCenter`.
+    pub card_anchor: CardAnchor,
 }
 
 impl RenderCaps {
@@ -347,6 +375,11 @@ impl RenderCaps {
         highlight_texture: HighlightTexture::Wash,
         title_style: TitleStyle::InlinePrefix,
         page_frame: PageFrame::None,
+        // The PALETTE-COMPOSITION round's flip: every world's summoned card
+        // now anchors TOP-LEFT by default (reads more anchored + opens the
+        // right side for the ghost placard). Revert to the historical centered
+        // placement in ONE line here (`CardAnchor::TopCenter`).
+        card_anchor: CardAnchor::TopLeft,
     };
 
     /// THE ONE owner of the row/title "selected region" highlight decision —

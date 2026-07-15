@@ -9,7 +9,7 @@ use super::cjk::{
 };
 use super::color::Srgb;
 use super::model::{
-    Backdrop, Background, CaretBlockStyle, DecorativeWash, Elevation, HighlightTexture,
+    Backdrop, Background, CardAnchor, CaretBlockStyle, DecorativeWash, Elevation, HighlightTexture,
     ImageReveal, LavaEdge, PageFrame, PlacardCorner, PlacardInk, RenderCaps, RoleOverrides,
     SelectionStyle, Theme, ThemeTags, TitleStyle, WashOverride,
 };
@@ -1005,6 +1005,10 @@ pub const WAGTAIL: Theme = Theme {
         // 1-bit-legal by construction. Graduated from the AWL_PAGE_BORDER
         // gallery probe (2px white was the user's pick over 1px).
         page_frame: PageFrame::Line { weight_px: 2.0 },
+        // The PALETTE-COMPOSITION round's global flip — Wagtail rides it too
+        // (the silent pole is still an anchored object). Listed explicitly
+        // because this literal names every field (no `..DEFAULT` spread).
+        card_anchor: CardAnchor::TopLeft,
     },
 };
 

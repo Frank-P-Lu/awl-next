@@ -177,6 +177,15 @@ pub(super) struct OverlayGeom {
     /// selected-row band and the pointer hit-test read, so they can't drift from the
     /// shaped rows.
     header_rows: usize,
+    /// PALETTE-COMPOSITION round: extra VERTICAL negative space (device px)
+    /// inserted AFTER the header rows (the `› query` line, plus the lens strip on
+    /// a faceted card) and BEFORE the candidate list — the calm "divider" that
+    /// separates chrome from the list without a drawn rule. `0.0` for the
+    /// contextual spell popup (no header to divide from). The candidate band, the
+    /// selected-row highlight, the pointer hit-test, and the card height all fold
+    /// it in through [`overlay_row_top`], so they can't drift; the shaper realizes
+    /// it by inflating the last header line's height by exactly this.
+    header_gap: f32,
     /// EMPTY STATE: `Some(message)` when the picker has NO candidate rows (an empty
     /// corpus, or a query that filtered everything out) — the shaper then draws ONE
     /// dim, non-selectable message row (styled like the foot hint) in the candidate
@@ -271,8 +280,13 @@ impl TextPipeline {
         height: u32,
         rect: Option<[f32; 4]>,
     ) {
+        // The card's edge (rim + shadow) rides the EFFECTIVE elevation — the
+        // world's own `render_caps.elevation`, or the `AWL_OVERLAY_ELEVATION_FORCE`
+        // dev probe (the PALETTE-COMPOSITION round's light-world-border A/B; no
+        // world's data flips). Composes with the new anchor + header gap freely —
+        // the rim just traces the card rect, wherever it sits.
         let elevated = rect.is_some()
-            && theme::active().render_caps.elevation == theme::Elevation::Bordered;
+            && crate::render::effective_card_elevation() == theme::Elevation::Bordered;
         set_float_quads(
             &mut self.panel_shadow,
             &mut self.panel_border,
@@ -323,10 +337,16 @@ fn preview_glyph_key_at(buf: &GlyphBuffer, text: &str, idx: usize) -> Option<Cac
 pub(super) fn overlay_row_top(
     text_top: f32,
     header_rows: usize,
+    header_gap: f32,
     row: usize,
     line_height: f32,
 ) -> f32 {
-    text_top + (header_rows + row) as f32 * line_height
+    // The candidate area sits `header_rows` lines below `text_top`, PLUS the
+    // PALETTE-COMPOSITION round's `header_gap` — a slab of negative space after
+    // the query/facet header that reads as the divider (no drawn rule). The gap
+    // is realized in the SHAPED buffer by inflating the last header line's
+    // height by the same `header_gap`, so this formula and the pixels agree.
+    text_top + header_rows as f32 * line_height + header_gap + row as f32 * line_height
 }
 
 /// The ONE bounded scroll-WINDOW owner shared by EVERY summoned picker — the flat
@@ -369,6 +389,7 @@ pub(super) fn scroll_window(len: usize, sel: usize, scroll_hint: usize, max: usi
 pub(super) fn overlay_row_of(
     text_top: f32,
     header_rows: usize,
+    header_gap: f32,
     line_height: f32,
     py: f32,
 ) -> Option<usize> {
@@ -376,8 +397,9 @@ pub(super) fn overlay_row_of(
         return None;
     }
     // Candidate row 0's top is `overlay_row_top(.., 0, ..)` — the exact inverse of
-    // the forward formula, so it snaps to the same band the highlight draws.
-    let first_top = overlay_row_top(text_top, header_rows, 0, line_height);
+    // the forward formula (header_gap folded in), so it snaps to the same band
+    // the highlight draws.
+    let first_top = overlay_row_top(text_top, header_rows, header_gap, 0, line_height);
     if py < first_top {
         return None;
     }
@@ -402,6 +424,7 @@ pub(super) fn overlay_row_index(
     text_top: f32,
     line_height: f32,
     header_rows: usize,
+    header_gap: f32,
     visible: usize,
     top_idx: usize,
     n_items: usize,
@@ -414,7 +437,7 @@ pub(super) fn overlay_row_index(
     if px < card_x || px > card_x + card_w {
         return None;
     }
-    let vis = overlay_row_of(text_top, header_rows, line_height, py)?;
+    let vis = overlay_row_of(text_top, header_rows, header_gap, line_height, py)?;
     if vis >= visible {
         return None;
     }
@@ -586,13 +609,13 @@ mod hit_tests {
     const LH: f32 = 24.0;
 
     fn hit(px: f32, py: f32, visible: usize, top_idx: usize, n: usize) -> Option<usize> {
-        // The flat/nav pickers: one header row (the query line).
-        overlay_row_index(CARD_X, CARD_W, TEXT_TOP, LH, 1, visible, top_idx, n, px, py)
+        // The flat/nav pickers: one header row (the query line), no header gap.
+        overlay_row_index(CARD_X, CARD_W, TEXT_TOP, LH, 1, 0.0, visible, top_idx, n, px, py)
     }
 
     fn hit_spell(px: f32, py: f32, visible: usize, top_idx: usize, n: usize) -> Option<usize> {
         // The contextual spell panel: NO query line, so rows start at `text_top`.
-        overlay_row_index(CARD_X, CARD_W, TEXT_TOP, LH, 0, visible, top_idx, n, px, py)
+        overlay_row_index(CARD_X, CARD_W, TEXT_TOP, LH, 0, 0.0, visible, top_idx, n, px, py)
     }
 
     #[test]
@@ -658,7 +681,7 @@ mod hit_tests {
     // the theme branch then reads out of its interleaved plan. `header_rows == 2` for
     // the theme picker (the query line + the lens strip).
     fn theme_row(py: f32) -> Option<usize> {
-        overlay_row_of(TEXT_TOP, 2, LH, py)
+        overlay_row_of(TEXT_TOP, 2, 0.0, LH, py)
     }
 
     #[test]
@@ -679,15 +702,20 @@ mod hit_tests {
         // The forward `row → y` owner and the inverse `y → row` snap to the same band:
         // sampling the exact top of display row `r` (for any header config) maps back
         // to `r`. Sweeps the three real header counts (0 spell, 1 flat/nav, 2 theme).
+        // Also sweep a range of header GAPS (the PALETTE-COMPOSITION round's
+        // divider): the forward/inverse owners must agree for ANY gap, since the
+        // rendered candidate rows and the hit-test both fold it in identically.
         for &header_rows in &[0usize, 1, 2] {
-            for r in 0usize..8 {
-                let top = overlay_row_top(TEXT_TOP, header_rows, r, LH);
-                assert_eq!(overlay_row_of(TEXT_TOP, header_rows, LH, top), Some(r));
-                // A hair inside the band (never at the next row's top) still resolves `r`.
-                assert_eq!(
-                    overlay_row_of(TEXT_TOP, header_rows, LH, top + LH * 0.5),
-                    Some(r)
-                );
+            for &gap in &[0.0f32, 5.0, 13.0] {
+                for r in 0usize..8 {
+                    let top = overlay_row_top(TEXT_TOP, header_rows, gap, r, LH);
+                    assert_eq!(overlay_row_of(TEXT_TOP, header_rows, gap, LH, top), Some(r));
+                    // A hair inside the band (never the next row's top) still resolves `r`.
+                    assert_eq!(
+                        overlay_row_of(TEXT_TOP, header_rows, gap, LH, top + LH * 0.5),
+                        Some(r)
+                    );
+                }
             }
         }
     }
@@ -699,7 +727,7 @@ mod hit_tests {
         // same `overlay_row_of` inverse), so `overlay_row_top` and the hit-test agree.
         let n = 8;
         for r in 0usize..n {
-            let top = overlay_row_top(TEXT_TOP, 1, r, LH);
+            let top = overlay_row_top(TEXT_TOP, 1, 0.0, r, LH);
             assert_eq!(hit(500.0, top, n, 0, n), Some(r));
         }
     }

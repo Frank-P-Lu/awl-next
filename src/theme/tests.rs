@@ -5,7 +5,52 @@
 //! lives in moved.
 
 use super::*;
-use super::derive::SELECTED_BAND_STEPS;
+use super::derive::{OVERLAY_SELROW_EXTRA_STEPS, SELECTED_BAND_STEPS};
+
+/// PALETTE-COMPOSITION round (item 5): the picker's selected-row band
+/// ([`overlay_selected_band`]) is the shared [`surface_selected`] climbed
+/// [`OVERLAY_SELROW_EXTRA_STEPS`] FURTHER up the SAME surface ramp — a stronger
+/// VALUE step, in the ramp's own direction, never a new hue (DESIGN §3/§5; the
+/// distinguishability sweep is the law that polices its visibility). The shared
+/// band the HUD/menu borders read is untouched.
+#[test]
+fn overlay_selected_band_is_a_stronger_value_step_never_a_hue() {
+    let _g = crate::testlock::serial();
+    assert!(OVERLAY_SELROW_EXTRA_STEPS > 0, "the round strengthens the band by default");
+    for world in ["Kingfisher", "Saltpan", "Firetail", "Tawny"] {
+        let t = set_active_by_name(world).unwrap();
+        assert_ne!(t.base_200, t.base_300, "{world}: ordinary (non-collapsed) ramp");
+        let shared = surface_selected();
+        let band = overlay_selected_band();
+        // Per channel: the overlay band moves in the SAME direction the ramp step
+        // does (value-only, no hue reversal) and is at least as far as the shared
+        // band (stronger-or-equal, gamut-clamp permitting).
+        let chans = [
+            (t.base_200.r, t.base_300.r, shared.r, band.r),
+            (t.base_200.g, t.base_300.g, shared.g, band.g),
+            (t.base_200.b, t.base_300.b, shared.b, band.b),
+        ];
+        for (lo, hi, sh, bd) in chans {
+            let d = (hi as i32 - lo as i32).signum();
+            let band_delta = bd as i32 - hi as i32;
+            let shared_delta = sh as i32 - hi as i32;
+            assert!(band_delta * d >= 0, "{world}: band stays in the ramp direction");
+            assert!(
+                band_delta * d >= shared_delta * d,
+                "{world}: overlay band is >= the shared band's step (stronger-or-equal)"
+            );
+        }
+    }
+    // Non-triviality: on a dark world with ramp headroom the strengthening is
+    // STRICT (the extra step actually moves the band).
+    set_active_by_name("Kingfisher").unwrap();
+    assert_ne!(
+        overlay_selected_band(),
+        surface_selected(),
+        "Kingfisher: the strengthened band differs from the shared band"
+    );
+    set_active(DEFAULT_THEME);
+}
 
 
 #[test]
@@ -1624,6 +1669,7 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 },
                 title_style: TitleStyle::InlinePrefix,
                 page_frame: PageFrame::Line { weight_px: 2.0 },
+                card_anchor: model::CardAnchor::TopLeft,
             },
             "Tawny" | "Mopoke" | "Potoroo" | "Gumtree" | "Bilby" | "Saltpan" | "Quokka"
             | "Undertow" | "Kingfisher" | "Outback" => RenderCaps::DEFAULT,
