@@ -1312,6 +1312,110 @@ mod tests {
         assert!(res.intercepts.is_empty());
     }
 
+    // ── HERMETIC SCENARIO FILESYSTEM: the strict door's sandbox ──
+    //
+    // `crate::scenario` owns the seam (its own tests pin seeding + install);
+    // these pin the COMPOSITION with the replay engine: a strict scenario's
+    // writes land in the sandbox and its external handoffs stay intercepted,
+    // while the REAL files keep every byte.
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn hermetic_scenario_save_lands_in_the_sandbox_never_on_real_disk() {
+        // Arrange a REAL input file (the storyboard input), enter the sandbox
+        // through the ONE production door, then strict-replay an edit + save:
+        // the sandboxed copy updates, the real file keeps every byte — the
+        // hermetic inverse of CAPTURE.md's legacy "save writes to disk" caveat.
+        let dir = std::env::temp_dir().join(format!("awl-hermetic-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("doc.md");
+        std::fs::write(&input, "alpha\n").unwrap();
+        {
+            // FsGuard(current) restores whatever the install swaps in, even on
+            // a failed assert, so no sibling test ever sees the sandbox.
+            let _restore = crate::fs::FsGuard::install(crate::fs::active());
+            crate::scenario::install_hermetic_fs(Some(&input), None, Some(&dir));
+            let mut buffer = load_buffer(&Some(input.clone()));
+            assert_eq!(buffer.text(), "alpha\n", "the sandbox seeded the real input's bytes");
+            let keys = keyspec::parse_keys("X s-s").unwrap();
+            let res = replay_keys_mode(
+                crate::replay::Mode::Strict,
+                &mut buffer,
+                &keys,
+                &[],
+                &dir,
+                None,
+                &dir,
+                &Config::empty(),
+                None,
+            )
+            .expect("an edit + save crosses no unsupported seam");
+            assert!(res.intercepts.is_empty());
+            assert_eq!(
+                crate::fs::active().read_to_string(&input).unwrap(),
+                "Xalpha\n",
+                "the replayed save landed in the sandbox"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(&input).unwrap(),
+            "alpha\n",
+            "the REAL file keeps every byte a hermetic scenario 'saved'"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn hermetic_scenario_witnesses_the_url_handoff_as_an_intercept() {
+        // The phase-1 intercept seam COMPOSED with the sandbox: a strict
+        // scenario driving "open link at caret" records the handoff — URL
+        // included — performs nothing, and leaves both filesystems byte-
+        // identical (the sandbox untouched beyond its seed, the real file
+        // untouched entirely).
+        let dir = std::env::temp_dir().join(format!("awl-hermetic-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("linked.md");
+        let body = "[a](https://awl.example/doc) tail\n";
+        std::fs::write(&input, body).unwrap();
+        {
+            let _restore = crate::fs::FsGuard::install(crate::fs::active());
+            crate::scenario::install_hermetic_fs(Some(&input), None, Some(&dir));
+            let mut buffer = load_buffer(&Some(input.clone()));
+            // Right lands the caret inside the link, C-c C-o follows it.
+            let keys = keyspec::parse_keys("Right C-c C-o").unwrap();
+            let res = replay_keys_mode(
+                crate::replay::Mode::Strict,
+                &mut buffer,
+                &keys,
+                &[],
+                &dir,
+                None,
+                &dir,
+                &Config::empty(),
+                None,
+            )
+            .expect("an intercepted handoff is legal under strict");
+            assert_eq!(
+                res.intercepts,
+                vec![crate::replay::Intercept {
+                    effect: "follow_link",
+                    detail: "https://awl.example/doc".into()
+                }],
+                "the handoff was observed and recorded, not performed"
+            );
+            assert_eq!(
+                crate::fs::active().read_to_string(&input).unwrap(),
+                body,
+                "the sandbox copy is untouched (following a link edits nothing)"
+            );
+        }
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), body, "the real file too");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── SHARED SEARCH/REPLACE INPUT ROUTING: the replay-side search guard ──
     //
     // While the isearch panel is open the replay loop consumes EVERY chord

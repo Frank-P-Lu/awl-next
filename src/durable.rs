@@ -403,8 +403,17 @@ mod tests {
             ("index.rs", 4),
             // Two of these are the fresh-oracle Goto regression's own fixture
             // seeds (`goto_switch_mid_replay_reshapes_the_oracle_to_the_
-            // arriving_buffer`) — temp-dir test files, never a durable store.
-            ("main/run.rs", 15),
+            // arriving_buffer`) — temp-dir test files, never a durable store;
+            // two more are the hermetic-scenario tests' real-disk inputs
+            // (seeded precisely to prove the sandbox never writes them back).
+            ("main/run.rs", 17),
+            // ONE production site (`build_sandbox`: seeding the hermetic
+            // in-memory sandbox INSTANCE before it becomes the active backend
+            // — `write_atomic` routes through `fs::active()`, which at seed
+            // time is still the real disk, so the direct instance write is
+            // the only correct call; nothing durable, nothing on disk) + four
+            // test seeds/asserts in its own `#[cfg(test)]` module.
+            ("scenario.rs", 5),
         ];
         let expected_map: std::collections::BTreeMap<String, usize> =
             expected.iter().map(|(f, n)| (f.to_string(), *n)).collect();

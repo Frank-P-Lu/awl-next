@@ -60,7 +60,8 @@ riding it) never leaves a later motion on stale wrap geometry.
 
 - **Save writes to disk.** Replaying `C-x C-s` actually saves the target file
   during a headless capture. Don't replay save/quit chords against files you
-  don't want mutated.
+  don't want mutated. (Under `--strict-replay` the save lands in the hermetic
+  in-memory sandbox instead and the real file keeps every byte — see below.)
 - **Unbound chords are silent no-ops** (e.g. `C-Q` → `Ignore`, dropped); only
   structurally invalid tokens (e.g. `frobnicate`) error. (Under
   `--strict-replay` an unbound chord aborts instead — see below.)
@@ -124,6 +125,28 @@ byte-identically to the permissive run. The plain `--keys` path stays
 permissive but now WARNS on stderr when it crosses an Unsupported or
 Intercepted seam; intercepted handoffs are recorded in the replay result under
 both modes (the future trace file's seam).
+
+**Hermetic by default (the scenario filesystem).** A strict run swaps the
+process filesystem seam (`fs::active()`) to an in-memory SANDBOX before its
+config even loads — `src/scenario.rs` is the one owner, with exactly one
+production door (`args::parse_args`'s strict arm). The sandbox is seeded from
+exactly the inputs the command line names: the launch file's bytes and an
+explicitly-passed config (`--config` / `$AWL_CONFIG`). Everything downstream
+routes through it — the config load, the buffer open, the `.git` probe (so the
+read-only `git` subprocesses never spawn), the index walk, a replayed save, a
+History read, a Settings open. A strict scenario therefore NEVER reads the
+user's implicit `~/.config/awl/config.toml` (an un-seeded path degrades to
+pure defaults) and NEVER writes any real file besides the PNG + JSON it was
+asked to produce: a replayed `Cmd-S` lands in the sandbox and the real file
+keeps every byte. External handoffs stay observed-not-performed (Intercepted,
+above), so a scenario run's only real side effects are its own artifacts.
+`tests/hermetic_canary.rs` proves the whole contract on the real binary: a
+save-bearing strict scenario under a canary HOME/XDG leaves the entire canary
+tree byte-identical, while the legacy leg (no `--strict-replay`) still reads
+the user's config off the real disk — hermeticity is the SCENARIO default,
+never a regression of the one-off permissive harness. Storyboards (the later
+phase) seed MORE files — fixtures, config, history — through the same
+`scenario::build_sandbox` door, not a new seam.
 
 ## Deterministic timeline capture (`--capture-timeline`)
 

@@ -90,6 +90,10 @@ mod recent_files;
 mod recents;
 mod render;
 mod replay;
+// The hermetic scenario filesystem (the strict-replay sandbox) — native-only:
+// wasm has no CLI capture modes and installs `WebFs` instead.
+#[cfg(not(target_arch = "wasm32"))]
+mod scenario;
 mod script;
 mod search;
 mod selection;

@@ -68,7 +68,10 @@ pub(crate) enum Mode {
         /// Unsupported effect, or a missing layout oracle — naming the exact
         /// offender — instead of the legacy permissive warn-and-continue. The
         /// scenario-runner default the later harness phases plumb through;
-        /// see `crate::replay`'s module doc.
+        /// see `crate::replay`'s module doc. Also HERMETIC: by the time this
+        /// Mode exists the process fs has been swapped to the seeded sandbox
+        /// (`crate::scenario::install_hermetic_fs`, called before the config
+        /// loaded), so the whole run never touches the user's real files.
         strict: bool,
     },
     /// Deterministic one-frame capture of a caret MID-GLIDE (dropped to the
@@ -744,7 +747,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\
                      \x20 --wait              windowed editor only: single-instance daemon — hand `file` to an already-running awl and block until C-x # finishes it (EDITOR=awl --wait for git)\n\
                      \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture\n\
-                     \x20 --strict-replay     with --screenshot --keys: abort (naming the offender) on an unbound chord, a live-only effect the replay can't perform, or a missing layout oracle"
+                     \x20 --strict-replay     with --screenshot --keys: abort (naming the offender) on an unbound chord, a live-only effect the replay can't perform, or a missing layout oracle; runs HERMETIC (an in-memory fs seeded from the named file + --config — a replayed save never touches the real file, the user's own config/notes/history are never read or written)"
                 );
                 std::process::exit(0);
             }
@@ -808,9 +811,34 @@ pub(crate) fn parse_args() -> Result<Mode> {
             unused.join(", ")
         );
     }
-    // Load the persistent CONFIG (flag/$AWL_CONFIG/XDG path). Absent file = all
-    // defaults, so this is purely additive. Parse `--keys` THROUGH the config's
-    // keybinding overrides so a replay exercises rebound chords.
+    // `--strict-replay` gates a `--keys` replay, and only the plain
+    // `--screenshot` mode threads the strict engine (the motion/timeline/held
+    // variants stay permissive one-offs); refuse the combinations that would
+    // silently ignore it. Validated BEFORE the hermetic install below so a
+    // refused flag combination never swaps the process filesystem first.
+    if strict_replay {
+        if keys_spec.is_none() {
+            bail!("--strict-replay requires --keys (there is no replay to be strict about)");
+        }
+        if kind != CaptureKind::Screenshot {
+            bail!("--strict-replay only applies to --screenshot (not motion/timeline/held captures)");
+        }
+    }
+    // HERMETIC SCENARIO FILESYSTEM — the ONE production door (`crate::scenario`'s
+    // module doc is the contract): a strict (scenario) run swaps the process fs
+    // to an in-memory sandbox seeded from exactly the CLI-named inputs BEFORE
+    // the config loads, so the load below — and every fs consumer after it —
+    // reads the sandbox, never the user's real files. The legacy permissive
+    // paths never install it (real-fs behavior kept byte-for-byte).
+    #[cfg(not(target_arch = "wasm32"))]
+    if strict_replay {
+        crate::scenario::install_hermetic_fs(file.as_deref(), config_arg.as_deref(), root.as_deref());
+    }
+    // Load the persistent CONFIG (flag/$AWL_CONFIG/XDG path — resolved inside
+    // the hermetic sandbox for a strict run, where an un-seeded path degrades
+    // to pure defaults). Absent file = all defaults, so this is purely
+    // additive. Parse `--keys` THROUGH the config's keybinding overrides so a
+    // replay exercises rebound chords.
     let config = Config::load(config::config_path(config_arg));
     // STICKY PREFERENCES: restore the remembered THEME / PAGE / CARET onto the
     // process-globals (the same globals the flags set), honouring flag > config —
@@ -838,18 +866,6 @@ pub(crate) fn parse_args() -> Result<Mode> {
     // CAPTURE GATE).
     if wait_flag && out.is_some() {
         bail!("--wait only applies to the windowed editor (no capture mode)");
-    }
-    // `--strict-replay` gates a `--keys` replay, and only the plain
-    // `--screenshot` mode threads the strict engine (the motion/timeline/held
-    // variants stay permissive one-offs); refuse the combinations that would
-    // silently ignore it.
-    if strict_replay {
-        if keys_spec.is_none() {
-            bail!("--strict-replay requires --keys (there is no replay to be strict about)");
-        }
-        if kind != CaptureKind::Screenshot {
-            bail!("--strict-replay only applies to --screenshot (not motion/timeline/held captures)");
-        }
     }
     // STRUCTURAL parse only — a garbled token still errors right here. The
     // chords stay UNRESOLVED: the replay loop resolves them one press at a time
