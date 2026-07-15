@@ -119,15 +119,17 @@ pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 /// The signed "distance outside the no-lava zones" at pixel x (px): positive out
 /// in a lava-bearing margin, <= 0 inside a zone the field must vanish from.
 /// Ordinarily the one zone is the writing column `[col_left, col_right]` (both
-/// edges via `max()`). With the LEFT-MARGIN RAIL carved (`rail_carved` —
-/// left-margin ink is actually DRAWN this frame: the margin outline or the
-/// bottom-left gutter, see `TextPipeline::lava_rail_carved`) the whole LEFT
-/// margin joins the no-lava zone: only the RIGHT margin's distance counts, so
-/// the rail's dim entries sit on the flat ground at every phase and the lamp
-/// keeps the right margin (both surfaces hiding reclaims the full margin). The
-/// carve also feeds the Glow treatment's `could_glow` through this same
-/// distance, so no unexplained edge-bleed tints the page next to a flat rail.
-/// MUST match `shaders/lava.wgsl`'s `dist_outside`.
+/// edges via `max()`). With the LEFT-MARGIN RAIL carved (`rail_carved` — the
+/// margin OUTLINE is actually DRAWN this frame, a HEADED doc, see
+/// `TextPipeline::lava_rail_carved`) the whole LEFT margin joins the no-lava
+/// zone: only the RIGHT margin's distance counts, so the outline's dim entries
+/// sit on the flat ground at every phase and the lamp keeps the right margin
+/// (the outline hiding reclaims the full margin). The bottom-left GUTTER no
+/// longer flattens the whole margin — it drives the bounded
+/// [`gutter_corner_dist_outside`] carve instead, so an ordinary (gutter-only)
+/// doc keeps BOTH margins. The carve also feeds the Glow treatment's
+/// `could_glow` through this same distance, so no unexplained edge-bleed tints
+/// the page next to a flat rail. MUST match `shaders/lava.wgsl`'s `dist_outside`.
 #[allow(dead_code)]
 pub fn rail_dist_outside(x: f32, col_left: f32, col_right: f32, rail_carved: bool) -> f32 {
     if rail_carved {
@@ -158,6 +160,47 @@ pub fn lava_mask(x: f32, col_left: f32, col_right: f32, gap: f32, rail_carved: b
 #[allow(dead_code)]
 pub fn column_mask(x: f32, col_left: f32, col_right: f32, gap: f32) -> f32 {
     lava_mask(x, col_left, col_right, gap, false)
+}
+
+/// The signed "distance outside the GUTTER's local corner rect" at pixel
+/// `(x, y)` (px): <= 0 inside the bounded bottom-left region the gutter owns,
+/// positive out beyond it. `rect` is `[left, top, right, bottom]`. The per-axis
+/// outside distances (negative inside the span) are combined by `max`, so the
+/// result is negative iff BOTH axes are inside — the box interior — and its
+/// magnitude just outside a face is the perpendicular distance to that face.
+/// Unlike [`rail_dist_outside`] (which flattens the WHOLE left margin for a
+/// headed doc), this carves only a bounded corner, leaving the rest of both
+/// margins their lamp. MUST match `shaders/lava.wgsl`'s `gutter_dist_outside`.
+#[allow(dead_code)]
+pub fn gutter_corner_dist_outside(x: f32, y: f32, rect: [f32; 4]) -> f32 {
+    let gx = (rect[0] - x).max(x - rect[2]);
+    let gy = (rect[1] - y).max(y - rect[3]);
+    gx.max(gy)
+}
+
+/// The full 2-D lava coverage mask at pixel `(x, y)`: the 1-D margin mask
+/// ([`lava_mask`] — the writing column plus, when `rail_carved`, the whole left
+/// margin) further multiplied by the GUTTER's local corner carve when
+/// `gutter_rect` is `Some` (the field vanishes over the bounded bottom-left
+/// region, feathered over `gap` px at its top/right faces). This is the exact
+/// SHIP-path mirror of `shaders/lava.wgsl`'s `fs_main` mask (probe mode 0): with
+/// `gutter_rect = None` it is byte-for-byte [`lava_mask`]. MUST stay in lockstep
+/// with the shader.
+#[allow(dead_code)]
+pub fn lava_mask_2d(
+    x: f32,
+    y: f32,
+    col_left: f32,
+    col_right: f32,
+    gap: f32,
+    rail_carved: bool,
+    gutter_rect: Option<[f32; 4]>,
+) -> f32 {
+    let base = lava_mask(x, col_left, col_right, gap, rail_carved);
+    match gutter_rect {
+        Some(r) => base * smoothstep(0.0, gap.max(1.0), gutter_corner_dist_outside(x, y, r)),
+        None => base,
+    }
 }
 
 /// The ANIMATED center (UV space) of base blob `i` at `phase` (in cycles) — the
@@ -357,6 +400,71 @@ pub fn env_phase() -> Option<f32> {
     spec().as_ref().map(|(_, phase)| *phase)
 }
 
+// --- The dev-only BOTH-SIDES probe knob (AWL_LAVA_BOTH=...) --------------------
+//
+// Mirrors the `AWL_LAVA` / `AWL_CJK_FORCE` precedent: read ONCE at startup,
+// memoized, a TOTAL no-op unless set (`LavaBoth::Off`), so ship + headless
+// determinism is untouched when absent. Auditions three ways a HEADED (outline)
+// doc could go both-sides — treatments that ship NOTHING; the human eyeballs the
+// gallery captures before any of them is chosen (or none).
+//   AWL_LAVA_BOTH=plate   solid ground plate behind just the rail entries
+//   AWL_LAVA_BOTH=band    glow-suppression + a local band carve around the rail
+//   AWL_LAVA_BOTH=bleed   FULL-BLEED: lava everywhere incl. under the column,
+//                         heavily value-dimmed there (the two-layer-model tension
+//                         made visible; GPU cost is just the mask multiply)
+
+/// The both-sides gallery probe treatment, chosen by `AWL_LAVA_BOTH`. `Off` in
+/// every ship + headless run (env absent), so the whole probe path is inert.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LavaBoth {
+    Off,
+    Plate,
+    Band,
+    Bleed,
+}
+
+impl LavaBoth {
+    /// The uniform-carried `mode` float the shader dispatches on (0 ship / 1
+    /// plate / 2 band / 3 bleed). MUST match `shaders/lava.wgsl`'s `probe`
+    /// dispatch.
+    pub fn mode(self) -> f32 {
+        match self {
+            LavaBoth::Off => 0.0,
+            LavaBoth::Plate => 1.0,
+            LavaBoth::Band => 2.0,
+            LavaBoth::Bleed => 3.0,
+        }
+    }
+}
+
+fn parse_both(raw: &str) -> LavaBoth {
+    match raw.trim() {
+        "plate" => LavaBoth::Plate,
+        "band" => LavaBoth::Band,
+        "bleed" => LavaBoth::Bleed,
+        _ => LavaBoth::Off,
+    }
+}
+
+/// The both-sides probe treatment for this run — `LavaBoth::Off` (a total no-op)
+/// unless `AWL_LAVA_BOTH` was set to a recognized value at startup. Read once,
+/// memoized (the `AWL_LAVA` precedent).
+pub fn probe_both() -> LavaBoth {
+    static ONCE: OnceLock<LavaBoth> = OnceLock::new();
+    *ONCE.get_or_init(|| {
+        std::env::var("AWL_LAVA_BOTH")
+            .ok()
+            .as_deref()
+            .map(parse_both)
+            .unwrap_or(LavaBoth::Off)
+    })
+}
+
+/// The full-bleed under-column alpha floor (probe `bleed` only): the faint,
+/// heavily value-dimmed coverage the lamp keeps UNDER the writing column so the
+/// document floats over one continuous field. Gallery-only.
+pub const PROBE_COLUMN_DIM: f32 = 0.14;
+
 // --- The wgpu pipeline --------------------------------------------------------
 
 /// Uniform globals. MUST match `Globals` in `shaders/lava.wgsl`.
@@ -367,11 +475,17 @@ struct Globals {
     field_viewport: [f32; 2],
     blob_count: u32,
     dither: u32,
-    /// 1 = left-margin INK (the margin OUTLINE or the bottom-left GUTTER) is
-    /// drawn this frame, so the whole LEFT margin is its rail — carved out of
-    /// the field mask (see [`rail_dist_outside`]).
+    /// 1 = the margin OUTLINE is drawn this frame (a HEADED doc), so the whole
+    /// LEFT margin is its rail — carved out of the field mask (the conservative
+    /// FULL carve, see [`rail_dist_outside`]). The bottom-left GUTTER no longer
+    /// gates this full carve; it drives the LOCAL corner carve below instead, so
+    /// an ordinary (gutter-only) doc keeps BOTH margins their lamp.
     rail: u32,
-    _pad: u32,
+    /// 1 = the bottom-left GUTTER is drawn this frame, so a bounded LOCAL corner
+    /// region around it ([`Globals::gutter_rect`]) is carved out of the field
+    /// mask while the rest of both margins keep the lamp. MUST match
+    /// `shaders/lava.wgsl`'s `gutter` gate + [`gutter_corner_dist_outside`].
+    gutter: u32,
     /// `[col_left_px, col_right_px, gap_px, mask_mode]` — `mask_mode` from
     /// [`LavaEdge::mask_mode`] (1.0 hard, 2.0 glow).
     margin: [f32; 4],
@@ -381,6 +495,20 @@ struct Globals {
     blob_lo: [f32; 4],
     blob_hi: [f32; 4],
     blobs: [[f32; 4]; MAX_BLOBS],
+    /// The GUTTER's local corner carve rect `[left, top, right, bottom]` (px) —
+    /// the bounded bottom-left region the field vanishes from when `gutter == 1`.
+    /// All-zero when there is no gutter carve. See [`gutter_corner_dist_outside`].
+    gutter_rect: [f32; 4],
+    /// PROBE-ONLY (env `AWL_LAVA_BOTH`, gallery-only, all-zero in every ship
+    /// frame): the OUTLINE rail's own band rect `[left, top, right, bottom]`
+    /// (px), consumed by the `plate` / `band` gallery treatments so a HEADED doc
+    /// can be auditioned both-sides. Inert unless the probe knob is set.
+    outline_rect: [f32; 4],
+    /// PROBE-ONLY (env `AWL_LAVA_BOTH`): `[mode, column_dim, 0, 0]` — `mode` is
+    /// [`LavaBoth`] as a float (0 ship / 1 plate / 2 band / 3 bleed); `column_dim`
+    /// is the full-bleed under-column alpha floor. `mode == 0.0` in every ship
+    /// frame, so the whole probe block is inert unless the env knob is set.
+    probe: [f32; 4],
 }
 
 /// The LAVA-LAMP metaball ground pipeline: one fullscreen triangle, drawn right
@@ -493,11 +621,14 @@ impl LavaPipeline {
     /// Upload this frame's globals from the resolved lava `params` (`None` for
     /// every non-lava world → the pipeline goes INACTIVE and draws nothing), the
     /// live column bounds (`col_left`/`col_w` from `TextPipeline::column_left`/
-    /// `column_width`, the one geometry owner), whether the left margin's rail
-    /// is carved out of the mask this frame (`rail_carved`, from
-    /// `TextPipeline::lava_rail_carved` — the outline's and the gutter's own
-    /// draw gates, so the carve can never disagree with what the frame draws),
-    /// and the effective `phase`.
+    /// `column_width`, the one geometry owner), whether the whole LEFT margin is
+    /// carved out of the mask this frame (`rail_carved`, from
+    /// `TextPipeline::lava_rail_carved` — the margin OUTLINE's own draw gate, so
+    /// the full carve can never disagree with what the frame draws), the GUTTER's
+    /// bounded LOCAL corner carve rect (`gutter_rect`, `Some` iff the gutter
+    /// draws — from `TextPipeline::lava_gutter_carve_rect`), the effective
+    /// `phase`, and the gallery-only `probe` treatment (`LavaBoth::Off` in every
+    /// ship frame; its `outline_rect` band feeds the `plate`/`band` auditions).
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
@@ -508,6 +639,9 @@ impl LavaPipeline {
         col_left: f32,
         col_w: f32,
         rail_carved: bool,
+        gutter_rect: Option<[f32; 4]>,
+        probe: LavaBoth,
+        outline_rect: Option<[f32; 4]>,
         params: Option<(Srgb, Srgb, Srgb, LavaEdge, bool)>,
         phase: f32,
     ) {
@@ -532,13 +666,16 @@ impl LavaPipeline {
             blob_count: BACKDROP_BLOBS.len() as u32,
             dither: dithered as u32,
             rail: rail_carved as u32,
-            _pad: 0,
+            gutter: gutter_rect.is_some() as u32,
             margin: [col_left, col_left + col_w, MARGIN_GAP_PX, edge.mask_mode()],
             anim: [phase, 0.0, 0.0, 0.0],
             ground: srgb_u8_to_linear(ground),
             blob_lo: srgb_u8_to_linear(blob_lo),
             blob_hi: srgb_u8_to_linear(blob_hi),
             blobs,
+            gutter_rect: gutter_rect.unwrap_or([0.0; 4]),
+            outline_rect: outline_rect.unwrap_or([0.0; 4]),
+            probe: [probe.mode(), PROBE_COLUMN_DIM, 0.0, 0.0],
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
     }
@@ -787,6 +924,81 @@ mod tests {
                 "right-edge glow distance unchanged at x={x}"
             );
         }
+    }
+
+    /// THE GUTTER LOCAL CORNER CARVE at the mask seam (the shader mirror,
+    /// `lava_mask_2d` / `gutter_corner_dist_outside`): a bounded bottom-left rect
+    /// is carved to zero INSIDE its bounds, while OUTSIDE (the upper-left margin
+    /// and the right margin) the lamp is byte-for-byte the un-carved mask — the
+    /// whole point, so an ordinary (gutter-only) doc keeps BOTH margins. Unlike
+    /// the outline's full carve, the left margin ABOVE the corner band is
+    /// untouched.
+    #[test]
+    fn gutter_corner_carve_zeroes_only_its_bounds_and_keeps_both_margins() {
+        let (col_left, col_right, gap) = (300.0, 900.0, MARGIN_GAP_PX);
+        // A bottom-left corner rect: x in [0, 260], y in [820, 1000] (a bottom
+        // band a shade shy of the column, the gutter's own box).
+        let rect = [0.0, 820.0, 260.0, 1000.0];
+        // `None` is the exact 1-D identity everywhere (no gutter → nothing new).
+        for &(x, y) in &[(20.0, 900.0), (150.0, 400.0), (600.0, 500.0), (1000.0, 900.0)] {
+            assert_eq!(
+                lava_mask_2d(x, y, col_left, col_right, gap, false, None),
+                column_mask(x, col_left, col_right, gap),
+                "gutter None is the plain column mask at ({x},{y})"
+            );
+        }
+        // INSIDE the corner rect (well past the feathered faces): the mask is 0,
+        // even where the un-carved left margin is FULL strength.
+        for &(x, y) in &[(20.0, 970.0), (120.0, 900.0), (200.0, 860.0)] {
+            assert_eq!(column_mask(x, col_left, col_right, gap), 1.0);
+            assert_eq!(
+                lava_mask_2d(x, y, col_left, col_right, gap, false, Some(rect)),
+                0.0,
+                "the gutter corner band holds no lava at ({x},{y})"
+            );
+        }
+        // ABOVE the band in the LEFT margin: the lamp is untouched (both margins
+        // reclaimed — the corner carve is LOCAL, not the whole margin).
+        for &(x, y) in &[(20.0, 200.0), (150.0, 400.0), (120.0, 600.0)] {
+            assert_eq!(
+                lava_mask_2d(x, y, col_left, col_right, gap, false, Some(rect)),
+                column_mask(x, col_left, col_right, gap),
+                "the left margin above the gutter band keeps its lamp at ({x},{y})"
+            );
+        }
+        // The RIGHT margin, at every y, is byte-identical to the un-carved mask.
+        for &(x, y) in &[(950.0, 900.0), (1000.0, 970.0), (1100.0, 500.0)] {
+            assert_eq!(
+                lava_mask_2d(x, y, col_left, col_right, gap, false, Some(rect)),
+                column_mask(x, col_left, col_right, gap),
+                "the right margin keeps its lamp beside a gutter corner carve at ({x},{y})"
+            );
+        }
+    }
+
+    /// The gutter corner distance is a true box "outside distance": <= 0 strictly
+    /// inside, positive just outside each face, and it feathers the carve over
+    /// `gap` px at the top/right faces (the canvas-corner left/bottom faces sit
+    /// off-screen). Mirrors `shaders/lava.wgsl`'s `rect_dist_outside`.
+    #[test]
+    fn gutter_corner_dist_outside_is_a_box_signed_distance() {
+        let rect = [0.0, 820.0, 260.0, 1000.0];
+        // Deep interior: negative.
+        assert!(gutter_corner_dist_outside(120.0, 900.0, rect) < 0.0);
+        // Just outside the RIGHT face by 10px → +10 (top-face term is negative).
+        assert!((gutter_corner_dist_outside(270.0, 900.0, rect) - 10.0).abs() < 1e-4);
+        // Just outside the TOP face by 20px → +20 (right-face term is negative).
+        assert!((gutter_corner_dist_outside(120.0, 800.0, rect) - 20.0).abs() < 1e-4);
+        // A full gap past the top face → the mask has ramped to full lamp.
+        let (col_left, col_right, gap) = (300.0, 900.0, MARGIN_GAP_PX);
+        let above = 820.0 - gap - 1.0;
+        assert!(
+            (lava_mask_2d(120.0, above, col_left, col_right, gap, false, Some(rect))
+                - column_mask(120.0, col_left, col_right, gap))
+            .abs()
+                < 1e-4,
+            "a full gap above the corner band the lamp is back to full"
+        );
     }
 
     #[test]

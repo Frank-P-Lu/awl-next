@@ -6,6 +6,12 @@
 
 use super::*;
 
+/// The vertical breath (in LABEL rows) added ABOVE the gutter block when carving
+/// its local lava corner — a half-row so the feathered top face clears the top
+/// glyph. Read by [`TextPipeline::gutter_carve_rect`] and pinned by the
+/// gutter-corner bounds law (`theme::tests`).
+pub(in crate::render) const GUTTER_CARVE_BREATH: f32 = 0.5;
+
 impl TextPipeline {
     /// The page-mode GUTTER's fully decided layout for this frame: the available
     /// RIGHT-aligned box width (px), the filename AND the project line each
@@ -184,15 +190,41 @@ impl TextPipeline {
     /// Whether the page-mode GUTTER is actually DRAWN this frame — THE one
     /// visibility rule, read straight off [`Self::gutter_layout`]'s own full gate
     /// (page mode + a buffer name + a margin past the hard floor), never a
-    /// re-derivation. Exposed for the LAVA rail carve
-    /// ([`TextPipeline::lava_rail_carved`], `render/layers.rs`) — the gutter is
-    /// the SECOND left-margin ink surface (after the outline) whose presence
-    /// flattens the rail, so its `muted`/`faint` stack never swims in the lamp
-    /// (the lava follow-ups audit's gutter finding). Reading the SAME owner
-    /// `prepare_gutter`/`gutter_report` share means the carve can never disagree
-    /// with what the frame draws.
+    /// re-derivation. Exposed for the LAVA gutter corner carve
+    /// ([`TextPipeline::lava_gutter_carve_rect`], `render/layers.rs`). Reading the
+    /// SAME owner `prepare_gutter`/`gutter_report` share means the carve can never
+    /// disagree with what the frame draws.
     pub(in crate::render) fn gutter_visible(&self) -> bool {
         self.gutter_layout().is_some()
+    }
+
+    /// THE GUTTER'S LOCAL LAVA CARVE RECT `[left, top, right, bottom]` (px) — the
+    /// bounded bottom-left region the lava field vanishes from while the gutter
+    /// draws, so its `muted`/`faint` stack sits on flat ground while the REST of
+    /// both margins keep the lamp (an ordinary doc goes both-sides — the fix for
+    /// the gutter gating the whole-margin carve). Derived from the SAME
+    /// [`Self::gutter_layout`] owner `prepare_gutter` lays the block from, so the
+    /// carve exactly covers the drawn block:
+    ///
+    /// * `left = 0`, `right = avail` (the gutter's own box — the filename/project
+    ///   are RIGHT-aligned within `[0, avail]`, `avail` a small gap shy of the
+    ///   writing column), so the carve spans the block's full horizontal extent.
+    /// * `bottom = height` (the block is bottom-anchored an 8px inset up), `top =
+    ///   the block top minus a half-row breath` — the bottom band the two stacked
+    ///   LABEL rows occupy. `None` when the gutter is HIDDEN (nothing to carve).
+    ///
+    /// The half-row breath and the `+1.0` mirror `prepare_gutter`'s own box; the
+    /// [`GUTTER_CARVE_BREATH`] constant names the pad the bounds law reads.
+    pub(in crate::render) fn gutter_carve_rect(&self, height: u32) -> Option<[f32; 4]> {
+        let layout = self.gutter_layout()?;
+        let label = crate::markdown::type_scale::LABEL;
+        let lines = if layout.project.is_empty() { 1.0 } else { 2.0 };
+        let block_h = self.metrics.line_height * label * lines;
+        // `prepare_gutter` anchors the block bottom 8px up from the canvas bottom.
+        let block_top = height as f32 - block_h - 8.0;
+        let breath = self.metrics.line_height * label * GUTTER_CARVE_BREATH;
+        let top = (block_top - breath).max(0.0);
+        Some([0.0, top, layout.avail, height as f32])
     }
 
     /// The page-mode GUTTER state for the capture sidecar: `Some((name, project))`

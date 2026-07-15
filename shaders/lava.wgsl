@@ -31,13 +31,18 @@ struct Globals {
     field_viewport: vec2<f32>,
     blob_count: u32,
     dither: u32,
-    // THE LEFT-MARGIN RAIL CARVE: 1 when left-margin INK — the margin outline
-    // or the bottom-left gutter — is actually DRAWN this frame
-    // (`TextPipeline::lava_rail_carved`), making the whole LEFT margin its
-    // rail — another no-lava zone, so the ink's dim entries sit on the flat
-    // ground instead of inside the lamp. 0 (both surfaces hidden) reclaims the
-    // full margin. MUST match `lava::rail_dist_outside` (the Rust mirror).
+    // THE LEFT-MARGIN RAIL CARVE: 1 when the margin OUTLINE is DRAWN this frame
+    // (a HEADED doc — `TextPipeline::lava_rail_carved`), making the whole LEFT
+    // margin its rail — another no-lava zone, so the outline's dim entries sit on
+    // the flat ground instead of inside the lamp. 0 (outline hidden) reclaims the
+    // full margin. The bottom-left gutter no longer sets this — it drives the
+    // LOCAL corner carve below. MUST match `lava::rail_dist_outside`.
     rail: u32,
+    // THE GUTTER'S LOCAL CORNER CARVE: 1 when the bottom-left gutter is DRAWN this
+    // frame, so the bounded `gutter_rect` region is carved out of the field mask
+    // while the rest of BOTH margins keep the lamp (an ordinary doc goes both
+    // sides). MUST match `lava::gutter_corner_dist_outside` / `lava_mask_2d`.
+    gutter: u32,
     // MARGINS-ONLY mask, packed as one vec4 (16-byte aligned per WGSL's
     // uniform-address-space rules): [col_left_px, col_right_px, gap_px,
     // mask_mode] — mask_mode 1.0 = hard (fade before the edge), 2.0 = edge-glow
@@ -56,6 +61,16 @@ struct Globals {
     // fraction of viewport HEIGHT (round regardless of aspect); w = field weight.
     // The shader animates each blob's position from `anim.x` (see `blob_center`).
     blobs: array<vec4<f32>, 8>,
+    // The GUTTER's local corner carve rect [left, top, right, bottom] (px), used
+    // when `gutter == 1`. All-zero otherwise.
+    gutter_rect: vec4<f32>,
+    // PROBE-ONLY (env AWL_LAVA_BOTH, gallery-only): the OUTLINE rail band rect
+    // [left, top, right, bottom] (px) for the `plate`/`band` auditions. Inert
+    // when `probe.x == 0` (every ship frame).
+    outline_rect: vec4<f32>,
+    // PROBE-ONLY: [mode, column_dim, 0, 0] — mode 0 ship / 1 plate / 2 band /
+    // 3 bleed; column_dim = the full-bleed under-column alpha floor. 0 in ship.
+    probe: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -157,35 +172,73 @@ const GLOW_BLEED_PX: f32 = 56.0;
 const GLOW_FIELD_REF: f32 = 0.12;
 const GLOW_MAX: f32 = 0.16;
 
+// The signed "distance outside" an axis-aligned rect [left, top, right, bottom]
+// (px): <= 0 inside, positive out. Per-axis outside distance combined by max, so
+// negative iff BOTH axes are inside. MUST match `lava::gutter_corner_dist_outside`.
+fn rect_dist_outside(p: vec2<f32>, rect: vec4<f32>) -> f32 {
+    let dx = max(rect.x - p.x, p.x - rect.z);
+    let dy = max(rect.y - p.y, p.y - rect.w);
+    return max(dx, dy);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let x = in.px.x;
     let mode = g.margin.w;
+    let probe = u32(g.probe.x + 0.5);
     // `dist_outside`: positive in a lava-bearing margin, <= 0 inside a no-lava
     // zone. Ordinarily the one zone is the writing column (both edges via
-    // max()); with the LEFT-MARGIN RAIL carved (`g.rail == 1u` — the outline
-    // or the gutter draws there) the whole LEFT margin joins it — only the
+    // max()); with the LEFT-MARGIN RAIL carved (`g.rail == 1u` — the OUTLINE
+    // draws there, a headed doc) the whole LEFT margin joins it — only the
     // RIGHT margin's distance counts, so the rail renders the flat ground
     // (and, through `could_glow` below, sheds the left-edge bleed a flat rail
-    // would make read as an unexplained tint).
-    // The lava is ALWAYS margins-only, so `mode` is 1.0 (hard) or 2.0
+    // would make read as an unexplained tint). The `plate`/`band` probes
+    // deliberately DON'T full-carve — they let a headed doc keep both margins.
+    // The lava is ALWAYS margins-only (ship), so `mode` is 1.0 (hard) or 2.0
     // (glow) — never 0. `mask` = 0 at the zone edge, ramping to full strength
     // `gap` px further out into the margin, so the field fades entirely OUTSIDE
     // the zones and the page (and a carved rail) stays a clean flat ground.
     // MUST match `lava::rail_dist_outside`/`lava::lava_mask` (the Rust mirror).
     let dist_all = max(g.margin.x - x, x - g.margin.y);
-    let dist_outside = select(dist_all, x - g.margin.y, g.rail == 1u);
+    let rail_on = g.rail == 1u && probe != 1u && probe != 2u;
+    let dist_outside = select(dist_all, x - g.margin.y, rail_on);
     let gap = max(g.margin.z, 1.0);
-    let mask = smoothstep(0.0, gap, dist_outside);
+    var mask = smoothstep(0.0, gap, dist_outside);
+
+    // GUTTER LOCAL CORNER CARVE (ship): a bounded bottom-left region around the
+    // gutter block is carved from the mask, feathered over `gap` px at its
+    // top/right faces, while the rest of both margins keep the lamp. MUST match
+    // `lava::lava_mask_2d`.
+    if (g.gutter == 1u) {
+        mask = mask * smoothstep(0.0, gap, rect_dist_outside(in.px, g.gutter_rect));
+    }
+
+    // PROBE `band` (gallery-only): a local band carve around the OUTLINE rail,
+    // so a headed doc keeps both margins outside the rail's own band.
+    if (probe == 2u) {
+        mask = mask * smoothstep(0.0, gap, rect_dist_outside(in.px, g.outline_rect));
+    }
+
+    // FULL-BLEED probe: the lamp continues UNDER the writing column at a faint,
+    // heavily value-dimmed alpha floor, so the document floats over one field.
+    let bleed = probe == 3u;
 
     // EDGE-GLOW: within the short bleed distance INSIDE the column, a faint,
-    // field-driven tail may show (glow mode only).
-    let could_glow = mode > 1.5 && dist_outside < 0.0 && dist_outside > -GLOW_BLEED_PX;
+    // field-driven tail may show (glow mode only). The `band` probe suppresses
+    // it (a flat local band should shed the same edge bleed a carved rail does).
+    let could_glow = mode > 1.5 && probe != 2u && dist_outside < 0.0 && dist_outside > -GLOW_BLEED_PX;
+
+    // PROBE `plate` (gallery-only): a SOLID ground plate behind just the rail
+    // entries — opaque ground inside the outline band, lava both sides elsewhere.
+    if (probe == 1u && rect_dist_outside(in.px, g.outline_rect) <= 0.0) {
+        return vec4<f32>(g.ground.rgb, 1.0);
+    }
 
     // Deep inside the column with no glow possible: the fragment is fully
     // TRANSPARENT so the flat base_100 page clear shows through untouched — both
-    // a legibility guarantee and a free perf win (most of a page's pixels).
-    if (mask < 0.02 && !could_glow) {
+    // a legibility guarantee and a free perf win (most of a page's pixels). The
+    // full-bleed probe skips this (it fills the column instead).
+    if (mask < 0.02 && !could_glow && !bleed) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
@@ -223,6 +276,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // the straight-alpha blend composites it over the base-ground pass beneath.
     var out_rgb = margin_rgb;
     var out_a = mask;
+
+    // FULL-BLEED probe (gallery-only): under the column the mask is ~0, but the
+    // lamp keeps a faint value-dimmed presence there — the field's own color at a
+    // low alpha floor, so the document reads over one continuous ground.
+    if (bleed) {
+        out_a = max(out_a, g.probe.y * clamp(edge_t, 0.0, 1.0));
+    }
 
     if (could_glow) {
         // A SEPARATE, gentler falloff (see the const doc above): a faint blob_lo
