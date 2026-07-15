@@ -136,6 +136,12 @@ pub fn classify(effect: &Effect) -> Classified {
         Effect::FollowLink(url) => c("follow_link", EffectClass::Intercepted { detail: url.clone() }),
         Effect::ReportProblem => c("report_problem", EffectClass::Intercepted { detail: String::new() }),
         Effect::DownloadFile => c("download_file", EffectClass::Intercepted { detail: String::new() }),
+        // The export renders the document + writes a sibling file (or a web
+        // download) — a live-App-only external write the replay/capture safely
+        // skips, leaving the editor state exactly as live. Recorded, not performed.
+        Effect::Export(format) => {
+            c("export", EffectClass::Intercepted { detail: format.ext().to_string() })
+        }
         Effect::CheckForUpdates => c("check_for_updates", EffectClass::Intercepted { detail: String::new() }),
         Effect::TrashAsset { rel } => c("trash_asset", EffectClass::Intercepted { detail: rel.clone() }),
 
@@ -316,6 +322,7 @@ mod tests {
             Effect::FollowLink("https://example.com".into()),
             Effect::ReportProblem,
             Effect::DownloadFile,
+            Effect::Export(crate::export::Format::Docx),
             Effect::CheckForUpdates,
             Effect::CopyPulse,
             Effect::SettingToggle { key: "wysiwyg".into() },
@@ -338,8 +345,10 @@ mod tests {
             "overlay_accept", "jump_to_line", "convert_scratch_and_save", "save_done", "recoil",
             "type_impact", "delete_squash", "gulp", "line_land", "copy_pulse",
         ];
-        let intercepted =
-            ["follow_link", "report_problem", "download_file", "check_for_updates", "trash_asset"];
+        let intercepted = [
+            "follow_link", "report_problem", "download_file", "export", "check_for_updates",
+            "trash_asset",
+        ];
         let unsupported = [
             "quit", "last_buffer", "finish_buffer", "keep_version", "rebind_commit",
             "rebind_reset", "setting_toggle", "setting_value_commit", "setting_path_pick",

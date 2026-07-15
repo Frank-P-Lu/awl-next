@@ -64,6 +64,63 @@ pub fn trigger_download(filename: &str, text: &str) {
     let _ = Url::revoke_object_url(&url);
 }
 
+/// The document's base STEM (no extension) — the active buffer's
+/// [`crate::buffer::Buffer::display_name`] with a trailing `.md` / `.markdown`
+/// stripped. Shared by the native EXPORT target-naming (`App::export_document`
+/// builds `<stem>.<ext>`) and the web export download name below, so a saved
+/// `notes.md` exports as `notes.docx` and a scratch buffer as its slugified
+/// first line — never a re-derived naming rule. Compiled on every platform
+/// (native uses it for the sibling/notes-root path).
+pub fn export_stem(buffer: &crate::buffer::Buffer) -> String {
+    let name = buffer.display_name();
+    for ext in [".markdown", ".md"] {
+        if let Some(stem) = name.strip_suffix(ext) {
+            return stem.to_string();
+        }
+    }
+    name
+}
+
+/// The web EXPORT download filename — `<`[`export_stem`]`>.<format-ext>`
+/// (`notes.docx` / `notes.html`). Compiled everywhere for unit-testability
+/// (mirrors [`filename_for`]); only CALLED from the `wasm32` export arm.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn export_name(buffer: &crate::buffer::Buffer, format: crate::export::Format) -> String {
+    format!("{}.{}", export_stem(buffer), format.ext())
+}
+
+/// The BINARY download handoff (WEB-ONLY, `wasm32`) for the export commands —
+/// the byte-blob sibling of [`trigger_download`]. Builds a typed `Blob` (the
+/// `.docx` OOXML MIME or `text/html`) from the raw `bytes`, an object URL, and
+/// clicks a synthetic `<a download="filename">`; best-effort throughout (a
+/// failed DOM step degrades to a calm no-op, never panics), then revokes the URL.
+#[cfg(target_arch = "wasm32")]
+pub fn trigger_download_bytes(filename: &str, mime: &str, bytes: &[u8]) {
+    use wasm_bindgen::{JsCast, JsValue};
+    use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Url};
+
+    let Some(window) = web_sys::window() else { return };
+    let Some(document) = window.document() else { return };
+
+    // A single Uint8Array view over the bytes, wrapped in the parts array.
+    let array = js_sys::Uint8Array::from(bytes);
+    let parts = js_sys::Array::new();
+    parts.push(&JsValue::from(array));
+    let opts = BlobPropertyBag::new();
+    opts.set_type(mime);
+    let Ok(blob) = Blob::new_with_u8_array_sequence_and_options(&parts, &opts) else { return };
+    let Ok(url) = Url::create_object_url_with_blob(&blob) else { return };
+
+    if let Ok(el) = document.create_element("a") {
+        if let Ok(anchor) = el.dyn_into::<HtmlAnchorElement>() {
+            anchor.set_href(&url);
+            anchor.set_download(filename);
+            anchor.click();
+        }
+    }
+    let _ = Url::revoke_object_url(&url);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

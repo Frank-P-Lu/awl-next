@@ -321,6 +321,16 @@ pub enum Action {
     Highlight,
     /// STRIKETHROUGH toggle: wrap in `~~…~~`.
     Strikethrough,
+    /// EXPORT AS WORD (palette-only, markdown buffers): render the document to a
+    /// neutral-house-style `.docx` beside the file (or into `notes_root` for a
+    /// scratch buffer) — the pure core signals [`crate::actions::Effect::Export`];
+    /// the live App builds + writes the bytes (`crate::export`). No default chord.
+    ExportWord,
+    /// EXPORT AS HTML (palette-only, markdown buffers): render the document to a
+    /// standalone, print-tuned `.html` sibling (the documented PDF path — open it
+    /// and Print → Save as PDF). Same [`crate::actions::Effect::Export`] seam as
+    /// [`ExportWord`](Action::ExportWord). No default chord.
+    ExportHtml,
     /// Cmd-O: summon the GO-TO overlay over the active project's file index — the
     /// native go-to-file door (the emacs `C-x C-f` default is retired). While it is
     /// open, typed chars edit the overlay query (not the buffer).

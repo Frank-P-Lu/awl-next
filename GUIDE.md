@@ -166,6 +166,8 @@ markers below, byte for byte).
 | Inline code | ⌘E | Ctrl+E |
 | Highlight |  |  |
 | Strikethrough |  |  |
+| Export as Word… |  |  |
+| Export as HTML… |  |  |
 | Insert link… | ⌘K |  |
 | Save | ⌘S | Ctrl+S |
 | Quit | ⌘Q | Ctrl+Q |

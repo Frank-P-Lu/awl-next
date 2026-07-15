@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Export Fixture</title>
+<style>
+:root { --ink: #1a1a1a; --muted: #6b6b6b; --rule: #d8d8d8; --code-bg: #f4f4f2; --mark: #fdf6b2; --link: #2244aa; }
+* { box-sizing: border-box; }
+body { color: var(--ink); background: #fff; font-family: Georgia, 'Iowan Old Style', 'Times New Roman', serif; font-size: 12pt; line-height: 1.55; max-width: 42rem; margin: 2rem auto; padding: 0 1.25rem; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.2; margin: 1.6em 0 0.5em; font-weight: 600; }
+h1 { font-size: 2em; } h2 { font-size: 1.6em; } h3 { font-size: 1.35em; }
+h4 { font-size: 1.15em; } h5 { font-size: 1em; } h6 { font-size: 0.9em; color: var(--muted); }
+p { margin: 0 0 0.9em; }
+a { color: var(--link); text-decoration: underline; }
+strong { font-weight: 700; } em { font-style: italic; } del { color: var(--muted); }
+mark { background: var(--mark); color: inherit; padding: 0 0.1em; }
+code { font-family: 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace; font-size: 0.9em; background: var(--code-bg); padding: 0.1em 0.3em; border-radius: 3px; }
+pre { background: var(--code-bg); padding: 0.9em 1.1em; border-radius: 5px; overflow-x: auto; line-height: 1.4; }
+pre code { background: none; padding: 0; font-size: 0.85em; }
+blockquote { margin: 1em 0; padding: 0.2em 1.1em; border-left: 3px solid var(--rule); color: var(--muted); font-style: italic; }
+hr { border: none; border-top: 1px solid var(--rule); margin: 2em 0; }
+ul, ol { margin: 0 0 0.9em; padding-left: 1.6em; }
+li { margin: 0.2em 0; }
+li.task { list-style: none; margin-left: -1.3em; }
+li.task input { margin-right: 0.4em; }
+table { border-collapse: collapse; margin: 1em 0; width: 100%; }
+th, td { border: 1px solid var(--rule); padding: 0.4em 0.7em; text-align: left; }
+th { background: var(--code-bg); font-weight: 600; }
+img { max-width: 100%; height: auto; }
+@media print {
+  @page { margin: 2cm; }
+  body { max-width: none; margin: 0; font-size: 11pt; }
+  a { color: var(--ink); }
+  h1, h2, h3, h4, h5, h6 { break-after: avoid; page-break-after: avoid; }
+  pre, blockquote, table, img, tr { break-inside: avoid; page-break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<h1>Export Fixture</h1>
+<p>A paragraph with <strong>bold</strong>, <em>italic</em>, <del>struck</del>, <mark>highlighted</mark>, and <code>inline code</code>.
+Here is a <a href="https://example.com/path?q=1&amp;r=2">link</a>.</p>
+<h2>Section Two</h2>
+<p>Body text under a section, with a soft
+break across two source lines.</p>
+<h3>Subsection</h3>
+<ul>
+  <li>
+  </li>
+  <li>
+    <ul>
+      <li>
+      </li>
+    </ul>
+  </li>
+  <li>
+  </li>
+</ul>
+<ol>
+  <li>
+  </li>
+  <li>
+  </li>
+  <li>
+  </li>
+</ol>
+<ul>
+  <li class="task"><input type="checkbox" disabled> 
+  </li>
+  <li class="task"><input type="checkbox" disabled checked> 
+  </li>
+</ul>
+<blockquote>
+  <p>A quoted line.
+A second quoted line.</p>
+</blockquote>
+<hr>
+<table>
+  <thead>
+    <tr>
+      <th style="text-align:left">Left</th>
+      <th style="text-align:center">Center</th>
+      <th style="text-align:right">Right</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align:left">a</td>
+      <td style="text-align:center">b</td>
+      <td style="text-align:right">c</td>
+    </tr>
+    <tr>
+      <td style="text-align:left">dee</td>
+      <td style="text-align:center">eee</td>
+      <td style="text-align:right">eff</td>
+    </tr>
+  </tbody>
+</table>
+<pre><code class="language-rust">fn main() {
+    println!("hello");
+}</code></pre>
+<p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAYAAAAECAYAAACtBE5DAAAATUlEQVR4Ae3AA6AkWZbG8f937o3IzKdyS2Oubdu2bdu2bdu2bWmMnpZKr54yMyLu+Xa3anqmhztr1a++9mu/9mvzvAieP4Lnj+D54x8BZKABC6Rxy+gAAAAASUVORK5CYII=" alt="a picture" width="48"></p>
+<p>The end.</p>
+</body>
+</html>
