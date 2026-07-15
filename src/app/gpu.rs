@@ -86,6 +86,12 @@ impl Gpu {
         // format, never the possibly-non-srgb config format.
         let mut pipeline = TextPipeline::new(&device, &queue, &cache, view_format);
         pipeline.set_size(width as f32, height as f32);
+        // MOTION-JUICE ARMING — the ONE call site, on the live App's GPU init
+        // alone: every headless capture / bench / test pipeline stays unarmed,
+        // so those paths render the settled state structurally (the
+        // determinism law). Arming is inert on its own — every world ships
+        // `MotionJuice::CALM`; see `TextPipeline::arm_live_juice`'s doc.
+        pipeline.arm_live_juice();
 
         Ok(Self {
             instance,

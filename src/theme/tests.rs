@@ -1675,6 +1675,10 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 title_style: TitleStyle::InlinePrefix,
                 page_frame: PageFrame::Line { weight_px: 2.0 },
                 card_anchor: model::CardAnchor::TopLeft,
+                // FIRETAIL-MAXIMALIST-SHOWCASE round: both new dials landed
+                // INERT on every world — the silent pole included.
+                chrome_face: model::ChromeFace::Body,
+                motion: model::MotionJuice::CALM,
             },
             "Tawny" | "Mopoke" | "Potoroo" | "Gumtree" | "Bilby" | "Saltpan" | "Quokka"
             | "Undertow" | "Kingfisher" | "Outback" => RenderCaps::DEFAULT,
@@ -1769,7 +1773,15 @@ fn page_frame_ink_is_the_ladder_and_assigned_weights_are_real() {
 fn a_placard_grey_ink_would_violate_a_one_bit_worlds_own_law() {
     for t in THEMES.iter() {
         if let model::TitleStyle::Placard {
-            ink: ink @ (model::PlacardInk::Faint | model::PlacardInk::Ghost),
+            // The FIRETAIL-MAXIMALIST-SHOWCASE dial-up rungs (`Muted`/`Bold`)
+            // are ordinary greys on every world today, so they join the
+            // guarded set alongside `Faint`/`Ghost`; `Stipple` stays the one
+            // 1-bit-legal exemption (hard pure-ink pixels).
+            ink:
+                ink @ (model::PlacardInk::Faint
+                | model::PlacardInk::Ghost
+                | model::PlacardInk::Muted
+                | model::PlacardInk::Bold),
             ..
         } = t.render_caps.title_style
         {
@@ -1782,4 +1794,93 @@ fn a_placard_grey_ink_would_violate_a_one_bit_worlds_own_law() {
             );
         }
     }
+}
+
+/// THE FIRETAIL-MAXIMALIST-SHOWCASE round's DIAL-UP ink law: the two new
+/// smooth rungs (`Muted`/`Bold`) are pure ladder derivations through the ONE
+/// owner (`theme::placard_ink`) — `Muted` IS the world's own `muted` rung
+/// verbatim, `Bold` is a pure `muted`→`base_content` blend that stays
+/// strictly BELOW full ink (the rows always outshine the wordmark, by
+/// construction), presence-ordered above `Faint` (louder is genuinely
+/// louder, on every world, both grounds), and — the never-amber guard, in
+/// its identity form — never literally the accent on any chromatic world
+/// (they're ladder greys; the assertable half is non-identity, the same
+/// shape as `page_frame_ink`'s own guard). Every world is swept even though
+/// no world SHIPS a dial-up rung yet: the probe (`AWL_OVERLAY_STYLE_FORCE`)
+/// makes them reachable on all sixteen today, so the law must already hold
+/// everywhere, not just on a future assignee.
+#[test]
+fn dialup_placard_inks_stay_on_the_ladder_below_full_ink() {
+    let _g = crate::testlock::serial();
+    // Gamma-correct Rec.709 relative luminance (the same local recipe the
+    // other placard-ink laws carry).
+    fn rel_lum(c: Srgb) -> f32 {
+        fn lin(u: u8) -> f32 {
+            let s = u as f32 / 255.0;
+            if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        }
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    for t in THEMES.iter() {
+        set_active_by_name(t.name).unwrap();
+        let muted_rung = derive::placard_ink(model::PlacardInk::Muted);
+        let bold = derive::placard_ink(model::PlacardInk::Bold);
+        let faint_rung = derive::placard_ink(model::PlacardInk::Faint);
+        assert_eq!(
+            muted_rung, t.muted,
+            "{}: PlacardInk::Muted must be exactly the world's own muted rung",
+            t.name
+        );
+        assert_eq!(
+            bold,
+            t.muted.lerp(t.base_content, 0.5),
+            "{}: PlacardInk::Bold must be the one documented muted→base_content blend",
+            t.name
+        );
+        // Presence ordering, in ink-distance-from-ground terms: Faint ≤ Muted ≤
+        // Bold < full ink — the dial goes UP, and its ceiling is structural.
+        let ground = rel_lum(t.base_100);
+        let dy = |c: Srgb| (rel_lum(c) - ground).abs();
+        assert!(
+            dy(faint_rung) <= dy(muted_rung) + 1e-6,
+            "{}: Muted must read at least as present as Faint (ΔY {:.4} < {:.4})",
+            t.name,
+            dy(muted_rung),
+            dy(faint_rung)
+        );
+        assert!(
+            dy(muted_rung) <= dy(bold) + 1e-6,
+            "{}: Bold must read at least as present as Muted (ΔY {:.4} < {:.4})",
+            t.name,
+            dy(bold),
+            dy(muted_rung)
+        );
+        // The strict below-full-ink ceiling exempts a TRUE 1-BIT world (the
+        // same declared exemption arm the dark-ground placard law carries):
+        // its ladder COLLAPSES (`muted == base_content`, pure white), so the
+        // blend is degenerate — and a grey placard rung is already
+        // structurally illegal there anyway (`a_placard_grey_ink_would_
+        // violate_a_one_bit_worlds_own_law` guards Muted/Bold too).
+        if !t.is_one_bit() {
+            assert!(
+                dy(bold) < dy(t.base_content),
+                "{}: Bold (ΔY {:.4}) must stay BELOW full ink (ΔY {:.4}) — the rows always win",
+                t.name,
+                dy(bold),
+                dy(t.base_content)
+            );
+        }
+        // Never-amber, identity form (ladder greys can't carry the accent's
+        // hue by construction; the assertable half is non-identity).
+        if !t.is_monochrome() {
+            for (label, c) in [("Muted", muted_rung), ("Bold", bold)] {
+                assert_ne!(
+                    c, t.primary,
+                    "{}: dial-up placard {label} ink must never be literally the accent",
+                    t.name
+                );
+            }
+        }
+    }
+    set_active(DEFAULT_THEME);
 }

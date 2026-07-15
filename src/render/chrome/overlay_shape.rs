@@ -161,10 +161,15 @@ impl TextPipeline {
         self.placard_buffer.set_wrap(&mut self.font_system, Wrap::None);
         let text = self.overlay_title.to_uppercase();
         let color = theme::placard_ink(ink).to_glyphon();
+        // The wordmark is CHROME (the frame around the list, never the list),
+        // so it shapes in the world's chrome face — `chrome_attrs` is
+        // `panel_attrs` verbatim on every `ChromeFace::Body` world (all of
+        // them today), and swaps only under a `Named` face / the
+        // `AWL_CHROME_FACE_FORCE` audition probe.
         self.placard_buffer.set_text(
             &mut self.font_system,
             &text,
-            &panel_attrs().color(color),
+            &chrome_attrs().color(color),
             Shaping::Advanced,
             None,
         );
@@ -345,9 +350,21 @@ impl TextPipeline {
         // width in mean glyph widths against the widest right-column label. `Split`/
         // `Full` elide the names to their granted budget (the historical math);
         // `Measure` shapes them UNELIDED and lets the shaped pixels decide below.
+        //
+        // WILD-MENU SLANT PROBE (env-gated; `slant_tax == 0.0` on every normal
+        // run — byte-identical): the deepest row's stair offset is subtracted
+        // from the effective row span BEFORE the rowlayout math, so elision
+        // respects the reduced width (a shifted row can never paint past the
+        // card's right text edge). Rows still flow through `rowlayout` — the
+        // law is untouched; only the width it budgets against shrinks.
+        let slant = crate::render::overlay_slant();
+        let slant_tax = slant
+            .map(|s| crate::render::slant_max_offset(&s, visible))
+            .unwrap_or(0.0);
+        let slant_text_w = (geom.text_w - slant_tax).max(0.0);
         let m = self.metrics;
         let total_chars = if m.char_width > 0.0 {
-            (geom.text_w / m.char_width).floor() as usize
+            (slant_text_w / m.char_width).floor() as usize
         } else {
             usize::MAX
         };
@@ -384,7 +401,7 @@ impl TextPipeline {
         let name_px = self.widest_candidate_px(geom);
         let right_px = self.widest_right_px();
         let gap_px = rowlayout::GAP_CHARS as f32 * m.char_width;
-        if rowlayout::fits(geom.text_w, gap_px, name_px, right_px) {
+        if rowlayout::fits(slant_text_w, gap_px, name_px, right_px) {
             self.overlay_right_shown = true;
             return true;
         }
@@ -532,11 +549,23 @@ impl TextPipeline {
                 mk(c)
             }
         };
+        // The "<title> › " prefix is CHROME (it names the picker), so it rides
+        // the chrome face (`chrome_attrs` == `panel_attrs` on every Body world
+        // — byte-identical today); the bare `› ` sigil and the query TEXT are
+        // the input affordance, never chrome — they keep the body face.
+        let hkc = |c| {
+            let a = chrome_attrs().color(c);
+            if geom.header_gap > 0.0 {
+                a.metrics(GlyphMetrics::new(name_fs, header_lh))
+            } else {
+                a
+            }
+        };
         if has_query {
             if title_prefix.is_empty() {
                 spans.push((sigil, hk(muted)));
             } else {
-                spans.push((title_prefix.as_str(), hk(muted)));
+                spans.push((title_prefix.as_str(), hkc(muted)));
             }
             spans.push((self.overlay_query.as_str(), hk(ink)));
         }
@@ -554,6 +583,20 @@ impl TextPipeline {
         // (see `HighlightTreatment::InverseFill`). `sel_vis` is the 0-based row
         // among those SHOWN, matching `overlay_draw_card`'s band placement.
         let sel_vis = self.overlay_selected.saturating_sub(geom.top_idx);
+        // WILD-MENU SLANT PROBE, italic half (env-gated; `false` on every
+        // normal run): the Persona-style italic on the row NAMES only — the
+        // query/hint/chrome never slant. The face may not carry a true italic;
+        // cosmic-text then matches the nearest style — acceptable for a
+        // gallery probe (which faces carry real italics is a probe FINDING).
+        let slant_italic =
+            crate::render::overlay_slant().map(|s| s.italic).unwrap_or(false);
+        let rk = |c| {
+            if slant_italic {
+                mk(c).style(glyphon::cosmic_text::Style::Italic)
+            } else {
+                mk(c)
+            }
+        };
         for (row, content) in rows.iter().enumerate() {
             if !(!has_query && row == 0) {
                 spans.push(("\n", mk(ink)));
@@ -568,9 +611,9 @@ impl TextPipeline {
                 crate::overlay::row_split(content)
             };
             if split > 0 {
-                spans.push((&content[..split], mk(dir_c)));
+                spans.push((&content[..split], rk(dir_c)));
             }
-            spans.push((&content[split..], mk(name_c)));
+            spans.push((&content[split..], rk(name_c)));
         }
         // EMPTY STATE: with no candidate rows, one dim, non-selectable message row
         // (styled like the foot hint) sits in the candidate area — the shared calm

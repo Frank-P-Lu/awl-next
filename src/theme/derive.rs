@@ -141,6 +141,15 @@ const PLACARD_DARK_LIFT_GHOST: f32 = 0.45;
 /// (perceived tone is carried by DENSITY instead — see
 /// [`placard_stipple_density`], its partner owner), so this returns
 /// `base_content` for it: the pixel color half of the stipple pair.
+///
+/// The FIRETAIL-MAXIMALIST-SHOWCASE round's DIAL-UP rungs sit ABOVE `Faint`
+/// on the same ladder, mode-INDEPENDENT (they name absolute ladder positions,
+/// not ground-relative corrections — `muted` already carries each world's own
+/// contrast): `Muted` is the [`muted`] rung verbatim (the rows' own ink);
+/// `Bold` steps [`PLACARD_BOLD_LIFT`] further from `muted` toward
+/// [`base_content`] — a clear statement that stays under full ink BY
+/// CONSTRUCTION (a `muted`→`base_content` lerp at < 1.0 can never reach the
+/// rows' brightest ink). Still never a free color, still never dithered.
 pub fn placard_ink(ink: super::model::PlacardInk) -> Srgb {
     let t = active();
     match ink {
@@ -153,8 +162,17 @@ pub fn placard_ink(ink: super::model::PlacardInk) -> Srgb {
         super::model::PlacardInk::Faint => faint(),
         super::model::PlacardInk::Ghost => faint().lerp(base_300(), 0.5),
         super::model::PlacardInk::Stipple => base_content(),
+        super::model::PlacardInk::Muted => muted(),
+        super::model::PlacardInk::Bold => muted().lerp(base_content(), PLACARD_BOLD_LIFT),
     }
 }
+
+/// How far the `Bold` dial-up rung steps from `muted` toward `base_content`
+/// — one global constant, never a per-world hand value (the same discipline
+/// as [`PLACARD_DARK_LIFT_FAINT`]). Halfway reads as a clear statement while
+/// structurally staying below the full-ink rows (law-tested by
+/// `theme::tests::dialup_placard_inks_stay_on_the_ladder_below_full_ink`).
+const PLACARD_BOLD_LIFT: f32 = 0.5;
 
 /// Gamma-correct Rec.709 relative luminance — the same recipe the law tests
 /// use (`theme::tests`' `rel_lum`, `render::tests::syntax_roles`'
