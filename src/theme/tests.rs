@@ -357,6 +357,65 @@ fn outline_rail_band_is_flat_ground_and_outline_ink_clears_it_on_every_lava_worl
     }
 }
 
+/// KNOWN GAP, PINNED (lava follow-ups audit, 2026-07-15): the bottom-left page-mode
+/// GUTTER (`TextPipeline::prepare_gutter` — the filename/project stack, same left
+/// margin real estate the outline's rail carve now protects) has **no analogous
+/// protection**. `lava::rail_dist_outside`'s carve is keyed ONLY off
+/// `TextPipeline::lava_rail_carved` (outline visibility), so whenever the outline is
+/// NOT drawn — any NON-MARKDOWN buffer, or a heading-free markdown doc, both
+/// completely ordinary page-mode states — the gutter's `faint`/`muted` ink sits on
+/// the UNCARVED margin, exposed to the full animated lava field exactly like the
+/// outline was before this round's fix.
+///
+/// This test PINS the CURRENT numeric reality (not an aspiration) using the exact
+/// same redmean floor `outline_rail_band_is_flat_ground_and_outline_ink_clears_it_
+/// on_every_lava_world` holds the outline to: Mangrove's `faint` (the gutter's
+/// project-line ink) clears only 68.0 redmean against `blob_hi` (the brightest
+/// reachable lava core tone) — under the 100 floor the outline is held to one test
+/// above this one. A live-pixel audit corroborates this isn't a pure-math
+/// worst-case fluke: sampling the ACTUAL rendered PNG bytes around the gutter's
+/// real glyph position (`plain.rs` / a heading-free `.md` fixture, page mode,
+/// `--measure 40`, both lava worlds) found 74-92% of the local backdrop pixels
+/// immediately around the gutter text below this same 100-redmean floor (median
+/// ~57-63, worst ~26-33) — though the SAME crops still read legibly to the eye at
+/// this capture's fixed phase (a single frozen animation moment; the field sweeps
+/// continuously through every phase live, so a worse moment is plausible, not
+/// proven).
+///
+/// **This test is a REGRESSION PIN, not a law**: if a future round extends the
+/// carve to the gutter (or gives it its own), Mangrove's number will cross 100 and
+/// this assertion will fail — that's the intended trip-wire forcing a conscious
+/// update instead of a silent revert. Until then, this documents the gap so it
+/// can't be re-discovered as a surprise. Follow-up: extend `TextPipeline::
+/// lava_rail_carved` (or a sibling) to also carve while `gutter_layout` reports
+/// `Some` — `rail_dist_outside` is already a pure function of `x` alone, so the
+/// SAME whole-left-margin carve the outline uses would cover the gutter's y band
+/// for free; the open design question is whether that widens the no-lava zone too
+/// often (gutter is visible in most ordinary page-mode viewing, unlike the
+/// heading-gated outline).
+#[test]
+fn gutter_ink_has_no_rail_carve_protection_unlike_the_outline_a_known_gap() {
+    fn redmean(a: Srgb, b: Srgb) -> f32 {
+        let rbar = (a.r as f32 + b.r as f32) * 0.5;
+        let dr = a.r as f32 - b.r as f32;
+        let dg = a.g as f32 - b.g as f32;
+        let db = a.b as f32 - b.b as f32;
+        ((2.0 + rbar / 256.0) * dr * dr + 4.0 * dg * dg + (2.0 + (255.0 - rbar) / 256.0) * db * db)
+            .sqrt()
+    }
+    let mangrove = THEMES.iter().find(|t| t.name == "Mangrove").expect("Mangrove ships");
+    let Background::Lava { blob_hi, .. } = mangrove.background else {
+        panic!("Mangrove must carry a Lava background");
+    };
+    let contrast = redmean(mangrove.faint, blob_hi);
+    assert!(
+        contrast < 100.0,
+        "Mangrove's gutter-ink/blob_hi contrast is {contrast:.1} — if this now \
+         clears the 100 floor, the gap this test pins has been fixed: update or \
+         remove this pin (see the doc comment) rather than silently deleting it",
+    );
+}
+
 /// FIRETAIL PALETTE CHARACTER law: the sixteenth world is an ORIGINAL deep
 /// oxblood-charcoal + wine-lava + ember-gold system, not Potoroo's rust palette
 /// copied under a moving ground. Hue arithmetic pins the authored direction:
