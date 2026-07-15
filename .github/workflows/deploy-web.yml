@@ -31,7 +31,7 @@ jobs:
       # the "Write version.json" step below needs the tags to exist locally;
       # the default shallow (depth-1, no-tags) checkout would always report
       # "no tag found".
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

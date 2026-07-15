@@ -57,7 +57,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -195,7 +195,7 @@ jobs:
       - name: Zip Awl.app (for artifact upload)
         run: ditto -c -k --keepParent dist-mac/Awl.app dist-mac/Awl-macos-universal.app.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: awl-macos
           path: |
@@ -209,7 +209,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Same apt-get list as ci.yml's linux job.
       - name: Install system dependencies
@@ -239,7 +239,7 @@ jobs:
           cp THIRD-PARTY-LICENSES.md dist-linux/awl-linux-x86_64/ 2>/dev/null || true
           tar -czf dist-linux/awl-linux-x86_64.tar.gz -C dist-linux awl-linux-x86_64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: awl-linux
           path: dist-linux/awl-linux-x86_64.tar.gz
@@ -251,7 +251,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -275,7 +275,7 @@ jobs:
           cp LICENSE NOTICE CREDITS.md THIRD-PARTY-LICENSES.md dist/ 2>/dev/null || true
           (cd dist && zip -r ../dist-web/awl-web-dist.zip .)
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: awl-web
           path: dist-web/awl-web-dist.zip
@@ -288,12 +288,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
       - name: softprops/action-gh-release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.plan.outputs.version }}
           files: |
