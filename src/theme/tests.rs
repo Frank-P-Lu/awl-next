@@ -1418,6 +1418,56 @@ fn lerp_interpolates_and_clamps() {
     assert_eq!(a.lerp(b, 2.0), b, "t>1 clamps to other");
 }
 
+/// EVERY shipped `TitleStyle::Placard` world anchors its wordmark BOTTOM-LEFT
+/// (`PlacardCorner::BL`) — the settled composition, not an accident. The card
+/// now defaults to the top-LEFT anchor (`CardAnchor::TopLeft`), so a placard at
+/// a TOP corner (`TL`/`TR`) shares the card's own screen band and the large,
+/// canvas-anchored wordmark BLEEDS into the card's top edge — its ink lands
+/// over the card's own fill and title row, not clear over the scrim
+/// (gallery-confirmed with pixels: `AWL_OVERLAY_STYLE_FORCE="placard:TR:5.0:bold"`
+/// and `"placard:TL:2.5:stipple"` on Firetail both drove the wordmark's strokes
+/// into the card's top-right / title-row region). `BLEED IS THE CONTRACT`
+/// (the wordmark anchors to the canvas, rows composite OVER it — see
+/// `model::TitleStyle`'s own doc), so this is not a render bug at those forced
+/// corners; it is exactly WHY the shipped data uses BL — card top-left +
+/// wordmark bottom-left = balanced asymmetry with no overlap. This guard makes
+/// that decision STRUCTURAL: a future data flip to a top corner (or `BR`, which
+/// clips long words against the right canvas edge — the other gallery finding)
+/// must FIRST solve the card-overlap / edge-clip, and will trip here until it
+/// consciously does. The `AWL_OVERLAY_STYLE_FORCE` dev probe still reaches
+/// every corner for auditions — this pins the WORLDS DATA, never the probe.
+#[test]
+fn every_shipped_placard_world_anchors_bottom_left() {
+    let placards: Vec<(&str, model::PlacardCorner, f32)> = THEMES
+        .iter()
+        .filter_map(|t| match t.render_caps.title_style {
+            model::TitleStyle::Placard { corner, scale, .. } => Some((t.name, corner, scale)),
+            model::TitleStyle::InlinePrefix => None,
+        })
+        .collect();
+    assert!(
+        !placards.is_empty(),
+        "at least one world ships a Placard (the round that introduced them) — a \
+         zero here means the data table lost every placard, not that the guard passed"
+    );
+    for (name, corner, scale) in placards {
+        assert_eq!(
+            corner,
+            model::PlacardCorner::BL,
+            "{name}: a shipped placard must anchor BOTTOM-LEFT — a top/right corner \
+             overlaps the top-left card (or clips long words at the right edge). Flip \
+             to another corner only after solving that; see this test's own doc."
+        );
+        // The wordmark scale is a loudness dial, not a fit guarantee
+        // (`overlay_shape_placard` shrinks a wider-than-canvas mark), but a
+        // shipped value staying in a sane band keeps the data honest.
+        assert!(
+            (0.5..=5.0).contains(&scale),
+            "{name}: shipped placard scale {scale} sits outside the sane 0.5..=5.0 band"
+        );
+    }
+}
+
 /// `theme::placard_ink` NEVER invents a free color, and is MODE-AWARE (the
 /// personality-assignment round's dark-ground correction): LIGHT worlds keep
 /// the gallery-validated originals byte-for-byte (`Faint` = the world's own
