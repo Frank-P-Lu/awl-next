@@ -293,7 +293,8 @@ fn base64(data: &[u8]) -> String {
 }
 
 /// Re-exported so `mod.rs`'s tests can exercise the base64 encoder directly.
-#[cfg(test)]
+/// Gated with the native-only export test module (its sole consumer).
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(super) fn base64_for_test(data: &[u8]) -> String {
     base64(data)
 }

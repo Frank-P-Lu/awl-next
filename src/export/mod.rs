@@ -21,7 +21,11 @@ mod html;
 mod model;
 mod zip;
 
-#[cfg(test)]
+// Native-only: the export tests read on-disk golden files at runtime
+// (`CARGO_MANIFEST_DIR`/`std::fs`) and build the fixture PNG through the
+// native-only `paste_image` encoder — neither exists on wasm. The export
+// logic itself (model/docx/html) still compiles on every target.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 
 pub use model::{ExportImage, ImageSource};
