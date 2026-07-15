@@ -242,6 +242,7 @@ impl TextPipeline {
         geom: &OverlayGeom,
         ink: glyphon::Color,
         muted: glyphon::Color,
+        selected_ink: Option<glyphon::Color>,
     ) -> bool {
         // Build the strip LINE ("\n" then the faceting-lens labels) as one owned string,
         // tracking each label's byte range so the ACTIVE label's glyphs can be underlined.
@@ -282,11 +283,11 @@ impl TextPipeline {
         // fit, so every lens stays present + hit-testable instead of the far
         // right clipping away. At any comfortable width the measured strip fits
         // and the single full-size pass stands (byte-identical wide captures).
-        self.shape_theme_spans(geom, ink, muted, &strip_s, &label_ranges, &sep_ranges, &hint_line, 1.0);
+        self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, &hint_line, 1.0);
         let strip_w = self.theme_strip_px();
         if strip_w > geom.text_w {
             let scale = (geom.text_w / strip_w).max(0.5);
-            self.shape_theme_spans(geom, ink, muted, &strip_s, &label_ranges, &sep_ranges, &hint_line, scale);
+            self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, &hint_line, scale);
         }
 
         // Record the active-lens UNDERLINE from the shaped strip glyphs (line 1). Line-1
@@ -331,6 +332,7 @@ impl TextPipeline {
         geom: &OverlayGeom,
         ink: glyphon::Color,
         muted: glyphon::Color,
+        selected_ink: Option<glyphon::Color>,
         strip_s: &str,
         label_ranges: &[(std::ops::Range<usize>, bool)],
         sep_ranges: &[std::ops::Range<usize>],
@@ -347,7 +349,6 @@ impl TextPipeline {
         let ui = super::overlay::OVERLAY_UI_SCALE;
         let lh = self.overlay_lh();
         let header_metrics = GlyphMetrics::new(m.font_size * ui * label, lh);
-        let strip_metrics = GlyphMetrics::new(m.font_size * ui * strip_scale, lh);
         let base = panel_attrs();
         let mk = |c| base.clone().color(c);
         let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
@@ -393,8 +394,9 @@ impl TextPipeline {
         // Strip line: active label in full ink, others muted, separators + the "\n"
         // faint. One ordered pass over `strip_s` so the spans tile the line in byte
         // order (rich-text concatenates spans in push order). The label/separator
-        // spans carry `strip_metrics`; the leading "\n" keeps the buffer's UI metrics
-        // so the strip row's HEIGHT (and everything below it) is scale-invariant.
+        // spans carry the strip font size at the `strip_lh` (= `lh + header_gap`)
+        // row height; the leading "\n" keeps the buffer's UI font size so the strip
+        // row's font stays scale-invariant.
         {
             let mut cursor = 0usize;
             let mut pushes: Vec<(std::ops::Range<usize>, glyphon::Color)> = Vec::new();
@@ -405,35 +407,54 @@ impl TextPipeline {
                 pushes.push((r.clone(), faint));
             }
             pushes.sort_by_key(|(r, _)| r.start);
-            // The strip row's leading "\n" governs its HEIGHT (see above). The
-            // PALETTE-COMPOSITION round inflates it by `header_gap`, so the calm
-            // divider space falls after the lens strip, before the section-grouped
-            // rows — uniform with the flat pickers' query-line gap. The plan-line
-            // offsets, selected band, and underline all fold the same gap in
-            // through `overlay_row_top`, so nothing below the strip drifts.
-            let strip_nl_metrics = GlyphMetrics::new(m.font_size * ui, lh + geom.header_gap);
-            spans.push((&strip_s[0..1], mk(faint).metrics(strip_nl_metrics)));
+            // The strip row's HEIGHT is inflated by `header_gap` (PALETTE-COMPOSITION
+            // round) so the calm divider space falls after the lens strip, before the
+            // section-grouped rows — uniform with the flat pickers' query-line gap.
+            // The plan-line offsets, selected band, and underline all fold the same
+            // gap in through `overlay_row_top`, so nothing below the strip drifts.
+            //
+            // The gap MUST ride the strip line's REAL LABEL glyphs, NOT its leading
+            // "\n": cosmic-text sizes a line from the glyphs ON it, and the "\n" is a
+            // BREAK that terminates the PRIOR (query) line — its own metrics never
+            // grow the strip line, so inflating only the "\n" moved the selected BAND
+            // (which reads `header_gap` off `overlay_row_top`) down a half-row while
+            // the TEXT stayed put. That half-row band/text drift was invisible under
+            // a gentle value band but clipped the top of the selected row's own
+            // glyphs once a 1-bit world drew them as solid black on a white band
+            // (the Wagtail selected-row bug's second half). `strip_lh` on the labels
+            // makes text and band agree; the "\n" keeps the row's scale-invariant
+            // baseline size.
+            let strip_lh = lh + geom.header_gap;
+            spans.push((&strip_s[0..1], mk(faint).metrics(GlyphMetrics::new(m.font_size * ui, lh))));
             cursor += 1;
             for (r, c) in pushes {
                 debug_assert_eq!(r.start, cursor, "strip spans must tile the line");
                 cursor = r.end;
-                let attrs = if strip_scale < 1.0 {
-                    mk(c).metrics(strip_metrics)
+                let fs = if strip_scale < 1.0 {
+                    m.font_size * ui * strip_scale
                 } else {
-                    mk(c)
+                    m.font_size * ui
                 };
-                spans.push((&strip_s[r], attrs));
+                spans.push((&strip_s[r], mk(c).metrics(GlyphMetrics::new(fs, strip_lh))));
             }
         }
         // Plan lines: faint uppercase section headers (LABEL size) + world rows (ink).
+        // On a true 1-bit world the SELECTED item's own glyphs recolor to the solid
+        // contrasting ink (`selected_ink`) so black text lands crisp on the white
+        // band — the same crisp black-on-white the flat pickers get, one rule (see
+        // `HighlightTreatment::InverseFill`). Byte-identical (`None`) elsewhere.
         for (line, fit) in geom.plan.iter().zip(fitted.iter()) {
             spans.push(("\n", mk(ink)));
             match line {
                 ThemeLine::Header(h) => {
                     spans.push((h.as_str(), mk(faint).metrics(header_metrics)));
                 }
-                ThemeLine::Item(_) => {
-                    spans.push((fit.as_deref().unwrap_or(""), mk(ink)));
+                ThemeLine::Item(i) => {
+                    let c = match selected_ink {
+                        Some(c) if *i == self.overlay_selected => c,
+                        _ => ink,
+                    };
+                    spans.push((fit.as_deref().unwrap_or(""), mk(c)));
                 }
             }
         }

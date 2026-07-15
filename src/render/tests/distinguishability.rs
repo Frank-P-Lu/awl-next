@@ -17,11 +17,12 @@
 //!   reduces to a computable color (a value band, a wash tint, the caret
 //!   accent), assert the CONTRACT holds by redmean color distance — the same
 //!   `role_style_laws_hold_for_every_world` pattern `syntax_roles.rs`
-//!   already uses. A true-inverse-video world's treatment isn't a plain
-//!   color at all (it's a per-pixel invert), so for those worlds this tier
-//!   checks the STRUCTURAL fact (the declared treatment really is `Invert`)
-//!   instead of a color distance — the real-pixel proof that the renderer
-//!   actually HONORS that structural fact is tier (b).
+//!   already uses. A 1-bit world's selected-row treatment is now a solid
+//!   `InverseFill { band, ink }` PAIR (base_content fill + base_300 glyphs,
+//!   the crisp black-on-white that replaced the old framebuffer invert), so
+//!   this tier checks BOTH color distances — band-vs-ground AND ink-vs-band —
+//!   the same as an ordinary value band. The real-pixel proof that the
+//!   renderer actually HONORS it is tier (b) + `one_bit.rs`.
 //! - **(b) REAL PIXELS, capability-driven sampling.** Every world carrying
 //!   ANY non-default `RenderCaps` (today exactly Wagtail — the sampling rule
 //!   is capability-driven, so a FUTURE deviant world automatically joins
@@ -29,7 +30,7 @@
 //!   rendered for real through the pixel-diff helper (`pixeldiff.rs`) and
 //!   diffed at the pixel level. This is the tier that would have caught the
 //!   original bug: tier (a) alone would have happily asserted Wagtail's
-//!   `HighlightTreatment::Invert` was the DECLARED contract while the
+//!   `HighlightTreatment` pair was the DECLARED contract while the
 //!   renderer still uploaded a `[0,0,0,0]` band and called it done.
 
 use super::super::*;
@@ -175,10 +176,24 @@ fn check_color_math(th: &theme::Theme, s: Surface, floor: f32) {
     match s {
         Surface::PickerSelectedRow => {
             let band = theme::surface_selected();
-            match th.render_caps.highlight_treatment(band) {
-                // Structural half of the contract; the real-pixel proof that
-                // the renderer actually honors it lives in tier (b) below.
-                theme::HighlightTreatment::Invert => {}
+            match th.highlight_treatment(band) {
+                // 1-bit world: the band is a SOLID `base_content` fill and the
+                // selected row's own glyphs recolor to `base_300`. The band must
+                // read against the card ground AND the recolored text must read
+                // against the band (the crisp black-on-white pair that replaced
+                // the framebuffer invert). Both hold trivially for pure #000/#FFF,
+                // but this pins it so a future 1-bit palette can't ship a pair
+                // that collapses. Real-pixel proof lives in tier (b) + one_bit.rs.
+                theme::HighlightTreatment::InverseFill { band, ink } => {
+                    let d_band = redmean(band, th.base_300);
+                    let d_ink = redmean(ink, band);
+                    assert!(
+                        d_band >= floor && d_ink >= floor,
+                        "{}: PickerSelectedRow InverseFill band {:?}/ink {:?} — band-vs-card \
+                         {d_band:.1}, ink-vs-band {d_ink:.1} (floor {floor})",
+                        th.name, band, ink
+                    );
+                }
                 theme::HighlightTreatment::ValueBand(color) => {
                     let d = redmean(color, th.base_300);
                     assert!(
@@ -191,8 +206,17 @@ fn check_color_math(th: &theme::Theme, s: Surface, floor: f32) {
             }
         }
         Surface::MenubarOpenTitle => {
-            match th.render_caps.highlight_treatment(th.selection) {
-                theme::HighlightTreatment::Invert => {}
+            match th.highlight_treatment(th.selection) {
+                theme::HighlightTreatment::InverseFill { band, ink } => {
+                    let d_band = redmean(band, th.base_100);
+                    let d_ink = redmean(ink, band);
+                    assert!(
+                        d_band >= floor && d_ink >= floor,
+                        "{}: MenubarOpenTitle InverseFill band {:?}/ink {:?} — band-vs-bar \
+                         {d_band:.1}, ink-vs-band {d_ink:.1} (floor {floor})",
+                        th.name, band, ink
+                    );
+                }
                 theme::HighlightTreatment::ValueBand(color) => {
                     let d = redmean(color, th.base_100);
                     assert!(

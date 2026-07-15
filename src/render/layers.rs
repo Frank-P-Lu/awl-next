@@ -2001,8 +2001,6 @@ impl TextPipeline {
         } else if self.search_active {
             self.prepare_panel(device, queue, width, height)?;
             self.overlay_rows.prepare(device, queue, width, height, &[]);
-            self.overlay_rows_invert
-                .prepare(device, queue, width, height, &[]);
         } else {
             // NO overlay, NO search: PARK every overlay pipeline empty — the flat
             // card + row-band + lens-underline quads, the amber query caret, AND

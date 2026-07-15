@@ -619,7 +619,7 @@ fn forced_placard_suppresses_the_inline_title_prefix_on_both_shapers() {
     let query_line = |p: &mut TextPipeline, v: &ViewState| -> String {
         p.set_view(v);
         let geom = p.overlay_geometry(1200);
-        p.overlay_shape_text(&geom, ink, muted);
+        p.overlay_shape_text(&geom, ink, muted, None);
         p.panel_buffer
             .layout_runs()
             .find(|r| r.line_i == 0)
