@@ -62,6 +62,25 @@ capture exercises the real edit logic — not a parallel mock.
 - **Unbound chords are silent no-ops** (e.g. `C-Q` → `Ignore`, dropped); only
   structurally invalid tokens (e.g. `frobnicate`) error.
 
+### Strict replay (`--strict-replay`, opt-in)
+
+`--screenshot --keys "SPEC" --strict-replay` turns the permissive replay into a
+truthfulness gate (the scenario-runner default the harness phases build on —
+`src/replay.rs` is the one owner). Every `actions::Effect` is classified
+**Applied** (performed for real headlessly), **Intercepted** (an external
+handoff — URL open, mailto, Trash, download — observed and recorded, payload
+included, deliberately not performed), or **Unsupported** (live-App-only work
+whose skip would diverge the session from live). The classification is a
+no-wildcard match, so a future `Effect` variant fails to compile until
+classified. Strict mode aborts, naming the exact offender, on: an unbound
+chord or dangling prefix sequence (at parse time), any Unsupported effect (at
+replay time), or a missing layout oracle (no GPU adapter — motion would
+silently fall back to logical lines). A spec that crosses no such seam renders
+byte-identically to the permissive run. The plain `--keys` path stays
+permissive but now WARNS on stderr when it crosses an Unsupported or
+Intercepted seam; intercepted handoffs are recorded in the replay result under
+both modes (the future trace file's seam).
+
 ## Deterministic timeline capture (`--capture-timeline`)
 
 A single frozen frame is great for *state*, but it can't show an animation's

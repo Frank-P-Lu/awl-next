@@ -50,6 +50,18 @@ pub fn parse_keys_with(spec: &str, cfg: &crate::config::Config) -> Result<Vec<Ac
     parse_keys_through(spec, KeymapState::with_overrides_and_keep(&cfg.keys, &cfg.effective_linux_keep()))
 }
 
+/// STRICT sibling of [`parse_keys_with`] — the scenario-runner door (see
+/// [`crate::replay`]'s module doc): every chord must RESOLVE to a real action.
+/// A chord that parses but binds to nothing (`Action::Ignore` — the permissive
+/// path's silent drop) or dangles off an unfinished prefix (`C-x <unbound>`,
+/// which the keymap resolves to a quiet `Cancel`) is an error NAMING that exact
+/// chord, so a typo'd scenario aborts instead of replaying a fiction. An
+/// EXPLICIT cancel chord mid-prefix (`Esc` / `C-g`) stays legal — cancelling a
+/// prefix on purpose is a real thing a scenario can say.
+pub fn parse_keys_strict_with(spec: &str, cfg: &crate::config::Config) -> Result<Vec<Action>> {
+    parse_keys_mode(spec, KeymapState::with_overrides_and_keep(&cfg.keys, &cfg.effective_linux_keep()), true)
+}
+
 /// TEST-ONLY: like [`parse_keys`], but resolve through a keymap PINNED to
 /// `convention` rather than the ambient [`crate::convention::Convention::current`]
 /// — so a test with a hardcoded MAC-literal spec (`"Cmd-S-h"`, `"s-p"`, a bare
@@ -68,16 +80,55 @@ pub(crate) fn parse_keys_pinned(spec: &str, convention: crate::convention::Conve
 
 /// Shared core: resolve every chord in `spec` through one persistent `km` (so C-x
 /// prefix state and any config rebinds compose across the sequence).
-fn parse_keys_through(spec: &str, mut km: KeymapState) -> Result<Vec<Action>> {
+fn parse_keys_through(spec: &str, km: KeymapState) -> Result<Vec<Action>> {
+    parse_keys_mode(spec, km, false)
+}
+
+/// The one resolve loop both doors share. `strict: false` is the legacy
+/// permissive behavior verbatim (unbound chords drop silently); `strict: true`
+/// errors on any chord that resolves to nothing — a bare `Ignore`, or a
+/// non-cancel chord that dangles off an armed prefix (the keymap's quiet
+/// `Cancel`) — naming the exact chord (and, for a dangling sequence, the
+/// prefix chord it failed to complete).
+fn parse_keys_mode(spec: &str, mut km: KeymapState, strict: bool) -> Result<Vec<Action>> {
     let mut actions = Vec::new();
+    // The chord that ARMED a still-pending prefix (`C-x` / `C-c`), for the
+    // strict dangling-sequence error's wording. `None` outside a prefix.
+    let mut pending_prefix: Option<&str> = None;
     for chord in spec.split_whitespace() {
         let (key, mods) = parse_chord(chord)?;
         let action = km.resolve(&key, &mods);
+        if strict {
+            if matches!(action, Action::Ignore) {
+                bail!("strict replay: chord {chord:?} is unbound (resolves to no action)");
+            }
+            if let Some(pfx) = pending_prefix {
+                if matches!(action, Action::Cancel) && !is_explicit_cancel(&key, mods.state()) {
+                    bail!(
+                        "strict replay: chord {chord:?} does not complete the {pfx:?} prefix (unbound sequence)"
+                    );
+                }
+            }
+        }
+        pending_prefix = matches!(action, Action::BeginPrefix).then_some(chord);
         if !matches!(action, Action::Ignore | Action::BeginPrefix) {
             actions.push(action);
         }
     }
     Ok(actions)
+}
+
+/// Is this chord an EXPLICIT cancel (`Esc` / `C-g`)? Mid-prefix, the keymap
+/// resolves EVERY unbound second key to a quiet `Cancel`; strict parsing only
+/// forgives the ones a scenario can honestly MEAN as "cancel the prefix".
+fn is_explicit_cancel(key: &Key, mods: ModifiersState) -> bool {
+    match key {
+        Key::Named(NamedKey::Escape) => true,
+        Key::Character(s) => {
+            s.as_str().eq_ignore_ascii_case("g") && mods.contains(ModifiersState::CONTROL)
+        }
+        _ => false,
+    }
 }
 
 /// WORD-form modifier prefixes (case-insensitive), an alternative to the terse
@@ -574,6 +625,70 @@ mod tests {
     fn unknown_chord_errors() {
         // A multi-char token that is not a named key is an error, not a panic.
         assert!(parse_keys("frobnicate").is_err());
+    }
+
+    // ── STRICT REPLAY TRUTHFULNESS: the strict parse door ──
+
+    /// Strict parse pinned to Mac, mirroring the permissive shadow above (these
+    /// tests document MAC-native defaults; Linux displacement is law-tested in
+    /// `keymap.rs`).
+    fn parse_keys_strict(spec: &str) -> Result<Vec<Action>> {
+        parse_keys_mode(spec, KeymapState::new_with_convention(crate::convention::Convention::Mac), true)
+    }
+
+    #[test]
+    fn strict_rejects_an_unbound_chord_naming_it() {
+        // Cmd-L is deliberately unbound (see keymap.rs's own "Cmd-L stays
+        // unbound" test): permissive drops it silently, strict names it.
+        assert_eq!(parse_keys("s-l").unwrap(), Vec::<Action>::new());
+        let err = parse_keys_strict("s-l").unwrap_err().to_string();
+        assert!(err.contains("\"s-l\""), "names the exact chord: {err}");
+        assert!(err.contains("unbound"), "says why: {err}");
+        // The offender is named even mid-spec, after bound chords.
+        let err = parse_keys_strict("C-n s-l C-p").unwrap_err().to_string();
+        assert!(err.contains("\"s-l\""), "mid-spec offender named: {err}");
+    }
+
+    #[test]
+    fn strict_rejects_a_dangling_prefix_sequence_naming_both_chords() {
+        // The C-x defaults are retired, so `C-x C-s` resolves to a quiet Cancel
+        // permissively (pinned above in `native_save_and_c_x_retired`); strict
+        // refuses it, naming the failed second key AND the prefix it dangled off.
+        let err = parse_keys_strict("C-x C-s").unwrap_err().to_string();
+        assert!(err.contains("\"C-s\""), "names the dangling chord: {err}");
+        assert!(err.contains("\"C-x\""), "names the prefix: {err}");
+    }
+
+    #[test]
+    fn strict_allows_an_explicit_prefix_cancel() {
+        // Esc / C-g mid-prefix MEAN "cancel the prefix" — a scenario can say
+        // that honestly, so strict resolves them exactly like permissive.
+        for spec in ["C-x Esc", "C-x C-g"] {
+            assert_eq!(
+                parse_keys_strict(spec).unwrap(),
+                parse_keys(spec).unwrap(),
+                "explicit cancel stays legal in strict: {spec:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_matches_permissive_on_fully_bound_specs() {
+        for spec in ["C-n C-n", "s-s", "a b C-Space Left", "Enter Tab Backspace", "s-Down M->"] {
+            assert_eq!(
+                parse_keys_strict(spec).unwrap(),
+                parse_keys(spec).unwrap(),
+                "strict is a pure gate, never a different resolution: {spec:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_still_errors_on_an_unparseable_token() {
+        // The unparseable-token error is shared with the permissive door (both
+        // name the token); strict adds no second vocabulary for it.
+        let err = parse_keys_strict("frobnicate").unwrap_err().to_string();
+        assert!(err.contains("\"frobnicate\""), "{err}");
     }
 
     #[test]

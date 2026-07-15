@@ -104,6 +104,20 @@ struct ReplayResult {
     /// drives a Goto accept, so a plain `--screenshot` (no `--keys`, or keys
     /// that never open a second file) is unaffected.
     buffers_open: usize,
+    /// STRICT REPLAY TRUTHFULNESS: every INTERCEPTED external handoff the
+    /// replay observed + recorded without performing (URL open, mailto, Trash,
+    /// download — see [`crate::replay::classify`]), in replay order. Recorded
+    /// under BOTH modes; the phase-5 scenario trace consumes this seam (no
+    /// consumer beyond the tests yet, hence the allow).
+    #[allow(dead_code)]
+    intercepts: Vec<crate::replay::Intercept>,
+    /// The permissive-mode warning lines (exactly what was printed to stderr,
+    /// one per Unsupported/Intercepted crossing — [`crate::replay::warn_line`]),
+    /// so the warnings themselves are testable. Empty under strict mode (it
+    /// aborts on Unsupported and records Intercepted silently) and for any
+    /// replay that stays on the Applied path.
+    #[allow(dead_code)]
+    warnings: Vec<String>,
 }
 
 /// PARK `buffer` into `registry` under its stable identity (a no-op for an
@@ -137,11 +151,47 @@ fn replay_keys(
     workspace: Option<&std::path::Path>,
     notes_root: &std::path::Path,
     config: &Config,
+    oracle: Option<&dyn actions::LayoutOracle>,
+) -> ReplayResult {
+    match replay_keys_mode(
+        crate::replay::Mode::Permissive,
+        buffer,
+        keys,
+        corpus,
+        root,
+        workspace,
+        notes_root,
+        config,
+        oracle,
+    ) {
+        Ok(res) => res,
+        // Every abort in the loop is Strict-gated, so the permissive door is
+        // structurally infallible — pinned by
+        // `permissive_replay_never_aborts_and_warns_on_both_non_applied_seams`.
+        Err(e) => unreachable!("permissive replay never aborts: {e}"),
+    }
+}
+
+/// The mode-aware core both doors share. PERMISSIVE never errors (it warns on
+/// stderr + records); STRICT returns the exact offender the moment an
+/// Unsupported effect fires ([`crate::replay::strict_error`]) — the scenario
+/// runner's truthfulness contract (see [`crate::replay`]'s module doc).
+fn replay_keys_mode(
+    mode: crate::replay::Mode,
+    buffer: &mut Buffer,
+    keys: &[Action],
+    corpus: &[String],
+    root: &std::path::Path,
+    workspace: Option<&std::path::Path>,
+    notes_root: &std::path::Path,
+    config: &Config,
     // The visual-line motion LAYOUT ORACLE (an offscreen-shaped pipeline), so the
     // headless replay sees the SAME wrap geometry the live window does. `None` in
     // the unit tests / GPU-less paths, where motion falls back to LOGICAL lines.
     oracle: Option<&dyn actions::LayoutOracle>,
-) -> ReplayResult {
+) -> Result<ReplayResult> {
+    let mut intercepts: Vec<crate::replay::Intercept> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     let mut shift_selecting = false;
     let mut zoom = 1.0f32;
     let mut search: Option<crate::search::SearchState> = None;
@@ -287,6 +337,37 @@ fn replay_keys(
         // matching the emacs-style sticky region the key-spec expresses.
         let effect = actions::apply_core(&mut ctx, &action, false);
         drop(ctx);
+        // STRICT REPLAY TRUTHFULNESS: consult the ONE classification
+        // (`crate::replay::classify`, a no-wildcard match over `Effect`) BEFORE
+        // the apply arms below run. Strict ABORTS on an Unsupported effect,
+        // naming the exact action + effect; permissive keeps the legacy
+        // behavior byte-identically but WARNS on stderr (and records the same
+        // line) when it crosses an Unsupported or Intercepted seam. Every
+        // Intercepted handoff is recorded under BOTH modes — the phase-5
+        // trace seam.
+        let classified = crate::replay::classify(&effect);
+        // An intercepted handoff is RECORDED under both modes (the trace seam).
+        if let crate::replay::EffectClass::Intercepted { detail } = &classified.class {
+            intercepts.push(crate::replay::Intercept {
+                effect: classified.name,
+                detail: detail.clone(),
+            });
+        }
+        // Strict refuses an Unsupported effect outright, naming the offender.
+        if mode == crate::replay::Mode::Strict {
+            if let crate::replay::EffectClass::Unsupported { .. } = classified.class {
+                return Err(crate::replay::strict_error(&action, &classified));
+            }
+        }
+        // Permissive warns on either non-Applied crossing (`warn_line` is
+        // `None` for Applied) — the ONE stderr seam, mirrored into `warnings`
+        // so the exact printed line is testable.
+        if mode == crate::replay::Mode::Permissive {
+            if let Some(w) = crate::replay::warn_line(&action, &classified) {
+                eprintln!("{w}");
+                warnings.push(w);
+            }
+        }
         // BREADCRUMB: stamp the overlay this action just opened (if any) with the
         // palette parent a preceding `RunAction` re-dispatch set — a no-op unless the
         // previous iteration was a palette Enter (`pending_return_to` still None here
@@ -530,7 +611,7 @@ fn replay_keys(
     let search_case = search.as_ref().map(|s| s.is_case_sensitive()).unwrap_or(false);
     let replace_active = search.as_ref().map(|s| s.is_replace_active()).unwrap_or(false);
     let replacement = search.as_ref().map(|s| s.replacement().to_string()).unwrap_or_default();
-    ReplayResult {
+    Ok(ReplayResult {
         zoom: zoom_out,
         selection: sel,
         search_query,
@@ -540,7 +621,9 @@ fn replay_keys(
         overlay,
         accept,
         buffers_open,
-    }
+        intercepts,
+        warnings,
+    })
 }
 
 /// A plain `--screenshot` capture: resolve the project, replay `--keys`, fold the
@@ -556,6 +639,9 @@ fn capture_screenshot(
     workspace: Option<PathBuf>,
     notes_root: PathBuf,
     config: Config,
+    // STRICT REPLAY (`--strict-replay`): abort on any Unsupported effect or a
+    // missing layout oracle instead of degrading quietly — see `crate::replay`.
+    strict: bool,
 ) -> Result<()> {
             // Resolve the active project + its file index BEFORE the replay so a
             // `Cmd-O` in the key-spec summons a real, scoped go-to overlay.
@@ -597,7 +683,19 @@ fn capture_screenshot(
             } else {
                 capture::build_oracle(&buffer, &opts)
             };
-            let res = replay_keys(
+            // STRICT REPLAY: a spec with keys MUST ride the real wrap geometry —
+            // a missing oracle (no GPU adapter) means visual-line motion would
+            // silently fall back to logical lines, so strict refuses up front.
+            if strict && !keys.is_empty() && oracle.is_none() {
+                return Err(crate::replay::missing_oracle_error());
+            }
+            let mode = if strict {
+                crate::replay::Mode::Strict
+            } else {
+                crate::replay::Mode::Permissive
+            };
+            let res = replay_keys_mode(
+                mode,
                 &mut buffer,
                 &keys,
                 &corpus,
@@ -606,7 +704,7 @@ fn capture_screenshot(
                 &notes_root,
                 &config,
                 oracle.as_ref().map(|o| o.as_oracle()),
-            );
+            )?;
             if opts.zoom.is_none() {
                 opts.zoom = res.zoom;
             }
@@ -783,7 +881,8 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             workspace,
             notes_root,
             config,
-        } => capture_screenshot(out, file, opts, keys, root, workspace, notes_root, config),
+            strict,
+        } => capture_screenshot(out, file, opts, keys, root, workspace, notes_root, config, strict),
         Mode::ScreenshotMotion { out, file, keys } => {
             let mut buffer = load_buffer(&file);
             let root = resolve_root(&None, &file, None);
@@ -977,6 +1076,106 @@ mod tests {
         let root = PathBuf::from("/tmp");
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         assert_eq!(res.selection, Some(((0, 1), (0, 3))), "mark@3 + two Lefts -> [1,3)");
+    }
+
+    // ── STRICT REPLAY TRUTHFULNESS: the mode-aware replay engine ──
+
+    #[test]
+    fn strict_replay_aborts_on_an_unsupported_effect_naming_action_and_effect() {
+        // Cmd-Q's `Effect::Quit` is classified Unsupported (live exits the
+        // event loop; a replay would keep applying keys past it) — the strict
+        // door must refuse it, naming the exact action AND effect.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-q").unwrap();
+        let root = PathBuf::from("/tmp");
+        let err = replay_keys_mode(
+            crate::replay::Mode::Strict,
+            &mut buffer,
+            &keys,
+            &[],
+            &root,
+            None,
+            &root,
+            &Config::empty(),
+            None,
+        )
+        .err()
+        .expect("strict replay aborts on an unsupported effect")
+        .to_string();
+        assert!(err.contains("`quit`"), "effect named: {err}");
+        assert!(err.contains("Quit"), "action named: {err}");
+        assert!(err.starts_with("strict replay:"), "{err}");
+    }
+
+    #[test]
+    fn strict_replay_records_intercepted_handoffs_without_aborting() {
+        // C-c C-o on a link produces `Effect::FollowLink(url)` — an EXTERNAL
+        // handoff the replay observes and records but never performs. Strict
+        // must PASS it (that's the intercept contract, not a violation) and the
+        // recorded intercept must carry the observed URL — the phase-5 trace seam.
+        let mut buffer = Buffer::from_str("[a](https://awl.example/doc) tail");
+        buffer.set_cursor(1); // inside the link
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys_mode(
+            crate::replay::Mode::Strict,
+            &mut buffer,
+            &[Action::FollowLink],
+            &[],
+            &root,
+            None,
+            &root,
+            &Config::empty(),
+            None,
+        )
+        .expect("intercepted handoffs are legal under strict");
+        assert_eq!(
+            res.intercepts,
+            vec![crate::replay::Intercept {
+                effect: "follow_link",
+                detail: "https://awl.example/doc".into()
+            }]
+        );
+        assert!(res.warnings.is_empty(), "strict records silently, never warns");
+    }
+
+    #[test]
+    fn permissive_replay_never_aborts_and_warns_on_both_non_applied_seams() {
+        // The legacy `--keys` door: an Unsupported effect (Quit) and an
+        // Intercepted one (FollowLink) both WARN — the same strings printed to
+        // stderr are recorded here — and the replay runs to completion (the
+        // key AFTER the Quit still applies, today's documented behavior).
+        let mut buffer = Buffer::from_str("[a](https://awl.example/x) tail");
+        buffer.set_cursor(1);
+        let keys = vec![Action::Quit, Action::FollowLink, Action::BufferEnd];
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert_eq!(res.warnings.len(), 2, "one warning per crossing: {:?}", res.warnings);
+        assert!(
+            res.warnings[0].contains("skipped unsupported effect `quit`"),
+            "{}",
+            res.warnings[0]
+        );
+        assert!(
+            res.warnings[1].contains("intercepted `follow_link`")
+                && res.warnings[1].contains("https://awl.example/x"),
+            "{}",
+            res.warnings[1]
+        );
+        assert_eq!(res.intercepts.len(), 1, "the handoff is recorded permissively too");
+        let (line, col) = buffer.cursor_line_col();
+        assert!(line > 0 || col > 0, "the key after Quit still applied (BufferEnd moved)");
+    }
+
+    #[test]
+    fn a_fully_applied_replay_stays_warning_and_intercept_free() {
+        // The common case (typing/motion) crosses no seam: the permissive door
+        // is byte-identical to the pre-round replay, with silent stderr.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("a b c C-a C-e").unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.warnings.is_empty(), "{:?}", res.warnings);
+        assert!(res.intercepts.is_empty());
     }
 
     // ── SAVE-FEEDBACK round: Cmd-S on a scratch buffer is headless-reachable ──
@@ -2123,6 +2322,7 @@ mod tests {
             None,
             notes_root,
             config,
+            false, // permissive (the legacy default)
         )
         .expect("capture succeeds");
         let json = std::fs::read_to_string(out.with_extension("json")).unwrap();
@@ -2167,6 +2367,7 @@ mod tests {
                 Some(dir.clone()),
                 dir.clone(),
                 Config::empty(),
+                false, // permissive (the legacy default)
             )
             .expect("lava width-law capture succeeds");
             let json: serde_json::Value = serde_json::from_str(

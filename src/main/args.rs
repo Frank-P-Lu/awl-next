@@ -57,6 +57,12 @@ pub(crate) enum Mode {
         /// The loaded persistent config: supplies the `[keys]` overrides reflected in
         /// the palette's effective bindings, and the Settings-open target.
         config: Config,
+        /// STRICT REPLAY (`--strict-replay`, opt-in): abort on any unbound
+        /// chord (checked at parse time), any Unsupported effect, or a missing
+        /// layout oracle — naming the exact offender — instead of the legacy
+        /// permissive warn-and-continue. The scenario-runner default the later
+        /// harness phases plumb through; see `crate::replay`'s module doc.
+        strict: bool,
     },
     /// Deterministic one-frame capture of a caret MID-GLIDE (dropped to the
     /// baseline and stretched into a trailing underline streak), so the temporal
@@ -407,6 +413,10 @@ pub(crate) fn parse_args() -> Result<Mode> {
     // `--wait` (single-instance daemon; `EDITOR=awl --wait` for git): only
     // meaningful for the windowed editor — see `crate::daemon`'s module doc.
     let mut wait_flag = false;
+    // `--strict-replay`: the strict replay gate on `--screenshot --keys` — see
+    // `crate::replay`'s module doc. Parsed keys go through the STRICT door
+    // (unbound chords error) and the replay aborts on Unsupported effects.
+    let mut strict_replay = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -659,6 +669,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
                     .ok_or_else(|| anyhow::anyhow!("--keys requires a key-spec string"))?;
                 keys_spec = Some(v);
             }
+            "--strict-replay" => {
+                strict_replay = true;
+            }
             "--config" => {
                 let v = args
                     .next()
@@ -717,7 +730,8 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
                      \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\
                      \x20 --wait              windowed editor only: single-instance daemon — hand `file` to an already-running awl and block until C-x # finishes it (EDITOR=awl --wait for git)\n\
-                     \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture"
+                     \x20 --keys \"SPEC\"        replay emacs chords (e.g. \"C-n C-n M->\") then capture\n\
+                     \x20 --strict-replay     with --screenshot --keys: abort (naming the offender) on an unbound chord, a live-only effect the replay can't perform, or a missing layout oracle"
                 );
                 std::process::exit(0);
             }
@@ -812,7 +826,22 @@ pub(crate) fn parse_args() -> Result<Mode> {
     if wait_flag && out.is_some() {
         bail!("--wait only applies to the windowed editor (no capture mode)");
     }
+    // `--strict-replay` gates a `--keys` replay, and only the plain
+    // `--screenshot` mode threads the strict engine (the motion/timeline/held
+    // variants stay permissive one-offs); refuse the combinations that would
+    // silently ignore it.
+    if strict_replay {
+        if keys_spec.is_none() {
+            bail!("--strict-replay requires --keys (there is no replay to be strict about)");
+        }
+        if kind != CaptureKind::Screenshot {
+            bail!("--strict-replay only applies to --screenshot (not motion/timeline/held captures)");
+        }
+    }
     let keys: Vec<Action> = match &keys_spec {
+        // The STRICT door: an unbound chord (or a dangling prefix sequence) is
+        // an error naming the exact chord, instead of the permissive silent drop.
+        Some(spec) if strict_replay => keyspec::parse_keys_strict_with(spec, &config)?,
         Some(spec) => keyspec::parse_keys_with(spec, &config)?,
         None => Vec::new(),
     };
@@ -866,6 +895,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
             workspace: workspace_folded,
             notes_root: notes_root_resolved,
             config,
+            strict: strict_replay,
         },
         None => Mode::Windowed {
             file,

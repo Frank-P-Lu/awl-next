@@ -89,6 +89,7 @@ mod project;
 mod recent_files;
 mod recents;
 mod render;
+mod replay;
 mod script;
 mod search;
 mod selection;
