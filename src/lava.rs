@@ -408,7 +408,9 @@ pub fn env_phase() -> Option<f32> {
 // doc could go both-sides — treatments that ship NOTHING; the human eyeballs the
 // gallery captures before any of them is chosen (or none).
 //   AWL_LAVA_BOTH=plate   solid ground plate behind just the rail entries
-//   AWL_LAVA_BOTH=band    glow-suppression + a local band carve around the rail
+//   AWL_LAVA_BOTH=band    a local band carve around the rail + a local left-edge
+//                         glow-shed over the rail band (the far margin keeps its
+//                         ordinary edge-glow — the shed is scoped, not global)
 //   AWL_LAVA_BOTH=bleed   FULL-BLEED: lava everywhere incl. under the column,
 //                         heavily value-dimmed there (the two-layer-model tension
 //                         made visible; GPU cost is just the mask multiply)

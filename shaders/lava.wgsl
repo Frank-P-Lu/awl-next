@@ -214,7 +214,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     // PROBE `band` (gallery-only): a local band carve around the OUTLINE rail,
-    // so a headed doc keeps both margins outside the rail's own band.
+    // so a headed doc keeps both margins outside the rail's own band. Its
+    // left-edge glow is shed locally too (see `near_rail_edge` below) — the
+    // carve and the glow-shed cover the SAME rail band, never the far margin.
     if (probe == 2u) {
         mask = mask * smoothstep(0.0, gap, rect_dist_outside(in.px, g.outline_rect));
     }
@@ -224,12 +226,23 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let bleed = probe == 3u;
 
     // EDGE-GLOW: within the short bleed distance INSIDE the column, a faint,
-    // field-driven tail may show (glow mode only). The `band` probe suppresses
-    // it (a flat local band should shed the same edge bleed a carved rail does).
-    let could_glow = mode > 1.5 && probe != 2u && dist_outside < 0.0 && dist_outside > -GLOW_BLEED_PX;
+    // field-driven tail may show (glow mode only). The `plate`/`band` probes
+    // shed it ONLY where their local rail treatment sits — the LEFT edge, within
+    // the rail band's own vertical extent — so a flat local band (or solid plate)
+    // sheds the same left-edge bleed a carved rail does WITHOUT touching the
+    // opposite margin's ordinary glow. `x - g.margin.x < GLOW_BLEED_PX` is TRUE
+    // only for the LEFT-edge tail (the RIGHT edge sits a full column-width away),
+    // so the right margin's edge-glow survives both probes untouched.
+    let rail_probe = probe == 1u || probe == 2u;
+    let in_rail_band_y = in.px.y >= g.outline_rect.y && in.px.y <= g.outline_rect.w;
+    let near_rail_edge = rail_probe && in_rail_band_y && (x - g.margin.x) < GLOW_BLEED_PX;
+    let could_glow = mode > 1.5 && !near_rail_edge && dist_outside < 0.0 && dist_outside > -GLOW_BLEED_PX;
 
     // PROBE `plate` (gallery-only): a SOLID ground plate behind just the rail
     // entries — opaque ground inside the outline band, lava both sides elsewhere.
+    // The plate-to-column boundary reads as a clean solid floor: the left-edge
+    // glow tail is shed inside the rail band (`near_rail_edge`), so no hair of
+    // blob crest bleeds across the plate's edge.
     if (probe == 1u && rect_dist_outside(in.px, g.outline_rect) <= 0.0) {
         return vec4<f32>(g.ground.rgb, 1.0);
     }
