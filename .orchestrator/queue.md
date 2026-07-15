@@ -165,6 +165,8 @@ headless driver does not implement.
 **Explicitly deferred:** semantic surface locators, pointer/drag scripting, full
 event-loop/compositor coverage, a complete `HeadlessApp`, and a polished trace-viewer UI.
 
+**LANDED FOLLOW-UPS (2026-07-15, from the round's honest flags):** (a) strict scenarios can't yet drive rebind commits, settings toggles/value-commits/path-picks, note rename/duplicate/move, keep-version, last-/finish-buffer — all honestly `Unsupported` until a later phase teaches the replay to apply them for real (the abort names them exactly); (b) TASTE CALL: `Effect::Quit` is `Unsupported` (strict aborts on Cmd-Q) — a later phase may promote it to a clean runner-level stop; (c) the missing-oracle strict abort is unit-pinned but only live-reachable on a GPU-less host; (d) mid-replay project switch doesn't rebuild the Goto corpus for later keys in the same spec (pre-existing narrow gap, unchanged); (e) local ffmpeg on the dev Mac has a broken libvpx dylib — film encode degrades exactly as spec'd (frames retained, note printed, exit 0); the encode plumbing is proven via a stub-ffmpeg test.
+
 **Done / verify:** prefixed `cargo build` + `cargo test`; Linux-convention tests;
 wasm build; byte-identical repeated trace; regressions for search typing and
 edit→wrapped-motion; one scenario that intentionally aborts on an unsupported
