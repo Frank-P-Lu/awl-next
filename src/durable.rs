@@ -398,6 +398,11 @@ mod tests {
             ("crashlog.rs", 1),
             ("daemon.rs", 1),
             ("durable.rs", 1),
+            // The export golden-file BLESS helper (`export::tests::golden`, gated
+            // on `AWL_BLESS`): writes a committed test fixture under
+            // `src/export/testdata/`, never a durable user store — a torn write
+            // just means re-blessing, and the golden is regenerated on demand.
+            ("export/tests.rs", 1),
             ("fs.rs", 4),
             ("history/tests.rs", 1),
             ("index.rs", 4),

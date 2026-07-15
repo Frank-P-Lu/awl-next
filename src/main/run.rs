@@ -732,6 +732,11 @@ impl<'a> ReplaySession<'a> {
             // (`web_export::filename_for`). Also gated off entirely on native by
             // `commands::action_available` before this effect can even be signaled.
             | actions::Effect::DownloadFile
+            // EXPORT: rendering the document + writing the `.docx`/`.html` sibling
+            // (or a web download) is a live-App-only concern (`App::export_document`)
+            // — a capture must never write an export file, so this is a documented
+            // no-op here; the exporter core itself is unit-tested pure (`export/`).
+            | actions::Effect::Export(_)
             // CHECK FOR UPDATES: recording the local "last checked" marker and
             // opening the site's `/check?v=…` page are both live-App-only
             // concerns (`App::check_for_updates`) — a capture must never touch

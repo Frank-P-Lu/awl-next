@@ -298,6 +298,12 @@ static COMMAND_SEED: &[Command] = &[
     Command { name: "Inline code",       action: Action::InlineCode,         native: "",    emacs: ""        , native_only: false, web_only: false },
     Command { name: "Highlight",         action: Action::Highlight,          native: "",         emacs: ""        , native_only: false, web_only: false },
     Command { name: "Strikethrough",     action: Action::Strikethrough,      native: "",         emacs: ""        , native_only: false, web_only: false },
+    // EXPORT COMMANDS (see `export/`): render the markdown document to a portable
+    // `.docx` / standalone `.html` sibling. Palette-only, markdown buffers (a calm
+    // no-op elsewhere, like the format toggles); available on native AND web (web
+    // routes through the download shim). No default chord — both rebindable.
+    Command { name: "Export as Word…",   action: Action::ExportWord,         native: "",         emacs: ""        , native_only: false, web_only: false },
+    Command { name: "Export as HTML…",   action: Action::ExportHtml,         native: "",         emacs: ""        , native_only: false, web_only: false },
     // LINKS V2: Cmd-K — the chord the keybinding-idiom audit reserved for exactly
     // this (W1: Bear/Craft/Notion/Things/Ulysses/Slack all spend it on insert/
     // edit-link). Emacs slot deliberately empty (no prior default claimed it —
@@ -1319,6 +1325,9 @@ mod tests {
             "Code block",
             "Highlight",
             "Strikethrough",
+            // Export commands — palette-only, no native convention.
+            "Export as Word…",
+            "Export as HTML…",
         ];
         for c in COMMANDS.iter() {
             if !PALETTE_ONLY.contains(&c.name) {

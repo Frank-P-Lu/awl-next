@@ -272,6 +272,17 @@ pub enum Effect {
     /// build. LIVE-APP-ONLY: headless `--keys` replay no-ops it (never touches the
     /// DOM), so a settled capture stays byte-identical. See `web_export.rs`.
     DownloadFile,
+    /// EXPORT (`Action::ExportWord` / `Action::ExportHtml`): render the ACTIVE
+    /// markdown buffer to a `.docx` / standalone `.html` document. The pure core
+    /// can't reach the filesystem (sibling-file write) or the DOM (web download),
+    /// and image embedding reads the doc's `assets/` off disk — all caller-level
+    /// concerns — so it signals the requested [`crate::export::Format`] for the
+    /// live App to perform (`App::export_document`, `export/`). Only produced for
+    /// a markdown buffer (the `Action::ExportWord`/`ExportHtml` arms gate on
+    /// `Buffer::is_markdown`; a `.rs`/`.txt` buffer is a calm no-op, mirroring the
+    /// format toggles). LIVE-APP-ONLY: headless `--keys` replay never writes a
+    /// file or touches the DOM, so a settled capture stays byte-identical.
+    Export(crate::export::Format),
     /// "Check for Updates": the pure core can't reach the fs marker or the OS
     /// browser handoff, so it signals a bare request for the live App to (a)
     /// record a LOCAL "last checked" marker (`updates::record_checked`,
@@ -777,6 +788,19 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::InlineCode => apply_inline_format(ctx, format::InlineKind::InlineCode),
         Action::Highlight => apply_inline_format(ctx, format::InlineKind::Highlight),
         Action::Strikethrough => apply_inline_format(ctx, format::InlineKind::Strikethrough),
+        // EXPORT (markdown-only, like the format toggles): signal the requested
+        // format for the live App to render + write. A non-markdown buffer is a
+        // calm no-op (`Effect::None`).
+        Action::ExportWord => {
+            if ctx.buffer.is_markdown() {
+                effect = Effect::Export(crate::export::Format::Docx);
+            }
+        }
+        Action::ExportHtml => {
+            if ctx.buffer.is_markdown() {
+                effect = Effect::Export(crate::export::Format::Html);
+            }
+        }
         // LINKS V2 — Cmd-K: summon the URL minibuffer (`link::open_insert_link`
         // decides WRAP / EDIT / INSERT from buffer state — see `Action::InsertLink`'s
         // own doc). Markdown-only, calm no-op elsewhere. The actual edit lands on
