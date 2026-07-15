@@ -48,7 +48,13 @@ Spec grammar — space-separated emacs chords:
 - `C-x` two-chord prefixes compose: `"C-x C-s"` → save.
 
 Because replay drives the same keymap + `apply_core` seam as live editing, a
-capture exercises the real edit logic — not a parallel mock.
+capture exercises the real edit logic — not a parallel mock. The visual-line
+LAYOUT ORACLE (the offscreen-shaped pipeline wrapped motion consults) is
+RE-SHAPED from the current buffer / zoom / page-measure state before every
+action (`capture::OraclePipeline::refresh` — one seam), mirroring the live
+window's between-keystrokes re-sync — so an edit that re-wraps a line, a
+replayed zoom change, or a Goto buffer switch (and the sticky-measure re-apply
+riding it) never leaves a later motion on stale wrap geometry.
 
 **Caveats — know these before trusting a replay:**
 

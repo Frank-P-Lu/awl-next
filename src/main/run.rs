@@ -151,7 +151,7 @@ fn replay_keys(
     workspace: Option<&std::path::Path>,
     notes_root: &std::path::Path,
     config: &Config,
-    oracle: Option<&dyn actions::LayoutOracle>,
+    oracle: Option<&mut capture::OraclePipeline>,
 ) -> ReplayResult {
     match replay_keys_mode(
         crate::replay::Mode::Permissive,
@@ -186,9 +186,14 @@ fn replay_keys_mode(
     notes_root: &std::path::Path,
     config: &Config,
     // The visual-line motion LAYOUT ORACLE (an offscreen-shaped pipeline), so the
-    // headless replay sees the SAME wrap geometry the live window does. `None` in
-    // the unit tests / GPU-less paths, where motion falls back to LOGICAL lines.
-    oracle: Option<&dyn actions::LayoutOracle>,
+    // headless replay sees the SAME wrap geometry the live window does. Held
+    // MUTABLY because the loop RE-SHAPES it from the current buffer / zoom /
+    // page-measure state before EVERY action (`OraclePipeline::refresh` — the one
+    // freshness seam), mirroring the live window's between-keystrokes re-sync so
+    // an edit / zoom / Goto switch can never leave a later motion on stale wrap
+    // geometry. `None` in the unit tests / GPU-less paths, where motion falls
+    // back to LOGICAL lines.
+    mut oracle: Option<&mut capture::OraclePipeline>,
 ) -> Result<ReplayResult> {
     let mut intercepts: Vec<crate::replay::Intercept> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -221,6 +226,16 @@ fn replay_keys_mode(
         // re-dispatched action's `apply_core` opens its overlay.
         let mut pending_return_to: Option<crate::overlay::OverlayKind> = None;
         while let Some(action) = current.take() {
+        // FRESH LAYOUT ORACLE PER ACTION: re-shape the oracle from the CURRENT
+        // buffer / zoom / page-measure state BEFORE the action consults it —
+        // the live window's pipeline re-syncs between keystrokes, so the
+        // headless twin must too, or an edit that re-wraps a line (or a zoom
+        // change, or the Goto arm's buffer + measure switch below) leaves the
+        // NEXT motion reading stale wrap geometry. One seam, unconditional by
+        // design (both underlying calls no-op cheaply when nothing changed).
+        if let Some(op) = oracle.as_deref_mut() {
+            op.refresh(buffer, zoom);
+        }
         // GO-TO's HEADINGS lens corpus: the current buffer's markdown headings (title
         // indented by depth, paired with its line) — the fold that retired the
         // standalone Outline picker. Gathered ONLY when a Go-to door fires (Cmd-O /
@@ -331,7 +346,7 @@ fn replay_keys_mode(
             overlay: &mut overlay,
             make_overlay: &mut make_overlay,
             browse_to: &mut browse_to,
-            oracle,
+            oracle: oracle.as_deref().map(|op| op.as_oracle()),
         };
         // Replay is unshifted: selection comes from an explicit C-Space mark,
         // matching the emacs-style sticky region the key-spec expresses.
@@ -676,9 +691,11 @@ fn capture_screenshot(
             //
             // Visual-line motion ORACLE: when the spec has keys, build an offscreen
             // pipeline shaped like the upcoming capture so headless motion reads the
-            // SAME wrap geometry the live window does. Skipped for an empty spec (no
-            // motion to resolve) and absent on GPU-less hosts (logical fallback).
-            let oracle = if keys.is_empty() {
+            // SAME wrap geometry the live window does (and is re-shaped from the
+            // current replay state before every action — `OraclePipeline::refresh`,
+            // called inside the replay loop). Skipped for an empty spec (no motion
+            // to resolve) and absent on GPU-less hosts (logical fallback).
+            let mut oracle = if keys.is_empty() {
                 None
             } else {
                 capture::build_oracle(&buffer, &opts)
@@ -703,7 +720,7 @@ fn capture_screenshot(
                 Some(effective_workspace.as_path()),
                 &notes_root,
                 &config,
-                oracle.as_ref().map(|o| o.as_oracle()),
+                oracle.as_mut(),
             )?;
             if opts.zoom.is_none() {
                 opts.zoom = res.zoom;
@@ -2462,7 +2479,7 @@ mod tests {
         crate::page::set_measure(measure);
         let mut buffer = Buffer::from_str(text);
         let opts = CaptureOpts::default();
-        let out = capture::build_oracle(&buffer, &opts).map(|op| {
+        let out = capture::build_oracle(&buffer, &opts).map(|mut op| {
             let keys = keyspec::parse_keys(keys).unwrap();
             let root = PathBuf::from("/tmp");
             replay_keys(
@@ -2473,7 +2490,7 @@ mod tests {
                 None,
                 &root,
                 &Config::empty(),
-                Some(op.as_oracle()),
+                Some(&mut op),
             );
             buffer.cursor_line_col()
         });
@@ -2563,7 +2580,7 @@ mod tests {
         crate::page::set_measure(15);
         let probe = Buffer::from_str(LONG);
         let opts = CaptureOpts::default();
-        let result = capture::build_oracle(&probe, &opts).map(|op| {
+        let result = capture::build_oracle(&probe, &opts).map(|mut op| {
             // Step DOWN from (0,0) with goal-x 0 until the logical line changes;
             // `steps` C-n's cross into line 1, `steps-1` stay on line 0.
             let mut steps = 0usize;
@@ -2586,12 +2603,12 @@ mod tests {
             // One fewer C-n keeps us on line 0's LAST visual row...
             let mut b0 = Buffer::from_str(LONG);
             let keys_stay = keyspec::parse_keys(&"C-n ".repeat(steps - 1)).unwrap();
-            replay_keys(&mut b0, &keys_stay, &[], &root, None, &root, &Config::empty(), Some(op.as_oracle()));
+            replay_keys(&mut b0, &keys_stay, &[], &root, None, &root, &Config::empty(), Some(&mut op));
             let stay = b0.cursor_line_col();
             // ...and the full count crosses into line 1's first visual row.
             let mut b1 = Buffer::from_str(LONG);
             let keys_cross = keyspec::parse_keys(&"C-n ".repeat(steps)).unwrap();
-            replay_keys(&mut b1, &keys_cross, &[], &root, None, &root, &Config::empty(), Some(op.as_oracle()));
+            replay_keys(&mut b1, &keys_cross, &[], &root, None, &root, &Config::empty(), Some(&mut op));
             (stay, b1.cursor_line_col())
         });
         crate::page::set_measure(crate::page::DEFAULT_MEASURE);
@@ -2624,12 +2641,12 @@ mod tests {
         replay_keys(&mut logical, &keys, &[], &root, None, &root, &Config::empty(), None);
 
         let mut visual = Buffer::from_str(text);
-        let Some(op) = capture::build_oracle(&visual, &opts) else {
+        let Some(mut op) = capture::build_oracle(&visual, &opts) else {
             crate::page::set_measure(crate::page::DEFAULT_MEASURE);
             eprintln!("skipping regression_non_wrapped byte-identical: no wgpu adapter");
             return;
         };
-        replay_keys(&mut visual, &keys, &[], &root, None, &root, &Config::empty(), Some(op.as_oracle()));
+        replay_keys(&mut visual, &keys, &[], &root, None, &root, &Config::empty(), Some(&mut op));
 
         assert_eq!(
             visual.cursor_line_col(),
@@ -2650,6 +2667,130 @@ mod tests {
             bv, bl,
             "non-wrapped short-line doc: visual + logical captures are byte-identical"
         );
+    }
+
+    // ---- FRESH LAYOUT ORACLE PER ACTION (Phase 2) --------------------------
+    //
+    // The replay loop re-shapes the oracle from the CURRENT buffer / zoom /
+    // page-measure state before EVERY action (`OraclePipeline::refresh` — the
+    // one freshness seam), mirroring the live window's between-keystrokes
+    // re-sync. Each test below drives one staleness source end-to-end through
+    // the REAL replay and FAILS on the pre-phase build-once oracle (which
+    // shaped the pre-replay buffer exactly once). The per-source refresh
+    // mechanics are unit-tested beside the seam (`capture::oracle::tests`).
+
+    #[test]
+    fn regression_edit_then_wrapped_motion_sees_fresh_wrap_geometry() {
+        // THE known stale case this round retires: a spec that EDITS (wrapping
+        // line 0) and then moves DOWN. The pre-phase oracle still held the
+        // pre-replay shape (line 0 short, unwrapped), so C-n stepped straight
+        // into logical line 1 at (1, 0); fresh per-action geometry lands on
+        // line 0's SECOND visual row instead.
+        let _g = crate::testlock::serial();
+        crate::page::set_page_on(true);
+        crate::page::set_measure(15);
+        let mut buffer = Buffer::from_str("ab\ntail\n");
+        let opts = CaptureOpts::default();
+        let Some(mut op) = capture::build_oracle(&buffer, &opts) else {
+            crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+            eprintln!("skipping regression_edit_then_wrapped_motion: no wgpu adapter");
+            return;
+        };
+        // Type 30 chars at the head of line 0 (it now wraps at the 15-char
+        // measure), return to the buffer start, then move DOWN one visual row.
+        let mut keys: Vec<Action> =
+            "the quick brown fox jumps over".chars().map(Action::InsertChar).collect();
+        keys.push(Action::BufferStart);
+        keys.push(Action::NextLine);
+        let root = PathBuf::from("/tmp");
+        replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), Some(&mut op));
+        let (line, col) = buffer.cursor_line_col();
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        assert_eq!(line, 0, "Down follows the freshly-wrapped line 0 (stale geometry crossed into line 1)");
+        assert!(col > 0, "landing on line 0's second visual row, got col {col}");
+    }
+
+    #[test]
+    fn zoom_change_mid_replay_re_wraps_the_oracle_for_later_motion() {
+        // With the column capped by the WINDOW (MAX_MEASURE), a bigger zoom
+        // fits fewer chars per visual row — so Down after a replayed Cmd-+
+        // must land at a strictly SMALLER column than the same Down at zoom
+        // 1.0. The pre-phase oracle kept its build-time zoom, landing the two
+        // replays identically.
+        let _g = crate::testlock::serial();
+        crate::page::set_page_on(true);
+        crate::page::set_measure(crate::page::MAX_MEASURE);
+        let text = format!("{}\ntail\n", "word ".repeat(80));
+        let root = PathBuf::from("/tmp");
+        let opts = CaptureOpts::default();
+
+        let mut plain = Buffer::from_str(&text);
+        let Some(mut op1) = capture::build_oracle(&plain, &opts) else {
+            crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+            eprintln!("skipping zoom_change_mid_replay_re_wraps_the_oracle: no wgpu adapter");
+            return;
+        };
+        let keys_plain = keyspec::parse_keys("C-n").unwrap();
+        replay_keys(&mut plain, &keys_plain, &[], &root, None, &root, &Config::empty(), Some(&mut op1));
+        let (l1, c1) = plain.cursor_line_col();
+
+        let mut zoomed = Buffer::from_str(&text);
+        let Some(mut op2) = capture::build_oracle(&zoomed, &opts) else {
+            crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+            eprintln!("skipping zoom_change_mid_replay_re_wraps_the_oracle: no wgpu adapter");
+            return;
+        };
+        let keys_zoom = keyspec::parse_keys("s-= C-n").unwrap();
+        replay_keys(&mut zoomed, &keys_zoom, &[], &root, None, &root, &Config::empty(), Some(&mut op2));
+        let (l2, c2) = zoomed.cursor_line_col();
+
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        assert_eq!((l1, l2), (0, 0), "both Downs stay on the wrapped line 0");
+        assert!(c1 > 0 && c2 > 0, "both landed on a second visual row: {c1}, {c2}");
+        assert!(
+            c2 < c1,
+            "the zoomed row holds fewer chars, so its wrap boundary is earlier: {c2} < {c1}"
+        );
+    }
+
+    #[test]
+    fn goto_switch_mid_replay_reshapes_the_oracle_to_the_arriving_buffer() {
+        // The Goto arm swaps the ACTIVE buffer (and re-applies its sticky page
+        // measure) mid-replay; a following Down must read the ARRIVING
+        // buffer's wrap geometry. Launched on a CODE file (configured measure
+        // 100 — b.md's long line would NOT wrap there), the switch to the
+        // prose b.md re-applies measure 15 and swaps the text: both must reach
+        // the oracle for Down to stay on b.md's wrapped line 0. The pre-phase
+        // oracle stayed shaped on a.rs, so Down crossed into line 1 at (1, 0).
+        let _fs = crate::testlock::serial();
+        let dir = std::env::temp_dir().join(format!("awl-oracle-goto-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(dir.join("b.md"), "the quick brown fox jumps over\ntail\n").unwrap();
+        let cfg = Config {
+            page_width_prose: Some(15),
+            page_width_code: Some(100),
+            ..Config::empty()
+        };
+        crate::page::set_page_on(true);
+        crate::page::set_measure(100); // the launch file's own (code) measure
+        let mut buffer = Buffer::from_file(&dir.join("a.rs"));
+        let corpus = vec!["a.rs".to_string(), "b.md".to_string()];
+        let opts = CaptureOpts::default();
+        let Some(mut op) = capture::build_oracle(&buffer, &opts) else {
+            crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+            let _ = std::fs::remove_dir_all(&dir);
+            eprintln!("skipping goto_switch_mid_replay_reshapes_the_oracle: no wgpu adapter");
+            return;
+        };
+        let keys = keyspec::parse_keys("s-o b . m d RET C-n").unwrap();
+        replay_keys(&mut buffer, &keys, &corpus, &dir, None, &dir, &cfg, Some(&mut op));
+        let (line, col) = buffer.cursor_line_col();
+        crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(buffer.path(), Some(dir.join("b.md").as_path()), "the Goto switch landed on b.md");
+        assert_eq!(line, 0, "Down follows b.md's line 0, wrapped at ITS re-applied measure");
+        assert!(col > 0, "landing on line 0's second visual row, got col {col}");
     }
 
     /// LAW: the caret-MODE preference (an explicit pin, OR auto) must never be
