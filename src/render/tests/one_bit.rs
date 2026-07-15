@@ -633,18 +633,20 @@ fn every_overlay_kind_is_classified_and_the_two_families_render_as_declared() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
-/// THE PICKER-ROW-HIGHLIGHT ROUND'S OWN "selected row is invisible" report,
-/// at the INSTANCE-COUNT seam (mirrors
-/// `wagtail_selection_uses_the_invert_pipeline_other_worlds_use_the_ordinary_fill`
-/// above): on Wagtail, `overlay_rows` (the ordinary fill) uploads ZERO
-/// instances and `overlay_rows_invert` carries exactly one — the OPPOSITE of
-/// every other world, where `overlay_rows` carries the real band and
-/// `overlay_rows_invert` stays idle.
+/// THE PICKER-ROW-HIGHLIGHT report's selected-row half, at the INSTANCE-COUNT
+/// seam. The old framebuffer invert (`overlay_rows_invert`) is RETIRED: every
+/// world — 1-bit included — now drives the ONE `overlay_rows` fill pipeline for
+/// the selected band, its COLOR the only thing `HighlightTreatment` changes
+/// (solid `base_content` on a 1-bit world, the value band elsewhere) and the
+/// selected row's own glyphs recolored in the shaper. So `overlay_rows` carries
+/// exactly ONE instance on BOTH a 1-bit and an ordinary world — the
+/// "prepare neither pipeline" hole the old two-pipeline split could represent is
+/// closed by construction (there is only one pipeline left to prepare).
 #[test]
-fn wagtail_picker_row_uses_the_invert_pipeline_other_worlds_use_the_ordinary_fill_band() {
+fn wagtail_picker_selected_band_rides_the_one_fill_pipeline_like_every_world() {
     let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
         eprintln!(
-            "skipping wagtail_picker_row_uses_the_invert_pipeline_other_worlds_use_the_ordinary_fill_band: no wgpu adapter"
+            "skipping wagtail_picker_selected_band_rides_the_one_fill_pipeline_like_every_world: no wgpu adapter"
         );
         return;
     };
@@ -655,55 +657,45 @@ fn wagtail_picker_row_uses_the_invert_pipeline_other_worlds_use_the_ordinary_fil
     v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
     v.overlay_selected = 0;
 
-    theme::set_active_by_name("Wagtail").unwrap();
-    p.set_view(&v);
-    p.prepare(&device, &queue, 1200, 800).unwrap();
-    assert_eq!(
-        p.overlay_rows.instance_count(),
-        0,
-        "Wagtail (one-bit): the ordinary fill band must upload nothing — a flat white \
-         quad would hide the selected row's own white text"
-    );
-    assert_eq!(
-        p.overlay_rows_invert.instance_count(),
-        1,
-        "Wagtail (one-bit): the invert pipeline carries exactly one instance -- this \
-         frame's selected-row rect"
-    );
-
-    theme::set_active_by_name("Tawny").unwrap();
-    p.set_view(&v);
-    p.prepare(&device, &queue, 1200, 800).unwrap();
-    assert_eq!(
-        p.overlay_rows.instance_count(),
-        1,
-        "Tawny: the ordinary fill band carries the real selected-row rect"
-    );
-    assert_eq!(
-        p.overlay_rows_invert.instance_count(),
-        0,
-        "Tawny: overlay_rows_invert stays idle on an ordinary (non-one-bit) world"
-    );
+    for world in ["Wagtail", "Tawny"] {
+        theme::set_active_by_name(world).unwrap();
+        p.sync_theme();
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        assert_eq!(
+            p.overlay_rows.instance_count(),
+            1,
+            "{world}: the ONE fill pipeline carries the selected-row band (the invert \
+             pipeline is retired — a 1-bit world differs only in the band COLOR + its \
+             recolored row glyphs, not in which pipeline draws)"
+        );
+    }
 
     theme::set_active(theme::DEFAULT_THEME);
 }
 
-/// THE ROUND'S OWN motivating bug, at the REAL-PIXEL seam (mirrors
-/// `wagtail_palette_card_real_pixels_show_a_white_border_ring_black_interior`):
-/// a Wagtail command-palette capture with the selected row's own rect (read
-/// back via `overlay_window_report`) sampled directly must show a genuinely
-/// MIXED region — some pure white (the inverted ground), some pure black
-/// (the inverted text) — never the uniform all-black the pre-fix renderer
-/// produced (a flat `[0,0,0,0]`-alpha band composited straight onto the
-/// already-black card, indistinguishable from an unselected row). Also
-/// proves the highlight FOLLOWS the selection: after one `C-n`, the row that
-/// used to read as selected goes back to mostly black and the next
-/// candidate's row picks up the white band instead.
+/// THE ROUND'S OWN motivating bug PLUS the repair round's contrast fix, at the
+/// REAL-PIXEL seam. On Wagtail the selected picker row is a SOLID `base_content`
+/// (white) fill band with the row's own glyphs recolored to solid `base_300`
+/// (black): a crisp black-on-white pair. This test reads the rendered pixels and
+/// asserts BOTH halves:
+///   1. the selected row carries a WIDE run of pure-white band pixels (the solid
+///      fill — never the uniform all-black the original transparent band gave),
+///      AND
+///   2. the row's text strokes reach GENUINELY NEAR-BLACK. The retired
+///      framebuffer invert bottomed out at a gamma-limited mid-grey (~sRGB 83,
+///      the `1 - dst` flip of antialiased near-white strokes); a solid black
+///      recolor lands far darker. The threshold (`< 60`) sits below that grey
+///      floor, so a regression back to the invert (or a half-covered band, the
+///      pre-alignment bug where the row's glyph tops fell on the black card and
+///      only their bottoms reached the white) fails the assertion.
+/// Also proves the highlight FOLLOWS the selection: after moving down, the old
+/// row loses its white band and the new row picks it up.
 #[test]
-fn wagtail_picker_row_pixels_actually_invert_and_the_highlight_follows_the_selection() {
+fn wagtail_picker_selected_row_is_crisp_black_on_a_solid_white_band() {
     let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
         eprintln!(
-            "skipping wagtail_picker_row_pixels_actually_invert_and_the_highlight_follows_the_selection: no wgpu adapter"
+            "skipping wagtail_picker_selected_row_is_crisp_black_on_a_solid_white_band: no wgpu adapter"
         );
         return;
     };
@@ -718,79 +710,81 @@ fn wagtail_picker_row_pixels_actually_invert_and_the_highlight_follows_the_selec
     p.sync_theme();
     p.set_view(&v);
     p.prepare(&device, &queue, 1200, 800).unwrap();
+    let [card_x, card_y, card_w, card_h] = p.overlay_card_rect().expect("the card must be open");
 
-    let (top, _lines, sel_row, card_h, _canvas_h) =
-        p.overlay_window_report().expect("the overlay must be open");
-    assert_eq!(top, 0);
-    assert_eq!(sel_row, 0, "row 0 is selected at the start");
-    let rect = p.overlay_card_rect().expect("the card must be open");
-    let [card_x, card_y, card_w, _] = rect;
-
-    let sample_row = |p: &TextPipeline,
-                       device: &wgpu::Device,
-                       queue: &wgpu::Queue,
-                       row: usize|
-     -> (usize, usize, usize) {
+    // Read every rendered pixel once, then locate the selected row's band by
+    // SCANNING for it (the black card makes a pure-white fill unmistakable) —
+    // robust to the exact row geometry (header rows + the header_gap divider),
+    // which the old fixed `text_top + lh*row` math got wrong once the gap landed.
+    let read = |p: &TextPipeline, device: &wgpu::Device, queue: &wgpu::Queue| -> Vec<[u8; 4]> {
         let (texture, tview) = super::dither::offscreen(device, 1200, 800);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("awl one-bit picker-row encoder"),
         });
         p.render(&mut encoder, &tview).unwrap();
         queue.submit(Some(encoder.finish()));
-        let pixels = super::dither::read_pixels(device, queue, &texture, 1200, 800);
-        let at = |x: i64, y: i64| pixels[(y as u32 * 1200 + x as u32) as usize];
-        // header row (the query line) sits above the candidate rows; each
-        // candidate row is `lh` tall (`overlay_lh`, the shared owner both
-        // shaping and geometry read).
-        let lh = p.overlay_lh();
-        let text_top = card_y + 12.0; // pad
-        let row_top = (text_top + lh * (1.0 + row as f32)) as i64; // + header_rows
-        let row_bottom = (text_top + lh * (2.0 + row as f32)) as i64;
-        let mut white = 0usize;
-        let mut black = 0usize;
-        let mut other = 0usize;
-        for y in row_top..row_bottom {
-            for x in (card_x as i64)..((card_x + card_w) as i64) {
-                match at(x, y) {
-                    [255, 255, 255, 255] => white += 1,
-                    [0, 0, 0, 255] => black += 1,
-                    _ => other += 1,
-                }
-            }
-        }
-        (white, black, other)
+        super::dither::read_pixels(device, queue, &texture, 1200, 800)
+    };
+    let x0 = card_x as i64;
+    let x1 = (card_x + card_w) as i64;
+    let y0 = card_y as i64;
+    let y1 = (card_y + card_h) as i64;
+    // Per row inside the card: the count of pure-white pixels (the solid band
+    // ground) and the DARKEST luminance seen (the recolored black text).
+    let white_run = |pixels: &[[u8; 4]], y: i64| -> usize {
+        (x0..x1).filter(|&x| pixels[(y as u32 * 1200 + x as u32) as usize] == [255, 255, 255, 255]).count()
+    };
+    let darkest_on = |pixels: &[[u8; 4]], y: i64| -> u8 {
+        (x0..x1)
+            .map(|x| pixels[(y as u32 * 1200 + x as u32) as usize][0])
+            .min()
+            .unwrap_or(255)
+    };
+    // The band row = the card row with the widest pure-white run.
+    let band_row = |pixels: &[[u8; 4]]| -> (i64, usize) {
+        (y0..y1).map(|y| (y, white_run(pixels, y))).max_by_key(|&(_, w)| w).unwrap()
     };
 
-    let _ = card_h;
-    let (white0, black0, _) = sample_row(&p, &device, &queue, 0);
+    let pixels0 = read(&p, &device, &queue);
+    let (by0, bw0) = band_row(&pixels0);
     assert!(
-        white0 > 0,
-        "row 0 (selected) must contain SOME pure-white pixels (the inverted ground) -- \
-         got white={white0} black={black0}"
+        bw0 > (card_w as usize) / 2,
+        "Wagtail selected band must be a WIDE solid-white fill — widest white run {bw0}px \
+         of a {}px card (a transparent/partial band would leave the row black)",
+        card_w as usize
     );
+    // The text is on the band rows. Sweep the few rows around the widest-white
+    // row for the darkest stroke — solid black recolor reaches far below the
+    // old invert's ~83 gamma-grey floor.
+    let darkest0 = (by0 - 8..=by0 + 8).map(|y| darkest_on(&pixels0, y)).min().unwrap();
     assert!(
-        black0 > 0,
-        "row 0 (selected) must also contain SOME pure-black pixels (the inverted text) -- \
-         a uniform white slab would just be a different invisibility"
+        darkest0 < 60,
+        "Wagtail selected row text must be CRISP near-black on the white band — darkest \
+         stroke sRGB {darkest0} (the retired invert bottomed out at ~83 mid-grey; \
+         a value ≥ 60 means the recolor regressed or the band no longer covers the glyphs)"
     );
 
-    // Move the selection down one (`C-n`) and re-derive.
+    // Move the selection down one and re-derive: the white band FOLLOWS it.
     v.overlay_selected = 1;
     p.set_view(&v);
     p.prepare(&device, &queue, 1200, 800).unwrap();
     let (_, _, sel_row2, _, _) = p.overlay_window_report().unwrap();
     assert_eq!(sel_row2, 1, "the selection moved to row 1");
-    let (white1_row0, _black1_row0, _) = sample_row(&p, &device, &queue, 0);
-    let (white1_row1, black1_row1, _) = sample_row(&p, &device, &queue, 1);
+    let pixels1 = read(&p, &device, &queue);
+    let (by1, bw1) = band_row(&pixels1);
     assert!(
-        white1_row1 > 0 && black1_row1 > 0,
-        "row 1 (now selected) must carry the mixed inverted band -- got white={white1_row1} \
-         black={black1_row1}"
+        bw1 > (card_w as usize) / 2,
+        "the now-selected row 1 must carry the same wide white band — got {bw1}px"
     );
     assert!(
-        white1_row0 < white0,
-        "row 0 (no longer selected) must lose most of its white pixels once the \
-         highlight moves off it -- was {white0}, now {white1_row0}"
+        (by1 - by0).abs() >= 4,
+        "the white band must MOVE to the newly selected row (was y={by0}, now y={by1})"
+    );
+    assert!(
+        white_run(&pixels1, by0) < bw0,
+        "the previously selected row must lose its white band once the highlight moves off it \
+         (row y={by0}: was {bw0}px white, now {}px)",
+        white_run(&pixels1, by0)
     );
 
     theme::set_active(theme::DEFAULT_THEME);

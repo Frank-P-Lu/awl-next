@@ -295,6 +295,12 @@ impl TextPipeline {
         geom: &OverlayGeom,
         ink: glyphon::Color,
         muted: glyphon::Color,
+        // The SELECTED row's own glyph color on a true 1-bit world
+        // (`HighlightTreatment::InverseFill` — solid `base_300` so black text
+        // lands crisply on the white band). `None` on every ordinary world,
+        // where the selected row keeps its content ink and the shaper is
+        // byte-identical to before.
+        selected_ink: Option<glyphon::Color>,
     ) -> bool {
         // FACETED (lens-strip) pickers — the theme worlds AND the Cmd-P command
         // palette / Settings / Browse / … once a lens strip is populated — lay out
@@ -305,7 +311,7 @@ impl TextPipeline {
         // a right column was built.
         self.overlay_right_shown = false;
         if geom.theme {
-            return self.shape_faceted(geom, ink, muted);
+            return self.shape_faceted(geom, ink, muted, selected_ink);
         }
         let visible = geom.visible;
         let top_idx = geom.top_idx;
@@ -363,7 +369,7 @@ impl TextPipeline {
                 }
             })
             .collect();
-        self.shape_overlay_names(geom, ink, muted, &rows);
+        self.shape_overlay_names(geom, ink, muted, selected_ink, &rows);
         if !has_right {
             return false;
         }
@@ -386,7 +392,7 @@ impl TextPipeline {
         let rows: Vec<String> = (0..visible)
             .map(|row| rowlayout::fit_primary(&self.overlay_items[top_idx + row], full))
             .collect();
-        self.shape_overlay_names(geom, ink, muted, &rows);
+        self.shape_overlay_names(geom, ink, muted, selected_ink, &rows);
         false
     }
 
@@ -421,9 +427,10 @@ impl TextPipeline {
         geom: &OverlayGeom,
         ink: glyphon::Color,
         muted: glyphon::Color,
+        selected_ink: Option<glyphon::Color>,
     ) -> bool {
         // The section-grouped name column + the active-lens underline (unchanged).
-        self.overlay_shape_theme(geom, ink, muted);
+        self.overlay_shape_theme(geom, ink, muted, selected_ink);
         // The dim RIGHT column: the SAME precedence the flat path uses (bindings →
         // times → git; only one is ever populated). Empty on the literal Theme
         // picker → no right column, byte-identical.
@@ -487,6 +494,7 @@ impl TextPipeline {
         geom: &OverlayGeom,
         ink: glyphon::Color,
         muted: glyphon::Color,
+        selected_ink: Option<glyphon::Color>,
         rows: &[String],
     ) {
         // The flat/nav pickers show a `› query` line on top (`header_rows == 1`); the
@@ -538,19 +546,31 @@ impl TextPipeline {
         // stays whole in content ink. The SELECTED row is marked by a surface VALUE BAND
         // (DESIGN §5), not a brighter name. A leading `\n` puts each name on its own row
         // BELOW the query line; without a query line (spell panel) row 0 sits on line 0.
+        //
+        // ONE EXCEPTION — a true 1-bit world (`selected_ink.is_some()`): the
+        // SELECTED row's own glyphs (name AND its dir prefix) recolor to the
+        // solid contrasting ink so black text lands crisp on the white band,
+        // instead of the gamma-grey a framebuffer invert of the row produced
+        // (see `HighlightTreatment::InverseFill`). `sel_vis` is the 0-based row
+        // among those SHOWN, matching `overlay_draw_card`'s band placement.
+        let sel_vis = self.overlay_selected.saturating_sub(geom.top_idx);
         for (row, content) in rows.iter().enumerate() {
             if !(!has_query && row == 0) {
                 spans.push(("\n", mk(ink)));
             }
+            let (name_c, dir_c) = match selected_ink {
+                Some(c) if row == sel_vis => (c, c),
+                _ => (ink, muted),
+            };
             let split = if content.ends_with('/') {
                 0
             } else {
                 crate::overlay::row_split(content)
             };
             if split > 0 {
-                spans.push((&content[..split], mk(muted)));
+                spans.push((&content[..split], mk(dir_c)));
             }
-            spans.push((&content[split..], mk(ink)));
+            spans.push((&content[split..], mk(name_c)));
         }
         // EMPTY STATE: with no candidate rows, one dim, non-selectable message row
         // (styled like the foot hint) sits in the candidate area — the shared calm

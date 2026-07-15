@@ -1364,7 +1364,7 @@ fn at_least_six_distinct_faces() {
     assert_eq!(TAWNY.font, "IBM Plex Mono");
 }
 
-/// THE LAW ROUND's `RenderCaps::highlight_treatment` — a NO-ABSENT-VARIANT
+/// THE LAW ROUND's `Theme::highlight_treatment` — a NO-ABSENT-VARIANT
 /// enum consumed by `render/chrome/overlay.rs`'s picker-row highlight and
 /// `render/chrome/menubar.rs`'s open-title band, replacing the former
 /// hand-rolled `if selection_style == InverseVideo { .. } else { .. }` at
@@ -1377,7 +1377,7 @@ fn at_least_six_distinct_faces() {
 fn highlight_treatment_matches_selection_style_on_every_world_no_absent_case() {
     for t in THEMES.iter() {
         let band = crate::theme::Srgb::rgb(0x11, 0x22, 0x33);
-        let treatment = t.render_caps.highlight_treatment(band);
+        let treatment = t.highlight_treatment(band);
         match (t.render_caps.selection_style, treatment) {
             (
                 crate::theme::SelectionStyle::Fill,
@@ -1387,8 +1387,13 @@ fn highlight_treatment_matches_selection_style_on_every_world_no_absent_case() {
             }
             (
                 crate::theme::SelectionStyle::InverseVideo,
-                crate::theme::HighlightTreatment::Invert,
-            ) => {}
+                crate::theme::HighlightTreatment::InverseFill { band: b, ink },
+            ) => {
+                // A 1-bit world resolves the pair off its OWN ladder, not the
+                // caller's `band`: solid `base_content` fill + `base_300` glyphs.
+                assert_eq!(b, t.base_content, "{}: InverseFill band must be base_content", t.name);
+                assert_eq!(ink, t.base_300, "{}: InverseFill ink must be base_300", t.name);
+            }
             (style, treatment) => panic!(
                 "{}: selection_style {style:?} produced the WRONG treatment {treatment:?} — \
                  the enum's whole point is that this pairing is supposed to be unreachable",

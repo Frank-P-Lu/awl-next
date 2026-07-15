@@ -64,8 +64,6 @@ impl TextPipeline {
             self.menu_drop_menu = None;
             self.menubar_bg.prepare(device, queue, width, height, &[]);
             self.menubar_hi.prepare(device, queue, width, height, &[]);
-            self.menubar_hi_invert
-                .prepare(device, queue, width, height, &[]);
             self.park_menu_text(device, queue, width, height, bounds)?;
             self.park_menu_dropdown(device, queue, width, height, bounds)?;
             return Ok(());
@@ -79,6 +77,19 @@ impl TextPipeline {
         let faint = theme::faint().to_glyphon();
         let muted = theme::muted().to_glyphon();
         let content = theme::base_content().to_glyphon();
+        // The open title's highlight decision, from the ONE owner every
+        // "selected region" surface shares (`highlight_treatment`). A true 1-bit
+        // world fills the band with solid `base_content` and recolors the OPEN
+        // title's own glyphs to solid `base_300` (`open_ink`), so black text
+        // lands crisp on the white band — NOT the gamma-grey a framebuffer
+        // invert of the antialiased title produced (see
+        // `HighlightTreatment::InverseFill`). Ordinary worlds keep the muted
+        // open title on a value-band fill, byte-identical.
+        let hi_treatment = theme::active().highlight_treatment(theme::selection());
+        let (band_srgb, open_ink) = match hi_treatment {
+            theme::HighlightTreatment::ValueBand(c) => (c, muted),
+            theme::HighlightTreatment::InverseFill { band, ink } => (band, ink.to_glyphon()),
+        };
 
         // Bar GROUND: a full-width value-step strip at the very top. Bled past the
         // top/left/right canvas edges it runs flush to (`menubar::bleed_to_canvas_
@@ -103,7 +114,7 @@ impl TextPipeline {
                 spans.push((TITLE_SEP, base.clone().color(faint)));
                 byte += TITLE_SEP.len();
             }
-            let ink = if open == Some(i) { muted } else { faint };
+            let ink = if open == Some(i) { open_ink } else { faint };
             let start = byte;
             spans.push((menu.title, base.clone().color(ink)));
             byte += menu.title.len();
@@ -157,23 +168,14 @@ impl TextPipeline {
             )],
             None => Vec::new(),
         };
-        // TRUE 1-BIT WORLDS: route the band into the inverse-video pipeline
-        // instead of the ordinary fill — see `menubar_hi_invert`'s field doc
-        // (mirrors `overlay_draw_card`'s identical split for the picker).
-        // Routed through `RenderCaps::highlight_treatment` — the LAW ROUND's
-        // no-absent-variant enum, see that fn's own doc for the bug history
-        // this closes.
-        match theme::active().render_caps.highlight_treatment(theme::selection()) {
-            theme::HighlightTreatment::Invert => {
-                self.menubar_hi.prepare(device, queue, width, height, &[]);
-                self.menubar_hi_invert.prepare(device, queue, width, height, hi);
-            }
-            theme::HighlightTreatment::ValueBand(_) => {
-                self.menubar_hi.prepare(device, queue, width, height, hi);
-                self.menubar_hi_invert
-                    .prepare(device, queue, width, height, &[]);
-            }
-        }
+        // The band is ONE solid fill on every world (`menubar_hi`); its COLOR is
+        // the only thing the treatment changes — a value-band tint on ordinary
+        // worlds, solid `base_content` (white) on a 1-bit world, with the open
+        // title's glyphs already recolored to `base_300` above. Mirrors
+        // `overlay_draw_card`'s identical single-fill path for the picker;
+        // routed through the ONE `highlight_treatment` owner.
+        self.menubar_hi.set_color(band_srgb.rgba_bytes());
+        self.menubar_hi.prepare(device, queue, width, height, hi);
 
         // Draw the title text (vertically centered in the bar).
         let title_top = (bar_h - label_lh) * 0.5;

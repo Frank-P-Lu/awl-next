@@ -108,7 +108,21 @@ impl TextPipeline {
         };
         self.placard_stipple
             .prepare(device, queue, width, height, &stipple_rects);
-        let has_right = self.overlay_shape_text(&geom, ink, muted);
+        // The SELECTED row's own glyphs recolor to a solid contrasting ink on a
+        // true 1-bit world (`HighlightTreatment::InverseFill`) — black on the
+        // white band — so they land crisp instead of the gamma-grey a
+        // framebuffer invert of the antialiased row text produced (see that
+        // variant's doc). `None` on every ordinary (`ValueBand`) world, where
+        // the selected row keeps its content ink on the value band — the
+        // shaper then stays byte-identical. Read from the SAME owner
+        // (`highlight_treatment`) `overlay_draw_card` fills the band from.
+        let selected_ink = match theme::active()
+            .highlight_treatment(crate::render::effective_overlay_selrow_band())
+        {
+            theme::HighlightTreatment::InverseFill { ink, .. } => Some(ink.to_glyphon()),
+            theme::HighlightTreatment::ValueBand(_) => None,
+        };
+        let has_right = self.overlay_shape_text(&geom, ink, muted, selected_ink);
         self.overlay_upload_text(
             device, queue, width, height, &geom, has_right, ink, muted, placard,
         )?;
@@ -145,8 +159,6 @@ impl TextPipeline {
         self.panel_shadow.prepare(device, queue, width, height, &[]);
         self.panel_border.prepare(device, queue, width, height, &[]);
         self.overlay_rows.prepare(device, queue, width, height, &[]);
-        self.overlay_rows_invert
-            .prepare(device, queue, width, height, &[]);
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &[]);
         // The stipple placard: parked (zero instances) — the frame after a
@@ -791,31 +803,31 @@ impl TextPipeline {
         //
         // TRUE 1-BIT WORLDS (`render_caps.selection_style ==
         // SelectionStyle::InverseVideo`): a flat fill would need SOME token
-        // between `base_300`/`base_content` (both pure black/white here) to
-        // read as "selected without erasing the row's own text" — no such
-        // token exists on a one-bit world. The System-7 answer: invert the
-        // row instead of filling it (`overlay_rows_invert`, the SAME true
-        // inverse-video mechanism `selection_invert`/`caret_invert` already
-        // use) — the row's ground flips to white and its text flips to
-        // black, so the selection reads as loudly as anywhere else in the
-        // app, never invisible. `overlay_rows` itself is parked empty on
-        // this branch; `overlay_rows_invert` stays parked empty on every
-        // other (Fill) world. Routed through `RenderCaps::highlight_treatment`
-        // — the LAW ROUND's no-absent-variant enum — so "prepare neither
-        // pipeline" is structurally unreachable (see that fn's own doc for
-        // the bug history this closes).
-        // The selected-row band VALUE is the PALETTE-COMPOSITION round's
+        // between `base_300`/`base_content` (both pure black/white here) to read
+        // as "selected without erasing the row's own text" — no such token
+        // exists on a one-bit world. The answer is a SOLID `base_content`
+        // (white) band with the selected row's own glyphs recolored to solid
+        // `base_300` (black) up in the shaper (`selected_ink`, threaded through
+        // `overlay_shape_text`) — a hard black-on-white pair, gamma-independent
+        // and CRISP. This supersedes the earlier framebuffer invert of the row
+        // (`overlay_rows_invert`, retired): a `1 - dst` flip of the antialiased
+        // near-white row text landed at a faint mid-grey (the Wagtail
+        // selected-row low-contrast bug — see `HighlightTreatment::InverseFill`).
+        // Both regimes now drive the ONE `overlay_rows` fill pipeline; the band
+        // COLOR is the only thing that differs, so "prepare neither / draw text
+        // that can't be read" is unreachable.
+        // The `ValueBand` band VALUE is the PALETTE-COMPOSITION round's
         // strengthened, calm-by-VALUE band (`effective_overlay_selrow_band`, one
         // ramp step past the shared `surface_selected`; the gallery A/Bs it and
         // the old band is one line away — see that fn's REVERT note). Never a hue
-        // (DESIGN §3/§5); the distinguishability sweep polices it. On a 1-bit
-        // world the treatment is `Invert` and this color is unused.
-        let treatment = theme::active()
-            .render_caps
-            .highlight_treatment(crate::render::effective_overlay_selrow_band());
-        if let theme::HighlightTreatment::ValueBand(color) = treatment {
-            self.overlay_rows.set_color(color.rgba_bytes());
-        }
+        // (DESIGN §3/§5); the distinguishability sweep polices it.
+        let band_color = match theme::active()
+            .highlight_treatment(crate::render::effective_overlay_selrow_band())
+        {
+            theme::HighlightTreatment::ValueBand(color) => color,
+            theme::HighlightTreatment::InverseFill { band, .. } => band,
+        };
+        self.overlay_rows.set_color(band_color.rgba_bytes());
         let sel_rects: Vec<[f32; 4]> = if geom.n_items == 0 {
             Vec::new()
         } else if geom.theme {
@@ -840,19 +852,8 @@ impl TextPipeline {
                 overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, sel_row, lh);
             vec![[geom.card_x, row_top, geom.card_w, lh]]
         };
-        match treatment {
-            theme::HighlightTreatment::Invert => {
-                self.overlay_rows.prepare(device, queue, width, height, &[]);
-                self.overlay_rows_invert
-                    .prepare(device, queue, width, height, &sel_rects);
-            }
-            theme::HighlightTreatment::ValueBand(_) => {
-                self.overlay_rows
-                    .prepare(device, queue, width, height, &sel_rects);
-                self.overlay_rows_invert
-                    .prepare(device, queue, width, height, &[]);
-            }
-        }
+        self.overlay_rows
+            .prepare(device, queue, width, height, &sel_rects);
         // THEME PICKER active-lens underline: the rect the shaper recorded; a non-theme
         // card parks it empty (so a stale rect from a prior theme picker never lingers).
         let underline: Vec<[f32; 4]> = if geom.theme {

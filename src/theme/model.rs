@@ -94,12 +94,16 @@ impl RoleOverrides {
 /// `TextPipeline::selection_invert`'s field doc + `prepare_selection_layer`.
 /// The SAME field also drives every OTHER "highlight a row/band" surface
 /// that faces the identical constraint: the picker's selected-row value band
-/// (`overlay_rows`/`overlay_rows_invert`, `render/chrome/overlay.rs`) and the
-/// web/Linux menu bar's open-title band (`menubar_hi`/`menubar_hi_invert`,
-/// `render/chrome/menubar.rs`) — a picker row or an open menu title is, in
-/// this renderer's terms, just another "selected" region; a value-band fill
-/// has the same "no legal intermediate grey" problem document selection does
-/// on a one-bit world, and the System-7 answer is the same inversion.
+/// (`overlay_rows`, `render/chrome/overlay.rs`) and the web/Linux menu bar's
+/// open-title band (`menubar_hi`, `render/chrome/menubar.rs`) — a picker row
+/// or an open menu title is, in this renderer's terms, just another "selected"
+/// region; a value-band fill has the same "no legal intermediate grey" problem
+/// document selection does on a one-bit world. For those SMALL-TEXT surfaces
+/// the answer is [`HighlightTreatment::InverseFill`]: a SOLID `base_content`
+/// band with the selected row's own glyphs recolored to solid `base_300`
+/// (black on white) — NOT the framebuffer invert document selection still
+/// uses, whose gamma-limited flip of the antialiased row text read as a faint
+/// grey (see that variant's doc).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectionStyle {
     /// The default: a translucent `selection`-tinted quad under the text.
@@ -382,27 +386,10 @@ impl RenderCaps {
         card_anchor: CardAnchor::TopLeft,
     };
 
-    /// THE ONE owner of the row/title "selected region" highlight decision —
-    /// the picker's selected row (`render/chrome/overlay.rs`) and the menu
-    /// bar's open-title band (`render/chrome/menubar.rs`) both call this
-    /// instead of hand-rolling their own `if selection_style == ..`
-    /// conditional. See [`HighlightTreatment`]'s own doc for why the return
-    /// type itself — not a bool plus a separately-computed color — is the
-    /// fix: it makes "draw nothing" a compile error, closing the exact hole
-    /// the Wagtail invisible-picker-row bug lived in (a fully-transparent
-    /// band silently passed every mechanism-shaped test, six surfaces, three
-    /// rounds, because "no indicator" was a REPRESENTABLE outcome of the old
-    /// `if invert { .. } else { .. }` shape).
-    pub fn highlight_treatment(&self, band: Srgb) -> HighlightTreatment {
-        match self.selection_style {
-            SelectionStyle::Fill => HighlightTreatment::ValueBand(band),
-            SelectionStyle::InverseVideo => HighlightTreatment::Invert,
-        }
-    }
 }
 
 /// The row/title HIGHLIGHT decision every "selected region" surface reduces
-/// to — see [`RenderCaps::highlight_treatment`]'s doc for the full history.
+/// to — see [`Theme::highlight_treatment`]'s doc for the full history.
 /// Deliberately carries NO absent/no-indicator variant: a consumer that
 /// matches this enum is structurally incapable of preparing neither pipeline
 /// (or both), which is exactly the shape that let a fully-transparent
@@ -413,11 +400,27 @@ impl RenderCaps {
 #[must_use]
 pub enum HighlightTreatment {
     /// The default: an ordinary opaque value-band quad, tinted `Srgb`, under
-    /// the row/title's own text.
+    /// the row/title's own text (which keeps its content ink).
     ValueBand(Srgb),
-    /// True inverse video (`1 - dst` per channel) — the only legal "selected"
-    /// mechanism on a world with no intermediate grey to fill a band with.
-    Invert,
+    /// A true 1-bit world (`SelectionStyle::InverseVideo`): fill the band with
+    /// a SOLID `band` ink (pure `base_content`) AND flip the SELECTED row/
+    /// title's own glyphs to `ink` (pure `base_300`), so a hard black-on-white
+    /// pair lands crisply.
+    ///
+    /// This replaces the old framebuffer invert of the ROW (`overlay_rows_invert`
+    /// / `menubar_hi_invert`, both retired). A `1 - dst` flip is exact in LINEAR
+    /// space, but the selected row's antialiased near-white glyph strokes (which
+    /// peak around 0.94 coverage, never a full 1.0 at this small size) inverted
+    /// THROUGH the sRGB gamma curve to a faint mid-grey (~0.08 linear → sRGB ~83,
+    /// a ~7.7:1 ratio against the white band versus the crisp ~19:1 every
+    /// UNSELECTED row reads at) — the Wagtail selected-row low-contrast bug.
+    /// Drawing the two SOLID inks directly is gamma-independent; the band GROUND
+    /// still reads as a hard invert because `base_content`/`base_300` ARE that
+    /// world's only ink pair. Document SELECTION and the block CARET keep the
+    /// true framebuffer invert (`SelectionStyle`/`CaretBlockStyle`): their glyphs
+    /// are the document's own body text, large enough that the flip stays crisp,
+    /// and they cannot know a "selected row ink" up front the way a picker can.
+    InverseFill { band: Srgb, ink: Srgb },
 }
 
 /// The MARGIN ground a world paints behind its centered page (PAGE MODE).
@@ -794,6 +797,37 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// THE ONE owner of the row/title "selected region" highlight decision —
+    /// the picker's selected row (`render/chrome/overlay.rs`) and the menu
+    /// bar's open-title band (`render/chrome/menubar.rs`) both call this
+    /// instead of hand-rolling their own `if selection_style == ..`
+    /// conditional. See [`HighlightTreatment`]'s own doc for why the return
+    /// type itself — not a bool plus a separately-computed color — is the
+    /// fix: it makes "draw nothing" a compile error, closing the exact hole
+    /// the Wagtail invisible-picker-row bug lived in (a fully-transparent
+    /// band silently passed every mechanism-shaped test, six surfaces, three
+    /// rounds, because "no indicator" was a REPRESENTABLE outcome of the old
+    /// `if invert { .. } else { .. }` shape).
+    ///
+    /// PURE in `self` — the `InverseFill` colors are read off THIS theme's own
+    /// ladder (`base_content`/`base_300`), never the global active theme, so a
+    /// caller iterating every world (the distinguishability + no-absent-case
+    /// laws) gets each world's own pair without having to `set_active` first.
+    pub fn highlight_treatment(&self, band: Srgb) -> HighlightTreatment {
+        match self.render_caps.selection_style {
+            SelectionStyle::Fill => HighlightTreatment::ValueBand(band),
+            // A true 1-bit world owns exactly two inks; the selected band is a
+            // SOLID `base_content` fill and the selected row's own glyphs flip
+            // to solid `base_300`, so the pair reads as crisp black-on-white
+            // (`InverseFill`'s doc explains why this replaced the framebuffer
+            // invert of the row text).
+            SelectionStyle::InverseVideo => HighlightTreatment::InverseFill {
+                band: self.base_content,
+                ink: self.base_300,
+            },
+        }
+    }
+
     /// THE font-ID resolver's DATA seam: the prioritized family-name candidate
     /// ladder for `id` on this world. A NO-WILDCARD match — a future
     /// [`FontId`] variant fails to compile here until it's given a ladder (the
