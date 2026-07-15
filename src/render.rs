@@ -142,6 +142,17 @@ pub mod perfbench;
 /// render path.
 pub mod framebench;
 
+/// UNIFIED BENCH SUITE — the hidden `--bench-suite` matrix runner: corpus
+/// tiers (S/M/L/pathological/CODE, generated deterministically from a fixed
+/// seed) x interaction scenarios (cold open, typing, scroll, search, palette,
+/// zoom, theme, resize), every cell witnessed (reshape counts / row deltas /
+/// match counts / changed pixels are `ensure!`s, not notes), reported as a
+/// table + a machine-keyed `bench.json`, and diffable against
+/// `benches/baseline.json` (`scripts/bench.sh`). A child of `render` for the
+/// same private-seam reason as [`perfbench`]/[`framebench`]. Dev-only; never
+/// on the render path.
+pub mod benchsuite;
+
 /// Fixed look-and-feel constants. Keeping these in one spot makes the headless
 /// capture deterministic and keeps windowed/headless visually identical.
 pub const FONT_SIZE: f32 = 24.0;

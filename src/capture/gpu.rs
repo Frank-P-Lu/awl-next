@@ -16,8 +16,9 @@ fn align_256(n: u32) -> u32 {
 
 /// Request a headless wgpu device + queue — no surface, no window. The adapter /
 /// device boilerplate is identical for every capture variant, so it lives here
-/// once; all three async entry points open on this.
-pub(super) async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue)> {
+/// once; all three async entry points open on this. (`pub(crate)`: the render
+/// bench suite reuses the same plumbing — one owner, see `capture`'s mod doc.)
+pub(crate) async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     // (capture runs without a window, so no display handle is needed)
     let adapter = instance
@@ -36,7 +37,7 @@ pub(super) async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue)> {
 /// Create the offscreen color target (texture + its default view) for a headless
 /// render: a single-sample [`FORMAT`] texture usable as a render attachment AND a
 /// copy source. The descriptor is the same in every variant, so it lives here once.
-pub(super) fn offscreen_target(
+pub(crate) fn offscreen_target(
     device: &wgpu::Device,
     width: u32,
     height: u32,
@@ -65,7 +66,7 @@ pub(super) fn offscreen_target(
 /// padding into a packed RGBA image. The caret/document must already be drawn into
 /// `texture` (submitted) before calling. Shared by the single-frame path and BOTH
 /// per-step loops so the readback dance lives in one place.
-pub(super) fn read_frame(
+pub(crate) fn read_frame(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
