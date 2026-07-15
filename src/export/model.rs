@@ -235,7 +235,13 @@ enum Frame {
     Root(Vec<Block>),
     BlockQuote(Vec<Block>),
     List { ordered: bool, start: u64, items: Vec<Item> },
-    Item { blocks: Vec<Block> },
+    /// A list item. In a LOOSE list pulldown wraps each item's content in its
+    /// own `Paragraph`; in a TIGHT list (no blank line between items — the
+    /// dominant form) it emits the item's inlines BARE, with no paragraph. So
+    /// the item is inline-accepting too: bare inlines land in `loose` and are
+    /// flushed into an implicit `Paragraph` when a real block arrives or the
+    /// item closes (dropping them was the tight-list content-loss bug).
+    Item { blocks: Vec<Block>, loose: Vec<Inline> },
     Paragraph(Vec<Inline>),
     Heading { level: u8, inlines: Vec<Inline> },
     Strong(Vec<Inline>),
@@ -280,7 +286,7 @@ fn open_frame(stack: &mut Vec<Frame>, tag: Tag) {
             start: start.unwrap_or(1),
             items: Vec::new(),
         }),
-        Tag::Item => stack.push(Frame::Item { blocks: Vec::new() }),
+        Tag::Item => stack.push(Frame::Item { blocks: Vec::new(), loose: Vec::new() }),
         Tag::Emphasis => stack.push(Frame::Emphasis(Vec::new())),
         Tag::Strong => stack.push(Frame::Strong(Vec::new())),
         Tag::Strikethrough => stack.push(Frame::Strikethrough(Vec::new())),
@@ -371,7 +377,12 @@ fn close_frame(stack: &mut Vec<Frame>, tag: TagEnd, pending_task: &mut Option<bo
         Frame::List { ordered, start, items } => {
             accept_block(stack, Block::List(List { ordered, start, items }))
         }
-        Frame::Item { blocks } => {
+        Frame::Item { mut blocks, mut loose } => {
+            // A tight item's bare inlines (or a trailing loose run after a
+            // nested block) become an implicit paragraph so they survive.
+            if !loose.is_empty() {
+                blocks.push(Block::Paragraph(std::mem::take(&mut loose)));
+            }
             let task = pending_task.take();
             if let Some(Frame::List { items, .. }) = stack.last_mut() {
                 items.push(Item { task, blocks });
@@ -400,7 +411,12 @@ fn accept_block(stack: &mut [Frame], block: Block) {
                 b.push(block);
                 return;
             }
-            Frame::Item { blocks } => {
+            Frame::Item { blocks, loose } => {
+                // Flush any bare inlines gathered before this block into an
+                // implicit paragraph FIRST, preserving source order.
+                if !loose.is_empty() {
+                    blocks.push(Block::Paragraph(std::mem::take(loose)));
+                }
                 blocks.push(block);
                 return;
             }
@@ -410,7 +426,8 @@ fn accept_block(stack: &mut [Frame], block: Block) {
 }
 
 /// Append `inline` to the nearest inline-accepting container (paragraph,
-/// heading, emphasis/strong/strike, link, or the open table cell).
+/// heading, emphasis/strong/strike, link, the open table cell, or a tight list
+/// item's bare-inline run).
 fn push_inline(stack: &mut [Frame], inline: Inline) {
     for frame in stack.iter_mut().rev() {
         match frame {
@@ -427,6 +444,15 @@ fn push_inline(stack: &mut [Frame], inline: Inline) {
                 if let Some(cell) = t.cur_cell.as_mut() {
                     cell.push(inline);
                 }
+                return;
+            }
+            // A tight list item is inline-accepting: bare inlines (no enclosing
+            // paragraph) gather here and are flushed to an implicit paragraph on
+            // block-accept / item close. A LOOSE item has its own Paragraph
+            // frame ABOVE this one, so the rev-walk reaches that first and this
+            // arm never fires for it.
+            Frame::Item { loose, .. } => {
+                loose.push(inline);
                 return;
             }
             _ => {}

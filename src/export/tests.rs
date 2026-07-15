@@ -190,6 +190,79 @@ fn tables_carry_alignment_and_task_items_carry_state() {
     assert!(tasks.contains(&Some(false)) && tasks.contains(&Some(true)));
 }
 
+/// LAW: a TIGHT list item (no blank line between items — the dominant form)
+/// emits its inlines BARE, with no wrapping paragraph. The parse walk MUST
+/// collect those into an implicit paragraph, and every emitter MUST carry the
+/// text through. This is the guard for the tight-list content-loss bug (bare
+/// item inlines fell through `push_inline` and were silently dropped, blessed
+/// into empty `<li>`s and glyph-only docx runs). Every item's own words must
+/// survive into the tree AND into both emitted documents.
+#[test]
+fn tight_list_item_text_survives_into_both_emitters() {
+    // The fixture's three tight lists (bullets, numbered, tasks).
+    let words = [
+        "first bullet",
+        "second bullet",
+        "nested bullet",
+        "third bullet",
+        "one",
+        "two",
+        "three",
+        "open task",
+        "done task",
+    ];
+
+    // (a) The neutral tree: gather every list item's plain text; each word is
+    //     present and non-empty (no item collapsed to an empty block list).
+    let doc = model::parse(FIXTURE);
+    let mut item_texts = Vec::new();
+    fn walk(blocks: &[Block], out: &mut Vec<String>) {
+        for b in blocks {
+            if let Block::List(l) = b {
+                for it in &l.items {
+                    // An item that lost its inlines has NO paragraph — this is
+                    // exactly what the bug produced.
+                    let text: String = it
+                        .blocks
+                        .iter()
+                        .filter_map(|blk| match blk {
+                            Block::Paragraph(inl) => Some(model::plain_text(inl)),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    out.push(text);
+                    walk(&it.blocks, out);
+                }
+            } else if let Block::BlockQuote(inner) = b {
+                walk(inner, out);
+            }
+        }
+    }
+    walk(&doc.blocks, &mut item_texts);
+    let joined = item_texts.join("\u{1}");
+    for w in words {
+        assert!(
+            item_texts.iter().any(|t| t.contains(w)),
+            "list item text {w:?} dropped from the parse tree (items: {item_texts:?})"
+        );
+    }
+    // No item is text-empty (every tight item carried at least its own words).
+    assert!(
+        !joined.split('\u{1}').any(|t| t.trim().is_empty()),
+        "an item rendered with empty text: {item_texts:?}"
+    );
+
+    // (b) Both emitters carry every word through.
+    let html = to_html(FIXTURE, &fixture_images());
+    let docx = to_docx(FIXTURE, &fixture_images());
+    let doc_xml = String::from_utf8(unzip_stored(&docx)["word/document.xml"].clone()).unwrap();
+    for w in words {
+        assert!(html.contains(w), "HTML export dropped list item text {w:?}");
+        assert!(doc_xml.contains(w), "DOCX export dropped list item text {w:?}");
+    }
+}
+
 // --- HTML emitter -----------------------------------------------------------
 
 #[test]
