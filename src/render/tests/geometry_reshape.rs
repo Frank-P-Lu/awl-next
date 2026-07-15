@@ -103,6 +103,57 @@ fn over_writing_column_agrees_with_the_page_column_bounds() {
     crate::page::set_measure(was_measure);
 }
 
+/// LOCKOUT REGRESSION (bug, 2026-07-15): with the page widened past the window's
+/// capacity the column COLLAPSES to the `PAGE_MIN_PAD` margins, and the resize
+/// affordance must STILL arm at both drawn edges so the user can drag the width back
+/// inward. Drives the REAL `page_resize_edge_at` (the same method hover, the ColResize
+/// cursor, the press-arm, and the double-click reset all ride) through the live page
+/// globals + adaptive `column_left` — the earlier `left <= PAGE_MIN_PAD + 1.0 → None`
+/// guard returned `None` here and locked the user out. GPU-backed; skips with no
+/// adapter. Holds both TEST_LOCKs like every page-global-mutating test.
+#[test]
+fn collapsed_page_still_arms_the_resize_affordance() {
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping collapsed_page_still_arms_the_resize_affordance: no wgpu adapter");
+        return;
+    };
+    let was_on = crate::page::page_on();
+    let was_measure = crate::page::measure();
+    crate::page::set_page_on(true);
+    // A narrow window with the measure pinned to MAX: the column can't fit, so it
+    // collapses to the small pad on both sides (left == PAGE_MIN_PAD).
+    p.set_size(600.0, 800.0);
+    crate::page::set_measure(crate::page::MAX_MEASURE);
+    let left = p.column_left();
+    let width = p.column_width();
+    assert!(
+        left <= PAGE_MIN_PAD + 1.0,
+        "fixture must actually collapse (left={left}) or it can't exercise the old guard",
+    );
+    // The pre-fix guard killed BOTH edges; both must now arm.
+    assert_eq!(
+        p.page_resize_edge_at(left),
+        Some(ResizeEdge::Left),
+        "collapsed left edge must arm the resize (lockout fix)",
+    );
+    assert_eq!(
+        p.page_resize_edge_at(left + width),
+        Some(ResizeEdge::Right),
+        "collapsed right edge must arm the resize (lockout fix)",
+    );
+    assert!(p.page_resize_hover(left), "hover must report the collapsed edge too");
+    // And a drag inward from the collapsed right edge narrows the measure below MAX.
+    let narrowed = p.page_resize_measure_at(left + width - 200.0, ResizeEdge::Right);
+    assert!(
+        narrowed < crate::page::MAX_MEASURE,
+        "dragging the collapsed edge inward must narrow the measure (got {narrowed})",
+    );
+    crate::page::set_page_on(was_on);
+    crate::page::set_measure(was_measure);
+}
+
 /// ROWGEOM GENERATION: every `invalidate()` bumps the shaped-geometry
 /// generation the derived proto caches key on. Pure cache mechanics — no GPU.
 #[test]

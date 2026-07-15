@@ -492,8 +492,11 @@ pub enum ResizeEdge {
 
 /// Is `pointer_x` within `tol` px of a page column's LEFT or RIGHT surface edge?
 /// (`column_left` .. `column_left + column_width`.) Returns the NEARER edge when both
-/// are in reach (a very narrow column), else `None`. Pure — the caller gates on page
-/// mode being on WITH real margin room; this only does the proximity geometry.
+/// are in reach (a very narrow column), else `None`. Pure — the caller
+/// ([`TextPipeline::page_resize_edge_at`]) gates only on page mode being ON; this does
+/// the proximity geometry against whatever edges the column currently draws, collapsed
+/// or not (a collapsed column keeps draggable edges so the width can be pulled back
+/// inward).
 pub fn page_boundary_hit(
     pointer_x: f32,
     column_left: f32,
@@ -510,6 +513,30 @@ pub fn page_boundary_hit(
     } else {
         None
     }
+}
+
+/// THE ONE OWNER of "does a press/hover at `pointer_x` arm the page-width resize
+/// affordance?" — the full decision behind [`TextPipeline::page_resize_edge_at`],
+/// pulled out as a pure fn so the arming LAW is testable without a GPU pipeline. The
+/// rule is exactly two clauses: page mode must be ON, and the pointer must be within
+/// `tol` of a DRAWN column edge ([`page_boundary_hit`] against the column's real
+/// `left`/`width`). There is DELIBERATELY no "collapsed page has no handle" gate —
+/// that earlier taste guard (`left <= PAGE_MIN_PAD + 1.0 → None`) locked the user out
+/// of dragging a widened-past-capacity column back inward (bug, 2026-07-15). A
+/// collapsed column pins both edges at the [`PAGE_MIN_PAD`] margins, and those edges
+/// stay grabbable so the width can be pulled back down ([`page_resize_measure_for_edge`]
+/// clamps the drag result to the settable band regardless).
+pub fn page_resize_edge_hit(
+    page_on: bool,
+    column_left: f32,
+    column_width: f32,
+    pointer_x: f32,
+    tol: f32,
+) -> Option<ResizeEdge> {
+    if !page_on {
+        return None;
+    }
+    page_boundary_hit(pointer_x, column_left, column_width, tol)
 }
 
 /// CURSOR SHAPE — is `pointer_x` within a column's horizontal extent
@@ -1038,12 +1065,15 @@ impl TextPipeline {
     }
 
     /// DIRECT-MANIPULATION resize — is the pointer at `pointer_x` (physical px)
-    /// hovering a DRAGGABLE page-column edge? True only in page mode AND when the
-    /// column has REAL margin room (left past the small [`PAGE_MIN_PAD`]) — a
-    /// collapsed, effectively edge-to-edge page has no margin to give, so it offers
-    /// no handle. The pure proximity test is [`page_boundary_hit`]. The live app reads
-    /// this to flip the OS cursor to a resize glyph and to decide whether a press
-    /// begins a width drag instead of a text selection.
+    /// hovering a DRAGGABLE page-column edge? True whenever page mode is ON and the
+    /// pointer is within [`PAGE_RESIZE_GRAB_PX`] of a DRAWN column edge — including a
+    /// COLLAPSED page whose margins sit at the [`PAGE_MIN_PAD`] floor. The edge is
+    /// the affordance whether or not there is margin left to give: dragging INWARD
+    /// from a collapsed column must still narrow the measure (else the user is locked
+    /// out — the widen-past-capacity lockout bug, 2026-07-15). The pure proximity
+    /// test is [`page_boundary_hit`]. The live app reads this to flip the OS cursor
+    /// to a resize glyph and to decide whether a press begins a width drag instead of
+    /// a text selection.
     pub fn page_resize_hover(&self, pointer_x: f32) -> bool {
         self.page_resize_edge_at(pointer_x).is_some()
     }
@@ -1051,15 +1081,18 @@ impl TextPipeline {
     /// Which page edge arms a width drag at `pointer_x`. This is the stateful
     /// gesture's press-time counterpart to [`Self::page_resize_hover`]: callers
     /// retain the edge for the whole drag so adaptive reflow cannot switch sides.
+    /// Arms on proximity to a DRAWN edge in page mode — no "real margin room"
+    /// precondition, so a collapsed column still offers its edges to drag back inward
+    /// ([`page_resize_measure_for_edge`] clamps the resulting measure to the settable
+    /// band regardless of the collapsed geometry).
     pub fn page_resize_edge_at(&self, pointer_x: f32) -> Option<ResizeEdge> {
-        if !crate::page::page_on() {
-            return None;
-        }
-        let left = self.column_left();
-        if left <= PAGE_MIN_PAD + 1.0 {
-            return None;
-        }
-        page_boundary_hit(pointer_x, left, self.column_width(), PAGE_RESIZE_GRAB_PX)
+        page_resize_edge_hit(
+            crate::page::page_on(),
+            self.column_left(),
+            self.column_width(),
+            pointer_x,
+            PAGE_RESIZE_GRAB_PX,
+        )
     }
 
     /// CURSOR SHAPE — is `pointer_x` within the writing column's horizontal
@@ -2248,6 +2281,77 @@ mod tests {
         let right = left + measure_px; // 888
         assert_eq!(page_boundary_hit(right - 1.0, left, measure_px, tol), Some(ResizeEdge::Right));
         assert_eq!(page_boundary_hit(600.0, left, measure_px, tol), None);
+    }
+
+    #[test]
+    fn resize_affordance_arms_at_both_drawn_edges_in_every_page_on_cell() {
+        // THE LOCKOUT LAW (bug, 2026-07-15): in page mode the resize affordance must
+        // arm at BOTH drawn column edges for every measure × window — ESPECIALLY the
+        // collapsed cells (column pinned at the PAGE_MIN_PAD margins) where the old
+        // `left <= PAGE_MIN_PAD + 1.0 → None` guard killed the affordance and locked the
+        // user out of dragging a widened-past-capacity column back inward. Drives the
+        // ONE arming owner `page_resize_edge_hit` against the DRAWN geometry
+        // (`column_left_for`/`column_width_for`), so a reintroduced collapse-guard fails
+        // here. Pure — no GPU, no page globals.
+        let tol = PAGE_RESIZE_GRAB_PX;
+        let adv = CW; // zoom-stripped page-column advance
+        let mut saw_collapsed = false;
+        for &measure in &[20usize, 40, 70, 100, 140] {
+            for &window in &[600.0f32, 900.0, 1200.0, 2400.0] {
+                let left = column_left_for(window, adv, true, measure);
+                let width = column_width_for(window, adv, true, measure);
+                let right = left + width;
+                let cell = format!("measure={measure} window={window}");
+
+                // Arms exactly on each drawn edge — the nearer edge wins a tie.
+                assert_eq!(
+                    page_resize_edge_hit(true, left, width, left, tol),
+                    Some(ResizeEdge::Left),
+                    "{cell}: left edge must arm",
+                );
+                assert_eq!(
+                    page_resize_edge_hit(true, left, width, right, tol),
+                    Some(ResizeEdge::Right),
+                    "{cell}: right edge must arm",
+                );
+                // And a hair inside each edge (a real fingertip lands near, not exactly on).
+                assert!(
+                    page_resize_edge_hit(true, left, width, left + tol - 0.5, tol).is_some(),
+                    "{cell}: just inside the left edge must arm",
+                );
+                assert!(
+                    page_resize_edge_hit(true, left, width, right - (tol - 0.5), tol).is_some(),
+                    "{cell}: just inside the right edge must arm",
+                );
+
+                // Page mode OFF never arms, at either drawn edge.
+                assert_eq!(
+                    page_resize_edge_hit(false, left, width, left, tol),
+                    None,
+                    "{cell}: page off must not arm (left)",
+                );
+                assert_eq!(
+                    page_resize_edge_hit(false, left, width, right, tol),
+                    None,
+                    "{cell}: page off must not arm (right)",
+                );
+
+                // The regression cell: a COLLAPSED column (left at the PAGE_MIN_PAD
+                // floor) is exactly what the old guard rejected — assert it still arms.
+                if left <= PAGE_MIN_PAD + 1.0 {
+                    saw_collapsed = true;
+                    assert!(
+                        page_resize_edge_hit(true, left, width, left, tol).is_some()
+                            && page_resize_edge_hit(true, left, width, right, tol).is_some(),
+                        "{cell}: COLLAPSED column must keep both edges grabbable (the lockout fix)",
+                    );
+                }
+            }
+        }
+        assert!(
+            saw_collapsed,
+            "grid must include collapsed cells or it can't prove the lockout fix",
+        );
     }
 
     #[test]
