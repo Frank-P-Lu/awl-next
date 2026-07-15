@@ -760,3 +760,113 @@ fn selected_row_stays_distinguishable_with_a_forced_stipple_placard_behind_it() 
 
     set_title_style_test_override(None);
 }
+
+// --- STANDING-POLICY AUDIT (2026-07-15): the minimum-window placard overflow ---
+//
+// Found by the personality-assignment round's OWN standing-policy audit
+// (CLAUDE.md's spot-check trigger 1: a new axis value — the four shipped
+// placard worlds — landed, so the FULL surface roster got probed, sampled
+// across states including a resized window). NOT covered by any existing
+// law: every geometry test above (`forced_placard_shapes_a_wordmark_inside_
+// the_canvas_corner`, the corner-quadrant sweep, …) fixes the canvas at the
+// standard 1200x800 capture size and a short title ("commands"). Neither
+// axis — a NARROW window, or a LONG title — was ever swept, so the gap
+// survived every existing test green.
+
+/// THE MINIMUM-WINDOW PLACARD OVERFLOW — a REAL, LIVE-REACHABLE defect, not a
+/// synthetic edge case: `placard_origin`'s BL/TL branch (`overlay_shape.rs`)
+/// anchors the wordmark's LEFT edge at `ax + inset` UNCONDITIONALLY. TR/BR's
+/// branch clamps with `.max(ax)` — but that clamp only protects the anchor's
+/// LEFT bound when the wordmark is WIDER than the anchor (it keeps a
+/// too-wide RIGHT-anchored mark from reporting a negative origin). There is
+/// NO symmetric clamp protecting the RIGHT bound for a LEFT-anchored corner
+/// — and every shipped placard is BL
+/// (`theme::tests::personality_assignments_are_exactly_the_decided_table`'s
+/// own corner-discipline pin). `scale` is a fixed per-world multiplier, not
+/// adaptive to title length or window width, so a LONG overlay title at a
+/// SMALL window overflows the canvas outright.
+///
+/// At the app's own DOCUMENTED minimum window (`app.rs::resumed`'s
+/// `MIN_COLS(30) * CHAR_WIDTH + 2*TEXT_LEFT` by `MIN_LINES(8) * LINE_HEIGHT +
+/// 2*TEXT_TOP` = 464x288 — a size a real user CAN resize the live window
+/// down to, enforced by `with_min_inner_size`, so this is NOT an
+/// unreachable synthetic size), `OverlayKind::History`'s title ("version
+/// history") HARD-CLIPS past the canvas's right edge — confirmed at REAL GPU
+/// pixels by the audit that added this test, on all four shipped placard
+/// worlds (Galah/Magpie/Mangrove/Firetail) alike, live: the rightmost
+/// wordmark-ink pixel lands on the canvas's OWN last column, with "RY"
+/// (Galah/Magpie/Firetail) or "ORY" (Mangrove's stipple) missing from the
+/// render entirely — not an antialiasing artifact.
+///
+/// THIS TEST IS A KNOWN RED, committed deliberately by the audit that found
+/// it (CLAUDE.md's "every audit that finds something ENDS by writing the
+/// missing law test") — it documents the regression until `placard_origin`
+/// grows a symmetric right-edge clamp for BL/TL (mirroring TR/BR's own
+/// `.max(ax)`, e.g. `(ax + inset).min((ax + aw - w).max(ax))`). Do not
+/// delete this test or loosen its bound to paper over the gap; fix the
+/// clamp instead.
+#[test]
+fn placard_wordmark_stays_in_bounds_at_the_apps_own_minimum_window_size() {
+    use crate::overlay::OverlayKind;
+
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!(
+            "skipping placard_wordmark_stays_in_bounds_at_the_apps_own_minimum_window_size: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    // The app's OWN enforced floor (`app.rs::resumed`'s `MIN_COLS`/`MIN_LINES`
+    // — private consts local to that fn, so mirrored here rather than
+    // imported; a real user can resize the live window down to exactly this
+    // and no smaller, via `with_min_inner_size`).
+    const MIN_COLS: f32 = 30.0;
+    const MIN_LINES: f32 = 8.0;
+    let min_w = MIN_COLS * CHAR_WIDTH + 2.0 * TEXT_LEFT;
+    let min_h = MIN_LINES * LINE_HEIGHT + 2.0 * TEXT_TOP;
+    p.set_size(min_w, min_h);
+
+    let mut failures = Vec::new();
+    for t in theme::THEMES.iter() {
+        // Only the worlds that actually SHIP a placard (no hardcoded name
+        // list — a future assignment is swept automatically).
+        if !matches!(t.render_caps.title_style, theme::TitleStyle::Placard { .. }) {
+            continue;
+        }
+        theme::set_active_by_name(t.name).unwrap();
+        p.sync_theme();
+        // Every real overlay title this world's placard could ever be asked
+        // to draw (the no-wildcard `OverlayKind` roster), not just the
+        // short "commands"/"settings" fixtures the other tests use.
+        for kind in OverlayKind::ALL {
+            let title = kind.title();
+            let mut v = view("hello\n", 0, 0);
+            v.overlay_active = true;
+            v.overlay_title = title;
+            v.overlay_items = vec!["Row one".into(), "Row two".into()];
+            p.set_view(&v);
+            let geom = p.overlay_geometry(min_w as u32);
+            let Some((x, _y, w, _h)) = p.overlay_shape_placard(&geom) else {
+                continue;
+            };
+            if x + w > min_w {
+                failures.push(format!(
+                    "{}/{title:?}: wordmark right edge {:.1} exceeds the {:.1}px-wide \
+                     minimum-window canvas by {:.1}px",
+                    t.name,
+                    x + w,
+                    min_w,
+                    x + w - min_w
+                ));
+            }
+        }
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+    assert!(
+        failures.is_empty(),
+        "placard wordmark(s) overflow the canvas at the app's own minimum window size \
+         (found by the personality-assignment round's standing-policy audit):\n{}",
+        failures.join("\n")
+    );
+}
