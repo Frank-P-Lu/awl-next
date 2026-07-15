@@ -1,5 +1,8 @@
 # awl — build queue
 
+## 📣 PUSH-POLICY UPDATE (2026-07-15) — REPO IS PUBLIC, CI-MINUTE HOLD LIFTED
+Verified via `gh repo view`: visibility PUBLIC, Actions enabled. Standard-runner minutes (including mac) are free on public repos → the July "pushes held" batching constraint is obsolete. Resume the normal policy: push main after each green merge train (tags/releases still need the user's explicit word). 4 commits unpushed right now (56616d8 checkpoint + 3 board commits) — the push rides the first cooking round's green landing so the checkpoint gets hard-gated on a full suite first. CLAUDE.md's "mac runners bill 10× on the private repo" line is now stale — fix at the next doc-sync (the working tree currently carries a user edit to CLAUDE.md; don't mix).
+
 ## 🐛 BOLD ON MONO-DISPLAY WORLDS SHAPES IN A FOREIGN SANS (user screenshot 2026-07-15, Firetail) — 🟢 QUEUED (fix direction = user taste pick)
 
 **Evidence (verified by capture, all five mono worlds):** `**bold**` markdown on
@@ -199,6 +202,9 @@ NEW (2026-07-14 flurry, mid-collection):
 ⛔ PREREQUISITE BEFORE FIRING WORKFLOWS A/B/C: the user's WORKING TREE IS DIRTY — 14 files uncommitted, incl. the EXACT fix targets: `src/lava.rs` (+132 lines!), `shaders/lava.wgsl`, `src/render.rs`, `src/app.rs`, `src/theme/worlds.rs`/`model.rs`/`tests.rs`, + DESIGN/THEMES/WORLDS docs. A worktree workflow branches from a REF, not the dirty tree, so it would build on a base MISSING this WIP → merge conflicts / clobber risk in lava.rs. MUST commit (or stash) the WIP first so the fixes stack on top cleanly. The personality-gallery workflow is UNAFFECTED (isolated worktree, throwaway code, only PNGs copied out — no merge).
 
 CLOBBER-GUARD RESET (user Q, answered from code files.rs:1590-1645): the sticky "changed on disk — autosave held" clears when the CONFLICT resolves — manual Cmd-S force-writes YOUR version + updates disk_mtime → notice flips to "saved" (yours wins); or reopening adopts theirs + clears (`load_path`:900). A mere edit re-checks + re-holds (correct — still diverged). DECISION: NO X BUTTON (would hide a live safety state while still unprotected); better = make the message self-explaining ("⌘S keeps yours · reopen for theirs"). Fold into the notice/toast round.
+
+## 📏 PERF BENCH SUITE (user-approved 2026-07-15: "your bench suite sounds good") — 🟡 COOKING
+`--bench-suite`, one unified release-only runner: corpus tiers S≈500w / M≈2k / L≈50k (novel — the missing tier) / X pathological (one huge unbroken paragraph, heavy markdown) / CODE (large .rs), generated DETERMINISTICALLY from a fixed seed at bench time (no fixture blobs in git) × scenario matrix (cold-open→first-frame, typing burst, scroll page-through + jump-to-end, zoom burst, theme burst, search type+next×N, palette open, wrap/resize step). Every scenario WITNESSED (house law — a bench must prove the work happened). Emits the human table + bench.json (sidecar idiom); scripts/bench.sh diffs vs a checked-in benches/baseline.json (~20% warn threshold, machine-keyed, updated deliberately like the audit ledger). The existing five flags stay working (become cells/aliases — builder's call, flagged). PLUS work-count TRIPWIRES into cargo test (deterministic counts, NO timing in tests; only invariants true today). Cadence: merge-train days + pre-tag. NO CLAUDE.md edits this round (the tree carries a user edit; doc-sync later) — round docs live in benches/README.md. Banked synergy: bench scenarios ride playwright storyboards once that harness lands.
 
 ## 🌋 LAVA FOLLOW-UPS: OUTLINE LEGIBILITY + MOVE-FLASH REGRESSION (user reports 2026-07-15) — 🟡 COOKING (one sequential workflow; same lava-family files)
 
