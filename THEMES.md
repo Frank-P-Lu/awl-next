@@ -677,6 +677,22 @@ names its enforcing test:
   Tests: `render::tests::overlay_personality::forced_placard_shapes_a_
   wordmark_inside_the_canvas_corner` (asserts the BL wordmark starts LEFT of
   and hangs BELOW the centered card) + the corner-quadrant sweep.
+- **Bleed past the CARD, never past the CANVAS — the wordmark fits the
+  window.** `scale` is a loudness dial, not a fit guarantee: at the app's own
+  enforced minimum window (464x288, `app.rs::resumed`'s `with_min_inner_size`
+  floor) a long title ("version history") shaped ~2.6x wider than the whole
+  canvas and hard-clipped off the right edge on all four placard worlds —
+  found LIVE by the round's own standing-policy audit (CLAUDE.md trigger 1;
+  every prior geometry test fixed the canvas at 1200x800 with a short
+  title). The fix is layered in TWO owners: `overlay_shape_placard`'s
+  FIT-TO-CANVAS shrink (natural width past the canvas minus both insets →
+  the font size re-metrics proportionally, one linear re-layout; comfortable
+  windows never enter the branch — byte-identical; the stipple rasterizer
+  reads the same re-shaped buffer, so it fits for free) and
+  `placard_origin`'s symmetric two-bound clamps per axis (the float-noise
+  backstop). Test: `render::tests::overlay_personality::placard_wordmark_
+  stays_in_bounds_at_the_apps_own_minimum_window_size` (every shipped
+  placard world × every `OverlayKind` title at exactly the minimum window).
 - **The distinguishability sweep stays green under every new treatment.**
   The selected row stays findable over a Ghost placard, over the stipple
   (`selected_row_stays_distinguishable_with_a_forced_stipple_placard_behind_

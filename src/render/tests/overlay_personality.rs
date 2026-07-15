@@ -773,38 +773,44 @@ fn selected_row_stays_distinguishable_with_a_forced_stipple_placard_behind_it() 
 // axis — a NARROW window, or a LONG title — was ever swept, so the gap
 // survived every existing test green.
 
-/// THE MINIMUM-WINDOW PLACARD OVERFLOW — a REAL, LIVE-REACHABLE defect, not a
-/// synthetic edge case: `placard_origin`'s BL/TL branch (`overlay_shape.rs`)
-/// anchors the wordmark's LEFT edge at `ax + inset` UNCONDITIONALLY. TR/BR's
-/// branch clamps with `.max(ax)` — but that clamp only protects the anchor's
-/// LEFT bound when the wordmark is WIDER than the anchor (it keeps a
-/// too-wide RIGHT-anchored mark from reporting a negative origin). There is
-/// NO symmetric clamp protecting the RIGHT bound for a LEFT-anchored corner
-/// — and every shipped placard is BL
+/// THE MINIMUM-WINDOW PLACARD OVERFLOW — a REAL, LIVE-REACHABLE defect (now
+/// fixed, see THE FIX below), not a synthetic edge case: `placard_origin`'s
+/// BL/TL branch (`overlay_shape.rs`) anchored the wordmark's LEFT edge at
+/// `ax + inset` UNCONDITIONALLY. TR/BR's branch clamped with `.max(ax)` —
+/// but that clamp only protects the anchor's LEFT bound when the wordmark is
+/// WIDER than the anchor (it keeps a too-wide RIGHT-anchored mark from
+/// reporting a negative origin). There was NO symmetric clamp protecting the
+/// RIGHT bound for a LEFT-anchored corner — and every shipped placard is BL
 /// (`theme::tests::personality_assignments_are_exactly_the_decided_table`'s
-/// own corner-discipline pin). `scale` is a fixed per-world multiplier, not
+/// own corner-discipline pin). `scale` was a fixed per-world multiplier, not
 /// adaptive to title length or window width, so a LONG overlay title at a
-/// SMALL window overflows the canvas outright.
+/// SMALL window overflowed the canvas outright.
 ///
 /// At the app's own DOCUMENTED minimum window (`app.rs::resumed`'s
 /// `MIN_COLS(30) * CHAR_WIDTH + 2*TEXT_LEFT` by `MIN_LINES(8) * LINE_HEIGHT +
 /// 2*TEXT_TOP` = 464x288 — a size a real user CAN resize the live window
 /// down to, enforced by `with_min_inner_size`, so this is NOT an
 /// unreachable synthetic size), `OverlayKind::History`'s title ("version
-/// history") HARD-CLIPS past the canvas's right edge — confirmed at REAL GPU
+/// history") HARD-CLIPPED past the canvas's right edge — confirmed at REAL GPU
 /// pixels by the audit that added this test, on all four shipped placard
 /// worlds (Galah/Magpie/Mangrove/Firetail) alike, live: the rightmost
 /// wordmark-ink pixel lands on the canvas's OWN last column, with "RY"
 /// (Galah/Magpie/Firetail) or "ORY" (Mangrove's stipple) missing from the
 /// render entirely — not an antialiasing artifact.
 ///
-/// THIS TEST IS A KNOWN RED, committed deliberately by the audit that found
-/// it (CLAUDE.md's "every audit that finds something ENDS by writing the
-/// missing law test") — it documents the regression until `placard_origin`
-/// grows a symmetric right-edge clamp for BL/TL (mirroring TR/BR's own
-/// `.max(ax)`, e.g. `(ax + inset).min((ax + aw - w).max(ax))`). Do not
-/// delete this test or loosen its bound to paper over the gap; fix the
-/// clamp instead.
+/// THE FIX (same round, layered — an origin clamp alone could NOT fix this:
+/// the audit's own numbers put the wordmark's natural width at ~1205px on a
+/// 464px canvas, wider than the WHOLE anchor, so no placement can contain
+/// it): (1) `overlay_shape_placard`'s FIT-TO-CANVAS shrink — when the
+/// naturally-scaled wordmark shapes wider than the canvas minus both insets,
+/// the font size re-metrics proportionally and re-lays out (cosmic-text
+/// multiplies normalized advances by the buffer font size at layout time, so
+/// one linear pass lands the width); `scale` stays a per-world loudness
+/// DIAL, and the window's own width is the ceiling. (2) `placard_origin`
+/// grew the symmetric two-bound clamps this comment originally named
+/// (BL/TL's right bound, TL/TR's bottom bound) as the float-noise backstop.
+/// A comfortable window enters neither path — byte-identical. This test is
+/// the enforcing law; do not loosen its bound.
 #[test]
 fn placard_wordmark_stays_in_bounds_at_the_apps_own_minimum_window_size() {
     use crate::overlay::OverlayKind;
@@ -850,6 +856,12 @@ fn placard_wordmark_stays_in_bounds_at_the_apps_own_minimum_window_size() {
             let Some((x, _y, w, _h)) = p.overlay_shape_placard(&geom) else {
                 continue;
             };
+            if x < 0.0 {
+                failures.push(format!(
+                    "{}/{title:?}: wordmark left edge {x:.1} sits off-canvas left",
+                    t.name
+                ));
+            }
             if x + w > min_w {
                 failures.push(format!(
                     "{}/{title:?}: wordmark right edge {:.1} exceeds the {:.1}px-wide \
