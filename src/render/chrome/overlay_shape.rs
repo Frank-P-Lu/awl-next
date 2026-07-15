@@ -12,6 +12,14 @@ use super::*;
 /// margin every other element does.
 const PLACARD_INSET: f32 = 12.0;
 
+/// The glyph-coverage cut for a STIPPLE placard ([`theme::PlacardInk::Stipple`]):
+/// a rasterized wordmark pixel joins the stipple's candidate set iff its swash
+/// coverage clears this (≥ 50%). A HARD threshold, deliberately — the stipple's
+/// whole contract is "individual full-ink pixels or nothing" (Bayer-legal by
+/// construction, like the Wagtail highlight stipple), so the glyph's
+/// antialiased fringe is CUT rather than half-drawn.
+const STIPPLE_COVERAGE_THRESHOLD: u8 = 0x80;
+
 /// Pure corner placement: the wordmark's `(x, y)` top-left, given its own
 /// shaped `(w, h)` and the ANCHOR rect `(x, y, w, h)` (the full canvas — see
 /// `overlay_shape_placard`). `TR`/`BR` anchor the wordmark's RIGHT edge to the
@@ -155,6 +163,73 @@ impl TextPipeline {
         let anchor = (0.0, reserve, self.window_w, self.window_h - reserve);
         let (x, y) = placard_origin(corner, anchor, w, line_height, PLACARD_INSET);
         Some((x, y, w, line_height))
+    }
+
+    /// THE STIPPLE PLACARD's rasterizer: the coverage RUNS of the just-shaped
+    /// `placard_buffer`'s glyphs, as 1px-tall rects positioned at the
+    /// wordmark's draw origin — fed to the `placard_stipple` pipeline, whose
+    /// dither branch then keeps only the Bayer-selected pixels (the SAME
+    /// matrix + shader branch as the Wagtail highlight stipple — one pattern
+    /// language, per the round's rule). CPU-rasterized off the SAME swash
+    /// cache glyphon itself uses (the morph caret's established idiom —
+    /// `render/caret.rs`'s mask rasterization), so the letterforms are the
+    /// real shaped glyphs, deterministic across captures (no clock, no
+    /// random: coverage is pure shaping, the Bayer cut is pure position).
+    /// Emitting RUNS (not per-pixel rects) keeps the instance count at
+    /// O(rows × glyphs), not O(pixels). Color-glyph (emoji) images are
+    /// skipped — a wordmark title has none, and a coverage mask is the only
+    /// content the stipple contract can honor.
+    pub(in crate::render) fn placard_stipple_rects(&mut self, origin: (f32, f32)) -> Vec<[f32; 4]> {
+        let (px, py) = origin;
+        // Collect (cache_key, pen_x, baseline_y) first: `get_image` needs
+        // `&mut font_system` while `layout_runs` borrows the buffer.
+        let mut glyphs: Vec<(CacheKey, f32, f32)> = Vec::new();
+        for run in self.placard_buffer.layout_runs() {
+            let baseline_y = py + run.line_y;
+            for g in run.glyphs.iter() {
+                glyphs.push((g.physical((0.0, 0.0), 1.0).cache_key, px + g.x, baseline_y));
+            }
+        }
+        let Self {
+            swash_cache,
+            font_system,
+            ..
+        } = self;
+        let mut rects: Vec<[f32; 4]> = Vec::new();
+        for (key, pen_x, baseline_y) in glyphs {
+            let Some(img) = swash_cache.get_image(font_system, key).as_ref() else {
+                continue;
+            };
+            if img.placement.width == 0
+                || img.placement.height == 0
+                || img.content != SwashContent::Mask
+            {
+                continue;
+            }
+            let gw = img.placement.width as usize;
+            // Box top-left = (pen_x + placement.left, baseline - placement.top)
+            // — the same placement convention the morph caret's masks use.
+            let x0 = pen_x + img.placement.left as f32;
+            let y0 = baseline_y - img.placement.top as f32;
+            for (row, cols) in img.data.chunks_exact(gw).enumerate() {
+                let y = y0 + row as f32;
+                let mut start: Option<usize> = None;
+                for (col, &alpha) in cols.iter().enumerate() {
+                    match (alpha >= STIPPLE_COVERAGE_THRESHOLD, start) {
+                        (true, None) => start = Some(col),
+                        (false, Some(s)) => {
+                            rects.push([x0 + s as f32, y, (col - s) as f32, 1.0]);
+                            start = None;
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(s) = start {
+                    rects.push([x0 + s as f32, y, (gw - s) as f32, 1.0]);
+                }
+            }
+        }
+        rects
     }
 
     /// Compose + shape the overlay text into the shared buffers: the query line +

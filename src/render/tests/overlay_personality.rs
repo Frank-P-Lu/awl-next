@@ -64,8 +64,12 @@ fn parse_overlay_style_force_placard_every_corner_and_ink() {
         ("placard:TR:1.5:ghost", theme::PlacardCorner::TR, 1.5, theme::PlacardInk::Ghost),
         ("placard:BL:3.0:ghost", theme::PlacardCorner::BL, 3.0, theme::PlacardInk::Ghost),
         ("placard:BR:0.5:faint", theme::PlacardCorner::BR, 0.5, theme::PlacardInk::Faint),
+        // The personality-assignment round's stipple variant joins the grammar
+        // (the Magpie STIPPLE PROBE the taste gallery shoots is exactly this).
+        ("placard:BL:3.0:stipple", theme::PlacardCorner::BL, 3.0, theme::PlacardInk::Stipple),
         // case-insensitive corner/ink, mixed case command word
         ("Placard:bl:2.25:Ghost", theme::PlacardCorner::BL, 2.25, theme::PlacardInk::Ghost),
+        ("placard:bl:3.0:Stipple", theme::PlacardCorner::BL, 3.0, theme::PlacardInk::Stipple),
     ];
     for (input, corner, scale, ink) in cases {
         let parsed = parse_overlay_style_force(input);
@@ -226,6 +230,28 @@ fn forced_placard_shapes_a_wordmark_inside_the_canvas_corner() {
     assert!(y >= 0.0 && y + h <= canvas_h, "wordmark sits within the canvas vertically");
     assert!((x - 12.0).abs() < 0.01, "BL anchors the wordmark's left edge at the inset");
     assert!(y > canvas_h * 0.5, "BL sits in the bottom half of the canvas");
+
+    // BLEED IS THE CONTRACT (the personality-assignment round's pinned
+    // semantics — the stale "clipped to the card" doc claim is the thing
+    // this assertion retires): the wordmark anchors to the CANVAS corner and
+    // MAY extend past the centered card — here the BL wordmark's box starts
+    // at the canvas inset, well LEFT of the card's own left edge, and hangs
+    // BELOW the card's bottom edge (the card is vertically centered; the
+    // wordmark hugs the canvas foot).
+    let [card_x, card_y, _card_w, card_h] =
+        p.overlay_card_rect().expect("the overlay card must be open");
+    assert!(
+        x < card_x,
+        "bleed contract: the BL wordmark (x {x:.1}) starts left of the centered card \
+         (card_x {card_x:.1}) — outside the card, over the scrim"
+    );
+    assert!(
+        y + h > card_y + card_h,
+        "bleed contract: the BL wordmark's box (bottom {:.1}) hangs below the centered \
+         card's bottom edge ({:.1})",
+        y + h,
+        card_y + card_h
+    );
 
     set_title_style_test_override(None); // leave no override behind for later tests
 }
@@ -591,6 +617,145 @@ fn forced_placard_suppresses_the_inline_title_prefix_on_both_shapers() {
         query_line(&mut p, &faceted),
         "› ",
         "a forced Placard suppresses the inline prefix (faceted shaper → bare sigil)"
+    );
+
+    set_title_style_test_override(None);
+}
+
+// --- THE PERSONALITY-ASSIGNMENT ROUND: the STIPPLE placard's pixel laws ---
+
+/// THE STIPPLE INK LAW, at REAL PIXELS (the placard-ink law extended to
+/// `Stipple`, as the round demands): on Mangrove — the world that actually
+/// SHIPS the stipple placard, running its own `render_caps`, no override —
+/// diffing an overlay frame against the same frame with the placard forced
+/// `InlinePrefix` isolates exactly the wordmark's contribution. Within the
+/// wordmark's own box, every changed pixel must be the world's own
+/// `placard_ink(Stipple)` ink (= `base_content`, ±1 LSB of sRGB round-trip)
+/// — INDIVIDUAL LADDER-INK PIXELS ONLY, never amber, never a blend (a
+/// fractional-alpha regression would show as intermediate tints here) — and
+/// there must be genuinely MANY of them (a parked/transparent regression —
+/// the Wagtail-invisible-row bug shape — fails the count floor, not just a
+/// mechanism assert). Determinism rides for free: coverage is pure shaping,
+/// the Bayer cut is pure position.
+#[test]
+fn mangrove_stipple_placard_paints_only_ladder_ink_pixels_at_real_density() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping mangrove_stipple_placard_paints_only_ladder_ink_pixels_at_real_density: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+    theme::set_active_by_name("Mangrove").unwrap();
+    p.sync_theme();
+
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "commands";
+    v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+    p.set_view(&v);
+
+    // Frame A: the placard silenced (InlinePrefix forced) — everything else
+    // identical. NOTE the query line also changes ("commands › " vs "› "),
+    // which is why the assertion below is scoped to the wordmark's own box,
+    // far from the centered card's query row.
+    set_title_style_test_override(Some(theme::TitleStyle::InlinePrefix));
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let a = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    // Frame B: Mangrove's OWN caps (Placard BL 3.0 Stipple).
+    set_title_style_test_override(None);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let geom = p.overlay_geometry(1200);
+    let (bx, by, bw, bh) = p
+        .overlay_shape_placard(&geom)
+        .expect("Mangrove's own caps ship a placard");
+    let b = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    let ink = theme::placard_ink(theme::PlacardInk::Stipple).rgba_bytes();
+    let (w, h) = (1200i64, 800i64);
+    let (x0, y0) = (bx.floor() as i64, by.floor() as i64);
+    let (x1, y1) = ((bx + bw).ceil() as i64, (by + bh).ceil() as i64);
+    let mut changed = 0usize;
+    let mut off_ink = 0usize;
+    let mut worst: Option<[u8; 4]> = None;
+    for y in y0.max(0)..y1.min(h) {
+        for x in x0.max(0)..x1.min(w) {
+            let i = (y * w + x) as usize;
+            if a[i] == b[i] {
+                continue;
+            }
+            changed += 1;
+            let px = b[i];
+            let near = |got: u8, want: u8| (got as i16 - want as i16).abs() <= 1;
+            if !(near(px[0], ink[0]) && near(px[1], ink[1]) && near(px[2], ink[2])) {
+                off_ink += 1;
+                worst = Some(px);
+            }
+        }
+    }
+    assert!(
+        changed >= 200,
+        "the stipple wordmark changed only {changed} pixels in its own box — \
+         near-invisible (the parked/transparent bug shape)"
+    );
+    assert_eq!(
+        off_ink, 0,
+        "{off_ink}/{changed} changed pixels in the wordmark box are NOT the world's own \
+         stipple ink {ink:?} (worst offender {worst:?}) — the stipple contract is \
+         individual ladder-ink pixels only"
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}
+
+/// The distinguishability sweep's placard case, extended to the STIPPLE
+/// treatment (the round's own law list: "selected row findable ... over
+/// dither"): with a stipple placard forced at the loudest shipped scale, the
+/// selected picker row stays perceptibly distinguishable from an adjacent
+/// row — mirrors `selected_row_stays_distinguishable_with_a_forced_placard_
+/// behind_it` exactly, over the new ink. (The bordered-card case rides the
+/// capability-driven tier (b) of `distinguishability.rs` automatically now
+/// that Currawong/Mangrove/Firetail carry non-default caps.)
+#[test]
+fn selected_row_stays_distinguishable_with_a_forced_stipple_placard_behind_it() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping selected_row_stays_distinguishable_with_a_forced_stipple_placard_behind_it: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_title_style_test_override(Some(theme::TitleStyle::Placard {
+        corner: theme::PlacardCorner::TL,
+        scale: 3.0,
+        ink: theme::PlacardInk::Stipple,
+    }));
+
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "commands";
+    v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+    v.overlay_selected = 0;
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let region = overlay_row_region(&p, 1, 0);
+    let a = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    v.overlay_selected = 1;
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let b = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    pixeldiff::assert_perceptibly_different(
+        &a,
+        &b,
+        1200,
+        800,
+        region,
+        DistinguishFloor::DEFAULT,
+        "PickerSelectedRow under a forced Placard{ink: Stipple} (row 0 selected vs row 1 selected)",
     );
 
     set_title_style_test_override(None);

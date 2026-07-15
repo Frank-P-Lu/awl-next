@@ -586,21 +586,23 @@ RenderCaps`):
 | `selection_style` | `Fill` \| `InverseVideo` | Document selection: translucent fill vs. true `1 - dst` inverse video (`prepare_selection_layer`) — and, paired with `highlight_texture`, the search-match quad's color (`search_match_rgba_bytes`). | Wagtail (`InverseVideo`) |
 | `caret_block_style` | `Normal` \| `InverseVideo` | Whether the BLOCK caret draws as an ordinary opaque quad, or must route through the same inverse-video mechanism (an opaque quad the same value as the ink would erase the glyph underneath); also degrades MORPH mode to BLOCK. | Wagtail (`InverseVideo`) |
 | `backdrop` | `Blur` \| `Flat` | Whether a full-takeover overlay / held HUD / lifetime card / hold-peek recedes the document behind a frosted gaussian blur, or falls back to the crisp no-blur path (a defocus of a two-value document smears every edge into a forbidden grey). | Wagtail (`Flat`) |
-| `elevation` | `Flat` \| `Bordered` | Whether a summoned card's elevation reads as a flat `base_300` fill (`surface_selected`, `prepare_panel_card_elevation`, the menu-bar open-title highlight, the picker's selected-row band) or a crisp raised white BORDER, because the surface ramp has collapsed (`base_200 == base_300`). | Wagtail (`Bordered`) |
+| `elevation` | `Flat` \| `Bordered` | Whether a summoned card's elevation is the flat `base_300` fill alone (the blur/scrim backdrop carries its contrast), or ADDS the float-panel primitive's raised border rim + drop shadow (`prepare_panel_card_elevation` → `set_float_quads`, border ink `surface_selected`). `surface_selected` itself keys its pure-ink override on the COLLAPSED RAMP (`base_200 == base_300`), never on this field — so an ordinary `Bordered` world keeps its ordinary ramp-step band. | Wagtail (collapsed ramp → white rim); Currawong (OLED black swallows the shadow — the rim IS the elevation); Mangrove, Firetail (the card must hold an edge over the moving lava) |
 | `decorative_wash` | `Enabled` \| `Off` | The floating-panel drop shadow (`float_shadow_srgba`) and the writing-nit underline (`nit_underline_srgba`) — both a translucent low-alpha wash, forbidden on a world with no intermediate grey. | Wagtail (`Off`) |
 | `image_reveal` | `Translucent` \| `Opaque` | The inline-image reveal caption scrim (`image_reveal_scrim`) — translucent veil vs. full opaque occlusion. | Wagtail (`Opaque`) |
 | `highlight_texture` | `Wash` \| `Stipple { color, density }` | THE ONE emphasis texture `==highlight==` spans and search matches share (`highlight_wash`, `wagtail_dither_density`) — a hue-derived translucent wash vs. a fixed-color Bayer-ordered dither stipple at `density`. | Wagtail (`Stipple { white, 0.25 }`) |
+| `title_style` | `InlinePrefix` \| `Placard { corner, scale, ink }` | How a summoned overlay card announces its title: the quiet inline `"<title> › "` prefix, or a large corner-anchored dim WORDMARK behind the rows (the P3R watermark; **bleed is the contract** — it anchors to the CANVAS corner and may bleed past the card; rows always composite over it; the inline prefix is suppressed so titles never double). `ink` ∈ Faint / Ghost / **Stipple** (Bayer pixel-stipple of the wordmark — see the personality section below). | Galah, Magpie (`BL 3.0 Ghost` — the gallery reference), Mangrove (`BL 3.0 Stipple` — the dither is its own language), Firetail (`BL 3.0 Faint`, deliberately smooth — the foil) |
+| `page_frame` | `None` \| `Line { weight_px }` | A thin FRAME around the WRITING COLUMN (distinct from the card border) — four hard-edged quads straddling the column boundary over the document's vertical extent, ink always `theme::page_frame_ink()` = the world's own `base_content` (the WORLD-ROLES "dark-line page-frame"; graduated from the `AWL_PAGE_BORDER` probe). | Wagtail (`Line { 2.0 }`, its ladder white — the 2px pick from the probe gallery) |
 
-`RenderCaps::DEFAULT` is what FIFTEEN of the sixteen worlds carry — every
-field at its ordinary value, byte-identical to the pre-refactor render paths.
-Wagtail (`theme/worlds.rs::WAGTAIL`) is simply DATA that sets every field
-away from its default — the mechanism-by-mechanism reasoning in the sections
-above is unchanged; only WHERE that reasoning lives moved, from a scattered
-`is_one_bit()` read at each render call site to one theme-owned struct
-literal. Fields are plain enums/numbers (TOML-ready shapes, no closures, no
-trait objects) — a future on-disk user-theme format could express them
-directly — but this round ships NO parser and NO on-disk format; that stays
-deliberately banked (see `ROADMAP.md`'s "theme capabilities as data" entry).
+`RenderCaps::DEFAULT` is what the QUIET worlds carry — every field at its
+ordinary value, byte-identical to the pre-capabilities render paths.
+Wagtail (`theme/worlds.rs::WAGTAIL`) sets every field away from its default;
+the PERSONALITY-ASSIGNMENT round (2026-07-15, below) added the first
+one-line deviations on five more worlds, proving the machinery's whole
+point: personality is a DATA edit, never a render branch. Fields are plain
+enums/numbers (TOML-ready shapes, no closures, no trait objects) — a future
+on-disk user-theme format could express them directly — but no parser and NO
+on-disk format ships; that stays deliberately banked (see `ROADMAP.md`'s
+"theme capabilities as data" entry).
 
 `Theme::is_one_bit()` itself still exists, unchanged, as a pure derivation
 helper (`base_100`/`base_content`/`primary` are each exactly pure black or
@@ -615,6 +617,96 @@ walks every non-test `.rs` file under `src/render/` and fails if either
 pattern reappears. A future theme wanting inverse-video selection, or a
 bordered card, or the dither stipple, sets the matching `render_caps` field —
 it can never again need a bespoke branch in the renderer.
+
+### Overlay personality + page frame (the PERSONALITY-ASSIGNMENT round, 2026-07-15)
+
+The overlay-personality machinery (the `title_style` capability above) landed
+dormant; this round assigned it per-world as DATA — the user's decided picks,
+each one line in `worlds.rs` — added the STIPPLE ink variant, and graduated
+the page frame from a gallery probe to the `page_frame` capability. Every law
+names its enforcing test:
+
+- **The assignment table is itself a law.** Every world's `render_caps` must
+  be EXACTLY its decided value (the placards, the borders, the frame, and —
+  just as deliberately — `DEFAULT` for every unnamed world; Wagtail ships NO
+  placard, user-confirmed: the silent pole announces nothing). A new world
+  fails the table's match until it decides its personality consciously.
+  Test: `theme::tests::personality_assignments_are_exactly_the_decided_table`
+  (which also pins the BL-corner discipline — TR/BR clip long titles, a
+  gallery finding).
+- **Placard inks derive from the ladder, MODE-AWARE.** ONE owner
+  (`theme::derive::placard_ink`): light grounds keep the gallery-validated
+  originals (`Faint` = the faint rung verbatim; `Ghost` = a `faint`/`base_300`
+  blend); dark grounds step the same two rungs UP the ladder instead (pure
+  `faint`→`muted` blends, one global constant per rung) because the light
+  formulas were near-invisible there (Undertow's Ghost, the user's taste
+  note). Test: `theme::tests::placard_ink_derives_from_the_ink_ladder_never_a_
+  free_color`.
+- **Dark-ground legibility floor + ghost ceiling.** On every dark world the
+  quieter rung clears ΔY ≥ 0.05 relative luminance over `base_100` (the same
+  domain as role-tint law (h)); presence ordering holds (Faint ≥ Ghost); and
+  the louder rung stays at or under the world's own `muted` in luminance — a
+  legible ghost, never a competing headline (held BY CONSTRUCTION by the
+  toward-`muted` blend). Amber guard binds by identity (a ladder blend IS the
+  world's ink; asserted never literally `primary`, monochrome exempt). Test:
+  `theme::tests::placard_inks_read_on_dark_grounds_and_stay_below_muted`.
+- **The STIPPLE placard speaks the ONE dither language.** `PlacardInk::
+  Stipple` renders the SAME shaped wordmark as a Bayer-matrix stipple of
+  INDIVIDUAL full-ink pixels: coverage runs CPU-rasterized off the same swash
+  cache glyphon uses (`placard_stipple_rects`), drawn through `shaders/
+  selection.wgsl`'s EXISTING dither branch (the same 8x8 matrix as the
+  Wagtail highlight texture and Mangrove's lava grain — never a second
+  pattern). Ink = `base_content` exactly; DENSITY is derived, never authored
+  (`placard_stipple_density`: the mean tone over the ground matches the
+  world's own strengthened Faint rung — "reads at roughly Faint tone from
+  reading distance"; Mangrove lands ≈0.24, beside Wagtail's 0.25 — two
+  independent derivations converging). Laws: density stays in its
+  floor/ceiling band and the mean tone clears ΔY ≥ 0.05 over the flat ground
+  AND over the worst-phase lava pixel (`theme::tests::stipple_placard_
+  density_clears_the_legibility_floor_over_its_own_ground`); at REAL pixels,
+  every changed pixel in the wordmark box is the ladder ink, ±1 sRGB LSB, and
+  genuinely many pixels change (`render::tests::overlay_personality::
+  mangrove_stipple_placard_paints_only_ladder_ink_pixels_at_real_density`).
+  A stipple would be the ONE monochrome/1-bit-legal placard ink (hard pure
+  pixels, no AA fringe) — banked, since Wagtail ships none; the grey inks
+  stay guarded (`theme::tests::a_placard_grey_ink_would_violate_a_one_bit_
+  worlds_own_law`).
+- **Bleed is the contract.** The wordmark anchors to the CANVAS corner and
+  may bleed past the card (P3R's own bleed — the "clipped to the card" doc
+  claim was stale and is retired); rows/query always composite OVER it.
+  Tests: `render::tests::overlay_personality::forced_placard_shapes_a_
+  wordmark_inside_the_canvas_corner` (asserts the BL wordmark starts LEFT of
+  and hangs BELOW the centered card) + the corner-quadrant sweep.
+- **The distinguishability sweep stays green under every new treatment.**
+  The selected row stays findable over a Ghost placard, over the stipple
+  (`selected_row_stays_distinguishable_with_a_forced_stipple_placard_behind_
+  it`), and inside a bordered card — the five newly capability-deviant
+  worlds (Galah/Magpie/Mangrove/Firetail/Currawong) auto-enroll in
+  `distinguishability.rs`'s real-pixel tier (b) by its capability-driven
+  sampling rule, zero edits there. `surface_selected`'s pure-ink override
+  now keys on the COLLAPSED RAMP (`base_200 == base_300`), not on
+  `Elevation::Bordered` — so the three ordinary Bordered worlds keep their
+  ramp-step selected-row band (returning white for them would have re-created
+  the Wagtail invisible-row bug by data).
+- **The page frame is pixel-provable, present iff assigned.** Ink = ONE owner
+  (`page_frame_ink` = `base_content`, never literally the accent, monochrome
+  exempt by identity; weight positive iff assigned:
+  `theme::tests::page_frame_ink_is_the_ladder_and_assigned_weights_are_real`).
+  At real GPU pixels: Wagtail's 2px frame draws PURE ladder white at the
+  column's edges, in-bounds, hard-edged (the pipeline runs the dither branch
+  at density 1.0 — a full fill with per-pixel edges, no fractional-alpha AA
+  rim to break the 1-bit law), while a `None` world uploads zero rects
+  (`render::tests::page_frame::wagtail_page_frame_draws_pure_ladder_white_in_
+  bounds_and_none_worlds_draw_none`). The old `AWL_PAGE_BORDER` color+weight
+  probe (never merged) is SUBSUMED: what survives is `AWL_PAGE_FRAME_FORCE`
+  (weight-only, `AWL_OVERLAY_STYLE_FORCE`'s idiom — the ink is always the
+  derivation now), used for the gallery's 1px-vs-2px A/B.
+
+Taste flags (live human confirmation, per the round): Magpie's placard starts
+at the Galah-reference scale 3.0 (its higher-contrast paper may want a dial);
+Mangrove's stipple-vs-flat call has its A/B pair in
+`gallery/personality-assigned/` (plus a Magpie stipple PROBE — not shipped —
+and the Wagtail frame 1px-vs-2px pair).
 
 ### Per-script font resolution (i18n round — `FontId`; Chinese round — the zh-Hans/ko floors)
 

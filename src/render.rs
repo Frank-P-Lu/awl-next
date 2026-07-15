@@ -1554,8 +1554,8 @@ fn apply_cjk_force(font_system: &mut FontSystem) {
 /// Grammar: `"inline"` forces [`theme::TitleStyle::InlinePrefix`];
 /// `"placard:<corner>:<scale>:<ink>"` forces a [`theme::TitleStyle::Placard`]
 /// — `<corner>` one of `TL`/`TR`/`BL`/`BR` (case-insensitive), `<scale>` a
-/// plain float, `<ink>` one of `faint`/`ghost` (case-insensitive), e.g.
-/// `"placard:BL:3.0:ghost"`. A malformed value parses to `None` (falls
+/// plain float, `<ink>` one of `faint`/`ghost`/`stipple` (case-insensitive),
+/// e.g. `"placard:BL:3.0:ghost"`. A malformed value parses to `None` (falls
 /// through to the active world's own `render_caps.title_style` — never a
 /// crash).
 fn parse_overlay_style_force(s: &str) -> Option<theme::TitleStyle> {
@@ -1578,6 +1578,7 @@ fn parse_overlay_style_force(s: &str) -> Option<theme::TitleStyle> {
     let ink = match parts.next()?.to_ascii_lowercase().as_str() {
         "faint" => theme::PlacardInk::Faint,
         "ghost" => theme::PlacardInk::Ghost,
+        "stipple" => theme::PlacardInk::Stipple,
         _ => return None,
     };
     if parts.next().is_some() {
@@ -1595,6 +1596,53 @@ fn awl_overlay_style_force() -> &'static Option<theme::TitleStyle> {
     ONCE.get_or_init(|| {
         std::env::var("AWL_OVERLAY_STYLE_FORCE").ok().and_then(|s| parse_overlay_style_force(&s))
     })
+}
+
+/// DEV-ONLY probe for the PAGE-FRAME taste A/Bs (`gallery/personality-assigned/`'s
+/// Wagtail 1px-vs-2px shots) — the personality-assignment round GRADUATED the
+/// old `AWL_PAGE_BORDER` color+weight probe into the real
+/// [`theme::PageFrame`] capability, and this force knob is what SURVIVES of
+/// it, reshaped to the `AWL_OVERLAY_STYLE_FORCE` idiom exactly: it forces
+/// the CAPABILITY (weight only — the ink is always the one-owner
+/// `theme::page_frame_ink()` ladder derivation now, never a free hex color,
+/// which is precisely what graduation retired). Total no-op unset; no config
+/// key, no CLI flag, undocumented in CAPTURE.md.
+///
+/// Grammar: `"none"` forces [`theme::PageFrame::None`]; a plain positive
+/// float (e.g. `"1"`, `"2.5"`) forces [`theme::PageFrame::Line`] at that
+/// weight on the ACTIVE world. Malformed → `None` (falls through to the
+/// world's own `render_caps.page_frame` — never a crash).
+fn parse_page_frame_force(s: &str) -> Option<theme::PageFrame> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("none") {
+        return Some(theme::PageFrame::None);
+    }
+    let w: f32 = s.parse().ok()?;
+    if w > 0.0 && w.is_finite() {
+        Some(theme::PageFrame::Line { weight_px: w })
+    } else {
+        None
+    }
+}
+
+/// The `AWL_PAGE_FRAME_FORCE` dev knob, read ONCE and memoized — the same
+/// env-read hazard note as [`awl_overlay_style_force`].
+fn awl_page_frame_force() -> &'static Option<theme::PageFrame> {
+    static ONCE: std::sync::OnceLock<Option<theme::PageFrame>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_PAGE_FRAME_FORCE").ok().and_then(|s| parse_page_frame_force(&s))
+    })
+}
+
+/// The EFFECTIVE [`theme::PageFrame`] for this frame: the
+/// `AWL_PAGE_FRAME_FORCE` dev probe if set, else the active world's own
+/// `render_caps.page_frame` — so an unset-env run renders exactly the
+/// assigned data (Wagtail's 2px line; `None` everywhere else).
+pub(crate) fn effective_page_frame() -> theme::PageFrame {
+    match awl_page_frame_force() {
+        Some(frame) => *frame,
+        None => theme::active().render_caps.page_frame,
+    }
 }
 
 /// TEST-ONLY escape hatch: force the EFFECTIVE title style without touching
@@ -1824,6 +1872,20 @@ pub struct TextPipeline {
     /// this fixed while the page mask follows the current window, then snaps it
     /// once the resize debounce settles.
     lava_field_viewport: [f32; 2],
+    /// THE PAGE FRAME (`theme::PageFrame`, the personality-assignment round's
+    /// graduated capability — subsumes the never-shipped `AWL_PAGE_BORDER`
+    /// gallery probe): four thin quads framing the writing column over the
+    /// document's vertical extent, drawn right after the lava ground and
+    /// before the washes/text. Ink = `theme::page_frame_ink()` (the world's
+    /// own `base_content`, ONE owner); weight = the capability's
+    /// `weight_px`. Zero instances for every `PageFrame::None` world (all
+    /// but Wagtail), so those stay byte-identical. Drawn HARD-EDGED via the
+    /// shader's dither branch at density 1.0 (`bayer_threshold01` < 1.0 at
+    /// every pixel — a full fill with a crisp per-pixel edge instead of the
+    /// ordinary ~1px antialiased rim): the one shipping frame world is
+    /// 1-bit, where a fractional-alpha edge would paint a forbidden grey
+    /// line down the whole column. See [`Self::prepare_page_frame`].
+    pub page_frame_pipeline: SelectionPipeline,
     /// SYNTAX WASHES: the low-alpha tinted quads drawn BEHIND prose-comment spans
     /// (all worlds) — the warm band that carries comment identity now that prose
     /// comments render at FULL ink (the tonsky inversion). A reused
@@ -2265,6 +2327,23 @@ pub struct TextPipeline {
     /// by VALUE + this hairline. A reused `SelectionPipeline`; parked empty for every
     /// other overlay, so a non-theme card draws byte-identically.
     pub overlay_lens_underline: SelectionPipeline,
+    /// THE STIPPLE PLACARD (`theme::PlacardInk::Stipple`): the corner wordmark
+    /// rendered as a Bayer-matrix stipple of individual full-ink pixels
+    /// instead of ordinary antialiased glyphs. The SHAPING half is shared
+    /// verbatim with the text placard (`overlay_shape_placard` — same buffer,
+    /// same corner math, same reveal rules); this pipeline then draws the
+    /// shaped glyphs' COVERAGE RUNS (CPU-rasterized off the same swash cache
+    /// glyphon uses — see [`Self::placard_stipple_rects`]) through the
+    /// selection shader's EXISTING dither branch at
+    /// `theme::placard_stipple_density()` — the same matrix, the same
+    /// mechanism, as Wagtail's highlight stipple (one pattern language, per
+    /// the round's own rule). Ink = `theme::placard_ink(Stipple)` =
+    /// `base_content` (the ladder's full-ink rung; the DENSITY carries the
+    /// perceived Faint-tone quietness). Drawn in `draw_overlay_card` right
+    /// before the overlay text (the same "behind the rows" slot the text
+    /// placard's first-in-batch upload gives it); parked empty on every
+    /// non-stipple world and whenever no overlay is up.
+    pub placard_stipple: SelectionPipeline,
     /// THEME PICKER only: the underline rect `[x, y, w, h]` computed during shaping
     /// (from the shaped strip glyphs, so it lands exactly under the active label at any
     /// world face), consumed by `overlay_draw_card`. `None` when no theme picker is up.
@@ -2703,6 +2782,14 @@ impl TextPipeline {
         // THE LAVA-LAMP GROUND: its own metaball pipeline, drawn right after the
         // margin gradient. Starts inactive (no lava world → draws nothing).
         let lava_pipeline = crate::lava::LavaPipeline::new(device, format);
+        // THE PAGE FRAME (theme::PageFrame): the writing-column frame, tinted
+        // from the one ink owner. Dither density 1.0 = a HARD-EDGED full fill
+        // (every pixel passes the Bayer threshold) — no fractional-alpha AA
+        // rim, so the 1-bit frame world stays pure. Zero instances (draws
+        // nothing) for every PageFrame::None world.
+        let mut page_frame_pipeline =
+            SelectionPipeline::new(device, format, theme::page_frame_ink().rgba_bytes());
+        page_frame_pipeline.set_dither(1.0);
         // SYNTAX WASH quads (under selection, over the ground): the warm band
         // behind prose comments + the green band behind dark-world strings. The
         // tints come from THE role style provider (`role_style_for`, via
@@ -2838,6 +2925,16 @@ impl TextPipeline {
         // hairline mark the active lens; never amber, DESIGN §3). Parked empty otherwise.
         let overlay_lens_underline =
             SelectionPipeline::new(device, format, theme::base_content().rgba_bytes());
+        // THE STIPPLE PLACARD: the corner wordmark's Bayer-stipple renderer
+        // (see the field's own doc). Ink + density re-read per re-tint; starts
+        // parked (zero instances) — only a stipple-placard world with an open
+        // overlay ever uploads rects.
+        let mut placard_stipple = SelectionPipeline::new(
+            device,
+            format,
+            theme::placard_ink(theme::PlacardInk::Stipple).rgba_bytes(),
+        );
+        placard_stipple.set_dither(theme::placard_stipple_density());
         // Word-count / reading-time readout renderer + buffer (quiet, dim, bottom
         // right; only for markdown buffers).
         let wordcount_renderer =
@@ -2940,6 +3037,7 @@ impl TextPipeline {
             lava_pipeline,
             lava_phase: crate::lava::LAVA_FROZEN_PHASE,
             lava_field_viewport: [0.0, 0.0],
+            page_frame_pipeline,
             wash_comment_pipeline,
             wash_string_pipeline,
             wash_highlight_pipeline,
@@ -3032,6 +3130,7 @@ impl TextPipeline {
             overlay_rows,
             overlay_rows_invert,
             overlay_lens_underline,
+            placard_stipple,
             overlay_theme_underline: None,
             overlay_right_shown: false,
             wordcount_renderer,
@@ -3264,6 +3363,19 @@ impl TextPipeline {
         self.nit_pipeline.set_color(nit_underline_srgba());
         // Re-tint the PAGE-MODE margin ground to the new world's tokens.
         self.background_pipeline.set_gradient(background_desc());
+        // THE PAGE FRAME: re-tint from the one ink owner (`base_content`).
+        // Geometry is re-prepared each frame (`prepare_page_frame`), so a
+        // world switch re-tints AND re-gates (a None world uploads zero
+        // rects) for free. The dither density stays the construction-time
+        // 1.0 (a hard-edged full fill — never a translucent AA rim).
+        self.page_frame_pipeline
+            .set_color(theme::page_frame_ink().rgba_bytes());
+        // THE STIPPLE PLACARD: re-tint the pixel ink + re-derive the density
+        // from the new world's own ladder (both one-owner derivations).
+        self.placard_stipple
+            .set_color(theme::placard_ink(theme::PlacardInk::Stipple).rgba_bytes());
+        self.placard_stipple
+            .set_dither(theme::placard_stipple_density());
     }
 
     /// Does the document carry any per-span text color that was BAKED from the
@@ -3829,6 +3941,9 @@ impl TextPipeline {
         // THE LAVA-LAMP GROUND: over the flat margin ground, before the washes.
         // A no-op (draws nothing) for every non-lava world.
         self.prepare_lava_layer(queue, width, height);
+        // THE PAGE FRAME: the thin writing-column frame (zero rects for every
+        // PageFrame::None world, so those stay byte-identical).
+        self.prepare_page_frame(device, queue, width, height);
         self.prepare_wash_layer(device, queue, width, height);
         self.prepare_wysiwyg_wash_layer(device, queue, width, height);
         self.prepare_text_layer(device, queue, width, height)?;
@@ -4070,6 +4185,12 @@ impl TextPipeline {
         // foreground layer. A total no-op (draws nothing) for every non-lava
         // world — so all fifteen shipped worlds render byte-identically.
         self.lava_pipeline.draw(pass);
+        // THE PAGE FRAME (theme::PageFrame): the thin writing-column frame,
+        // right after the ground and before every wash/text layer — so text,
+        // washes, selection all composite OVER it if they ever meet it (they
+        // shouldn't: the frame straddles the column boundary, in the margin).
+        // Zero instances (draws nothing) for every PageFrame::None world.
+        self.page_frame_pipeline.draw(pass);
         // WYSIWYG value-step panel/pill sit directly ON the ground, BEFORE the
         // syntax washes — so a fenced block's comment/string wash composites over
         // the panel exactly as it does over the bare ground, and a selection over
@@ -4188,6 +4309,12 @@ impl TextPipeline {
         // the overlay text so the glyphs sit on top. Parked empty for every other card.
         self.overlay_lens_underline.draw(pass);
         self.panel_caret.draw(pass);
+        // THE STIPPLE PLACARD: drawn right before the overlay text — the same
+        // "behind the rows, over the card/band quads" slot the TEXT placard
+        // occupies via its first-in-batch upload — so row/query glyphs always
+        // composite OVER the stippled wordmark. Zero instances on every
+        // non-stipple world / closed overlay.
+        self.placard_stipple.draw(pass);
         self.panel_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon overlay render failed: {e:?}"))?;
