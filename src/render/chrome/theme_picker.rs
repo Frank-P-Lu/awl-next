@@ -332,18 +332,53 @@ impl TextPipeline {
             (max_x > min_x).then_some((min_x, max_x))
         };
         let facet_style = crate::render::effective_facet_style();
-        // A PILL rect around a label span (device px): horizontal pad + a band that
-        // fills most of the strip row (display line 1). The active band/chip and the
-        // ghost chips all use this — one owner, so they can't drift in height.
-        let pill = |min_x: f32, max_x: f32| -> [f32; 4] {
-            let hpad = 6.0;
-            let vpad = 3.0;
+        // Padding + guaranteed inter-chip gap. The STRIP_GAP whitespace between
+        // labels (two spaces) is NARROWER than `2 * CHIP_HPAD`, so a naive
+        // pad-each-side pill overlaps its neighbours and the ghost chips merge
+        // into one rounded blob (the Chips gallery defect). `CHIP_MIN_GAP` is the
+        // clear device-px gap kept between adjacent chips: each chip stops short
+        // of the MIDPOINT to its neighbour by half that gap, so two neighbours
+        // meet with exactly `CHIP_MIN_GAP` between them (and keep the full pad
+        // wherever the labels sit far enough apart for it).
+        const CHIP_HPAD: f32 = 6.0;
+        const CHIP_MIN_GAP: f32 = 5.0;
+        const CHIP_VPAD: f32 = 3.0;
+        // A PILL rect from an already-resolved (left, right) glyph-x pair (device
+        // px): the band fills most of the strip row (display line 1). The active
+        // band/chip and the ghost chips all build through this — one owner, so
+        // they can't drift in height.
+        let pill_px = |left: f32, right: f32| -> [f32; 4] {
             [
-                geom.text_left + min_x - hpad,
-                geom.text_top + lh + vpad,
-                (max_x - min_x) + 2.0 * hpad,
-                (lh - 2.0 * vpad).max(1.0),
+                geom.text_left + left,
+                geom.text_top + lh + CHIP_VPAD,
+                (right - left).max(1.0),
+                (lh - 2.0 * CHIP_VPAD).max(1.0),
             ]
+        };
+        // All label glyph spans (min_x, max_x) in strip order + their active flag,
+        // so a chip can be clamped against its immediate NEIGHBOURS. Ordered like
+        // `label_ranges`, so index adjacency == on-strip adjacency.
+        let spans: Vec<(f32, f32, bool)> = label_ranges
+            .iter()
+            .filter_map(|(r, active)| span_of(&self.panel_buffer, r).map(|(a, b)| (a, b, *active)))
+            .collect();
+        // The neighbour-aware chip for span index `i`: full pad, but each edge is
+        // pulled back to at most the midpoint-to-neighbour minus half `CHIP_MIN_GAP`.
+        let chip_px = |i: usize| -> [f32; 4] {
+            let (min_x, max_x, _) = spans[i];
+            let right = match spans.get(i + 1) {
+                Some((nmin, _, _)) => {
+                    (max_x + CHIP_HPAD).min((max_x + nmin) * 0.5 - CHIP_MIN_GAP * 0.5)
+                }
+                None => max_x + CHIP_HPAD,
+            };
+            let left = match i.checked_sub(1).and_then(|j| spans.get(j)) {
+                Some((_, pmax, _)) => {
+                    (min_x - CHIP_HPAD).max((pmax + min_x) * 0.5 + CHIP_MIN_GAP * 0.5)
+                }
+                None => min_x - CHIP_HPAD,
+            };
+            pill_px(left, right)
         };
         self.overlay_theme_underline = active_range.as_ref().and_then(|ar| {
             let (min_x, max_x) = span_of(&self.panel_buffer, ar)?;
@@ -353,15 +388,22 @@ impl TextPipeline {
                     let y = geom.text_top + 2.0 * lh - 3.0;
                     [geom.text_left + min_x, y, max_x - min_x, 1.5]
                 }
-                theme::FacetStyle::Band | theme::FacetStyle::Chips => pill(min_x, max_x),
+                // A single active BAND has no drawn neighbour to collide with, so
+                // it keeps the full pad.
+                theme::FacetStyle::Band => pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD),
+                // The active CHIP sits among the ghost chips — clamp it too.
+                theme::FacetStyle::Chips => spans
+                    .iter()
+                    .position(|(_, _, active)| *active)
+                    .map(chip_px)
+                    .unwrap_or_else(|| pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD)),
             })
         });
-        // Ghost chips: one pill per INACTIVE label, `Chips` only.
+        // Ghost chips: one neighbour-clamped pill per INACTIVE label, `Chips` only.
         self.overlay_facet_ghosts = if matches!(facet_style, theme::FacetStyle::Chips) {
-            label_ranges
-                .iter()
-                .filter(|(_, active)| !active)
-                .filter_map(|(r, _)| span_of(&self.panel_buffer, r).map(|(a, b)| pill(a, b)))
+            (0..spans.len())
+                .filter(|&i| !spans[i].2)
+                .map(chip_px)
                 .collect()
         } else {
             Vec::new()

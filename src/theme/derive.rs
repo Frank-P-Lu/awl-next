@@ -293,6 +293,24 @@ pub fn overlay_selected_band() -> Srgb {
     surface_step_band(OVERLAY_SELROW_EXTRA_STEPS)
 }
 
+/// PER-ITEM LIST SURFACES round — the UNSELECTED bar's fill under
+/// [`super::ListStyle::Bars`]. A QUIET rung: one ramp increment ABOVE the card
+/// (`surface_step_band(-1)` == `SELECTED_BAND_STEPS - 1`), deliberately BELOW
+/// the shared `surface_selected` (steps `2`) and well below the selected bar's
+/// [`overlay_selected_band`] (steps `3`). Bars introduce surfaces BETWEEN the
+/// card and the selected row, so the OLD choice (unselected == `surface_selected`,
+/// one lone step under the selected band) left the selected bar barely findable
+/// on saturated worlds (Kingfisher/Saltpan — the gallery defect). Pushing the
+/// unselected bar down toward the card re-opens a ~2-step VALUE gap to the
+/// selected bar (an obvious glance) while each bar still reads distinct from the
+/// bare card between bars (the `bars_draw_a_findable_surface_per_row` law). Value
+/// only — never a hue, never the amber accent (DESIGN §3/§5). The collapsed-ramp
+/// guard in `surface_step_band` keeps a 1-bit world legal (Wagtail draws its
+/// selected row via `InverseFill`, so this fill is inert there anyway).
+pub fn overlay_bar_unselected() -> Srgb {
+    surface_step_band(-1)
+}
+
 pub fn surface_selected() -> Srgb {
     // The shared band: `base_300` stepped `SELECTED_BAND_STEPS` further up the
     // surface ramp, in the SAME direction `base_200 -> base_300` carries (toward

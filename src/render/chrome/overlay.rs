@@ -1179,10 +1179,15 @@ impl TextPipeline {
                 // P4-Status bars, large = Velvet capsules).
                 self.overlay_rows.set_corner(r);
                 self.overlay_bars.set_corner(r);
-                // Unselected bars: a quieter value step than the selected band, so
-                // the selected bar reads brighter by VALUE (never a hue, DESIGN §3).
+                // Unselected bars: a QUIET rung one step above the card
+                // (`overlay_bar_unselected`, steps `1`) — deliberately well below
+                // the selected bar's band (`overlay_selected_band`, steps `3`), so
+                // the selected bar leads by a ~2-step VALUE gap (an obvious glance,
+                // never a hue — DESIGN §3). The old `surface_selected` (steps `2`)
+                // sat one lone step under the selected band and read as barely
+                // distinct on saturated worlds (the Kingfisher/Saltpan defect).
                 self.overlay_bars
-                    .set_color(theme::surface_selected().rgba_bytes());
+                    .set_color(theme::overlay_bar_unselected().rgba_bytes());
                 // The DISPLAY rows that get a bar: every drawn ITEM row (the theme
                 // picker's section-HEADER lines get none — a header is a label).
                 let item_rows: Vec<usize> = if geom.theme {

@@ -262,6 +262,19 @@ fn bars_draw_a_findable_surface_per_row() {
         d_bar >= 10.0,
         "an unselected bar {unsel:?} must read distinct from the card gap {card:?} (redmean {d_bar:.1})"
     );
+    // THE OBVIOUS-GLANCE LAW (the Kingfisher/Saltpan gallery defect): bars
+    // introduce surfaces BETWEEN the card and the selected row, so a raw
+    // "d_sel >= 10" floor passed while the selected bar read as barely distinct
+    // from its neighbours (both saturated value steps, one lone rung apart). The
+    // fix drops the unselected bar to a quiet rung near the card, so the selected
+    // bar must now lead its NEIGHBOURS at least as strongly as a neighbour leads
+    // the bare CARD — selection is at least as findable as a bar. Before the fix
+    // this inverted (d_sel ≈ 1 step < d_bar ≈ 2 steps); it is the law that draws
+    // the exact line between the bug and the fix.
+    assert!(
+        d_sel >= d_bar,
+        "selected bar must lead its neighbours (redmean {d_sel:.1}) at least as much as a bar leads the bare card (redmean {d_bar:.1}) — an obvious glance, not close inspection"
+    );
 }
 
 // --- FacetStyle: chips + band visibly differ from the Text baseline ----------
@@ -314,4 +327,63 @@ fn facet_chips_and_band_differ_from_text_in_the_strip() {
         &text, &band, w as i64, h as i64, strip, pixeldiff::DistinguishFloor::DEFAULT,
         "facet Band vs Text strip",
     );
+}
+
+/// THE CHIP-GAP LAW (the Chips gallery defect): the STRIP_GAP whitespace between
+/// lens labels (two spaces) is narrower than a naive pad-each-side pill, so the
+/// ghost chips for adjacent inactive facets merged into ONE rounded blob with
+/// only tiny corner notches. Every DRAWN chip (the active filled chip + the
+/// inactive ghosts) must be a horizontally DISJOINT rectangle with a positive
+/// clear gap between neighbours — four labels read as four chips, not one blob.
+#[test]
+fn facet_chips_keep_a_clear_gap_between_neighbours() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping facet_chips_keep_a_clear_gap_between_neighbours: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    // Four adjacent facets (the real File/Edit/View/Recent shape), one active —
+    // so both the active filled chip and several ghost chips are drawn side by
+    // side, the exact arrangement that merged into a blob.
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
+    v.overlay_selected = 1;
+    v.overlay_lens = vec![
+        ("All".into(), false),
+        ("File".into(), false),
+        ("Edit".into(), true),
+        ("View".into(), false),
+        ("Recent".into(), false),
+    ];
+
+    set_facet_style_test_override(Some(theme::FacetStyle::Chips));
+    p.set_view(&v);
+    p.prepare(&device, &queue, w, h).unwrap();
+
+    // Every DRAWN chip: the active filled chip (`overlay_theme_underline`) plus
+    // the inactive ghosts (`overlay_facet_ghosts`). All draw as chips under
+    // `Chips`, so all must stay disjoint.
+    let mut chips: Vec<[f32; 4]> = p.overlay_facet_ghosts.clone();
+    chips.extend(p.overlay_theme_underline);
+    set_facet_style_test_override(None);
+
+    // File/Edit/View/Recent draw (All is the home, skipped) → 3 ghosts + 1 active.
+    assert_eq!(chips.len(), 4, "four drawn chips (File/Edit/View/Recent), All is the skipped home");
+
+    // Sort left-to-right by x, then assert each neighbour is fully clear of the
+    // previous one (a positive gap, never a touch or an overlap).
+    chips.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
+    for pair in chips.windows(2) {
+        let (l, r) = (pair[0], pair[1]);
+        let l_right = l[0] + l[2];
+        let r_left = r[0];
+        let gap = r_left - l_right;
+        assert!(
+            gap > 0.5,
+            "adjacent chips must keep a clear gap: left {l:?} ends at {l_right:.1}, right {r:?} starts at {r_left:.1} (gap {gap:.1}px)"
+        );
+    }
 }
