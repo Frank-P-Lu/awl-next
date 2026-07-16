@@ -18,3 +18,8 @@
 # .toml — see CAPTURE.md's storyboard section). The storyboards themselves
 # (scenarios/*.toml + fixtures) are checked in; their runs never are.
 *.run/
+
+# The HTML-export Playwright harness bootstraps Playwright on first run
+# (scripts/smoke-export-html.sh); its node_modules is scratch, never committed.
+/test/export-html/node_modules/
+/test/export-html/package-lock.json

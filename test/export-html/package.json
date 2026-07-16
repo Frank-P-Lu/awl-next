@@ -1,0 +1,13 @@
+{
+  "name": "awl-export-html-smoke",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Repeatable Playwright pass over awl's exported rich.html golden.",
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.55.0"
+  }
+}

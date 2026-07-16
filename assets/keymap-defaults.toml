@@ -19,11 +19,15 @@
 #     collision table (`keymap::LINUX_DISPLACED_LETTERS`, policy code, not data
 #     — see keymap.rs's module doc) unless kept via `linux_keep_emacs`/
 #     `keymap = "emacs"`.
-# An empty string means that slot has no default; a command entirely absent
-# from this table has NO default binding at all (unbound out of the box) — it
-# is still Cmd-P/rebind-menu addressable and independently rebindable via the
-# user-facing `config.toml`'s `[keys]` table, which overlays on top of
-# whatever this file resolves to, unchanged by this round.
+# This table is EXHAUSTIVE: exactly one row per catalog command, no more, no
+# fewer — `commands::COMMANDS` ASSERTS the count matches and PANICS at first
+# access on any command that is absent here (or on any slug here that names no
+# catalog command). A command with no default binding is written EXPLICITLY as
+# ["", ""]; an empty string means that slot has no default. There is no
+# "silently absent = unbound" path any more. Every command stays Cmd-P/rebind-
+# menu addressable and independently rebindable via the user-facing
+# `config.toml`'s `[keys]` table, which overlays on top of whatever this file
+# resolves to, unchanged by this round.
 #
 # THIS FILE IS NOT `[keys]`. It is not read from `$XDG_CONFIG_HOME`, never
 # hand-edited by a user, and carries no format-freeze promise beyond matching

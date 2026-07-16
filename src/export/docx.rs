@@ -31,6 +31,12 @@ const NS_PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
 const EMU_PER_PX: i64 = 9525;
 /// Max image content width: 6 inches (a US-Letter page minus 1" margins).
 const MAX_IMG_EMU: i64 = 6 * 914400;
+/// Usable content width in twips: a US-Letter page (12240) minus the 1" left +
+/// 1" right margins (1440 each) declared in the `sectPr` `pgMar`. Table columns
+/// split this evenly. REAL column widths matter: with `w:w="0"`/`type="auto"`
+/// Word auto-fits, but Pages collapses every column to one-character width — so
+/// we emit explicit `dxa` widths + a `fixed` `tblLayout` and both honor the grid.
+const TABLE_CONTENT_TWIPS: i64 = 12240 - 1440 - 1440;
 
 /// A package relationship (styles/numbering/hyperlink/image).
 struct Rel {
@@ -239,9 +245,20 @@ impl Docx<'_> {
     }
 
     fn table(&mut self, table: &Table) {
-        self.body.push_str(
+        // Column count = the widest of header/rows/aligns; the usable content
+        // width splits evenly across them. Computed FIRST so the real twip
+        // widths flow into `tblW`, every `gridCol`, and every cell's `tcW`.
+        let cols = table
+            .head
+            .len()
+            .max(table.aligns.len())
+            .max(table.rows.iter().map(|r| r.len()).max().unwrap_or(0))
+            .max(1);
+        let col_w = (TABLE_CONTENT_TWIPS / cols as i64).max(1);
+        let total_w = col_w * cols as i64;
+        self.body.push_str(&format!(
             "<w:tbl><w:tblPr><w:tblStyle w:val=\"TableGrid\"/>\
-             <w:tblW w:w=\"0\" w:type=\"auto\"/>\
+             <w:tblW w:w=\"{total_w}\" w:type=\"dxa\"/>\
              <w:tblBorders>\
              <w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"AAAAAA\"/>\
              <w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"AAAAAA\"/>\
@@ -249,35 +266,32 @@ impl Docx<'_> {
              <w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"AAAAAA\"/>\
              <w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"AAAAAA\"/>\
              <w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"AAAAAA\"/>\
-             </w:tblBorders></w:tblPr>",
-        );
-        // A `w:tblGrid` (one `gridCol` per column) — Word prompts to "repair" a
-        // table that lacks it. Column count = the widest of header/rows/aligns.
-        let cols = table
-            .head
-            .len()
-            .max(table.aligns.len())
-            .max(table.rows.iter().map(|r| r.len()).max().unwrap_or(0));
+             </w:tblBorders>\
+             <w:tblLayout w:type=\"fixed\"/></w:tblPr>",
+        ));
+        // A `w:tblGrid` (one sized `gridCol` per column) — Word prompts to
+        // "repair" a table that lacks it, and Pages needs the explicit widths.
         self.body.push_str("<w:tblGrid>");
         for _ in 0..cols {
-            self.body.push_str("<w:gridCol/>");
+            self.body.push_str(&format!("<w:gridCol w:w=\"{col_w}\"/>"));
         }
         self.body.push_str("</w:tblGrid>");
         if !table.head.is_empty() {
-            self.table_row(&table.head, &table.aligns, true);
+            self.table_row(&table.head, &table.aligns, col_w, true);
         }
         for row in &table.rows {
-            self.table_row(row, &table.aligns, false);
+            self.table_row(row, &table.aligns, col_w, false);
         }
         self.body.push_str("</w:tbl>");
         // A trailing empty paragraph — Word requires a block after a table.
         self.body.push_str("<w:p/>");
     }
 
-    fn table_row(&mut self, cells: &[Vec<Inline>], aligns: &[Align], header: bool) {
+    fn table_row(&mut self, cells: &[Vec<Inline>], aligns: &[Align], col_w: i64, header: bool) {
         self.body.push_str("<w:tr>");
         for (i, cell) in cells.iter().enumerate() {
-            self.body.push_str("<w:tc><w:tcPr><w:tcW w:w=\"0\" w:type=\"auto\"/></w:tcPr>");
+            self.body
+                .push_str(&format!("<w:tc><w:tcPr><w:tcW w:w=\"{col_w}\" w:type=\"dxa\"/></w:tcPr>"));
             let jc = match aligns.get(i).copied().unwrap_or(Align::None) {
                 Align::Center => Some("center"),
                 Align::Right => Some("right"),
