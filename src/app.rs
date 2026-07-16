@@ -264,6 +264,65 @@ impl ZoomReflow {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GpuLifecycle { AwaitingWindow, Active { oom_skips: u8 }, Suspended, Rebuilding }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GpuFaultAction { RetryOneFrame, Rebuild, NoticeOnly }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GpuSkipAction {
+    WaitForWake,
+    RetryAfter(Duration),
+    RetryWithNoticeAfter(Duration, &'static str),
+    HoldWithNotice(&'static str),
+}
+const GPU_SURFACE_RETRY: Duration = Duration::from_millis(16);
+fn gpu_fault_action(lifecycle: GpuLifecycle, kind: gpu::GpuFaultKind) -> GpuFaultAction {
+    match kind {
+        gpu::GpuFaultKind::OutOfMemory if matches!(lifecycle, GpuLifecycle::Active { oom_skips: 0 }) => GpuFaultAction::RetryOneFrame,
+        gpu::GpuFaultKind::Validation => GpuFaultAction::NoticeOnly,
+        _ => GpuFaultAction::Rebuild,
+    }
+}
+fn gpu_skip_action(skip: gpu::GpuFrameSkip, timeout_streak: u8) -> GpuSkipAction {
+    match skip {
+        gpu::GpuFrameSkip::Occluded => GpuSkipAction::WaitForWake,
+        gpu::GpuFrameSkip::Timeout => GpuSkipAction::RetryAfter(Duration::from_millis(
+            16_u64 << timeout_streak.min(5),
+        )),
+        gpu::GpuFrameSkip::SurfaceReconfigured => GpuSkipAction::RetryAfter(GPU_SURFACE_RETRY),
+        gpu::GpuFrameSkip::SurfaceRecreated => {
+            GpuSkipAction::RetryWithNoticeAfter(GPU_SURFACE_RETRY, "graphics surface recovered")
+        }
+        gpu::GpuFrameSkip::PrepareFailed => {
+            GpuSkipAction::HoldWithNotice("graphics skipped one frame — editing is safe")
+        }
+    }
+}
+fn keep_gpu_loop_hot(animating: bool, frame_presented: bool) -> bool {
+    animating && frame_presented
+}
+/// Map a live GPU skip cause onto the soak probe's [`crate::soak_gpu::SkipKind`]
+/// so each cause is counted SEPARATELY (the collapse into one `skipped` total is
+/// what hid the zero-drawable occlusion investigation).
+#[cfg(not(target_arch = "wasm32"))]
+fn soak_skip_kind(skip: gpu::GpuFrameSkip) -> crate::soak_gpu::SkipKind {
+    match skip {
+        gpu::GpuFrameSkip::Timeout => crate::soak_gpu::SkipKind::Timeout,
+        gpu::GpuFrameSkip::Occluded => crate::soak_gpu::SkipKind::Occluded,
+        gpu::GpuFrameSkip::SurfaceReconfigured => crate::soak_gpu::SkipKind::SurfaceReconfigured,
+        gpu::GpuFrameSkip::SurfaceRecreated => crate::soak_gpu::SkipKind::SurfaceRecreated,
+        gpu::GpuFrameSkip::PrepareFailed => crate::soak_gpu::SkipKind::PrepareFailed,
+    }
+}
+/// `WindowEvent::Occluded`: whether an occlusion CHANGE should schedule a
+/// repaint. The GPU skip path parks `Occluded → WaitForWake` with no retry
+/// timer, so an un-occlusion (`false`) is the wake that must request a redraw;
+/// becoming occluded (`true`) needs nothing — the next acquire returns
+/// `Occluded` and re-parks the loop. Pure so it is unit-testable off-window.
+fn occluded_change_wants_redraw(occluded: bool) -> bool {
+    !occluded
+}
+
 struct Gpu {
     instance: wgpu::Instance,
     device: wgpu::Device,
@@ -282,6 +341,11 @@ struct Gpu {
     view_format: wgpu::TextureFormat,
     pipeline: TextPipeline,
     window: Arc<Window>,
+    #[cfg(not(target_arch = "wasm32"))]
+    backend_name: String,
+    faults: gpu::GpuFaultInbox,
+    #[cfg(not(target_arch = "wasm32"))]
+    inject_surface_loss: bool,
 }
 
 /// GPU surface + frame loop (device/queue/surface, prepare/render).
@@ -332,12 +396,22 @@ pub struct App {
     whichkey_shown: bool,
     scroll_lines: usize,
     gpu: Option<Gpu>,
+    recovery_window: Option<Arc<Window>>,
+    gpu_lifecycle: GpuLifecycle,
+    gpu_retry_at: Option<Instant>,
+    gpu_timeout_streak: u8,
+    #[cfg(not(target_arch = "wasm32"))]
+    soak: Option<crate::soak_gpu::Controller>,
+    #[cfg(not(target_arch = "wasm32"))]
+    soak_recovery_pending: Option<crate::soak_gpu::FaultKind>,
+    #[cfg(not(target_arch = "wasm32"))]
+    soak_passed: Option<bool>,
     /// WASM-only handoff slot for the ASYNC GPU init. The browser main thread can't
     /// block, so `Gpu::new` runs on a `spawn_local` future that parks its result
     /// here; `window_event` moves it into `gpu` on the first frame. `Rc<RefCell>`
     /// because the future and the App share it on the (single) wasm main thread.
     #[cfg(target_arch = "wasm32")]
-    gpu_pending: std::rc::Rc<std::cell::RefCell<Option<Gpu>>>,
+    gpu_pending: std::rc::Rc<std::cell::RefCell<Option<Result<Gpu, String>>>>,
     /// Timestamp of the previous animated frame, for real-time spring dt. `None`
     /// while idle; set on the first animating redraw and cleared once settled.
     last_frame: Option<Instant>,
@@ -844,6 +918,38 @@ pub struct App {
 }
 
 impl App {
+    fn rebuild_gpu(&mut self, event_loop: &ActiveEventLoop, reason: &str) {
+        if self.gpu_lifecycle == GpuLifecycle::Rebuilding { return; }
+        let Some(window) = self.recovery_window.clone() else { event_loop.exit(); return };
+        self.gpu = None;
+        self.gpu_lifecycle = GpuLifecycle::Rebuilding;
+        self.last_frame = None;
+        self.gpu_retry_at = None;
+        self.gpu_timeout_streak = 0;
+        self.input_stamp = None;
+        self.set_sticky_notice(format!("{reason} — rebuilding graphics…"));
+        let display_handle = event_loop.owned_display_handle();
+        #[cfg(not(target_arch = "wasm32"))]
+        match pollster::block_on(Gpu::new(window, display_handle)) {
+            Ok(gpu) => {
+                self.gpu = Some(gpu);
+                self.gpu_lifecycle = GpuLifecycle::Active { oom_skips: 0 };
+                self.set_toast_notice("graphics recovered");
+                self.on_gpu_ready();
+            }
+            Err(e) => { eprintln!("failed to rebuild render state: {e}"); self.set_sticky_notice("graphics could not recover — closing safely"); event_loop.exit(); }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let slot = self.gpu_pending.clone();
+            let wake = window.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                *slot.borrow_mut() = Some(Gpu::new(window, display_handle).await.map_err(|e| e.to_string()));
+                wake.request_redraw();
+            });
+        }
+    }
+
     fn new(
         file: Option<PathBuf>,
         root: PathBuf,
@@ -949,6 +1055,16 @@ impl App {
             whichkey_shown: false,
             scroll_lines: 0,
             gpu: None,
+            recovery_window: None,
+            gpu_lifecycle: GpuLifecycle::AwaitingWindow,
+            gpu_retry_at: None,
+            gpu_timeout_streak: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            soak: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            soak_recovery_pending: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            soak_passed: None,
             #[cfg(target_arch = "wasm32")]
             gpu_pending: std::rc::Rc::new(std::cell::RefCell::new(None)),
             last_frame: None,
@@ -1198,10 +1314,17 @@ impl App {
     /// inline after the NATIVE blocking init, and from `window_event` once the WASM
     /// async init deposits its GPU.
     fn on_gpu_ready(&mut self) {
-        let sf = self.gpu.as_ref().unwrap().window.scale_factor() as f32;
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        self.gpu_retry_at = None;
+        self.gpu_timeout_streak = 0;
+        let sf = gpu.window.scale_factor() as f32;
         self.dpi = sf;
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.pipeline.set_dpi(sf);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let (Some(soak), Some(gpu)) = (self.soak.as_mut(), self.gpu.as_ref()) {
+            soak.observe_backend(gpu.backend_name().to_string());
         }
         // WASM: the surface was configured inside the async `Gpu::new` against the
         // canvas's size AT CREATION — which is 1x1 before the browser lays the page
@@ -1213,7 +1336,8 @@ impl App {
         // fix is web-only and leaves the native path untouched.
         #[cfg(target_arch = "wasm32")]
         {
-            let size = self.gpu.as_ref().unwrap().window.inner_size();
+            let Some(gpu) = self.gpu.as_ref() else { return };
+            let size = gpu.window.inner_size();
             if let Some(gpu) = self.gpu.as_mut() {
                 gpu.resize(size.width.max(1), size.height.max(1));
             }
@@ -1222,6 +1346,67 @@ impl App {
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn drive_gpu_soak(&mut self, event_loop: &ActiveEventLoop) {
+        if self.soak.is_none() { return; }
+        let now = Instant::now();
+        let metal = self.gpu.as_ref().and_then(Gpu::current_gpu_bytes);
+        let (finished, stimuli) = {
+            let Some(soak) = self.soak.as_mut() else { return };
+            soak.sample_if_due(now, metal);
+            let finished = soak.finished(now);
+            let mut stimuli = Vec::new();
+            if !finished {
+                for _ in 0..32 {
+                    let Some(stimulus) = soak.next_stimulus(now) else { break };
+                    let stop = matches!(stimulus, crate::soak_gpu::Stimulus::Inject(_) | crate::soak_gpu::Stimulus::Resize { .. });
+                    stimuli.push(stimulus);
+                    if stop { break; }
+                }
+            }
+            (finished, stimuli)
+        };
+        if finished {
+            let Some(soak) = self.soak.as_ref() else { return };
+            let report = soak.report(now);
+            self.soak_passed = Some(report.passed());
+            report.print();
+            event_loop.exit();
+            return;
+        }
+        for stimulus in stimuli.iter().copied() {
+            match stimulus {
+                crate::soak_gpu::Stimulus::SetLavaTheme => { let _ = crate::theme::set_active_by_name("Mangrove"); self.retint_theme_now(); self.sync_view(true); }
+                crate::soak_gpu::Stimulus::Resize { width, height } => if let Some(w) = self.recovery_window.as_ref() { let _ = w.request_inner_size(winit::dpi::PhysicalSize::new(width, height)); },
+                crate::soak_gpu::Stimulus::ThemeNext => { crate::theme::cycle(1); self.retint_theme_now(); self.sync_view(true); if let Some(s) = self.soak.as_mut() { s.observe_theme_switch(); } }
+                crate::soak_gpu::Stimulus::Overlay { open } => {
+                    let action = if open { Action::OpenCommandPalette } else { Action::Cancel };
+                    let _ = self.apply(action, false, event_loop, crate::stats::Door::Chord);
+                    if !open && self.overlay.is_none() { if let Some(s) = self.soak.as_mut() { s.observe_overlay_cycle(); } }
+                }
+                crate::soak_gpu::Stimulus::Inject(kind) => {
+                    // LIMITATION (acceptable): `soak_recovery_pending` is a
+                    // single slot, so two injections landing before a present
+                    // observes the first recovery would drop the earlier
+                    // timing. The schedule cannot reach that state — each fault
+                    // kind is injected EXACTLY ONCE (`Controller::injected` is a
+                    // one-shot latch per kind) and the batch loop above STOPS on
+                    // any `Inject`, so at most one injection is issued per tick
+                    // and the next present clears the slot before the following
+                    // kind can fire. A queue would be dead generality here.
+                    self.soak_recovery_pending = Some(kind);
+                    if let Some(gpu) = self.gpu.as_mut() { match kind {
+                        crate::soak_gpu::FaultKind::OutOfMemory => gpu.inject_fault(gpu::GpuFaultInjection::OutOfMemory),
+                        crate::soak_gpu::FaultKind::SurfaceLost => gpu.inject_surface_loss(),
+                        crate::soak_gpu::FaultKind::DeviceLost => gpu.inject_fault(gpu::GpuFaultInjection::DeviceLost),
+                    }}
+                }
+            }
+        }
+        if !stimuli.is_empty() { if let Some(gpu) = self.gpu.as_ref() { gpu.window.request_redraw(); } }
+        if self.last_frame.is_none() { event_loop.set_control_flow(control_flow_with_deadline(event_loop.control_flow(), now + if stimuli.len() == 32 { Duration::from_millis(1) } else { Duration::from_millis(100) })); }
     }
 
     /// DEBUG key→px: stamp the receipt of an input that will request a redraw —
@@ -1281,6 +1466,10 @@ impl ApplicationHandler<AwlEvent> for App {
         if self.gpu.is_some() {
             return;
         }
+        if self.recovery_window.is_some() {
+            self.rebuild_gpu(event_loop, "graphics resumed");
+            return;
+        }
         // THE PURE title string (`app::files::window_title`) — same owner
         // `App::update_title` uses on every later open/switch/theme-cycle, so
         // the very first frame's window title already names the document (and
@@ -1331,7 +1520,8 @@ impl ApplicationHandler<AwlEvent> for App {
         let attrs = {
             let attrs = Window::default_attributes()
                 .with_min_inner_size(LogicalSize::new(min_w, min_h))
-                .with_title(title);
+                .with_title(if self.soak.is_some() { "Awl GPU probe — keep visible".to_string() } else { title })
+                .with_visible(true);
             match self.restored_window {
                 Some(frame) => {
                     let screens: Vec<crate::session::ScreenRect> = event_loop
@@ -1375,6 +1565,7 @@ impl ApplicationHandler<AwlEvent> for App {
             attrs.with_canvas(canvas)
         };
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
+        self.recovery_window = Some(window.clone());
         // Ask the platform to deliver IME events so CJK (Japanese) composition
         // works: without this, WindowEvent::Ime is never sent and the user can
         // only type raw ASCII. Safe to call unconditionally; platforms without an
@@ -1389,6 +1580,7 @@ impl ApplicationHandler<AwlEvent> for App {
         match pollster::block_on(Gpu::new(window, display_handle)) {
             Ok(gpu) => {
                 self.gpu = Some(gpu);
+                self.gpu_lifecycle = GpuLifecycle::Active { oom_skips: 0 };
                 self.on_gpu_ready();
                 // NATIVE MACOS MENU BAR: install now that the window (and
                 // therefore NSApp) exists — `Menu::init_for_nsapp` and the
@@ -1414,6 +1606,7 @@ impl ApplicationHandler<AwlEvent> for App {
             }
             Err(e) => {
                 eprintln!("failed to init render state: {e}");
+                self.set_sticky_notice("graphics unavailable — closing safely");
                 event_loop.exit();
             }
         }
@@ -1425,18 +1618,29 @@ impl ApplicationHandler<AwlEvent> for App {
         // first frame. (The event-loop borrow can't cross the await, hence the slot.)
         #[cfg(target_arch = "wasm32")]
         {
+            self.gpu_lifecycle = GpuLifecycle::Rebuilding;
             let slot = self.gpu_pending.clone();
             let win = window.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 match Gpu::new(window, display_handle).await {
                     Ok(gpu) => {
-                        *slot.borrow_mut() = Some(gpu);
+                        *slot.borrow_mut() = Some(Ok(gpu));
                         win.request_redraw();
                     }
-                    Err(e) => log::error!("failed to init render state: {e}"),
+                    Err(e) => { *slot.borrow_mut() = Some(Err(e.to_string())); win.request_redraw(); }
                 }
             });
         }
+    }
+
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        self.gpu = None;
+        self.gpu_lifecycle = GpuLifecycle::Suspended;
+        self.last_frame = None;
+        self.input_stamp = None;
+        self.resize_settle_at = None;
+        self.move_settle_at = None;
+        self.present_sync_on = false;
     }
 
     fn window_event(
@@ -1453,9 +1657,11 @@ impl ApplicationHandler<AwlEvent> for App {
             // Take into a local FIRST so the `RefCell` borrow is dropped before
             // `on_gpu_ready` re-borrows `self`.
             let pending = self.gpu_pending.borrow_mut().take();
-            if let Some(gpu) = pending {
-                self.gpu = Some(gpu);
-                self.on_gpu_ready();
+            if let Some(result) = pending {
+                match result {
+                    Ok(gpu) => { self.gpu = Some(gpu); self.gpu_lifecycle = GpuLifecycle::Active { oom_skips: 0 }; self.on_gpu_ready(); }
+                    Err(e) => { log::error!("failed to rebuild render state: {e}"); self.set_sticky_notice("graphics could not recover — closing safely"); event_loop.exit(); }
+                }
             }
         }
         if self.gpu.is_none() {
@@ -1471,7 +1677,8 @@ impl ApplicationHandler<AwlEvent> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Focused(true) => self.on_focus_gained(),
             WindowEvent::Focused(false) => self.on_focus_lost(),
-            WindowEvent::Resized(size) => self.on_resized(size),
+            WindowEvent::Occluded(occluded) => self.on_occluded(occluded),
+            WindowEvent::Resized(size) => self.on_resized(event_loop, size),
             WindowEvent::Moved(position) => self.on_moved(position),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.on_scale_factor_changed(scale_factor);
@@ -1738,6 +1945,25 @@ impl ApplicationHandler<AwlEvent> for App {
                 ));
             }
         }
+        // GPU acquire retries are App-owned timers, never immediate redraw
+        // recursion. Occlusion deliberately arms no timer: an OS visibility,
+        // input, lava, or probe wake is the next opportunity. Timeout and
+        // surface reconfiguration arrive here after their bounded delay.
+        if let Some(deadline) = self.gpu_retry_at {
+            if Instant::now() >= deadline {
+                self.gpu_retry_at = None;
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+            } else if self.last_frame.is_none() {
+                event_loop.set_control_flow(control_flow_with_deadline(
+                    event_loop.control_flow(),
+                    deadline,
+                ));
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.drive_gpu_soak(event_loop);
     }
 }
 
@@ -1845,6 +2071,7 @@ pub fn run(
     cli_notes_root: Option<PathBuf>,
     config: Config,
     wait: bool,
+    #[cfg(not(target_arch = "wasm32"))] soak: Option<crate::soak_gpu::SoakConfig>,
 ) -> anyhow::Result<()> {
     // CRASH VISIBILITY (native only — mirrors the daemon's own CAPTURE GATE
     // exactly): install the panic hook FIRST, before any window/GPU/daemon
@@ -1855,7 +2082,7 @@ pub fn run(
     // installs it (tripwire: `main::run::tests::
     // headless_screenshot_never_installs_the_crash_hook`).
     #[cfg(not(target_arch = "wasm32"))]
-    crate::crashlog::install_hook();
+    if soak.is_none() { crate::crashlog::install_hook(); }
 
     // SINGLE-INSTANCE DAEMON (native only, and compiled out entirely under
     // `mas` — see `crate::daemon`'s module doc for the full CAPTURE GATE
@@ -1866,7 +2093,7 @@ pub fn run(
     // created. Under `mas`, Launch Services already refuses a second launch
     // and there is no CLI to hand a path off with, so this is simply absent.
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
-    let instance_listener = match crate::daemon::startup(file.as_deref(), wait) {
+    let instance_listener = if soak.is_some() { None } else { match crate::daemon::startup(file.as_deref(), wait) {
         Ok(crate::daemon::StartupOutcome::HandedOff) => return Ok(()),
         Ok(crate::daemon::StartupOutcome::Instance(l)) => Some(l),
         Err(e) => {
@@ -1876,7 +2103,7 @@ pub fn run(
             eprintln!("awl: single-instance socket unavailable ({e}); continuing without it");
             None
         }
-    };
+    }};
 
     // Mark this LIVE session's start, so the History picker's Session lens has a
     // floor to bucket versions against. Live-launch-only (never the headless capture,
@@ -1890,7 +2117,7 @@ pub fn run(
     // live-App startup path (never `--screenshot`/`--keys`), matching every
     // other native-only startup door's capture gate above.
     #[cfg(all(feature = "mas", target_os = "macos"))]
-    crate::mas::restore_all_grants();
+    if soak.is_none() { crate::mas::restore_all_grants(); }
 
     let event_loop = EventLoop::<AwlEvent>::with_user_event().build()?;
     #[cfg(not(target_arch = "wasm32"))]
@@ -1900,14 +2127,21 @@ pub fn run(
     // `spawn_app` without ever being mutated. Kept as ONE call site (never
     // duplicated across a `#[cfg]` split) — a law test below counts every
     // raw constructor call in this file.
+    #[cfg(not(target_arch = "wasm32"))]
+    let config = if soak.is_some() {
+        crate::fs::set_active(Arc::new(crate::fs::InMemoryFs::new()));
+        Config { session_restore: Some(false), autosave: Some(false), stats: Some(false), reduce_motion: Some(false), ..config }
+    } else { config };
     #[allow(unused_mut)]
     let mut app = App::new(file, root, cli_workspace, cli_notes_root, config);
+    #[cfg(not(target_arch = "wasm32"))]
+    { app.soak = soak.map(crate::soak_gpu::Controller::new); }
     // NATIVE MACOS MENU BAR: stash a proxy clone now (before the daemon's own
     // clone below is potentially moved away) so `resumed()` can install the
     // menu bar once the window/NSApp exists — see `App::menu_proxy`'s doc.
     #[cfg(target_os = "macos")]
     {
-        app.menu_proxy = Some(proxy.clone());
+        if app.soak.is_none() { app.menu_proxy = Some(proxy.clone()); }
     }
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
     if let Some(listener) = instance_listener {
@@ -1923,6 +2157,9 @@ pub fn run(
     #[cfg(not(target_arch = "wasm32"))]
     {
         event_loop.run_app(&mut app)?;
+        if app.soak.is_some() && app.soak_passed != Some(true) {
+            anyhow::bail!("native GPU soak did not meet its verification contract");
+        }
     }
 
     // WASM: the browser event loop is the page's own; winit can't BLOCK on it, so
@@ -1941,6 +2178,59 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_fault_outcomes_skip_once_then_rebuild_without_conflating_validation() {
+        assert_eq!(
+            gpu_fault_action(GpuLifecycle::Active { oom_skips: 0 }, gpu::GpuFaultKind::OutOfMemory),
+            GpuFaultAction::RetryOneFrame,
+        );
+        assert_eq!(
+            gpu_fault_action(GpuLifecycle::Active { oom_skips: 1 }, gpu::GpuFaultKind::OutOfMemory),
+            GpuFaultAction::Rebuild,
+        );
+        for kind in [gpu::GpuFaultKind::DeviceLost, gpu::GpuFaultKind::Internal, gpu::GpuFaultKind::SurfaceRecoveryFailed] {
+            assert_eq!(gpu_fault_action(GpuLifecycle::Active { oom_skips: 0 }, kind), GpuFaultAction::Rebuild);
+        }
+        assert_eq!(
+            gpu_fault_action(GpuLifecycle::Active { oom_skips: 0 }, gpu::GpuFaultKind::Validation),
+            GpuFaultAction::NoticeOnly,
+        );
+    }
+
+    #[test]
+    fn every_degraded_frame_names_its_retry_or_hold_outcome() {
+        assert_eq!(gpu_skip_action(gpu::GpuFrameSkip::Occluded, 0), GpuSkipAction::WaitForWake);
+        assert_eq!(gpu_skip_action(gpu::GpuFrameSkip::Timeout, 0), GpuSkipAction::RetryAfter(Duration::from_millis(16)));
+        assert_eq!(gpu_skip_action(gpu::GpuFrameSkip::Timeout, 1), GpuSkipAction::RetryAfter(Duration::from_millis(32)));
+        assert_eq!(gpu_skip_action(gpu::GpuFrameSkip::Timeout, 20), GpuSkipAction::RetryAfter(Duration::from_millis(512)));
+        assert_eq!(gpu_skip_action(gpu::GpuFrameSkip::SurfaceReconfigured, 0), GpuSkipAction::RetryAfter(GPU_SURFACE_RETRY));
+        assert_eq!(
+            gpu_skip_action(gpu::GpuFrameSkip::SurfaceRecreated, 0),
+            GpuSkipAction::RetryWithNoticeAfter(GPU_SURFACE_RETRY, "graphics surface recovered"),
+        );
+        assert_eq!(
+            gpu_skip_action(gpu::GpuFrameSkip::PrepareFailed, 0),
+            GpuSkipAction::HoldWithNotice("graphics skipped one frame — editing is safe"),
+        );
+    }
+
+    #[test]
+    fn un_occlusion_wakes_a_repaint_and_occlusion_does_not() {
+        // `Occluded → WaitForWake` arms no retry timer, so the un-occlude edge
+        // (`false`) is the one that must schedule a redraw; becoming occluded
+        // parks the loop and needs no frame.
+        assert!(occluded_change_wants_redraw(false));
+        assert!(!occluded_change_wants_redraw(true));
+    }
+
+    #[test]
+    fn skipped_surface_frame_never_drives_the_animation_poll_loop() {
+        assert!(!keep_gpu_loop_hot(true, false));
+        assert!(!keep_gpu_loop_hot(false, false));
+        assert!(!keep_gpu_loop_hot(false, true));
+        assert!(keep_gpu_loop_hot(true, true));
+    }
 
     #[test]
     fn wheel_zoom_only_on_super() {

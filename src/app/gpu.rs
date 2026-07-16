@@ -5,6 +5,82 @@
 //! the capture output — is byte-identical.
 
 use super::*;
+use std::sync::Mutex;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GpuFaultKind {
+    OutOfMemory,
+    Validation,
+    Internal,
+    DeviceLost,
+    SurfaceRecoveryFailed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) enum GpuFaultInjection { OutOfMemory, DeviceLost }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct GpuFault { pub(super) kind: GpuFaultKind, pub(super) message: String }
+
+#[derive(Default)]
+struct FaultSlots {
+    device_lost: Option<String>, out_of_memory: Option<String>, surface: Option<String>,
+    internal: Option<String>, validation: Option<String>,
+}
+
+impl FaultSlots {
+    fn drain(&mut self) -> Vec<GpuFault> {
+        [
+            (GpuFaultKind::DeviceLost, self.device_lost.take()),
+            (GpuFaultKind::SurfaceRecoveryFailed, self.surface.take()),
+            (GpuFaultKind::Internal, self.internal.take()),
+            (GpuFaultKind::OutOfMemory, self.out_of_memory.take()),
+            (GpuFaultKind::Validation, self.validation.take()),
+        ].into_iter().filter_map(|(kind, message)| message.map(|message| GpuFault { kind, message })).collect()
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct GpuFaultInbox { slots: Arc<Mutex<FaultSlots>>, window: Arc<Window> }
+
+impl GpuFaultInbox {
+    fn new(window: Arc<Window>) -> Self {
+        Self { slots: Arc::new(Mutex::new(FaultSlots::default())), window }
+    }
+    fn report(&self, fault: GpuFault) {
+        let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        let slot = match fault.kind {
+            GpuFaultKind::DeviceLost => &mut slots.device_lost,
+            GpuFaultKind::OutOfMemory => &mut slots.out_of_memory,
+            GpuFaultKind::SurfaceRecoveryFailed => &mut slots.surface,
+            GpuFaultKind::Internal => &mut slots.internal,
+            GpuFaultKind::Validation => &mut slots.validation,
+        };
+        *slot = Some(fault.message);
+        drop(slots);
+        self.window.request_redraw();
+    }
+    fn drain(&self) -> Vec<GpuFault> {
+        let mut s = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        s.drain()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GpuFrameSkip { Timeout, Occluded, SurfaceReconfigured, SurfaceRecreated, PrepareFailed }
+pub(super) enum GpuFrameOutcome { Presented(Option<(f32, Instant)>), Skipped(GpuFrameSkip), Fault(GpuFault) }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GpuResizeOutcome { IgnoredZeroExtent, Reconfigured }
+
+fn classify_uncaptured(error: wgpu::Error) -> GpuFault {
+    let kind = match error {
+        wgpu::Error::OutOfMemory { .. } => GpuFaultKind::OutOfMemory,
+        wgpu::Error::Validation { .. } => GpuFaultKind::Validation,
+        wgpu::Error::Internal { .. } => GpuFaultKind::Internal,
+    };
+    GpuFault { kind, message: error.to_string() }
+}
 
 impl Gpu {
     // Takes the display handle BY VALUE (not `&ActiveEventLoop`) so the wasm path
@@ -31,6 +107,11 @@ impl Gpu {
             })
             .await
             .map_err(|e| anyhow::anyhow!("no adapter: {e:?}"))?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let backend_name = {
+            let info = adapter.get_info();
+            format!("{:?}: {}", info.backend, info.name)
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("awl device"),
@@ -38,6 +119,14 @@ impl Gpu {
                 ..Default::default()
             })
             .await?;
+
+        let faults = GpuFaultInbox::new(window.clone());
+        let uncaptured = faults.clone();
+        device.on_uncaptured_error(Arc::new(move |error| uncaptured.report(classify_uncaptured(error))));
+        let lost = faults.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            lost.report(GpuFault { kind: GpuFaultKind::DeviceLost, message: format!("{reason:?}: {message}") });
+        });
 
         let caps = surface.get_capabilities(&adapter);
         // The CONFIG format: prefer a platform-offered sRGB surface format (native
@@ -50,7 +139,8 @@ impl Gpu {
             .iter()
             .copied()
             .find(|f| f.is_srgb())
-            .unwrap_or(caps.formats[0]);
+            .or_else(|| caps.formats.first().copied())
+            .ok_or_else(|| anyhow::anyhow!("surface advertised no texture formats"))?;
         // The VIEW format we actually render through — always the sRGB variant, so
         // the hardware applies the linear→sRGB encode on write (the shaders + the
         // per-pipeline color converters all emit LINEAR light expecting exactly
@@ -102,6 +192,11 @@ impl Gpu {
             view_format,
             pipeline,
             window,
+            #[cfg(not(target_arch = "wasm32"))]
+            backend_name,
+            faults,
+            #[cfg(not(target_arch = "wasm32"))]
+            inject_surface_loss: false,
         })
     }
 
@@ -160,14 +255,38 @@ impl Gpu {
         None
     }
 
-    pub(super) fn resize(&mut self, width: u32, height: u32) {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn backend_name(&self) -> &str { &self.backend_name }
+
+    pub(super) fn resize(&mut self, width: u32, height: u32) -> GpuResizeOutcome {
         if width == 0 || height == 0 {
-            return;
+            return GpuResizeOutcome::IgnoredZeroExtent;
         }
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
         self.pipeline.set_size(width as f32, height as f32);
+        GpuResizeOutcome::Reconfigured
+    }
+
+    pub(super) fn take_faults(&self) -> Vec<GpuFault> { self.faults.drain() }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn inject_fault(&self, injection: GpuFaultInjection) {
+        let kind = match injection { GpuFaultInjection::OutOfMemory => GpuFaultKind::OutOfMemory, GpuFaultInjection::DeviceLost => GpuFaultKind::DeviceLost };
+        self.faults.report(GpuFault { kind, message: format!("injected {kind:?}") });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn inject_surface_loss(&mut self) { self.inject_surface_loss = true; self.window.request_redraw(); }
+
+    fn recover_surface(&mut self) -> Result<(), GpuFault> {
+        let surface = self.instance.create_surface(self.window.clone()).map_err(|e| GpuFault {
+            kind: GpuFaultKind::SurfaceRecoveryFailed, message: format!("could not recreate GPU surface: {e}"),
+        })?;
+        surface.configure(&self.device, &self.config);
+        self.surface = surface;
+        Ok(())
     }
 
     /// LIVE-RESIZE CONTENT-STRETCH FIX (macOS only): toggle the underlying
@@ -221,40 +340,37 @@ impl Gpu {
     /// wait is vsync PACING, not work, and folding it in would make every busy
     /// sequence read as exactly-at-budget (PresentMon's MsCPUBusy vs MsCPUWait
     /// distinction). Stamps use the wasm-safe `crate::clock::Instant`.
-    pub(super) fn redraw(&mut self) -> Option<(f32, Instant)> {
+    pub(super) fn redraw(&mut self) -> GpuFrameOutcome {
         let (w, h) = (self.config.width, self.config.height);
         let debug = crate::debug::debug_on();
         let t0 = debug.then(Instant::now);
         if let Err(e) = self.pipeline.prepare(&self.device, &self.queue, w, h) {
             eprintln!("prepare error: {e}");
-            return None;
+            return GpuFrameOutcome::Skipped(GpuFrameSkip::PrepareFailed);
         }
+        if let Some(fault) = self.take_faults().into_iter().next() { return GpuFrameOutcome::Fault(fault); }
         // Prepare's span ends here; the acquire wait below is excluded.
         let prepare_ms = t0.map(|t| t.elapsed().as_secs_f32() * 1000.0);
 
-        let frame = match self.surface.get_current_texture() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let acquired = if std::mem::take(&mut self.inject_surface_loss) { wgpu::CurrentSurfaceTexture::Lost } else { self.surface.get_current_texture() };
+        #[cfg(target_arch = "wasm32")]
+        let acquired = self.surface.get_current_texture();
+        let frame = match acquired {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                self.window.request_redraw();
-                return None;
+                return GpuFrameOutcome::Skipped(if matches!(acquired, wgpu::CurrentSurfaceTexture::Timeout) { GpuFrameSkip::Timeout } else { GpuFrameSkip::Occluded });
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
                 self.surface.configure(&self.device, &self.config);
-                self.window.request_redraw();
-                return None;
+                return GpuFrameOutcome::Skipped(GpuFrameSkip::SurfaceReconfigured);
             }
             wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface = self
-                    .instance
-                    .create_surface(self.window.clone())
-                    .expect("recreate surface");
-                self.surface.configure(&self.device, &self.config);
-                self.window.request_redraw();
-                return None;
+                if let Err(fault) = self.recover_surface() { return GpuFrameOutcome::Fault(fault); }
+                return GpuFrameOutcome::Skipped(GpuFrameSkip::SurfaceRecreated);
             }
             wgpu::CurrentSurfaceTexture::Validation => {
-                eprintln!("surface validation error");
-                return None;
+                return GpuFrameOutcome::Fault(GpuFault { kind: GpuFaultKind::Validation, message: "surface validation error".into() });
             }
         };
         // Acquire SUCCEEDED: the post-acquire span (encode + submit + present).
@@ -291,9 +407,34 @@ impl Gpu {
         self.pipeline.atlas.trim();
         match (prepare_ms, t2, done) {
             (Some(prep), Some(t2), Some(done)) => {
-                Some((prep + (done - t2).as_secs_f32() * 1000.0, done))
+                GpuFrameOutcome::Presented(Some((prep + (done - t2).as_secs_f32() * 1000.0, done)))
             }
-            _ => None,
+            _ => GpuFrameOutcome::Presented(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+    fn source() -> wgpu::ErrorSource { Box::new(io::Error::other("synthetic")) }
+    #[test] fn uncaptured_oom_is_not_validation() { assert_eq!(classify_uncaptured(wgpu::Error::OutOfMemory { source: source() }).kind, GpuFaultKind::OutOfMemory); }
+    #[test] fn uncaptured_validation_stays_distinct_from_oom() { assert_eq!(classify_uncaptured(wgpu::Error::Validation { source: source(), description: "bad".into() }).kind, GpuFaultKind::Validation); }
+    #[test] fn uncaptured_internal_stays_distinct_from_device_loss() { assert_eq!(classify_uncaptured(wgpu::Error::Internal { source: source(), description: "bad".into() }).kind, GpuFaultKind::Internal); }
+    #[test]
+    fn bounded_fault_slots_prioritize_rebuild_before_retry() {
+        let mut slots = FaultSlots::default();
+        for n in 0..1_000 {
+            slots.out_of_memory = Some(format!("oom {n}"));
+        }
+        slots.internal = Some("internal".into());
+        slots.validation = Some("validation".into());
+        let faults = slots.drain();
+        assert_eq!(faults.len(), 3);
+        assert_eq!(faults[0].kind, GpuFaultKind::Internal);
+        assert_eq!(faults[1].kind, GpuFaultKind::OutOfMemory);
+        assert_eq!(faults[1].message, "oom 999");
+        assert_eq!(faults[2].kind, GpuFaultKind::Validation);
     }
 }

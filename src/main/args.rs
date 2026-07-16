@@ -193,6 +193,10 @@ pub(crate) enum Mode {
     /// checked-in machine-keyed baseline, exiting nonzero on a >20% cell
     /// regression (the `scripts/bench.sh` merge-day gate). Opens no window.
     BenchSuite { baseline: Option<PathBuf> },
+    /// Hidden bounded REAL native-window/surface robustness probe. The live App
+    /// runs isolated from daemon/session/history/user config state.
+    #[cfg(not(target_arch = "wasm32"))]
+    SoakGpu(crate::soak_gpu::SoakConfig),
 }
 
 /// Parse a `--sel L0:C0-L1:C1` argument into ordered line/col endpoints.
@@ -409,6 +413,17 @@ fn parse_held_dir(s: &str) -> Result<capture::HeldDir> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_soak_seconds(s: &str) -> Result<std::time::Duration> {
+    let seconds: f64 = s
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad --soak-gpu-seconds {s:?} (want a positive number)"))?;
+    if !seconds.is_finite() || seconds <= 0.0 {
+        bail!("--soak-gpu-seconds must be finite and > 0, got {s:?}");
+    }
+    Ok(std::time::Duration::from_secs_f64(seconds))
+}
+
 pub(crate) fn parse_args() -> Result<Mode> {
     let mut args = std::env::args().skip(1);
     let mut out: Option<PathBuf> = None;
@@ -437,6 +452,12 @@ pub(crate) fn parse_args() -> Result<Mode> {
     let mut bench_theme_burst = false;
     let mut bench_zoom_burst = false;
     let mut bench_suite = false;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut soak_gpu = false;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut soak_gpu_duration = crate::soak_gpu::DEFAULT_DURATION;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut soak_gpu_duration_seen = false;
     // `--bench-baseline <path>`: only meaningful with `--bench-suite` (rejected
     // otherwise below, so it can never be silently dropped).
     let mut bench_baseline: Option<PathBuf> = None;
@@ -489,6 +510,18 @@ pub(crate) fn parse_args() -> Result<Mode> {
             }
             "--bench-suite" => {
                 bench_suite = true;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            "--soak-gpu" => {
+                soak_gpu = true;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            "--soak-gpu-seconds" => {
+                let v = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--soak-gpu-seconds requires a positive number")
+                })?;
+                soak_gpu_duration = parse_soak_seconds(&v)?;
+                soak_gpu_duration_seen = true;
             }
             "--bench-baseline" => {
                 let v = args.next().ok_or_else(|| {
@@ -817,6 +850,27 @@ pub(crate) fn parse_args() -> Result<Mode> {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    if soak_gpu {
+        if file.is_some()
+            || out.is_some()
+            || keys_spec.is_some()
+            || wait_flag
+            || config_arg.is_some()
+            || root.is_some()
+            || workspace.is_some()
+            || notes_root.is_some()
+        {
+            bail!("--soak-gpu is isolated; file/capture/input/config/folder arguments do not apply");
+        }
+        return Ok(Mode::SoakGpu(crate::soak_gpu::SoakConfig {
+            duration: soak_gpu_duration,
+        }));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if soak_gpu_duration_seen {
+        bail!("--soak-gpu-seconds requires --soak-gpu");
+    }
     if bench_suite {
         return Ok(Mode::BenchSuite { baseline: bench_baseline });
     }
@@ -1120,6 +1174,16 @@ mod tests {
         assert!(parse_steps("").is_err());
         assert!(parse_steps("  ,  ").is_err());
         assert!(parse_steps("0,x,2").is_err());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn parse_soak_duration_accepts_short_runs_and_rejects_non_positive() {
+        assert_eq!(parse_soak_seconds("0.25").unwrap(), std::time::Duration::from_millis(250));
+        assert_eq!(parse_soak_seconds("900").unwrap(), crate::soak_gpu::DEFAULT_DURATION);
+        for bad in ["0", "-1", "NaN", "inf", "nope"] {
+            assert!(parse_soak_seconds(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
