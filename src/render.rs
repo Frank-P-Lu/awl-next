@@ -560,6 +560,32 @@ pub const FONT_ORNAMENT_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/Junicode-Ornaments.ttf"),
 ];
 
+/// BUNDLED CHROME-VOICE faces — the CHROME-VOICES round's two curated overlay
+/// CHROME faces (see [`crate::theme::ChromeFace`]'s doc for the closed surface
+/// set: placard wordmark / inline title prefix / lens-strip labels — never a
+/// list row, query line, or the writing column). A world names one on its
+/// `render_caps.chrome_face` as DATA; unnamed worlds keep their body face, so
+/// these change ZERO document shaping — registered here only for
+/// addressability by `Family::Name` (mirrors the CJK/ornament registration).
+///  - Archivo Black (registers as "Archivo Black") — the LOUD voice, Firetail's
+///    pick. A single heavy display weight; its `OS/2.usWeightClass` is 400 (NOT
+///    a 900-class register — verified in-file), so a plain `Weight::NORMAL`
+///    request matches with `weight_diff == 0` (NO `mono_safe_weight` exception,
+///    the opposite corner of the IBM-Plex-Light trap). SIL OFL 1.1,
+///    github.com/Omnibus-Type/ArchivoBlack (via google/fonts ofl/archivoblack),
+///    subset to Latin + typographic/code punctuation via `pyftsubset`.
+///  - Abril Fatface (registers as "Abril Fatface") — the REFINED voice, a
+///    high-contrast Didone display Regular (usWeightClass 400). Reserved Font
+///    Names "Abril" and "Abril Fatface" (embedded, preserved). SIL OFL 1.1,
+///    TypeTogether (via google/fonts ofl/abrilfatface), same Latin subset.
+///
+/// See `assets/fonts/LICENSES.md` for the per-face copyright + Reserved-Font-
+/// Name rows (taken from each file's own `name` table — never fabricated).
+pub const FONT_CHROME_FACES: &[&[u8]] = &[
+    include_bytes!("../assets/fonts/ArchivoBlack-Regular.ttf"),
+    include_bytes!("../assets/fonts/AbrilFatface-Regular.ttf"),
+];
+
 /// BUNDLED per-script JAPANESE faces — the "Japanese bundle round" (TASTE-GATED,
 /// see `theme::CJK_MINCHO`/`CJK_GOTHIC`): Noto Serif JP + Noto Sans JP, the
 /// Google-Fonts JP-scoped builds (OFL, github.com/google/fonts, ofl/notoserifjp
@@ -1511,6 +1537,20 @@ fn build_font_system() -> FontSystem {
     // `Theme::ornament_face` and named only through the per-run family span on the
     // section-break fleuron / About end-mark, so this changes zero display shaping.
     for &face_bytes in FONT_ORNAMENT_FACES {
+        font_system.db_mut().load_font_source(
+            glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
+                face_bytes.to_vec(),
+            )),
+        );
+    }
+
+    // Register the bundled CHROME-VOICE faces (Archivo Black, Abril Fatface — see
+    // FONT_CHROME_FACES) so `chrome_attrs`'s `Family::Name` request resolves them
+    // on every machine when a world's `render_caps.chrome_face` names one. Named
+    // ONLY through the chrome span (placard wordmark / title prefix / lens-strip
+    // label — never a `Theme::font`), so this changes zero document display
+    // shaping — a world with `ChromeFace::Body` (all but Firetail) is untouched.
+    for &face_bytes in FONT_CHROME_FACES {
         font_system.db_mut().load_font_source(
             glyphon::cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
                 face_bytes.to_vec(),
