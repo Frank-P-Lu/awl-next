@@ -309,6 +309,25 @@ pub fn overlay_bar_unselected() -> Srgb {
     base_200()
 }
 
+/// PER-ITEM LIST SURFACES round — the ROOM PLANE laid full-canvas behind the
+/// bars under [`super::ListStyle::Bars`]. The world's own OPAQUE ground plane
+/// (`base_100` — the paper): a uniform field, never a bordered box (no shadow,
+/// no border, no bright `base_300` fill), so the bars read as floating ON the
+/// room rather than IN a card — the user's "with the bars, there shouldn't be a
+/// pane!" honoured. OPAQUE (not a translucent veil) for two reasons the designer
+/// pixel-pass proved: (1) a translucent scrim let the crisp document's page
+/// margin bleed through every gap, so the comb SEAM survived at reduced alpha; a
+/// solid plane erases it outright; (2) the unselected bar is a WHISPER one value
+/// step off the ground (`base_200`) — a translucent veil pulls the gap toward
+/// `base_200` too and COLLAPSES the whisper (invisible on light worlds), while
+/// the solid paper keeps the `base_100 → base_200` step the whisper needs to
+/// read. The trade — the document preview no longer ghosts behind the bars — is
+/// right for a bars world (a maximalist statement room, not a peek). Value only,
+/// never a hue (DESIGN §3/§5).
+pub fn overlay_bars_room() -> Srgb {
+    base_100()
+}
+
 pub fn surface_selected() -> Srgb {
     // The shared band: `base_300` stepped `SELECTED_BAND_STEPS` further up the
     // surface ramp, in the SAME direction `base_200 -> base_300` carries (toward

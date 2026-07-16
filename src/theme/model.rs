@@ -379,20 +379,24 @@ pub enum ListStyle {
 }
 
 /// PER-ITEM LIST SURFACES round — how the faceted picker's LENS STRIP skins
-/// its labels. The strip stays keyboard/click IDENTICAL across all three (the
+/// its labels. The strip stays keyboard/click IDENTICAL across both (the
 /// hit-test reads the same shaped label spans); only the SKIN varies.
 /// - `Text` (every world today, byte-identical) — value-only labels, the
 ///   active one in full ink with a hairline underline, inactive muted.
-/// - `Chips` — a rounded pill per label: the active one FILLED (the selected
-///   band value), inactive ones GHOST (a faint surface) — the 2026 standard.
 /// - `Band` — an active-only value band behind the active label (the
 ///   selected-row language applied sideways), inactive plain.
+///
+/// DESIGNER PIXEL-PASS (2026-07-16): the `Chips` skin (a filled/ghost pill per
+/// label — the 2026 standard) was KILLED on the user's verdict — four outlined
+/// buttons weighed the header and the inactive ghost pills SHOUTED (worst on the
+/// Firetail maximalist, pink fills on every inactive facet). The `Band` skin
+/// (active-only value band, inactive plain and calm) won; the text-underline
+/// active mark reads as a hyperlink, so `Band` is the endorsed non-`Text` skin.
 ///
 /// NO world ships a non-`Text` value yet (probe: `AWL_FACET_STYLE_FORCE`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FacetStyle {
     Text,
-    Chips,
     Band,
 }
 
@@ -551,7 +555,7 @@ pub struct RenderCaps {
     /// THE PER-ITEM LIST SURFACES round's facet-strip capability (see
     /// [`FacetStyle`]'s own doc): how the faceted picker's lens strip skins
     /// its labels. [`FacetStyle::Text`] everywhere (byte-identical) until a
-    /// world flips to `Chips`/`Band`.
+    /// world flips to `Band`.
     pub facet_style: FacetStyle,
 }
 
@@ -577,8 +581,8 @@ impl RenderCaps {
         motion: MotionJuice::CALM,
         // PER-ITEM LIST SURFACES round: both new dials land INERT — the single
         // takeover Pane with its selected-row band, plain-text facet strip —
-        // on every world (byte-identical). A world flips to Bars / Chips / Band
-        // as one-line DATA in the later flip round after the user's gallery pick.
+        // on every world (byte-identical). A world flips to Bars / Band as
+        // one-line DATA in the later flip round after the user's gallery pick.
         list_style: ListStyle::Pane,
         facet_style: FacetStyle::Text,
     };

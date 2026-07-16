@@ -390,12 +390,19 @@ pub(super) fn bar_rect_unselected(card_x: f32, card_w: f32, top: f32, bar_h: f32
 
 /// PURE geometry — the SELECTED bar rect: inset like the others
 /// ([`bar_rect_unselected`]) but grown `grow_px` WIDER toward the open margin —
-/// RIGHT by default, mirrored LEFT under a right-anchored (`TopRight`) card —
-/// and clamped inside the card so a large `grow_px` never clips off-card. So on
+/// RIGHT by default, mirrored LEFT under a right-anchored (`TopRight`) card. On
 /// the default (left) anchor the selected bar shares the unselected LEFT edge
-/// and juts further right; mirrored it shares the RIGHT edge and juts further
-/// left. Text alignment is never touched (rowlayout owns it) — only the surface
-/// grows. ONE owner for the renderer + the law.
+/// and juts `grow_px` further RIGHT; mirrored it shares the RIGHT edge and juts
+/// `grow_px` further LEFT. Text alignment is never touched (rowlayout owns it) —
+/// only the surface grows. ONE owner for the renderer + the law.
+///
+/// DESIGNER PIXEL-PASS FIX (2026-07-16): the jut runs INTO THE ROOM, past the
+/// card's own edge — the old `card_x + card_w` clamp capped every jut at
+/// `BAR_SIDE_INSET` (~8px) no matter how large `grow_px` was, so the selected
+/// bar read as MISALIGNED, not as a deliberate Persona ledge. With the pane
+/// dropped there is no card box to stay within — the bar juts into the open
+/// margin/room and the framebuffer clips it at the canvas edge. Only the LEADING
+/// edge is floored at `0.0` so a mirrored jut never runs off the left side.
 pub(super) fn bar_rect_selected(
     card_x: f32,
     card_w: f32,
@@ -407,17 +414,16 @@ pub(super) fn bar_rect_selected(
     let g = grow_px.max(0.0);
     let base_x = card_x + BAR_SIDE_INSET;
     let base_w = (card_w - 2.0 * BAR_SIDE_INSET).max(1.0);
-    let (mut x, mut w) = if mirror {
-        (base_x - g, base_w + g)
+    let (x, w) = if mirror {
+        // Grow LEFT: the RIGHT edge (`base_x + base_w`) stays put; the left edge
+        // slides `g` left, floored at the canvas edge.
+        let left = (base_x - g).max(0.0);
+        (left, base_x + base_w - left)
     } else {
+        // Grow RIGHT: the LEFT edge stays put; the right edge juts `g` into the
+        // room (the framebuffer clips it at the canvas edge).
         (base_x, base_w + g)
     };
-    if x < card_x {
-        x = card_x;
-    }
-    if x + w > card_x + card_w {
-        w = card_x + card_w - x;
-    }
     [x, top, w.max(1.0), bar_h]
 }
 

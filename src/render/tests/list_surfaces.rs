@@ -1,7 +1,7 @@
 //! PER-ITEM LIST SURFACES round — the law suite for the three INERT-by-default
 //! capabilities (the "Persona list"): `ListStyle` (Pane | Bars), the
 //! RIGHT-ANCHOR MIRROR (`CardAnchor::TopRight`, a first-class anchor value),
-//! and `FacetStyle` (Text | Chips | Band). Every capability lands byte-identical
+//! and `FacetStyle` (Text | Band). Every capability lands byte-identical
 //! on every world (proven pixel-for-pixel against the main base in the round's
 //! CLI sweep + the inert instance-count law here); the divergent rendering is
 //! reachable only through the `AWL_*_FORCE` probes / the test overrides, and is
@@ -37,8 +37,10 @@ fn parse_list_style_force_grammar() {
 #[test]
 fn parse_facet_style_force_grammar() {
     assert_eq!(parse_facet_style_force("text"), Some(theme::FacetStyle::Text));
-    assert_eq!(parse_facet_style_force("Chips"), Some(theme::FacetStyle::Chips));
     assert_eq!(parse_facet_style_force("BAND"), Some(theme::FacetStyle::Band));
+    // The `Chips` skin was killed in the designer pixel-pass — its grammar word
+    // now parses to None (falls back to the world's own facet style).
+    assert_eq!(parse_facet_style_force("chips"), None);
     assert_eq!(parse_facet_style_force("pill"), None);
     assert_eq!(parse_facet_style_force(""), None);
 }
@@ -98,9 +100,7 @@ fn topright_card_box_is_right_anchored_and_on_canvas_across_the_width_sweep() {
 
 #[test]
 fn selected_bar_grows_wider_toward_the_open_margin_and_mirrors() {
-    // A card at x=100, width=500, one row at top=200, bar 20 tall, grow 6
-    // (<= BAR_SIDE_INSET so it grows cleanly without clamping — the clamp itself
-    // is checked separately below with a huge grow).
+    // A card at x=100, width=500, one row at top=200, bar 20 tall, grow 6.
     let (cx, cw, top, bh, g) = (100.0, 500.0, 200.0, 20.0, 6.0);
     let unsel = chrome::bar_rect_unselected(cx, cw, top, bh);
     let def = chrome::bar_rect_selected(cx, cw, top, bh, g, false);
@@ -121,10 +121,23 @@ fn selected_bar_grows_wider_toward_the_open_margin_and_mirrors() {
     );
     assert!(mir[0] < unsel[0] - 1e-3, "mirror juts left");
 
-    // Every bar stays inside the card horizontally (a large grow clamps).
-    for r in [unsel, def, mir, chrome::bar_rect_selected(cx, cw, top, bh, 999.0, true)] {
-        assert!(r[0] >= cx - 1e-3 && r[0] + r[2] <= cx + cw + 1e-3, "bar {r:?} inside card");
-    }
+    // DESIGNER PIXEL-PASS FIX (2026-07-16): the selected bar juts INTO THE ROOM,
+    // past the card's own edge — the pane is dropped, so there is no box to stay
+    // within; the framebuffer clips the trailing edge at the canvas. A big grow
+    // therefore extends the jut fully (no `card_w` clamp capping it at
+    // `BAR_SIDE_INSET`). Only the LEADING edge is floored at the canvas (0.0) so a
+    // mirrored jut never runs off the left side.
+    let big_def = chrome::bar_rect_selected(cx, cw, top, bh, 999.0, false);
+    assert!(
+        big_def[0] + big_def[2] > cx + cw,
+        "a large default grow juts past the card's right edge into the room: {big_def:?}"
+    );
+    let big_mir = chrome::bar_rect_selected(cx, cw, top, bh, 999.0, true);
+    assert!(big_mir[0] >= -1e-3, "a mirrored jut is floored at the canvas left edge: {big_mir:?}");
+    assert!(
+        (big_mir[0] + big_mir[2] - (unsel[0] + unsel[2])).abs() < 1e-3,
+        "a mirrored jut keeps the unselected RIGHT edge no matter how large: {big_mir:?}"
+    );
 }
 
 // --- INERT by default: no bar / chip instances, no gap (real pipeline) -------
@@ -157,11 +170,6 @@ fn list_and_facet_default_are_inert_no_bars_no_chips_no_gap() {
             0,
             "Pane draws ZERO bar surfaces (faceted={faceted})"
         );
-        assert_eq!(
-            p.overlay_chips.instance_count(),
-            0,
-            "Text strip draws ZERO ghost chips (faceted={faceted})"
-        );
         // The selected row still gets its single Pane band (unchanged).
         assert_eq!(p.overlay_rows.instance_count(), 1, "Pane keeps its one selected band");
     }
@@ -170,16 +178,17 @@ fn list_and_facet_default_are_inert_no_bars_no_chips_no_gap() {
 // --- Bars DROP THE PANE; Pane KEEPS it (the card-fill law, gated by style) ----
 
 /// THE PANE-DROP LAW (the user's refit: "with the bars, there shouldn't be a
-/// pane!"). Under `ListStyle::Bars` the summoned card SURFACE disappears
-/// entirely — the flat `panel_card` fill and its `panel_shadow`/`panel_border`
-/// elevation companions all draw ZERO instances — so the bars float directly on
-/// the overlay's frosted backdrop/scrim (the Persona room model). Under `Pane`
+/// pane!"). Under `ListStyle::Bars` the boxed pane's ELEVATION disappears — the
+/// `panel_shadow` and `panel_border` companions draw ZERO instances, so the bars
+/// never sit in a raised box. In place of the boxed fill, `panel_card` draws a
+/// single FULL-CANVAS ROOM VEIL (a value scrim of the ground, no elevation — the
+/// Persona room, added in the designer pixel-pass to kill the crisp-doc comb
+/// seam), so it keeps its one instance but is a room, not a card. Under `Pane`
 /// (the default every world ships) the card fill stays (one instance), the pane
 /// the whole picker family has always drawn. The `card_rect` still governs
 /// LAYOUT in both (anchor/width/hit-tests via `overlay_geometry`) — only the
-/// PAINT is gated. This is the exact card-fill-vs-list-style seam the round-B
-/// refit introduced; without this law a future "always draw the card" regression
-/// would silently restore the pane the user rejected.
+/// PAINT is gated. Without this law a future "always draw the elevated card"
+/// regression would silently restore the boxed pane the user rejected.
 #[test]
 fn bars_drop_the_pane_pane_keeps_it() {
     let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
@@ -201,18 +210,19 @@ fn bars_drop_the_pane_pane_keeps_it() {
     assert_eq!(p.panel_card.instance_count(), 1, "Pane draws the card fill");
     assert_eq!(p.overlay_bars.instance_count(), 0, "Pane draws no bars");
 
-    // BARS: the pane vanishes — card fill, shadow, and border all park empty —
-    // and a bar draws per unselected row instead.
+    // BARS: the boxed pane vanishes — shadow + border park empty (no elevation) —
+    // and a bar draws per unselected row. `panel_card` now paints ONE full-canvas
+    // room veil in place of the boxed fill (not a raised card).
     set_list_style_test_override(Some(theme::ListStyle::Bars {
         radius: 6.0,
         gap: 10.0,
-        grow_px: 6.0,
+        grow_px: 24.0,
     }));
     p.set_view(&v);
     p.prepare(&device, &queue, 1200, 800).unwrap();
-    assert_eq!(p.panel_card.instance_count(), 0, "Bars drop the card fill (no pane)");
-    assert_eq!(p.panel_shadow.instance_count(), 0, "Bars draw no card shadow");
-    assert_eq!(p.panel_border.instance_count(), 0, "Bars draw no card border");
+    assert_eq!(p.panel_card.instance_count(), 1, "Bars paint one full-canvas room veil");
+    assert_eq!(p.panel_shadow.instance_count(), 0, "Bars draw no card shadow (no elevation)");
+    assert_eq!(p.panel_border.instance_count(), 0, "Bars draw no card border (no elevation)");
     assert!(p.overlay_bars.instance_count() > 0, "Bars draw a surface per row");
 
     set_list_style_test_override(None);
@@ -259,6 +269,13 @@ fn bars_draw_a_findable_surface_per_row() {
         return;
     };
     let _g = crate::testlock::serial();
+    // Pin SALTPAN — the critique's own light-world proof that the whisper reads
+    // (its base_100 paper vs base_200 bar is a clear value step). A bars world
+    // lays its OPAQUE base_100 room plane behind the bars (designer pixel-pass),
+    // so the between-bars "ground" is now the paper; the whisper is exactly the
+    // base_100 → base_200 step, which reads on Saltpan (a flat-ramp world would
+    // make it vanish by its palette — not this law's concern).
+    theme::set_active_by_name("Saltpan").unwrap();
 
     // A flat (non-faceted) picker, selection on row 2, plenty of rows.
     let mut v = view("hello\n", 0, 0);
@@ -283,12 +300,11 @@ fn bars_draw_a_findable_surface_per_row() {
 
     // OUTCOME (real pixels): the selected bar reads distinct from an unselected
     // bar, and an unselected bar still reads (a whisper) against the GROUND
-    // between bars. NOTE: under Bars the card PANE is dropped (see
-    // `bars_drop_the_pane_pane_keeps_it`), so the between-bars region is now the
-    // frosted backdrop/scrim, not a card fill — the sample still lands on pure
-    // surface (left of the text column), the ground the unselected whisper lifts
-    // off of. `overlay_card_rect` still returns the layout bound (the pane's
-    // paint is gone, its geometry is not).
+    // between bars. NOTE: under Bars the boxed pane is dropped (see
+    // `bars_drop_the_pane_pane_keeps_it`) and replaced by the OPAQUE base_100 ROOM
+    // PLANE — so the between-bars region is that paper, the ground the unselected
+    // whisper (base_200) lifts off of. `overlay_card_rect` still returns the
+    // layout bound (the pane's paint is gone, its geometry is not).
     let rect = p.overlay_card_rect().expect("overlay card rect");
     let (card_x, card_y, _cw) = (rect[0], rect[1], rect[2]);
     let text_top = card_y + 12.0; // `overlay_geometry`'s inner pad (vertical)
@@ -296,6 +312,11 @@ fn bars_draw_a_findable_surface_per_row() {
     let gap = p.overlay_row_gap();
     let hg = p.overlay_header_gap();
     let bar_h = lh - gap;
+    // The bars are CENTERED in their row pitch-cell (designer pixel-pass): each
+    // bar sits `gap/2` below the cell top, so the gap splits half above / half
+    // below. The sample coords fold in this offset so `sel`/`unsel` land ON a bar
+    // and `ground` lands in the true (centered) gap between two bars.
+    let bar_off = gap * 0.5;
     // Sample column x: inside the bar's left inset (8px) but LEFT of text_left
     // (12px) — pure surface, no glyphs.
     let sx = (card_x + 9.0) as i64;
@@ -303,15 +324,26 @@ fn bars_draw_a_findable_surface_per_row() {
     let px = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
     let (wi, hi) = (w as i64, h as i64);
 
-    let sel = avg(&px, wi, hi, sx, (row_top(2) + 2.0) as i64, 2, (bar_h - 4.0) as i64);
-    let unsel = avg(&px, wi, hi, sx, (row_top(0) + 2.0) as i64, 2, (bar_h - 4.0) as i64);
-    // The gap between row 0 and row 1 shows the bare GROUND (the scrim — no pane).
-    let ground = avg(&px, wi, hi, sx, (row_top(0) + bar_h + 1.0) as i64, 2, (gap - 2.0) as i64);
+    let sel = avg(&px, wi, hi, sx, (row_top(2) + bar_off + 2.0) as i64, 2, (bar_h - 4.0) as i64);
+    let unsel = avg(&px, wi, hi, sx, (row_top(0) + bar_off + 2.0) as i64, 2, (bar_h - 4.0) as i64);
+    // The gap between row 0 and row 1 shows the ROOM PLANE (base_100 paper — no
+    // pane). Bar 0's bottom is `row_top(0) + bar_off + bar_h`; the gap runs from
+    // there for `gap` px.
+    let ground = avg(
+        &px,
+        wi,
+        hi,
+        sx,
+        (row_top(0) + bar_off + bar_h + 1.0) as i64,
+        2,
+        (gap - 2.0) as i64,
+    );
 
     let d_sel = redmean(sel, unsel);
     let d_bar = redmean(unsel, ground);
     set_list_style_test_override(None);
     set_card_anchor_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
     assert!(
         d_sel >= 10.0,
         "selected bar {sel:?} must be findable vs an unselected bar {unsel:?} (redmean {d_sel:.1})"
@@ -334,18 +366,21 @@ fn bars_draw_a_findable_surface_per_row() {
     );
 }
 
-// --- FacetStyle: chips + band visibly differ from the Text baseline ----------
+// --- FacetStyle: Band visibly differs from the Text baseline -----------------
 
+/// The `Band` skin (the designer pixel-pass winner over the killed `Chips`)
+/// must visibly change the faceted strip vs the `Text` baseline — the active
+/// lens gains a value BAND pill, so the strip row reads perceptibly different.
 #[test]
-fn facet_chips_and_band_differ_from_text_in_the_strip() {
+fn facet_band_differs_from_text_in_the_strip() {
     let (w, h) = (1200u32, 800u32);
     let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
-        eprintln!("skipping facet_chips_and_band_differ: no wgpu adapter");
+        eprintln!("skipping facet_band_differs: no wgpu adapter");
         return;
     };
     let _g = crate::testlock::serial();
 
-    // A faceted picker with an ACTIVE facet so both band + active-chip have a target.
+    // A faceted picker with an ACTIVE facet so the band has a target.
     let mut v = view("hello\n", 0, 0);
     v.overlay_active = true;
     v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
@@ -360,87 +395,17 @@ fn facet_chips_and_band_differ_from_text_in_the_strip() {
     };
 
     let text = frame(&mut p, Some(theme::FacetStyle::Text));
-    // Under Text, the ghost-chip pipeline is empty (byte-identical to today).
-    assert_eq!(p.overlay_chips.instance_count(), 0, "Text draws no ghost chips");
-
-    let chips = frame(&mut p, Some(theme::FacetStyle::Chips));
-    // Chips: a ghost pill per INACTIVE facet (All is the home, not drawn → Edit = 1).
-    assert!(p.overlay_chips.instance_count() >= 1, "Chips draws ghost pills for inactive facets");
-
     let band = frame(&mut p, Some(theme::FacetStyle::Band));
     set_facet_style_test_override(None);
 
-    // The strip row (display line 1) must visibly change under each skin.
+    // The strip row (display line 1) must visibly change under the Band skin.
     let rect = p.overlay_card_rect().expect("overlay card rect");
     let (card_x, card_y, cw) = (rect[0], rect[1], rect[2]);
     let text_top = card_y + 12.0;
     let lh = p.overlay_lh();
     let strip = pixeldiff::Region::new(card_x, text_top + lh, cw, lh);
     pixeldiff::assert_perceptibly_different(
-        &text, &chips, w as i64, h as i64, strip, pixeldiff::DistinguishFloor::DEFAULT,
-        "facet Chips vs Text strip",
-    );
-    pixeldiff::assert_perceptibly_different(
         &text, &band, w as i64, h as i64, strip, pixeldiff::DistinguishFloor::DEFAULT,
         "facet Band vs Text strip",
     );
-}
-
-/// THE CHIP-GAP LAW (the Chips gallery defect): the STRIP_GAP whitespace between
-/// lens labels (two spaces) is narrower than a naive pad-each-side pill, so the
-/// ghost chips for adjacent inactive facets merged into ONE rounded blob with
-/// only tiny corner notches. Every DRAWN chip (the active filled chip + the
-/// inactive ghosts) must be a horizontally DISJOINT rectangle with a positive
-/// clear gap between neighbours — four labels read as four chips, not one blob.
-#[test]
-fn facet_chips_keep_a_clear_gap_between_neighbours() {
-    let (w, h) = (1200u32, 800u32);
-    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
-        eprintln!("skipping facet_chips_keep_a_clear_gap_between_neighbours: no wgpu adapter");
-        return;
-    };
-    let _g = crate::testlock::serial();
-
-    // Four adjacent facets (the real File/Edit/View/Recent shape), one active —
-    // so both the active filled chip and several ghost chips are drawn side by
-    // side, the exact arrangement that merged into a blob.
-    let mut v = view("hello\n", 0, 0);
-    v.overlay_active = true;
-    v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
-    v.overlay_selected = 1;
-    v.overlay_lens = vec![
-        ("All".into(), false),
-        ("File".into(), false),
-        ("Edit".into(), true),
-        ("View".into(), false),
-        ("Recent".into(), false),
-    ];
-
-    set_facet_style_test_override(Some(theme::FacetStyle::Chips));
-    p.set_view(&v);
-    p.prepare(&device, &queue, w, h).unwrap();
-
-    // Every DRAWN chip: the active filled chip (`overlay_theme_underline`) plus
-    // the inactive ghosts (`overlay_facet_ghosts`). All draw as chips under
-    // `Chips`, so all must stay disjoint.
-    let mut chips: Vec<[f32; 4]> = p.overlay_facet_ghosts.clone();
-    chips.extend(p.overlay_theme_underline);
-    set_facet_style_test_override(None);
-
-    // File/Edit/View/Recent draw (All is the home, skipped) → 3 ghosts + 1 active.
-    assert_eq!(chips.len(), 4, "four drawn chips (File/Edit/View/Recent), All is the skipped home");
-
-    // Sort left-to-right by x, then assert each neighbour is fully clear of the
-    // previous one (a positive gap, never a touch or an overlap).
-    chips.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
-    for pair in chips.windows(2) {
-        let (l, r) = (pair[0], pair[1]);
-        let l_right = l[0] + l[2];
-        let r_left = r[0];
-        let gap = r_left - l_right;
-        assert!(
-            gap > 0.5,
-            "adjacent chips must keep a clear gap: left {l:?} ends at {l_right:.1}, right {r:?} starts at {r_left:.1} (gap {gap:.1}px)"
-        );
-    }
 }

@@ -50,9 +50,8 @@ pub(in crate::render) const CARD_MAX_W_FACETED: f32 = 600.0;
 /// no alignment risk. LIVE-ONLY: whether the fuller beat reads right needs an eye.
 const OVERLAY_QUERY_BEAT: f32 = 1.0;
 
-/// PER-ITEM LIST SURFACES round — the corner radius (device px) of a faceted
-/// strip CHIP / active BAND under [`theme::FacetStyle::Chips`]/`Band` (the pill
-/// look). A single dial the gallery A/Bs.
+/// PER-ITEM LIST SURFACES round — the corner radius (device px) of the faceted
+/// strip's active [`theme::FacetStyle::Band`] pill. A single dial the gallery A/Bs.
 const FACET_CHIP_RADIUS: f32 = 6.0;
 
 /// The foot HINT row height (item 5), as a fraction of the overlay row height —
@@ -330,16 +329,28 @@ impl TextPipeline {
         self.panel_shadow.prepare(device, queue, width, height, &[]);
         self.panel_border.prepare(device, queue, width, height, &[]);
         self.overlay_rows.prepare(device, queue, width, height, &[]);
-        // PER-ITEM LIST SURFACES: the bar + ghost-chip surfaces park empty too, so
-        // a closed picker carries no stale bar/chip quads into the next frame.
+        // PER-ITEM LIST SURFACES: the bar surfaces park empty too, so a closed
+        // picker carries no stale bar quads into the next frame.
         self.overlay_bars.prepare(device, queue, width, height, &[]);
-        self.overlay_chips.prepare(device, queue, width, height, &[]);
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &[]);
         // The stipple placard: parked (zero instances) — the frame after a
         // stipple-world overlay closes carries zero stale wordmark pixels.
         self.placard_stipple
             .prepare(device, queue, width, height, &[]);
+        // The Bars behind-the-bars placard pass: parked (no areas) so a closed
+        // picker carries no stale wordmark into the next frame.
+        self.placard_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                Vec::<TextArea>::new(),
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon placard park failed: {e:?}"))?;
         // The amber query caret: parked (nothing drawn).
         self.panel_caret.prepare_empty();
         // The overlay TEXT renderer: shape an EMPTY buffer off-screen and prepare
@@ -952,30 +963,67 @@ impl TextPipeline {
             default_color: ink,
             custom_glyphs: &[],
         };
-        // The placard wordmark is FIRST in the batch (drawn behind everything
-        // that follows), clipped to the WHOLE CANVAS — a screen-corner
-        // watermark that bleeds OVER the scrim behind the card (never the
-        // tighter card/text rect), per `overlay_shape_placard`'s doc. It is
-        // still uploaded first, so the rows composite over it, and it rides
-        // the text pass (above the scrim quad) so the dimmed document below
-        // still shows through.
+        // DESIGNER PIXEL-PASS FIX (2026-07-16) — the placard's DRAW SLOT depends on
+        // the list style. Under `Bars` it must sit BEHIND the bar quads, so it rides
+        // its own `placard_renderer` pass (run between the room veil and the bars in
+        // `draw_overlay_card`); under `Pane` it stays FIRST-in-batch in
+        // `panel_renderer` below (drawn behind the rows, over the opaque card — the
+        // byte-identical historical slot). The dedicated pass is prepared empty
+        // whenever it is not used, so a stale wordmark never lingers.
+        let bars = matches!(
+            crate::render::effective_list_style(),
+            theme::ListStyle::Bars { .. }
+        );
+        let canvas_bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        {
+            let placard_pass: Vec<TextArea> = match placard {
+                Some((px, py, _pw, _ph)) if bars => vec![TextArea {
+                    buffer: &self.placard_buffer,
+                    left: px,
+                    top: py,
+                    scale: 1.0,
+                    bounds: canvas_bounds,
+                    default_color: ink,
+                    custom_glyphs: &[],
+                }],
+                _ => Vec::new(),
+            };
+            self.placard_renderer
+                .prepare(
+                    device,
+                    queue,
+                    &mut self.font_system,
+                    &mut self.atlas,
+                    &self.viewport,
+                    placard_pass,
+                    &mut self.swash_cache,
+                )
+                .map_err(|e| anyhow::anyhow!("glyphon placard prepare failed: {e:?}"))?;
+        }
+        // The placard wordmark is FIRST in the panel batch under `Pane` (drawn
+        // behind everything that follows), clipped to the WHOLE CANVAS — a
+        // screen-corner watermark that bleeds OVER the scrim behind the card
+        // (never the tighter card/text rect), per `overlay_shape_placard`'s doc.
+        // Under `Bars` it was uploaded to `placard_renderer` above instead, so it
+        // is withheld here.
         let mut areas: Vec<TextArea> = Vec::new();
         if let Some((px, py, _pw, _ph)) = placard {
-            let canvas_bounds = TextBounds {
-                left: 0,
-                top: 0,
-                right: width as i32,
-                bottom: height as i32,
-            };
-            areas.push(TextArea {
-                buffer: &self.placard_buffer,
-                left: px,
-                top: py,
-                scale: 1.0,
-                bounds: canvas_bounds,
-                default_color: ink,
-                custom_glyphs: &[],
-            });
+            if !bars {
+                areas.push(TextArea {
+                    buffer: &self.placard_buffer,
+                    left: px,
+                    top: py,
+                    scale: 1.0,
+                    bounds: canvas_bounds,
+                    default_color: ink,
+                    custom_glyphs: &[],
+                });
+            }
         }
         // WILD-MENU SLANT PROBE (env-gated; `None` on every normal run, which
         // keeps the single verbatim `panel_area` push below — byte-identical):
@@ -1108,14 +1156,30 @@ impl TextPipeline {
             self.panel_border.prepare(device, queue, width, height, &[]);
         } else if matches!(list_style, theme::ListStyle::Bars { .. }) {
             // PER-ITEM LIST SURFACES round — BARS DROP THE PANE (the user's refit:
-            // "with the bars, there shouldn't be a pane!"). The card SURFACE
-            // disappears entirely — no fill, no border, no shadow — so the bars,
-            // title/query/strip/hint all float directly on the summoned overlay's
-            // frosted backdrop/scrim (the Persona room model: bars sit ON the room,
-            // not IN a box). The `card_rect` still governs LAYOUT (anchor, width,
-            // hit-tests) via `geom` — only the PAINT is withheld. Every card quad
-            // parks empty so no stale fill lingers from a prior Pane frame.
-            self.panel_card.prepare(device, queue, width, height, &[]);
+            // "with the bars, there shouldn't be a pane!"). No boxed card (no
+            // border, no shadow, no bright `base_300` fill) — the bars, title,
+            // query, strip and hint float in the Persona ROOM: bars sit ON the
+            // room, not IN a box.
+            //
+            // DESIGNER PIXEL-PASS FIX (2026-07-16, the "gap comb seam"): the theme
+            // picker is CRISP (no blur, no scrim — the doc stays bright so the live
+            // theme preview reads honestly), so with the box gone the RAW document
+            // showed through every gap between bars — its page-margin band on the
+            // left meeting the writing column mid-gap made a hard vertical seam
+            // repeated down the whole list. The room was never actually a room. So
+            // Bars lays a UNIFORM full-canvas value VEIL of the world's own ground
+            // (`base_100` at part alpha — a scrim, never a bordered box): it pulls
+            // the document a value back into one calm plane, killing the comb seam
+            // and the left-overhang stub in one stroke, while a hint of the
+            // re-tinted ground still ghosts through so the theme preview survives.
+            // The shadow/border stay empty (no elevation — it is a room, not a
+            // card). Drawn FIRST in `draw_overlay_card`, so the placard watermark,
+            // the bars, and the row text all composite over it.
+            self.panel_card.set_corner(0.0);
+            self.panel_card
+                .set_color(theme::overlay_bars_room().rgba_bytes());
+            self.panel_card
+                .prepare(device, queue, width, height, &[[0.0, 0.0, width as f32, height as f32]]);
             self.panel_shadow.prepare(device, queue, width, height, &[]);
             self.panel_border.prepare(device, queue, width, height, &[]);
         } else {
@@ -1215,7 +1279,16 @@ impl TextPipeline {
             }
             theme::ListStyle::Bars { radius, gap, grow_px } => {
                 let r = radius.max(0.0);
-                let bar_h = (lh - gap.max(0.0)).max(1.0);
+                let g = gap.max(0.0);
+                let bar_h = (lh - g).max(1.0);
+                // Center each bar in its row pitch-cell: the gap splits half
+                // above / half below (`+ g*0.5`), not all below. Without this the
+                // bar top-aligns in the `lh` cell while the glyph centers in the
+                // full cell, so the label rode ~gap/2 LOW of the bar's middle and
+                // descenders escaped the short bar (the designer's "labels sit low
+                // in the bar" defect). The text is untouched (rowlayout owns it);
+                // only the surface slides down to meet the glyph's optical center.
+                let bar_off = g * 0.5;
                 // Both bar pipelines round to the world's radius (0 = sharp
                 // P4-Status bars, large = Velvet capsules).
                 self.overlay_rows.set_corner(r);
@@ -1252,7 +1325,7 @@ impl TextPipeline {
                             k,
                             lh,
                         );
-                        bar_rect_unselected(geom.card_x, geom.card_w, top, bar_h)
+                        bar_rect_unselected(geom.card_x, geom.card_w, top + bar_off, bar_h)
                     })
                     .collect();
                 // Grow toward the open margin — RIGHT by default, mirrored LEFT under
@@ -1262,7 +1335,7 @@ impl TextPipeline {
                     Some(top) => vec![bar_rect_selected(
                         geom.card_x,
                         geom.card_w,
-                        top,
+                        top + bar_off,
                         bar_h,
                         grow_px,
                         mirror,
@@ -1284,19 +1357,14 @@ impl TextPipeline {
             Vec::new()
         };
         // PER-ITEM LIST SURFACES round: `Text` (default) keeps the content-ink
-        // hairline byte-identically; `Band`/`Chips` recolor the active mark to the
-        // selected-row band VALUE (never amber) and round it, and `Chips` fills the
-        // inactive labels with quiet GHOST pills (`overlay_chips`). Ghosts empty on
-        // `Text`/`Band` and every non-faceted card, so those stay byte-identical.
+        // hairline byte-identically; `Band` recolors the active mark to the
+        // selected-row band VALUE (never amber) and rounds it into a pill. (The
+        // `Chips` skin — ghost pills on every inactive facet — was killed in the
+        // designer pixel-pass; `Band` won.)
         let facet_style = crate::render::effective_facet_style();
-        let ghosts: Vec<[f32; 4]> = if geom.theme {
-            self.overlay_facet_ghosts.clone()
-        } else {
-            Vec::new()
-        };
         match facet_style {
             theme::FacetStyle::Text => {}
-            theme::FacetStyle::Band | theme::FacetStyle::Chips => {
+            theme::FacetStyle::Band => {
                 let band = match theme::active()
                     .highlight_treatment(crate::render::effective_overlay_selrow_band())
                 {
@@ -1305,15 +1373,10 @@ impl TextPipeline {
                 };
                 self.overlay_lens_underline.set_color(band.rgba_bytes());
                 self.overlay_lens_underline.set_corner(FACET_CHIP_RADIUS);
-                self.overlay_chips
-                    .set_color(theme::surface_selected().rgba_bytes());
-                self.overlay_chips.set_corner(FACET_CHIP_RADIUS);
             }
         }
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &underline);
-        self.overlay_chips
-            .prepare(device, queue, width, height, &ghosts);
     }
 
     /// Place the one amber caret: a resting block at the end of the query line. Read
