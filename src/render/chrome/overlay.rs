@@ -1338,27 +1338,26 @@ impl TextPipeline {
                 };
                 (rects, Vec::new())
             }
-            theme::ListStyle::Bars { radius, gap, grow_px, extent, coverage, fill } => {
+            theme::ListStyle::Bars { radius, gap, grow_px, extent, coverage } => {
                 let r = radius.max(0.0);
                 let g = gap.max(0.0);
                 let bar_h = (lh - g).max(1.0);
-                // V6 P5 HugText — per-row primary widths + which rows carry a
-                // shortcut, measured from the just-shaped buffers (read before the
-                // &mut pipeline calls below). Only consulted under `HugText`.
+                // V6 P5 HugText — per-row primary widths, measured from the
+                // just-shaped name buffer (read before the &mut pipeline calls
+                // below). Under HugText a row's shortcut is composed INLINE into
+                // its own name line (V7 taste-gate — see `overlay_shape_text`), so
+                // this width already includes any trailing shortcut and the bar
+                // hugs the whole content. Only consulted under `HugText`.
                 let hug = matches!(extent, theme::BarExtent::HugText);
                 let primary_px = if hug {
                     self.overlay_row_primary_px(geom)
                 } else {
                     std::collections::BTreeMap::new()
                 };
-                let has_secondary = if hug {
-                    self.overlay_row_has_secondary(geom)
-                } else {
-                    std::collections::BTreeSet::new()
-                };
                 // V6 P5 [`theme::BarExtent::HugText`] — the natural `(x, w)` span
-                // for a display row: full-width, or hugging the row's primary
-                // text (extending to full width when the row carries a shortcut).
+                // for a display row: full-width, or hugging the row's own content
+                // (label + inline shortcut) + a symmetric pad. EVERY row hugs; the
+                // rag derives from content length only (V7 taste-gate).
                 let span_of = |k: usize| -> (f32, f32) {
                     if hug {
                         super::bar_hug_span(
@@ -1366,7 +1365,6 @@ impl TextPipeline {
                             geom.card_w,
                             geom.text_left,
                             primary_px.get(&k).copied().unwrap_or(0.0),
-                            has_secondary.contains(&k),
                         )
                     } else {
                         super::bar_full_span(geom.card_x, geom.card_w)
@@ -1374,20 +1372,12 @@ impl TextPipeline {
                 };
                 let bar_off = g * 0.5;
                 // Both bar pipelines round to the world's radius (0 = sharp
-                // P4-Status bars, large = Velvet capsules).
+                // P4-Status bars, large = Velvet capsules). Bars are always FILLED
+                // (the V7 taste-gate dropped the outline-fill axis — the rim read
+                // as a focus ring, not a Persona ledge).
                 self.overlay_rows.set_corner(r);
                 self.overlay_bars.set_corner(r);
-                // V6 P5 [`theme::BarFill::Outline`] — the SELECTED bar draws as a
-                // hairline RIM (stroke, no fill) via the selection pipeline's
-                // `stroke` uniform; unselected bars + the footer plate stay FILLED
-                // (they ride `overlay_bars`, which never strokes — the plate must
-                // stay opaque to guard the footer over the placard). `Filled`
-                // resets the stroke to 0 (byte-identical). Under `SelectedOnly`
-                // coverage this reads as the pure "no bars, just an outline" look.
-                self.overlay_rows.set_stroke(match fill {
-                    theme::BarFill::Outline => crate::render::BAR_OUTLINE_STROKE_PX,
-                    theme::BarFill::Filled => 0.0,
-                });
+                self.overlay_rows.set_stroke(0.0);
                 self.overlay_bars.set_stroke(0.0);
                 // Unselected bars: a QUIET rung one step above the card
                 // (`overlay_bar_unselected`, steps `1`) — deliberately well below

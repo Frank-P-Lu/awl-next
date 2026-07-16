@@ -124,7 +124,6 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
                 grow_px: 24.0,
                 extent: theme::BarExtent::FullWidth,
                 coverage: theme::BarCoverage::All,
-                fill: theme::BarFill::Filled,
             }),
         ),
     ];

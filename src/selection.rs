@@ -37,8 +37,9 @@ struct Globals {
     /// OUTLINE / STROKE MODE (V6 P5 round) — see `shaders/selection.wgsl`'s
     /// `fs_main`: `0.0` is the original SOLID fill (byte-identical, every
     /// shipping consumer); `> 0.0` draws only a hollow RING that many px wide
-    /// just inside the rounded-rect edge (the `BarFill::Outline` bars + the
-    /// `FacetStyle::Chips` inactive ghost pills).
+    /// just inside the rounded-rect edge (the `FacetStyle::Chips` inactive ghost
+    /// pills; the V6 bar-fill `Outline` axis that also used it was dropped in the
+    /// V7 taste-gate).
     stroke: f32,
     /// Std140 tail padding so the uniform struct size is a 16-byte multiple
     /// (viewport 8 + corner 4 + dither 4 + stroke 4 + pad 12 = 32). MUST match
@@ -316,8 +317,8 @@ impl SelectionPipeline {
     /// `Globals::stroke` (V6 P5 round). `0.0` restores the SOLID fill
     /// (byte-identical to a pipeline that never calls this); `> 0.0` turns the
     /// quad into a hairline RING that wide just inside its edge — the
-    /// `BarFill::Outline` bars and the `FacetStyle::Chips` ghost pills. Set
-    /// every frame from the draw path so a mode change never leaves it stale.
+    /// `FacetStyle::Chips` ghost pills. Set every frame from the draw path so a
+    /// mode change never leaves it stale.
     pub fn set_stroke(&mut self, stroke: f32) {
         self.stroke = stroke.max(0.0);
     }
@@ -339,8 +340,8 @@ impl SelectionPipeline {
     }
 
     /// The current OUTLINE / STROKE width (`0.0` = solid fill). A cheap headless
-    /// assertion hook for the V6 `BarFill::Outline` / `FacetStyle::Chips` law
-    /// tests; no non-test caller in the shipping binary.
+    /// assertion hook for the `FacetStyle::Chips` ghost-pill law test; no non-test
+    /// caller in the shipping binary.
     #[allow(dead_code)]
     pub fn stroke(&self) -> f32 {
         self.stroke

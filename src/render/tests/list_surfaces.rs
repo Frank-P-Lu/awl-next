@@ -1,8 +1,9 @@
 //! PER-ITEM LIST SURFACES round — the law suite for the INERT-by-default
 //! capabilities (the "Persona list"): `ListStyle` (Pane | Bars, plus the V6 P5
-//! bar axes — extent HugText, coverage SelectedOnly, fill Outline), the
-//! RIGHT-ANCHOR MIRROR (`CardAnchor::TopRight`, a first-class anchor value),
-//! and `FacetStyle` (Text | Band | Chips). Each capability's DEFAULT arm is inert: the
+//! bar axes — extent HugText, coverage SelectedOnly; the V7 taste-gate DROPPED the
+//! `fill` Outline axis), the RIGHT-ANCHOR MIRROR (`CardAnchor::TopRight`, a
+//! first-class anchor value), and `FacetStyle` (Text | Band | Chips). Each
+//! capability's DEFAULT arm is inert: the
 //! divergent rendering is reachable only through the `AWL_*_FORCE` probes / the
 //! test overrides, and is proven to be a PERCEPTIBLE, findable change over real
 //! pixels (the Wagtail invisible-row lesson — assert the OUTCOME, not the
@@ -31,10 +32,9 @@
 use super::super::*;
 use super::{headless_dqp, pixeldiff, view};
 
-/// A `ListStyle::Bars` with the shipped-v5 DEFAULT axes (full-width, every row,
-/// solid fill) — the fixture every pre-v6 test uses, so those tests stay
-/// concerned only with radius/gap/grow. The V6 axis variants have their own
-/// dedicated tests below.
+/// A `ListStyle::Bars` with the shipped-v5 DEFAULT axes (full-width, every row) —
+/// the fixture every pre-v6 test uses, so those tests stay concerned only with
+/// radius/gap/grow. The V6 axis variants have their own dedicated tests below.
 fn bars(radius: f32, gap: f32, grow_px: f32) -> theme::ListStyle {
     theme::ListStyle::Bars {
         radius,
@@ -42,7 +42,6 @@ fn bars(radius: f32, gap: f32, grow_px: f32) -> theme::ListStyle {
         grow_px,
         extent: theme::BarExtent::FullWidth,
         coverage: theme::BarCoverage::All,
-        fill: theme::BarFill::Filled,
     }
 }
 
@@ -66,37 +65,36 @@ fn parse_list_style_force_grammar() {
             grow_px: 24.0,
             extent: theme::BarExtent::HugText,
             coverage: theme::BarCoverage::All,
-            fill: theme::BarFill::Filled,
         })
     );
     assert_eq!(
-        parse_list_style_force("bars:0:12:0:hug:selected:outline"),
+        parse_list_style_force("bars:0:12:0:hug:selected"),
         Some(theme::ListStyle::Bars {
             radius: 0.0,
             gap: 12.0,
             grow_px: 0.0,
             extent: theme::BarExtent::HugText,
             coverage: theme::BarCoverage::SelectedOnly,
-            fill: theme::BarFill::Outline,
         })
     );
-    // Keyword order is free; `all`/`full` here are the defaults, so only
-    // `outline` moves off the default fill.
+    // Keyword order is free; `all`/`full` here are the defaults, so this is the
+    // shipped-v5 look regardless of order. (The V7 taste-gate dropped the
+    // outline-fill axis — `outline`/`filled` are no longer recognized keywords.)
     assert_eq!(
-        parse_list_style_force("bars:outline:all:full"),
+        parse_list_style_force("bars:selected:all:full"),
         Some(theme::ListStyle::Bars {
             radius: 6.0,
             gap: 10.0,
             grow_px: 24.0,
             extent: theme::BarExtent::FullWidth,
             coverage: theme::BarCoverage::All,
-            fill: theme::BarFill::Outline,
         })
     );
     // Malformed / negative / wrong arity / unknown keyword → None (the world's own data).
     assert_eq!(parse_list_style_force("bars:1:2:3:4"), None); // a fourth float
     assert_eq!(parse_list_style_force("bars:-1:2:3"), None);
     assert_eq!(parse_list_style_force("bars:wobble"), None); // unknown keyword
+    assert_eq!(parse_list_style_force("bars:outline"), None); // retired fill axis
     assert_eq!(parse_list_style_force("capsule"), None);
     assert_eq!(parse_list_style_force(""), None);
 }
@@ -950,39 +948,39 @@ fn bars_footer_stays_legible_over_a_giant_placard() {
 // never the mere mechanism.
 
 /// TEXT-HUGGING BARS (pure geometry) — `bar_hug_span` sizes a bar to its own
-/// row's text: a SHORT primary yields a bar much narrower than full width
-/// (ragged right, the P5 main-menu look), sharing the full-width LEFT edge; a
-/// row that carries a SHORTCUT extends to full width (the shortcut sits inside
-/// the bar at its end — the P4-bookstore precedent); a very long primary CLAMPS
-/// at the full-width right edge, never jutting past the card.
+/// row's CONTENT text width: a SHORT primary yields a bar much narrower than full
+/// width (ragged right, the P5 main-menu look), sharing the full-width LEFT edge;
+/// a LONGER primary widens its bar (widths track content). V7 TASTE-GATE: a
+/// shortcut is composed INLINE into the row's name line (label + gap + shortcut),
+/// so a shortcut row is just a row with a wider `primary_px` — EVERY row hugs its
+/// own content, there is no full-width special case. A very long primary CLAMPS at
+/// the full-width right edge, never jutting past the card.
 #[test]
-fn bar_hug_span_hugs_short_text_and_extends_for_a_shortcut() {
+fn bar_hug_span_hugs_content_and_rags_by_length() {
     let (cx, cw) = (100.0, 500.0);
     // text_left = card_x + BAR_SIDE_INSET + BAR_TEXT_PAD (what the renderer feeds).
     let text_left = cx + chrome::BAR_SIDE_INSET + chrome::BAR_TEXT_PAD;
     let full = chrome::bar_full_span(cx, cw);
 
     // A short primary → a bar much narrower than full width, same left edge.
-    let short = chrome::bar_hug_span(cx, cw, text_left, 60.0, false);
+    let short = chrome::bar_hug_span(cx, cw, text_left, 60.0);
     assert!(
         short.1 < full.1 - 100.0,
         "a short-text hug bar is much narrower than full width: {short:?} vs full {full:?}"
     );
     assert!((short.0 - full.0).abs() < 1e-3, "the hug bar shares the full-width LEFT edge");
 
-    // A LONGER primary → a wider bar (ragged: widths track text).
-    let longer = chrome::bar_hug_span(cx, cw, text_left, 200.0, false);
-    assert!(longer.1 > short.1 + 100.0, "a longer primary widens its hug bar (ragged edges)");
-
-    // A row with a SHORTCUT extends to the full-width right edge.
-    let shortcut = chrome::bar_hug_span(cx, cw, text_left, 60.0, true);
+    // A LONGER primary (e.g. label + inline shortcut) → a wider bar (ragged:
+    // widths track content), still short of full width.
+    let longer = chrome::bar_hug_span(cx, cw, text_left, 200.0);
+    assert!(longer.1 > short.1 + 100.0, "a longer content widens its hug bar (ragged edges)");
     assert!(
-        (shortcut.1 - full.1).abs() < 1e-3,
-        "a shortcut row extends its bar to full width so the shortcut sits inside: {shortcut:?}"
+        longer.1 < full.1,
+        "a mid-length content still hugs — never pinned to full width: {longer:?} vs {full:?}"
     );
 
     // A very long primary clamps at the full-width right edge (never juts past).
-    let long = chrome::bar_hug_span(cx, cw, text_left, 9999.0, false);
+    let long = chrome::bar_hug_span(cx, cw, text_left, 9999.0);
     assert!(
         long.0 + long.1 <= full.0 + full.1 + 1e-3,
         "a long primary clamps at the full-width right edge, never past the card: {long:?}"
@@ -1017,7 +1015,6 @@ fn hug_extent_leaves_room_to_the_right_where_full_width_fills_it() {
             grow_px: 0.0, // no selected jut — isolate the extent difference
             extent: ext,
             coverage: theme::BarCoverage::All,
-            fill: theme::BarFill::Filled,
         }));
         p.set_view(&v);
         p.prepare(&device, &queue, w, h).unwrap();
@@ -1034,6 +1031,70 @@ fn hug_extent_leaves_room_to_the_right_where_full_width_fills_it() {
     pixeldiff::assert_perceptibly_different(
         &full, &hug, w as i64, h as i64, region, pixeldiff::DistinguishFloor::DEFAULT,
         "hug vs full-width bars (ragged right edge)",
+    );
+
+    set_list_style_test_override(None);
+    set_card_anchor_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// V7 TASTE-GATE — ALL ROWS HUG: a SHORTCUT-BEARING row under `HugText` must hug
+/// its own content (label + inline shortcut), NOT pin full-width. Before the fix a
+/// row that carried a right-column chord extended its bar to the card's right edge
+/// (two populations: ragged hug rows + full-width shortcut rows). Now the shortcut
+/// rides INLINE on the row's own name line, so the separate right-aligned column is
+/// dropped (`overlay_right_shown == false`) and the shortcut row's bar still leaves
+/// ROOM on the right — perceptibly different from the full-width extent, where the
+/// same row fills edge-to-edge.
+#[test]
+fn hug_shortcut_rows_hug_inline_and_leave_room() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping hug_shortcut_rows_hug_inline: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+
+    // A FLAT picker with a right column: short names + a short chord each. The chord
+    // is what pinned the bar full-width before the fix.
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = (0..6).map(|i| format!("It{i}")).collect();
+    v.overlay_bindings = (0..6).map(|_| "C-x".to_string()).collect();
+    v.overlay_selected = 2;
+
+    let frame = |p: &mut TextPipeline, ext: theme::BarExtent| {
+        set_list_style_test_override(Some(theme::ListStyle::Bars {
+            radius: 6.0,
+            gap: 10.0,
+            grow_px: 0.0, // isolate the extent difference
+            extent: ext,
+            coverage: theme::BarCoverage::All,
+        }));
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        pixeldiff::render_frame(p, &device, &queue, w, h)
+    };
+
+    let full = frame(&mut p, theme::BarExtent::FullWidth);
+    let hug = frame(&mut p, theme::BarExtent::HugText);
+
+    // Under hug the shortcut rode INLINE — no separate right-aligned column.
+    assert!(
+        !p.overlay_right_shown,
+        "HugText composes the shortcut inline, so the separate right column is dropped"
+    );
+
+    // The RIGHT ~35% of the candidate area: full-width fills it (bars + right-aligned
+    // chords), hug leaves ROOM (short content hugs left). If shortcut rows still
+    // pinned full-width, this region would match.
+    let rect = p.overlay_card_rect().expect("overlay card rect");
+    let (card_x, card_y, cw, ch) = (rect[0], rect[1], rect[2], rect[3]);
+    let region = pixeldiff::Region::new(card_x + cw * 0.6, card_y, cw * 0.35, ch);
+    pixeldiff::assert_perceptibly_different(
+        &full, &hug, w as i64, h as i64, region, pixeldiff::DistinguishFloor::DEFAULT,
+        "hug shortcut rows leave room (not pinned full-width)",
     );
 
     set_list_style_test_override(None);
@@ -1069,7 +1130,6 @@ fn selected_only_coverage_drops_unselected_bars_but_keeps_the_selected() {
             grow_px: 0.0,
             extent: theme::BarExtent::FullWidth,
             coverage: cov,
-            fill: theme::BarFill::Filled,
         }));
         p.set_view(&v);
         p.prepare(&device, &queue, w, h).unwrap();
@@ -1121,88 +1181,10 @@ fn selected_only_coverage_drops_unselected_bars_but_keeps_the_selected() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
-/// OUTLINE VARIANT — `Outline` fill draws the selected bar as a hairline STROKE
-/// (no fill): the selection pipeline's `stroke` uniform goes non-zero, the
-/// selected bar is still uploaded (`overlay_rows == 1`), and the bar's INTERIOR
-/// renders differently from a solid `Filled` bar (the room shows through the
-/// hollow centre). The CONTRAST floor: the rim must be VISIBLE against the room
-/// — the outline frame differs from a room-only baseline at the selected row.
-#[test]
-fn outline_fill_strokes_the_selected_bar_hollow_and_visible() {
-    let (w, h) = (1200u32, 800u32);
-    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
-        eprintln!("skipping outline_fill_strokes_the_selected_bar: no wgpu adapter");
-        return;
-    };
-    let _g = crate::testlock::serial();
-    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
-
-    let mut v = view("hello\n", 0, 0);
-    v.overlay_active = true;
-    v.overlay_items = (0..6).map(|i| format!("Item {i}")).collect();
-    v.overlay_selected = 2;
-
-    // SelectedOnly so the ONLY bar surface is the selected one — isolates the
-    // fill axis (the "no bars, just an outline" look).
-    let frame = |p: &mut TextPipeline, fill: theme::BarFill| {
-        set_list_style_test_override(Some(theme::ListStyle::Bars {
-            radius: 6.0,
-            gap: 10.0,
-            grow_px: 24.0,
-            extent: theme::BarExtent::FullWidth,
-            coverage: theme::BarCoverage::SelectedOnly,
-            fill,
-        }));
-        p.set_view(&v);
-        p.prepare(&device, &queue, w, h).unwrap();
-        pixeldiff::render_frame(p, &device, &queue, w, h)
-    };
-
-    let filled = frame(&mut p, theme::BarFill::Filled);
-    let filled_stroke = p.overlay_rows.stroke();
-    let probe = p.overlay_row_y_probe();
-    let outline = frame(&mut p, theme::BarFill::Outline);
-    let outline_stroke = p.overlay_rows.stroke();
-    let outline_sel = p.overlay_rows.instance_count();
-
-    // The stroke uniform: 0 under Filled, non-zero under Outline; bar still there.
-    assert_eq!(filled_stroke, 0.0, "Filled fill leaves the stroke uniform at 0 (solid)");
-    assert!(outline_stroke > 0.0, "Outline fill raises the stroke uniform (got {outline_stroke})");
-    assert_eq!(outline_sel, 1, "Outline still uploads the selected bar (as a rim)");
-
-    let rect = p.overlay_card_rect().expect("overlay card rect");
-    let (card_x, cw) = (rect[0], rect[2]);
-    let lh = probe.lh;
-    // The INTERIOR of the selected bar: solid under Filled, room under Outline.
-    let interior =
-        pixeldiff::Region::new(card_x + cw * 0.3, probe.band_top + lh * 0.35, cw * 0.4, lh * 0.3);
-    pixeldiff::assert_perceptibly_different(
-        &filled, &outline, w as i64, h as i64, interior, pixeldiff::DistinguishFloor::DEFAULT,
-        "the selected bar interior: solid fill vs hollow outline",
-    );
-
-    // CONTRAST / VISIBILITY floor: the rim itself must be VISIBLE against the
-    // room — not a hollowed-out nothing. Within the OUTLINE frame, the bar's TOP
-    // STROKE (a bright band-value hairline) must read clearly darker/brighter
-    // than the hollow room at the bar's centre. `bar_off = gap * 0.5` (=5) is the
-    // bar's top inside its pitch cell.
-    let (wi, hi) = (w as i64, h as i64);
-    let bar_off = 10.0 * 0.5;
-    let sx = (card_x + cw * 0.3) as i64;
-    let sw = (cw * 0.4) as i64;
-    let stroke_c = avg(&outline, wi, hi, sx, (probe.band_top + bar_off) as i64, sw, 3);
-    let room_c = avg(&outline, wi, hi, sx, (probe.band_top + lh * 0.5) as i64, sw, 3);
-    let rim_vs_room = redmean(stroke_c, room_c);
-    assert!(
-        rim_vs_room > 12.0,
-        "the outline stroke must be VISIBLE against the hollow interior room \
-         (redmean stroke={stroke_c:?} vs room={room_c:?} = {rim_vs_room:.1}, want > 12)"
-    );
-
-    set_list_style_test_override(None);
-    set_card_anchor_test_override(None);
-    theme::set_active(theme::DEFAULT_THEME);
-}
+// OUTLINE VARIANT — DROPPED in the V7 taste-gate (the rim read as a focus ring,
+// not a Persona ledge). The `BarFill` axis and its law are gone; the selection
+// pipeline's `stroke` uniform now serves ONLY the `FacetStyle::Chips` ghost pills
+// (see `facet_chips_render_a_pill_per_label_and_differ_from_text`).
 
 /// REAL CHIPS (third attempt, MUST render) — `FacetStyle::Chips` draws a rounded
 /// pill hugging EACH facet label: the ACTIVE label a FILLED value pill
@@ -1267,4 +1249,58 @@ fn facet_chips_render_a_pill_per_label_and_differ_from_text() {
     );
 
     theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// V7 TASTE-GATE — CHIP GAPS: adjacent facet pills must read as DISCRETE pills,
+/// not a segmented control. The taste gate measured the pills ABUTTING (a ~3px
+/// OVERLAP) because the 2-space strip gap couldn't host each pill's `CHIP_HPAD`
+/// plus a readable gap; the fix widened the inter-label separator ONLY under
+/// `Chips` (`CHIP_STRIP_GAP`). This law reads the recorded pill rects (active +
+/// ghosts), orders them left-to-right, and asserts every adjacent pair leaves a
+/// POSITIVE breathing gap (≥ 4px — the 6-8px target with float/rounding margin).
+#[test]
+fn facet_chips_leave_a_breathing_gap_between_pills() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping facet_chips_leave_a_breathing_gap: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
+    v.overlay_selected = 1;
+    v.overlay_lens = vec![
+        ("All".into(), false),
+        ("File".into(), true),
+        ("Edit".into(), false),
+        ("View".into(), false),
+    ];
+
+    set_facet_style_test_override(Some(theme::FacetStyle::Chips));
+    p.set_view(&v);
+    p.prepare(&device, &queue, w, h).unwrap();
+
+    // Every drawn pill: the active (filled) mark + each inactive ghost, ordered by x.
+    let mut pills: Vec<[f32; 4]> = Vec::new();
+    if let Some(a) = p.overlay_theme_underline {
+        pills.push(a);
+    }
+    pills.extend(p.overlay_theme_facet_ghosts.iter().copied());
+    set_facet_style_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+
+    assert_eq!(pills.len(), 3, "File/Edit/View draw 3 pills (1 active + 2 ghost)");
+    pills.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
+    for pair in pills.windows(2) {
+        let gap = pair[1][0] - (pair[0][0] + pair[0][2]);
+        assert!(
+            gap >= 4.0,
+            "adjacent chip pills must leave a breathing gap (≥4px), got {gap:.1} \
+             between {:?} and {:?}",
+            pair[0],
+            pair[1]
+        );
+    }
 }

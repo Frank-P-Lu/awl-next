@@ -383,9 +383,10 @@ impl CardAnchor {
 /// - `coverage` ([`BarCoverage`]) — `All` (v5, every row a bar) vs
 ///   `SelectedOnly` (unselected rows render as BARE floating text on the room,
 ///   only the selected row gets a surface — the P5 settings-screen look).
-/// - `fill` ([`BarFill`]) — `Filled` (v5, solid value bars) vs `Outline` (a
-///   hairline STROKE, no fill — the selected row indicated by a rim). Rides the
-///   selection pipeline's `stroke` uniform, so it composes with the other two.
+///
+/// V7 TASTE-GATE (2026-07-16): the `fill` (Filled | Outline) axis was DROPPED —
+/// the outline bar read as a focus ring, not a Persona ledge, and the mixed
+/// maximalist treatment muddied the probe. The axis stays lean: extent × coverage.
 // NOTE: no `Eq` — `radius`/`gap`/`grow_px` are floats (same reasoning as `TitleStyle`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ListStyle {
@@ -396,7 +397,6 @@ pub enum ListStyle {
         grow_px: f32,
         extent: BarExtent,
         coverage: BarCoverage,
-        fill: BarFill,
     },
 }
 
@@ -419,16 +419,6 @@ pub enum BarExtent {
 pub enum BarCoverage {
     All,
     SelectedOnly,
-}
-
-/// V6 P5 round — the BAR-FILL axis (see [`ListStyle::Bars`]). `Filled` is the
-/// solid value bar (v5). `Outline` draws each bar as a hairline STROKE (no
-/// fill) via the selection pipeline's `stroke` uniform, so the selected row is
-/// marked by a rim rather than a wash.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BarFill {
-    Filled,
-    Outline,
 }
 
 /// PER-ITEM LIST SURFACES round — how the faceted picker's LENS STRIP skins

@@ -132,6 +132,26 @@ pub enum PanelHit {
 /// index 0) is not drawn as a label, so the strip is just the facets, gap-separated.
 const STRIP_GAP: &str = "  ";
 
+/// The WIDER inter-label gap the strip uses ONLY under [`theme::FacetStyle::Chips`]
+/// (V7 taste-gate). The default 2-space [`STRIP_GAP`] (~9px) is too tight to host a
+/// pill's `CHIP_HPAD` on both labels AND a readable gap between them — the pills
+/// abutted (measured: -3px, a segmented control). Four spaces (~18px) leaves each
+/// pill its full pad and ~6px of breathing room between chips, so they read as
+/// discrete pills. `Text`/`Band` keep [`STRIP_GAP`] — byte-identical.
+const CHIP_STRIP_GAP: &str = "    ";
+
+/// The inter-label separator string for the current facet style — the ONE owner
+/// both the strip SHAPER ([`TextPipeline::overlay_shape_theme`]) and the strip
+/// HIT-TEST ([`TextPipeline::overlay_lens_at`]) read, so the two can never disagree
+/// on where a label sits. Wider under [`theme::FacetStyle::Chips`] (see
+/// [`CHIP_STRIP_GAP`]); [`STRIP_GAP`] otherwise.
+pub(super) fn strip_gap() -> &'static str {
+    match crate::render::effective_facet_style() {
+        theme::FacetStyle::Chips => CHIP_STRIP_GAP,
+        theme::FacetStyle::Text | theme::FacetStyle::Band => STRIP_GAP,
+    }
+}
+
 /// One DISPLAY line in the THEME picker's candidate area (below the query + lens
 /// strip): either a faint uppercase SECTION header, or a world ROW (carrying its
 /// index into `overlay_items`). Built by [`TextPipeline::theme_plan`] from the
@@ -375,6 +395,24 @@ pub(super) const BAR_SIDE_INSET: f32 = 8.0;
 /// [`TextPipeline::overlay_text_hpad`].
 pub(super) const BAR_TEXT_PAD: f32 = 13.0;
 
+/// V7 TASTE-GATE ([`theme::BarExtent::HugText`]) — the FIXED GAP text between a
+/// row's LABEL and its trailing inline SHORTCUT when a hug-bar row carries one.
+/// Composed into the row's own name line (not the right-aligned column) so the
+/// shortcut trails the label and the bar hugs `label + gap + shortcut + pad`;
+/// EVERY row then hugs its own content and the rag derives from length alone.
+pub(super) const INLINE_SHORTCUT_GAP: &str = "   ";
+
+/// Whether this frame draws TEXT-HUGGING bars ([`theme::BarExtent::HugText`]) —
+/// the ONE reader the shapers consult to decide whether to compose a row's
+/// shortcut INLINE (trailing its label) instead of into the right-aligned
+/// column. Any other list style (Pane, full-width bars) → `false`, byte-identical.
+pub(super) fn hug_bars() -> bool {
+    matches!(
+        crate::render::effective_list_style(),
+        theme::ListStyle::Bars { extent: theme::BarExtent::HugText, .. }
+    )
+}
+
 /// PURE geometry — the FULL-WIDTH bar span `(x, w)` inside a card
 /// `[card_x, card_x+card_w]`, inset [`BAR_SIDE_INSET`] each side. The shipped v5
 /// bar ([`theme::BarExtent::FullWidth`]); the ONE owner every full-width bar
@@ -388,26 +426,17 @@ pub(super) fn bar_full_span(card_x: f32, card_w: f32) -> (f32, f32) {
 
 /// PURE geometry (V6 P5 [`theme::BarExtent::HugText`]) — the TEXT-HUGGING bar
 /// span `(x, w)` for one row: the bar's left edge is the shared
-/// [`BAR_SIDE_INSET`], its right edge hugs the row's own primary text
-/// (`primary_px`, measured from the shaped glyphs) plus a symmetric
+/// [`BAR_SIDE_INSET`], its right edge hugs the row's own content text
+/// (`primary_px`, measured from the shaped name line) plus a symmetric
 /// [`BAR_TEXT_PAD`], so `text_left` sits `BAR_TEXT_PAD` inside BOTH edges — the
-/// P5 main-menu ragged-right look. A row that carries a right-column SHORTCUT
-/// (`has_secondary`, the P4-bookstore prices-in-panel precedent) extends to the
-/// full-width right edge so the shortcut sits INSIDE the bar at its end; a bare
-/// row stays short. The right edge is clamped to the full-width edge so a very
-/// long primary can never jut past the card.
-pub(super) fn bar_hug_span(
-    card_x: f32,
-    card_w: f32,
-    text_left: f32,
-    primary_px: f32,
-    has_secondary: bool,
-) -> (f32, f32) {
+/// P5 main-menu ragged-right look. V7 TASTE-GATE: EVERY row hugs — a row that
+/// carries a shortcut composes it INLINE into its own name line (label + gap +
+/// shortcut), so `primary_px` already spans that content and the bar hugs the
+/// whole thing; there is no full-width special case. The right edge is clamped to
+/// the full-width edge so a very long primary can never jut past the card.
+pub(super) fn bar_hug_span(card_x: f32, card_w: f32, text_left: f32, primary_px: f32) -> (f32, f32) {
     let (x, full_w) = bar_full_span(card_x, card_w);
     let full_right = x + full_w;
-    if has_secondary {
-        return (x, full_w);
-    }
     let right = (text_left + primary_px + BAR_TEXT_PAD).min(full_right);
     (x, (right - x).max(1.0))
 }

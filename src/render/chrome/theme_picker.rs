@@ -216,7 +216,7 @@ impl TextPipeline {
                     continue; // the All home is not a drawn label
                 }
                 if idx > 1 {
-                    s.push_str(STRIP_GAP);
+                    s.push_str(super::strip_gap());
                 }
                 let a = s.len();
                 s.push_str(lbl);
@@ -260,6 +260,12 @@ impl TextPipeline {
         ink: glyphon::Color,
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
+        // V7 TASTE-GATE — one trailing INLINE-SHORTCUT string per PLAN line
+        // (already `INLINE_SHORTCUT_GAP`-prefixed; empty = none / a header). Non-empty
+        // ONLY under `HugText` bars with a right column, where each item's shortcut
+        // rides its own name line so the bar hugs `label + gap + shortcut`. `&[]`
+        // otherwise — byte-identical (no trailing spans).
+        trailing: &[String],
     ) -> bool {
         // Build the strip LINE ("\n" then the faceting-lens labels) as one owned string,
         // tracking each label's byte range so the ACTIVE label's glyphs can be underlined.
@@ -274,7 +280,7 @@ impl TextPipeline {
             }
             if idx > 1 {
                 let s = strip_s.len();
-                strip_s.push_str(STRIP_GAP);
+                strip_s.push_str(super::strip_gap());
                 sep_ranges.push(s..strip_s.len());
             }
             let s = strip_s.len();
@@ -300,11 +306,11 @@ impl TextPipeline {
         // fit, so every lens stays present + hit-testable instead of the far
         // right clipping away. At any comfortable width the measured strip fits
         // and the single full-size pass stands (byte-identical wide captures).
-        self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, &hint_line, 1.0);
+        self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, &hint_line, trailing, 1.0);
         let strip_w = self.theme_strip_px();
         if strip_w > geom.text_w {
             let scale = (geom.text_w / strip_w).max(0.5);
-            self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, &hint_line, scale);
+            self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, &hint_line, trailing, scale);
         }
 
         // Record the active-lens mark from the shaped strip glyphs (line 1). Line-1
@@ -425,6 +431,9 @@ impl TextPipeline {
         label_ranges: &[(std::ops::Range<usize>, bool)],
         sep_ranges: &[std::ops::Range<usize>],
         hint_line: &str,
+        // V7 TASTE-GATE — trailing inline shortcut per PLAN line (see
+        // `overlay_shape_theme`); `&[]` on a non-hug frame.
+        trailing: &[String],
         strip_scale: f32,
     ) {
         let m = self.metrics;
@@ -561,7 +570,7 @@ impl TextPipeline {
                 mk(c)
             }
         };
-        for (line, fit) in geom.plan.iter().zip(fitted.iter()) {
+        for (idx, (line, fit)) in geom.plan.iter().zip(fitted.iter()).enumerate() {
             spans.push(("\n", mk(ink)));
             match line {
                 ThemeLine::Header(h) => {
@@ -573,6 +582,23 @@ impl TextPipeline {
                         _ => ink,
                     };
                     spans.push((fit.as_deref().unwrap_or(""), rk(c)));
+                    // V7 TASTE-GATE — the trailing INLINE SHORTCUT (HugText bars),
+                    // muted, on the SAME item line so the bar hugs label + gap +
+                    // shortcut. Symbol-split so ⌘ ⇧ ⌥ ⌃ shape from the bundled face.
+                    if let Some(t) = trailing.get(idx).filter(|t| !t.is_empty()) {
+                        let mut last = 0usize;
+                        for sr in symbol_runs(t) {
+                            if sr.start > last {
+                                spans.push((&t[last..sr.start], mk(muted)));
+                            }
+                            let end = sr.end;
+                            spans.push((&t[sr], sym(muted)));
+                            last = end;
+                        }
+                        if last < t.len() {
+                            spans.push((&t[last..], mk(muted)));
+                        }
+                    }
                 }
             }
         }

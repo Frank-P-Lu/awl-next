@@ -2187,9 +2187,10 @@ const BARS_DEFAULT_GROW: f32 = 24.0;
 /// keywords on the same grammar word.
 const BARS_DEFAULT_EXTENT: theme::BarExtent = theme::BarExtent::FullWidth;
 const BARS_DEFAULT_COVERAGE: theme::BarCoverage = theme::BarCoverage::All;
-const BARS_DEFAULT_FILL: theme::BarFill = theme::BarFill::Filled;
-/// V6 P5 round — the hairline STROKE width (px) an `Outline` bar / ghost chip
-/// draws, uploaded into the selection pipeline's `stroke` uniform.
+/// V6 P5 round — the hairline STROKE width (px) a ghost CHIP pill draws,
+/// uploaded into the facet-ghost pipeline's `stroke` uniform. (The bar-fill
+/// `Outline` axis that also used it was dropped in the V7 taste-gate; the
+/// ghost-chip skin still strokes its inactive pills.)
 pub(crate) const BAR_OUTLINE_STROKE_PX: f32 = 1.5;
 
 /// `AWL_OVERLAY_LIST_FORCE` grammar (V6 P5 round — the three ORTHOGONAL bar axes
@@ -2202,8 +2203,7 @@ pub(crate) const BAR_OUTLINE_STROKE_PX: f32 = 1.5;
 ///   or an AXIS KEYWORD flipping one of the three v6 axes:
 ///     - extent:   `full` | `hug`      ([`theme::BarExtent`])
 ///     - coverage: `all`  | `selected` ([`theme::BarCoverage`])
-///     - fill:     `filled` | `outline`([`theme::BarFill`])
-///   So `"bars:0:12:0:hug:selected:outline"`, `"bars:hug"`, `"bars:selected:outline"`
+///   So `"bars:0:12:0:hug:selected"`, `"bars:hug"`, `"bars:selected"`
 ///   all parse; floats and keywords may appear in any order. More than 3 floats,
 ///   an unrecognized token, or a negative/non-finite float → `None` (falls
 ///   through to the world's own `render_caps.list_style`).
@@ -2222,7 +2222,6 @@ fn parse_list_style_force(s: &str) -> Option<theme::ListStyle> {
     let mut grow_px = BARS_DEFAULT_GROW;
     let mut extent = BARS_DEFAULT_EXTENT;
     let mut coverage = BARS_DEFAULT_COVERAGE;
-    let mut fill = BARS_DEFAULT_FILL;
     let mut floats_seen = 0usize;
     if !rest.is_empty() {
         for tok in rest.split(':') {
@@ -2232,8 +2231,6 @@ fn parse_list_style_force(s: &str) -> Option<theme::ListStyle> {
                 "hug" => extent = theme::BarExtent::HugText,
                 "all" => coverage = theme::BarCoverage::All,
                 "selected" => coverage = theme::BarCoverage::SelectedOnly,
-                "filled" => fill = theme::BarFill::Filled,
-                "outline" => fill = theme::BarFill::Outline,
                 _ => {
                     // Positional float: radius, then gap, then grow.
                     let v: f32 = tok.parse().ok()?;
@@ -2251,7 +2248,7 @@ fn parse_list_style_force(s: &str) -> Option<theme::ListStyle> {
             }
         }
     }
-    Some(theme::ListStyle::Bars { radius, gap, grow_px, extent, coverage, fill })
+    Some(theme::ListStyle::Bars { radius, gap, grow_px, extent, coverage })
 }
 
 /// The three states an `AWL_*_FORCE` dev knob can be in. The `Retired` arm is
@@ -2308,7 +2305,7 @@ fn awl_list_style_force() -> &'static Option<theme::ListStyle> {
     ONCE.get_or_init(|| {
         read_forced_knob(
             "AWL_OVERLAY_LIST_FORCE",
-            "pane | bars | bars:<radius>:<gap>:<grow>[:hug|full][:selected|all][:outline|filled]",
+            "pane | bars | bars:<radius>:<gap>:<grow>[:hug|full][:selected|all]",
             parse_list_style_force,
         )
     })
