@@ -200,6 +200,16 @@ impl App {
         }
     }
 
+    /// Is a ZOOM gesture currently IN FLIGHT — a zoom step landed within the last
+    /// `ZOOM_PERSIST_DEBOUNCE` and the sticky-zoom write hasn't settled yet? Backed by
+    /// the SAME `zoom_persist_at` stamp `mark_zoom_dirty` arms and `about_to_wait`
+    /// clears on settle, so "the zoom gesture is live" has ONE owner. Consulted by the
+    /// hold-⌘ shortcut peek's zoom-suppression gate ([`crate::peek::peek_allowed`]) so
+    /// the frosted card never pops up over the very text the user is zooming to read.
+    pub(in crate::app) fn zoom_in_flight(&self) -> bool {
+        self.zoom_persist_at.is_some()
+    }
+
     /// C-v / M-v: move the cursor by (roughly) one screenful of lines, Emacs
     /// style. `dir` is +1 (down) or -1 (up). The subsequent cursor-follow sync
     /// scrolls the viewport to keep the cursor visible. Returns whether the cursor
@@ -304,7 +314,17 @@ impl App {
         // closes. Feeding `ArmBroken` while Idle is inert, so ordinary typing (no
         // arming modifier) never churns.
         let convention = crate::convention::Convention::current();
-        let stim = if crate::peek::is_bare_arming_modifier(m.state(), convention) {
+        // ZOOM-SUPPRESSION GATE: the bare arming modifier is ALSO the start of the
+        // Cmd-scroll / Cmd-± zoom gesture, where the user holds ⌘ precisely to change
+        // what they're looking at — the frosted peek card would obscure exactly the
+        // text being resized. So while a zoom is IN FLIGHT ([`peek::peek_allowed`] over
+        // `zoom_in_flight`, backed by the sticky-zoom debounce) a bare-modifier hold
+        // does NOT arm; it re-arms only once the zoom settles. A modifier change that
+        // WOULD have armed is downgraded to `ArmBroken`, which also puts down a card
+        // that was already up.
+        let stim = if crate::peek::is_bare_arming_modifier(m.state(), convention)
+            && crate::peek::peek_allowed(self.zoom_in_flight())
+        {
             crate::peek::PeekStimulus::ArmAlone
         } else {
             crate::peek::PeekStimulus::ArmBroken

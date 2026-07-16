@@ -185,6 +185,23 @@ pub fn is_bare_arming_modifier(
     mods == arming_modifier(convention)
 }
 
+/// Whether the shortcut peek may ARM or STAY OPEN, given whether a ZOOM gesture is
+/// currently IN FLIGHT (the sticky-zoom debounce window — `App::zoom_in_flight`,
+/// backed by `zoom_persist_at` — is open). Zoom is the one gesture where the user
+/// holds the arming modifier (⌘ on Mac / Ctrl on Linux) PRECISELY to change what they
+/// are looking at: the card and its frosted backdrop would obscure exactly the text
+/// being resized to read. So a zoom in flight SUPPRESSES the peek — a bare-modifier
+/// hold never arms, and a pending/open card is put down — and it may RE-ARM only once
+/// the zoom SETTLES (the debounce clears, `zoom_in_flight` falls back to `false`).
+/// Pure (gesture state → panel visibility), so the whole suppression decision is
+/// unit-testable without a clock or window; the live App consults it at the arming
+/// seam (`on_modifiers_changed`) and the summon seam (`about_to_wait`'s peek timer),
+/// and dismisses an already-open card the instant a zoom step lands (a wheel-zoom
+/// notch feeds [`PeekStimulus::Interrupt`]).
+pub fn peek_allowed(zoom_in_flight: bool) -> bool {
+    !zoom_in_flight
+}
+
 /// The pure hold-⌘ peek ARM state — the "hold the convention's bare arming modifier
 /// for a beat" gesture and every cancellation, modeled WITHOUT a clock or winit
 /// (WHICH physical modifier that means is [`arming_modifier`]'s separate,
@@ -339,6 +356,67 @@ mod tests {
         assert_eq!(Open.next(ArmBroken), Idle);
         // A key pressed while it's open (e.g. finally hitting the shortcut) closes it too.
         assert_eq!(Open.next(KeyJoined), Idle);
+    }
+
+    // ---- THE ZOOM-SUPPRESSION GATE ----------------------------------------------
+    //
+    // The bug this fixes: holding the arming modifier is ALSO the start of the
+    // Cmd-scroll / Cmd-± zoom gesture. Without the gate, the frosted-backdrop card
+    // pops up over the very text the user is zooming to read. `peek_allowed` is the
+    // pure decision (gesture state → panel visibility); the live App reads it at the
+    // arm + summon seams and dismisses an open card on the first zoom step.
+
+    #[test]
+    fn peek_allowed_only_when_no_zoom_in_flight() {
+        assert!(peek_allowed(false), "no zoom in flight → the peek may arm/stay open");
+        assert!(!peek_allowed(true), "a zoom in flight suppresses the peek");
+    }
+
+    #[test]
+    fn zoom_in_flight_gates_an_arm_into_idle_via_arm_broken() {
+        // The live seam turns a bare-arming-modifier ModifiersChanged into `ArmAlone`
+        // only when `peek_allowed(zoom_in_flight)`; else it feeds `ArmBroken`. Model
+        // both edges purely: with a zoom in flight the arm never reaches `Pending`, and
+        // a card already up is put down.
+        let zoom_in_flight = true;
+        let stim = if peek_allowed(zoom_in_flight) {
+            ArmAlone
+        } else {
+            ArmBroken
+        };
+        assert_eq!(stim, ArmBroken, "a zoom in flight downgrades the arm to a cancel");
+        assert_eq!(Idle.next(stim), Idle, "so a fresh hold never arms mid-zoom");
+        assert_eq!(Pending.next(stim), Idle, "and a pending hold is cancelled");
+        assert_eq!(Open.next(stim), Idle, "and an open card is closed");
+        // Once the zoom settles the gate re-opens and the same edge arms normally.
+        let settled = if peek_allowed(false) { ArmAlone } else { ArmBroken };
+        assert_eq!(settled, ArmAlone);
+        assert_eq!(Idle.next(settled), Pending, "after settle a bare hold arms again");
+    }
+
+    #[test]
+    fn zoom_in_flight_suppresses_the_summon_at_the_timer_seam() {
+        // `about_to_wait` fires the hold-timer deadline as `Elapsed` (opens the card)
+        // ONLY while `peek_allowed`; a zoom in flight feeds the cancelling `ArmBroken`
+        // instead, so a pause that would have opened the card folds back to Idle.
+        let elapsed_stim = |zoom_in_flight: bool| {
+            if peek_allowed(zoom_in_flight) {
+                Elapsed
+            } else {
+                ArmBroken
+            }
+        };
+        assert_eq!(Pending.next(elapsed_stim(false)), Open, "no zoom: the pause opens the card");
+        assert_eq!(Pending.next(elapsed_stim(true)), Idle, "zoom in flight: the pause is suppressed");
+    }
+
+    #[test]
+    fn a_zoom_step_closes_an_open_card_via_interrupt() {
+        // A wheel-zoom notch lands while the card is up (⌘ was held long enough to
+        // summon it, THEN the user Cmd-scrolls): the live wheel-zoom seam feeds
+        // `Interrupt`, closing the card before the next frame draws it over the text.
+        assert_eq!(Open.next(Interrupt), Idle);
+        assert_eq!(Pending.next(Interrupt), Idle);
     }
 
     #[test]

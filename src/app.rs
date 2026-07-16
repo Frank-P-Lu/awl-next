@@ -1740,7 +1740,18 @@ impl ApplicationHandler<AwlEvent> for App {
         if let Some(armed) = self.peek_armed_at {
             let deadline = armed + Duration::from_millis(crate::peek::HOLD_PEEK_MS);
             if Instant::now() >= deadline {
-                self.feed_peek(crate::peek::PeekStimulus::Elapsed);
+                // ZOOM-SUPPRESSION GATE: the pause elapsed, but if a zoom is in flight
+                // (the sticky-zoom debounce window is open) the card would pop up over
+                // the text being resized — feed the cancelling `ArmBroken` instead of
+                // `Elapsed`, folding the pending hold back to Idle. It re-arms only once
+                // the zoom settles. (`peek_allowed` is the ONE pure suppression owner,
+                // shared with the arming seam in `on_modifiers_changed`.)
+                let stim = if crate::peek::peek_allowed(self.zoom_in_flight()) {
+                    crate::peek::PeekStimulus::Elapsed
+                } else {
+                    crate::peek::PeekStimulus::ArmBroken
+                };
+                self.feed_peek(stim);
             } else if self.last_frame.is_none() {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
             }
