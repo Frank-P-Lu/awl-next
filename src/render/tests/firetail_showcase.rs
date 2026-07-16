@@ -177,6 +177,47 @@ fn chrome_attrs_is_panel_attrs_under_body_and_swaps_only_under_named() {
     );
 }
 
+/// NEVER-TOFU FOR CHROME (the font-DB half): both bundled CHROME-VOICE faces
+/// (CHROME-VOICES round — `render::FONT_CHROME_FACES`) register under their
+/// EXACT expected family names, AND every world whose `render_caps.chrome_face`
+/// is `Named(fam)` names a family the built font DB actually carries — so a
+/// flipped world can never tofu its placard/title/strip chrome. A subset/rename
+/// slip, or a typo in a world's `Named("…")`, fails HERE, not as a downstream
+/// invisible-glyph box (the Wagtail-picker lesson: assert the OUTCOME). Abril
+/// Fatface is bundled but assigned to no world's DATA yet (gallery-only, pending
+/// the user's veto pass), so it is asserted registered explicitly, not via the
+/// world sweep. NO-WILDCARD over `ChromeFace` so a future variant fails to
+/// compile until it is brought under this law.
+#[test]
+fn every_chrome_voice_registers_and_no_world_names_an_unregistered_one() {
+    let Some(p) = headless_pipeline() else {
+        eprintln!("skipping chrome-voice registration law: no wgpu adapter");
+        return;
+    };
+    let registered = |fam: &str| {
+        p.font_system
+            .db()
+            .faces()
+            .any(|f| f.families.iter().any(|(n, _)| n == fam))
+    };
+    // The two bundled voices register under their authentic family names.
+    for fam in ["Archivo Black", "Abril Fatface"] {
+        assert!(registered(fam), "chrome voice {fam:?} must be registered in the font DB");
+    }
+    // Every world's DATA-assigned chrome face resolves. NO-WILDCARD match: a new
+    // ChromeFace variant must be handled here before it compiles.
+    for t in theme::THEMES.iter() {
+        match t.render_caps.chrome_face {
+            theme::ChromeFace::Body => {}
+            theme::ChromeFace::Named(fam) => assert!(
+                registered(fam),
+                "{}: chrome_face names unregistered family {fam:?} — guaranteed tofu",
+                t.name
+            ),
+        }
+    }
+}
+
 // --- dial 4: motion juice — grammar, structural determinism, RM fold ---------
 
 #[test]

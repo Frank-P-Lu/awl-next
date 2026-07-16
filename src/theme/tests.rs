@@ -1711,7 +1711,8 @@ fn stipple_placard_density_clears_the_legibility_floor_over_its_own_ground() {
 /// byte-identity gate. Every world's `render_caps` must be EXACTLY its
 /// decided value: the four placard worlds (Galah/Magpie the Ghost reference
 /// look, Mangrove the stipple — the Bayer dither is its own language,
-/// Firetail the deliberately-smooth Faint foil), the three functional-
+/// Firetail the loud-end statement — a big/Bold smooth placard plus the
+/// Archivo Black chrome voice, the CHROME-VOICES flip), the three functional-
 /// elevation borders (Currawong's OLED rim, the two lava worlds' edge over
 /// motion, the six LIGHT worlds' pale-ground rim — composition round item 6),
 /// the Wagtail page frame (2px, its ladder white), Wagtail's
@@ -1748,8 +1749,18 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 elevation: Elevation::Bordered,
                 ..RenderCaps::DEFAULT
             },
+            // CHROME-VOICES FLIP (2026-07-16): the loud-end world's own loud
+            // overlay — BL placard dialed to the combo-shot scale + Bold ink,
+            // and the Archivo Black chrome voice on the placard/title/strip.
+            // (The other placard worlds still ship the calm 3.0/Faint-Ghost-
+            // Stipple grammar via `bl`; Firetail alone spells its louder values.)
             "Firetail" => RenderCaps {
-                title_style: bl(PlacardInk::Faint),
+                title_style: TitleStyle::Placard {
+                    corner: PlacardCorner::BL,
+                    scale: 4.5,
+                    ink: PlacardInk::Bold,
+                },
+                chrome_face: model::ChromeFace::Named("Archivo Black"),
                 elevation: Elevation::Bordered,
                 ..RenderCaps::DEFAULT
             },
