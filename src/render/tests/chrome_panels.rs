@@ -453,16 +453,22 @@ fn overlay_click_regions_select_inside_row_and_dismiss_outside() {
     p.set_view(&v);
 
     let [cx, cy, cw, ch] = p.overlay_card_rect().expect("the overlay has a card");
-    let lh = p.metrics.line_height;
+    // Use the REAL overlay row geometry (UI-scaled `lh` + the query BEAT), not a
+    // full-line-height approximation: the widened beat pushes row 0 down by
+    // `header_gap`, so a click point must be derived from the same owner the
+    // renderer + hit-test read (`overlay_row_top`).
+    let lh = p.overlay_lh();
+    let hg = p.overlay_header_gap();
     let pad = 12.0_f32; // centered-overlay inner padding (overlay_geometry)
     let text_top = cy + pad;
     // The exact predicate input.rs uses for "inside the card".
     let inside = |px: f32, py: f32| px >= cx && px <= cx + cw && py >= cy && py <= cy + ch;
 
-    // ON the first candidate row (one line below the query row): hit-tests to row 0
-    // → input.rs selects + accepts it.
+    // ON the first candidate row (below the query row + the beat gap): hit-tests to
+    // row 0 → input.rs selects + accepts it. Row 0's top is `text_top + lh + hg`
+    // (header_rows == 1 for a flat picker); click its vertical middle.
     let row_x = cx + cw * 0.5;
-    let row0_y = text_top + 1.5 * lh;
+    let row0_y = text_top + lh + hg + lh * 0.5;
     assert_eq!(p.overlay_row_at(row_x, row0_y), Some(0), "a click on the first candidate row selects it");
     assert!(inside(row_x, row0_y), "the row is inside the card");
 
@@ -544,19 +550,24 @@ fn overlay_lens_at_resolves_facet_labels_by_their_own_strip_index() {
     p.prepare(&device, &queue, 1200, 800).unwrap();
 
     let lh = p.overlay_lh();
+    let hg = p.overlay_header_gap();
+    // The strip line (display line 1) is inflated to `lh + header_gap` by the query
+    // BEAT; the labels center in it, so the strip band runs the full inflated height
+    // and the first candidate row sits below it (`text_top + 2*lh + hg`).
+    let strip_lh = lh + hg;
     let [cx, cy, _cw, _ch] = p.overlay_card_rect().expect("the faceted overlay has a card");
     let pad = 12.0_f32; // centered-overlay inner padding (overlay_geometry)
     let text_top = cy + pad;
-    let strip_y = text_top + 1.5 * lh; // mid strip row (display line 1)
+    let strip_y = text_top + lh + strip_lh * 0.5; // strip glyph center (display line 1)
     let query_y = text_top + 0.5 * lh; // the query line — not the strip
-    let row_y = text_top + 2.5 * lh; // a candidate item row — below the strip
+    let row_y = text_top + 2.0 * lh + hg + lh * 0.5; // candidate row 0 — below the strip + beat
 
     // The ACTIVE facet's own recorded underline rect pinpoints its shaped x-span —
     // a click in its middle resolves to ITS OWN strip index (1, Time).
     let [ux, uy, uw, _uh] = p.overlay_theme_underline.expect("Time is active, so it is underlined");
     assert!(
-        uy >= text_top + lh - 5.0 && uy <= text_top + 2.0 * lh + 5.0,
-        "underline sits on the strip row (line 1)"
+        uy >= text_top + lh - 5.0 && uy <= text_top + lh + strip_lh + 5.0,
+        "underline sits within the inflated strip line (display line 1)"
     );
     let time_mid_x = ux + uw * 0.5;
     assert_eq!(p.overlay_lens_at(time_mid_x, strip_y), Some(1), "a click on Time resolves to strip index 1");

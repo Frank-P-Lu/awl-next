@@ -41,7 +41,14 @@ pub(in crate::render) const CARD_MAX_W_FACETED: f32 = 600.0;
 /// The QUERY-INPUT BEAT (item 4), as a fraction of the overlay row height — the
 /// clear breath between the input line and the first result row. A single dial
 /// the gallery A/Bs; see [`TextPipeline::overlay_header_gap`].
-const OVERLAY_QUERY_BEAT: f32 = 0.72;
+///
+/// REFIT (2026-07-16): the user found `0.72` still read cramped under the input
+/// box on EVERY picker (Pane and Bars alike). Widened to a clearly-breathing
+/// FULL row of air — the beat moves the candidate band AND the glyphs together
+/// by construction (the shaper inflates the last header line's real metrics by
+/// exactly this; the y-agreement law holds), so this is a pure taste dial with
+/// no alignment risk. LIVE-ONLY: whether the fuller beat reads right needs an eye.
+const OVERLAY_QUERY_BEAT: f32 = 1.0;
 
 /// PER-ITEM LIST SURFACES round — the corner radius (device px) of a faceted
 /// strip CHIP / active BAND under [`theme::FacetStyle::Chips`]/`Band` (the pill
@@ -151,6 +158,22 @@ impl TextPipeline {
         match crate::render::effective_list_style() {
             theme::ListStyle::Bars { gap, .. } => gap.max(0.0),
             theme::ListStyle::Pane => 0.0,
+        }
+    }
+
+    /// PER-ITEM LIST SURFACES round — the horizontal inset (device px) the row
+    /// TEXT column holds from the layout bound (`card_x` .. `card_x + card_w`).
+    /// `Pane` keeps the historical `12` pad (byte-identical). `Bars` insets
+    /// `BAR_SIDE_INSET + BAR_TEXT_PAD` so the glyphs sit a comfortable pad INSIDE
+    /// each bar's edge (the user's "bar text needs real left padding" refit),
+    /// symmetric so the secondary chord column mirrors it inside the bar's right
+    /// edge. The ONE owner both `overlay_geometry` and `theme_overlay_geometry`
+    /// read for `text_left`/`text_w`, so shaping, hit-test, caret, and the
+    /// right-aligned chords all inset together.
+    pub(in crate::render) fn overlay_text_hpad(&self) -> f32 {
+        match crate::render::effective_list_style() {
+            theme::ListStyle::Bars { .. } => BAR_SIDE_INSET + BAR_TEXT_PAD,
+            theme::ListStyle::Pane => 12.0,
         }
     }
 
@@ -545,7 +568,12 @@ impl TextPipeline {
         // narrows the width only in the fill regime, so the text column can
         // never starve.
         let (card_x, card_w) = self.overlay_card_box(width, CARD_MAX_W);
-        let text_w = card_w - 2.0 * pad;
+        // Horizontal text inset is list-style aware (`Bars` pads the glyphs inside
+        // each bar's edge — the ONE owner `overlay_text_hpad`); vertical padding
+        // stays `pad` (12) so the card height math is untouched. `Pane` keeps
+        // `hpad == pad`, byte-identical.
+        let hpad = self.overlay_text_hpad();
+        let text_w = card_w - 2.0 * hpad;
         // The header gap adds to the card height alongside the row stack + padding,
         // so the card still FITS its content exactly (bottom padding == `pad`). The
         // foot hint (item 5) rides a SHORTER line, so reclaim `lh - hint_h` per
@@ -565,7 +593,7 @@ impl TextPipeline {
         // BEFORE `text_top`, so the card quad, rows, band, caret, and
         // hit-tests all ride the spring together through this ONE geometry.
         let card_y = margin + 40.0 + self.menubar_reserve() + self.overlay_entrance_offset();
-        let text_left = card_x + pad;
+        let text_left = card_x + hpad;
         let text_top = card_y + pad;
         OverlayGeom {
             visible,
@@ -1070,10 +1098,23 @@ impl TextPipeline {
         geom: &OverlayGeom,
     ) {
         let lh = self.overlay_lh();
+        let list_style = crate::render::effective_list_style();
         let card_rect = [geom.card_x, geom.card_y, geom.card_w, geom.card_h];
         if self.overlay_spell.is_some() {
             // Contextual spell panel: elevate on the float primitive, no flat card.
             self.prepare_float_panel(device, queue, width, height, Some(card_rect));
+            self.panel_card.prepare(device, queue, width, height, &[]);
+            self.panel_shadow.prepare(device, queue, width, height, &[]);
+            self.panel_border.prepare(device, queue, width, height, &[]);
+        } else if matches!(list_style, theme::ListStyle::Bars { .. }) {
+            // PER-ITEM LIST SURFACES round — BARS DROP THE PANE (the user's refit:
+            // "with the bars, there shouldn't be a pane!"). The card SURFACE
+            // disappears entirely — no fill, no border, no shadow — so the bars,
+            // title/query/strip/hint all float directly on the summoned overlay's
+            // frosted backdrop/scrim (the Persona room model: bars sit ON the room,
+            // not IN a box). The `card_rect` still governs LAYOUT (anchor, width,
+            // hit-tests) via `geom` — only the PAINT is withheld. Every card quad
+            // parks empty so no stale fill lingers from a prior Pane frame.
             self.panel_card.prepare(device, queue, width, height, &[]);
             self.panel_shadow.prepare(device, queue, width, height, &[]);
             self.panel_border.prepare(device, queue, width, height, &[]);
@@ -1146,7 +1187,7 @@ impl TextPipeline {
         // into `lh`. The row-y owner `overlay_row_top` feeds BOTH so bars and text
         // agree on every row; the hit-test rides the same `lh`, so a click in a
         // gap maps to the nearest row (no dead zones).
-        let list_style = crate::render::effective_list_style();
+        // `list_style` computed once at the top of this fn (drives the pane-drop).
         let mirror = crate::render::effective_card_anchor().mirrors_growth();
         // The selected row's drawn TOP, through the ONE row-y owner + the live-only
         // band slide (verbatim `target` in capture / Snap worlds). Computed ONCE

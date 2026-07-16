@@ -130,7 +130,10 @@ impl TextPipeline {
         // — via the SAME horizontal-box owner (edge inset + narrow-window fallback),
         // just a slightly wider cap ([`CARD_MAX_W_FACETED`]).
         let (card_x, card_w) = self.overlay_card_box(width, super::overlay::CARD_MAX_W_FACETED);
-        let text_w = card_w - 2.0 * pad;
+        // List-style-aware horizontal text inset (the ONE owner shared with the
+        // flat picker); vertical padding stays `pad`. `Pane` keeps `hpad == pad`.
+        let hpad = self.overlay_text_hpad();
+        let text_w = card_w - 2.0 * hpad;
         // Foot hint (item 5) rides a SHORTER line — reclaim `lh - hint_h` per hint
         // row so the card hugs the tighter footer (matching the flat owner).
         let card_h = total_rows as f32 * lh + header_gap + 2.0 * pad
@@ -140,7 +143,7 @@ impl TextPipeline {
         // never change how many rows fit), mirroring `overlay_geometry`'s own
         // placement of the same one-owner offset. `+ 0.0` when settled.
         let card_y = card_y + self.overlay_entrance_offset();
-        let text_left = card_x + pad;
+        let text_left = card_x + hpad;
         let text_top = card_y + pad;
         OverlayGeom {
             // The DRAWN window: `visible` = candidate DISPLAY LINES shown (headers + item
@@ -185,9 +188,14 @@ impl TextPipeline {
             return None;
         }
         let lh = self.overlay_lh();
-        // Strip is display line 1 (row band [text_top + lh, text_top + 2*lh)).
+        // Strip is display line 1, whose HEIGHT is inflated to `lh + header_gap` by
+        // the query BEAT (the labels center in that tall box, so they sit lower than
+        // a plain `lh` band — the whole inflated line is the strip's clickable region,
+        // meeting row 0's top exactly). Using the plain `lh` band would leave the
+        // lower half of the labels un-clickable once the beat widened.
         let strip_top = geom.text_top + lh;
-        if py < strip_top || py >= strip_top + lh {
+        let strip_lh = lh + geom.header_gap;
+        if py < strip_top || py >= strip_top + strip_lh {
             return None;
         }
         // Which label's shaped glyph span contains px? Scan the shaped strip line.
@@ -342,17 +350,30 @@ impl TextPipeline {
         // wherever the labels sit far enough apart for it).
         const CHIP_HPAD: f32 = 6.0;
         const CHIP_MIN_GAP: f32 = 5.0;
-        const CHIP_VPAD: f32 = 3.0;
+        const CHIP_VPAD: f32 = 2.0;
+        // VERTICAL PLACEMENT (the misaligned-chip refit): the strip line's height is
+        // inflated to `strip_lh = lh + header_gap` by the query BEAT, and cosmic-text
+        // CENTERS the glyphs in that tall line box — so the labels sit near the box's
+        // vertical middle, well BELOW a plain `lh` band at line 1. The old pill top
+        // (`text_top + lh + CHIP_VPAD`) tracked that plain band, so the pills floated
+        // ABOVE the labels; the widened beat made it glaring. A facet mark that HUGS
+        // its label must center on the GLYPH center: `line-1 top (== lh) + strip_lh/2`.
+        // `chip_h` is sized off the strip's own gap-independent text line height (not
+        // `lh`, which swells with a Bars row-gap), so the pill hugs the label the same
+        // whether or not Bars is also active.
+        let strip_lh = lh + geom.header_gap;
+        let mark_cy = geom.text_top + lh + strip_lh * 0.5;
+        let strip_text_lh = self.metrics.line_height * super::overlay::OVERLAY_UI_SCALE;
+        let chip_h = (strip_text_lh - 2.0 * CHIP_VPAD).max(1.0);
         // A PILL rect from an already-resolved (left, right) glyph-x pair (device
-        // px): the band fills most of the strip row (display line 1). The active
-        // band/chip and the ghost chips all build through this — one owner, so
-        // they can't drift in height.
+        // px): centered on the strip glyphs' vertical middle. The active band/chip and
+        // the ghost chips all build through this — one owner, so they can't drift.
         let pill_px = |left: f32, right: f32| -> [f32; 4] {
             [
                 geom.text_left + left,
-                geom.text_top + lh + CHIP_VPAD,
+                mark_cy - chip_h * 0.5,
                 (right - left).max(1.0),
-                (lh - 2.0 * CHIP_VPAD).max(1.0),
+                chip_h,
             ]
         };
         // All label glyph spans (min_x, max_x) in strip order + their active flag,
@@ -384,8 +405,12 @@ impl TextPipeline {
             let (min_x, max_x) = span_of(&self.panel_buffer, ar)?;
             Some(match facet_style {
                 theme::FacetStyle::Text => {
-                    // BYTE-IDENTICAL underline: hairline under the active label.
-                    let y = geom.text_top + 2.0 * lh - 3.0;
+                    // Hairline just UNDER the active label. Tracks the glyph center
+                    // (`mark_cy`) + half the strip text height, so it stays under the
+                    // labels after the query BEAT pushed them down the inflated strip
+                    // line (the same fix the chip/band placement rides — a plain
+                    // `2*lh - 3` band now cuts through the glyphs, not under them).
+                    let y = mark_cy + strip_text_lh * 0.5 - 2.0;
                     [geom.text_left + min_x, y, max_x - min_x, 1.5]
                 }
                 // A single active BAND has no drawn neighbour to collide with, so

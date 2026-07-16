@@ -52,17 +52,20 @@ fn overlay_selected_band_is_a_stronger_value_step_never_a_hue() {
     set_active(DEFAULT_THEME);
 }
 
-/// PER-ITEM LIST SURFACES round — the OBVIOUS-GLANCE law at the derivation
-/// level, covering EVERY world (the pixel test `bars_draw_a_findable_surface_per_row`
-/// only exercises the headless default theme). Under [`ListStyle::Bars`] the
-/// unselected bar ([`overlay_bar_unselected`]) sits BETWEEN the bare card
-/// (`base_300`) and the selected bar's band ([`overlay_selected_band`]) in the
-/// ramp's own direction, AND the selected↔unselected value step is at least as
-/// large as the unselected↔card step — so the selected bar leads its neighbours
-/// at least as strongly as a neighbour leads the card. The Kingfisher/Saltpan
-/// gallery defect was the OLD choice (unselected == `surface_selected`) inverting
-/// this: the selected bar was one lone rung above its neighbours while they sat
-/// two rungs above the card. Value only, never a hue. One-bit worlds are exempt
+/// PER-ITEM LIST SURFACES round (2026-07-16 REFIT) — the OBVIOUS-GLANCE law at
+/// the derivation level, covering EVERY world (the pixel test
+/// `bars_draw_a_findable_surface_per_row` only exercises the headless default
+/// theme). Under [`ListStyle::Bars`] the PANE is dropped — the bars float on the
+/// GROUND (`base_100`, the scrim/room), not in a card. So the reference is the
+/// GROUND, not the vanished card: the unselected bar ([`overlay_bar_unselected`]
+/// == `base_200`) is a WHISPER one gentle step off the ground in the ramp's own
+/// direction, and the selected bar's band ([`overlay_selected_band`]) sits
+/// further up still — AND the selected↔unselected value step is at least as large
+/// as the unselected↔ground step, so the selected bar's pop leads its whisper
+/// neighbours at least as strongly as a whisper leads the bare ground. The user's
+/// rejected first cut inverted the taste (unselected == a saturated rung under the
+/// selected band — "a picket fence where every row shouts"); the whisper gives the
+/// selection somewhere to go. Value only, never a hue. One-bit worlds are exempt
 /// (a collapsed ramp draws its selected row via `InverseFill`; bars are inert).
 #[test]
 fn bars_unselected_sits_a_quiet_rung_below_the_selected_band() {
@@ -85,18 +88,21 @@ fn bars_unselected_sits_a_quiet_rung_below_the_selected_band() {
             // drawn by `InverseFill`, not this fill. Declared exemption.
             continue;
         }
-        let card = t.base_300;
+        // The GROUND the bars float on now the pane is dropped (base_100), the
+        // reference the old card (base_300) used to be.
+        let ground = t.base_100;
         let unsel = overlay_bar_unselected();
         let sel = overlay_selected_band();
-        // Per channel: `unsel` moves in the ramp direction from the card, and
-        // `sel` moves at least as far again (unselected strictly between card and
-        // selected in the ramp's own direction, value-only — no hue reversal).
+        // Per channel: `unsel` moves in the ramp direction from the GROUND (a
+        // whisper), and `sel` moves at least as far again (whisper strictly between
+        // ground and selected in the ramp's own direction, value-only — no hue).
         let chans = [
-            (card.r, unsel.r, sel.r),
-            (card.g, unsel.g, sel.g),
-            (card.b, unsel.b, sel.b),
+            (ground.r, unsel.r, sel.r),
+            (ground.g, unsel.g, sel.g),
+            (ground.b, unsel.b, sel.b),
         ];
-        // The overall ramp direction (base_200 -> base_300 carries it onward).
+        // The overall ramp direction (base_200 -> base_300 carries it onward; the
+        // monotone surface ladder makes this the base_100 -> base_200 step's sign too).
         let dir = [
             (t.base_300.r as i32 - t.base_200.r as i32).signum(),
             (t.base_300.g as i32 - t.base_200.g as i32).signum(),
@@ -106,21 +112,21 @@ fn bars_unselected_sits_a_quiet_rung_below_the_selected_band() {
             let d = dir[i];
             let unsel_step = (u as i32 - c as i32) * d;
             let sel_step = (s as i32 - c as i32) * d;
-            assert!(unsel_step >= 0, "{}: unselected bar stays in the ramp direction", t.name);
+            assert!(unsel_step >= 0, "{}: unselected whisper lifts off the ground in the ramp direction", t.name);
             assert!(
                 sel_step >= unsel_step,
-                "{}: selected band ({s}) must sit at least as far up the ramp as the unselected bar ({u}) from the card ({c})",
+                "{}: selected band ({s}) must sit at least as far up the ramp as the unselected whisper ({u}) from the ground ({c})",
                 t.name
             );
         }
         // The OBVIOUS-GLANCE law (redmean): the selected↔unselected step reads at
-        // least as strong as the unselected↔card step — selection is at least as
-        // findable as a bar. This is the exact line the old code crossed.
+        // least as strong as the unselected↔ground step — selection's pop leads its
+        // whisper neighbours at least as much as a whisper leads the bare ground.
         let d_sel = redmean(sel, unsel);
-        let d_bar = redmean(unsel, card);
+        let d_bar = redmean(unsel, ground);
         assert!(
             d_sel >= d_bar,
-            "{}: selected bar {sel:?} must lead the unselected bar {unsel:?} (redmean {d_sel:.1}) at least as much as the bar leads the card {card:?} (redmean {d_bar:.1})",
+            "{}: selected bar {sel:?} must lead the unselected whisper {unsel:?} (redmean {d_sel:.1}) at least as much as the whisper leads the ground {ground:?} (redmean {d_bar:.1})",
             t.name
         );
     }

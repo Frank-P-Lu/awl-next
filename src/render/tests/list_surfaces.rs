@@ -167,6 +167,58 @@ fn list_and_facet_default_are_inert_no_bars_no_chips_no_gap() {
     }
 }
 
+// --- Bars DROP THE PANE; Pane KEEPS it (the card-fill law, gated by style) ----
+
+/// THE PANE-DROP LAW (the user's refit: "with the bars, there shouldn't be a
+/// pane!"). Under `ListStyle::Bars` the summoned card SURFACE disappears
+/// entirely — the flat `panel_card` fill and its `panel_shadow`/`panel_border`
+/// elevation companions all draw ZERO instances — so the bars float directly on
+/// the overlay's frosted backdrop/scrim (the Persona room model). Under `Pane`
+/// (the default every world ships) the card fill stays (one instance), the pane
+/// the whole picker family has always drawn. The `card_rect` still governs
+/// LAYOUT in both (anchor/width/hit-tests via `overlay_geometry`) — only the
+/// PAINT is gated. This is the exact card-fill-vs-list-style seam the round-B
+/// refit introduced; without this law a future "always draw the card" regression
+/// would silently restore the pane the user rejected.
+#[test]
+fn bars_drop_the_pane_pane_keeps_it() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping bars_drop_the_pane_pane_keeps_it: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
+    v.overlay_selected = 2;
+
+    // PANE (default): the card fill draws its one instance; no bars.
+    set_list_style_test_override(Some(theme::ListStyle::Pane));
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert_eq!(p.panel_card.instance_count(), 1, "Pane draws the card fill");
+    assert_eq!(p.overlay_bars.instance_count(), 0, "Pane draws no bars");
+
+    // BARS: the pane vanishes — card fill, shadow, and border all park empty —
+    // and a bar draws per unselected row instead.
+    set_list_style_test_override(Some(theme::ListStyle::Bars {
+        radius: 6.0,
+        gap: 10.0,
+        grow_px: 6.0,
+    }));
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert_eq!(p.panel_card.instance_count(), 0, "Bars drop the card fill (no pane)");
+    assert_eq!(p.panel_shadow.instance_count(), 0, "Bars draw no card shadow");
+    assert_eq!(p.panel_border.instance_count(), 0, "Bars draw no card border");
+    assert!(p.overlay_bars.instance_count() > 0, "Bars draw a surface per row");
+
+    set_list_style_test_override(None);
+    set_card_anchor_test_override(None);
+}
+
 // --- Bars: a surface per row, the selected one FINDABLE (real pixels) --------
 
 /// The average RGB over a small region of one rendered frame (surface color,
@@ -230,10 +282,16 @@ fn bars_draw_a_findable_surface_per_row() {
     assert!(p.overlay_row_gap() > 0.0, "Bars opens a positive row gap");
 
     // OUTCOME (real pixels): the selected bar reads distinct from an unselected
-    // bar, and an unselected bar reads distinct from the card gap between bars.
+    // bar, and an unselected bar still reads (a whisper) against the GROUND
+    // between bars. NOTE: under Bars the card PANE is dropped (see
+    // `bars_drop_the_pane_pane_keeps_it`), so the between-bars region is now the
+    // frosted backdrop/scrim, not a card fill — the sample still lands on pure
+    // surface (left of the text column), the ground the unselected whisper lifts
+    // off of. `overlay_card_rect` still returns the layout bound (the pane's
+    // paint is gone, its geometry is not).
     let rect = p.overlay_card_rect().expect("overlay card rect");
     let (card_x, card_y, _cw) = (rect[0], rect[1], rect[2]);
-    let text_top = card_y + 12.0; // `overlay_geometry`'s inner pad
+    let text_top = card_y + 12.0; // `overlay_geometry`'s inner pad (vertical)
     let lh = p.overlay_lh();
     let gap = p.overlay_row_gap();
     let hg = p.overlay_header_gap();
@@ -247,11 +305,11 @@ fn bars_draw_a_findable_surface_per_row() {
 
     let sel = avg(&px, wi, hi, sx, (row_top(2) + 2.0) as i64, 2, (bar_h - 4.0) as i64);
     let unsel = avg(&px, wi, hi, sx, (row_top(0) + 2.0) as i64, 2, (bar_h - 4.0) as i64);
-    // The gap between row 0 and row 1 shows the bare card.
-    let card = avg(&px, wi, hi, sx, (row_top(0) + bar_h + 1.0) as i64, 2, (gap - 2.0) as i64);
+    // The gap between row 0 and row 1 shows the bare GROUND (the scrim — no pane).
+    let ground = avg(&px, wi, hi, sx, (row_top(0) + bar_h + 1.0) as i64, 2, (gap - 2.0) as i64);
 
     let d_sel = redmean(sel, unsel);
-    let d_bar = redmean(unsel, card);
+    let d_bar = redmean(unsel, ground);
     set_list_style_test_override(None);
     set_card_anchor_test_override(None);
     assert!(
@@ -260,20 +318,19 @@ fn bars_draw_a_findable_surface_per_row() {
     );
     assert!(
         d_bar >= 10.0,
-        "an unselected bar {unsel:?} must read distinct from the card gap {card:?} (redmean {d_bar:.1})"
+        "an unselected bar {unsel:?} must still read (a present whisper) against the ground {ground:?} between bars (redmean {d_bar:.1})"
     );
-    // THE OBVIOUS-GLANCE LAW (the Kingfisher/Saltpan gallery defect): bars
-    // introduce surfaces BETWEEN the card and the selected row, so a raw
-    // "d_sel >= 10" floor passed while the selected bar read as barely distinct
-    // from its neighbours (both saturated value steps, one lone rung apart). The
-    // fix drops the unselected bar to a quiet rung near the card, so the selected
-    // bar must now lead its NEIGHBOURS at least as strongly as a neighbour leads
-    // the bare CARD — selection is at least as findable as a bar. Before the fix
-    // this inverted (d_sel ≈ 1 step < d_bar ≈ 2 steps); it is the law that draws
-    // the exact line between the bug and the fix.
+    // THE OBVIOUS-GLANCE LAW (the Firetail "picket fence" gallery defect the user
+    // rejected): the first cut drew unselected bars as saturated slabs one lone
+    // rung under the selected band — every row shouted, and the selected bar had
+    // nowhere to go. The refit drops the pane and quiets the unselected bar to a
+    // WHISPER off the ground (`base_200`), so the selected bar's strong pop now
+    // leads its NEIGHBOURS at least as much as a neighbouring whisper leads the
+    // bare GROUND — selection dominates the rhythm, an obvious glance. (With the
+    // whisper this holds comfortably: d_bar is small by design, d_sel large.)
     assert!(
         d_sel >= d_bar,
-        "selected bar must lead its neighbours (redmean {d_sel:.1}) at least as much as a bar leads the bare card (redmean {d_bar:.1}) — an obvious glance, not close inspection"
+        "selected bar must lead its neighbours (redmean {d_sel:.1}) at least as much as a whisper bar leads the bare ground (redmean {d_bar:.1}) — an obvious glance, not close inspection"
     );
 }
 

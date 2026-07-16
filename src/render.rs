@@ -2170,8 +2170,12 @@ pub(crate) fn slant_max_offset(slant: &SlantProbe, n_rows: usize) -> f32 {
 
 /// The bar-treatment defaults the bare `"bars"` grammar expands to (device px):
 /// a gentle P4/Velvet midpoint the gallery then A/Bs via the parametric form.
+/// REFIT (2026-07-16): the gap widened `6 → 10` — the user read the old cracks
+/// between saturated slabs as accidental, not intentional air; with the pane
+/// dropped and the bars quieted, a fuller gap makes each bar read as a placed
+/// surface floating on the room.
 const BARS_DEFAULT_RADIUS: f32 = 6.0;
-const BARS_DEFAULT_GAP: f32 = 6.0;
+const BARS_DEFAULT_GAP: f32 = 10.0;
 const BARS_DEFAULT_GROW: f32 = 6.0;
 
 /// `AWL_OVERLAY_LIST_FORCE` grammar: `"pane"` → [`theme::ListStyle::Pane`];

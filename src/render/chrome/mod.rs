@@ -364,6 +364,17 @@ pub(super) fn overlay_row_top(
 /// WIDER as well as brighter. A single dial the gallery A/Bs.
 pub(super) const BAR_SIDE_INSET: f32 = 8.0;
 
+/// PER-ITEM LIST SURFACES round — the extra left/right breathing room (device
+/// px) the ROW TEXT holds INSIDE a bar's edge under [`theme::ListStyle::Bars`],
+/// on top of [`BAR_SIDE_INSET`]. The default `Pane` text pad (12) put the glyph
+/// only ~4px inside the bar's left edge — the user's "bar text needs real left
+/// padding" note. Under Bars the text column insets `BAR_SIDE_INSET +
+/// BAR_TEXT_PAD` from the layout bound, so text sits a comfortable
+/// [`BAR_TEXT_PAD`] inside the bar (both edges — the secondary chord column
+/// mirrors it). The ONE owner both geometry builders read via
+/// [`TextPipeline::overlay_text_hpad`].
+pub(super) const BAR_TEXT_PAD: f32 = 13.0;
+
 /// PURE geometry — the UNSELECTED bar rect `[x, y, w, h]` for a candidate row
 /// whose pitch-cell top is `top`, inside a card `[card_x, card_x+card_w]`, drawn
 /// `bar_h` tall (`overlay_lh - gap`). The ONE owner both the renderer
