@@ -48,6 +48,17 @@ pub(in crate::render) const CARD_MAX_W_FACETED: f32 = 600.0;
 /// by construction (the shaper inflates the last header line's real metrics by
 /// exactly this; the y-agreement law holds), so this is a pure taste dial with
 /// no alignment risk. LIVE-ONLY: whether the fuller beat reads right needs an eye.
+///
+/// THE ROUND'S ONE SHIPPED VISUAL CHANGE. This `0.72 -> 1.0` widening is a
+/// user-directed taste change that moves EVERY summoned picker's query line (and
+/// the whole candidate stack below it) down a fraction vs the `main` base — so
+/// byte-identity-vs-`main` is by design IMPOSSIBLE for any query-line surface,
+/// and the Persona-list inert guarantee is scoped to self-consistency + the
+/// model-level inert law instead (see `render/tests/list_surfaces.rs`'s module
+/// doc). NOTE the caret's y is NOT derived from this constant: it reads the
+/// query line's real shaped `line_height` (`overlay_place_caret`), so it tracks
+/// the glyphs through cosmic-text's half-leading whatever this dial is set to
+/// (the full-bleed caret bug this refit closed).
 const OVERLAY_QUERY_BEAT: f32 = 1.0;
 
 /// PER-ITEM LIST SURFACES round — the corner radius (device px) of the faceted
@@ -125,6 +136,14 @@ pub(in crate::render) struct OverlayYProbe {
     pub caret_center: f32,
     /// The query line's own glyph TOP (absolute canvas y).
     pub query_line_top: f32,
+    /// The query line's ACTUAL shaped height (its first run's `line_height`) —
+    /// inflated by `header_gap` on the flat pickers, plain on the faceted ones.
+    /// The caret centre must ride THIS, not `lh` (the full-bleed caret bug).
+    pub query_line_height: f32,
+    /// The query line's BASELINE (absolute canvas y) — an INDEPENDENT witness of
+    /// where the glyphs sit, so the y-agreement law is not circular: the caret
+    /// centre must sit a sane, constant offset above this, not a half-beat high.
+    pub query_baseline: f32,
     /// Candidate-row index → the PRIMARY name's absolute glyph TOP.
     pub primary: std::collections::BTreeMap<usize, f32>,
     /// Candidate-row index → the SECONDARY label's absolute glyph TOP.
@@ -458,17 +477,32 @@ impl TextPipeline {
             self.overlay_selected.saturating_sub(geom.top_idx)
         };
         let band_top = overlay_row_top(geom.text_top, header_rows, geom.header_gap, sel_disp, lh);
+        // The query line's OWN shaped run — the SAME first run the render path
+        // reads for the caret's y and x. Its `line_height` is inflated by
+        // `header_gap` on the flat pickers; `line_y` is its baseline.
+        let query_run = self.panel_buffer.layout_runs().next();
+        let query_line_height = query_run
+            .as_ref()
+            .map(|r| r.line_height)
+            .unwrap_or_else(|| self.overlay_lh());
+        let query_line_top = query_run
+            .as_ref()
+            .map(|r| geom.text_top + r.line_top)
+            .unwrap_or(geom.text_top);
+        let query_baseline = query_run
+            .as_ref()
+            .map(|r| geom.text_top + r.line_y)
+            .unwrap_or(geom.text_top);
         OverlayYProbe {
             lh,
             band_top,
             sel_disp,
-            caret_center: overlay_query_center(geom.text_top, lh),
-            query_line_top: self
-                .panel_buffer
-                .layout_runs()
-                .next()
-                .map(|r| geom.text_top + r.line_top)
-                .unwrap_or(geom.text_top),
+            // Mirror the render path EXACTLY: the caret centres on the query
+            // line's real shaped height, not the bare `lh`.
+            caret_center: overlay_query_center(geom.text_top, query_line_height),
+            query_line_top,
+            query_line_height,
+            query_baseline,
             primary,
             secondary,
         }
@@ -1178,8 +1212,27 @@ impl TextPipeline {
             self.panel_card.set_corner(0.0);
             self.panel_card
                 .set_color(theme::overlay_bars_room().rgba_bytes());
-            self.panel_card
-                .prepare(device, queue, width, height, &[[0.0, 0.0, width as f32, height as f32]]);
+            // BLEED the room plane past ALL FOUR canvas edges. The panel quad
+            // pipeline feathers a ~1px antialiased edge (`selection.wgsl`'s
+            // `smoothstep(-1, 1, d)`), so a plane sized flush to `[0, 0, w, h]`
+            // left the FIRST pixel row (centre 0.5px inside the top edge) only
+            // ~84% covered — the calm ground showed a 1px LIGHTER seam along
+            // y = 0 (the designer's first-scanline nit). Growing the rect
+            // `ROOM_BLEED` px on every side pushes the whole feather off-screen,
+            // so every on-canvas pixel sits fully inside the plane (`d < -1`).
+            const ROOM_BLEED: f32 = 2.0;
+            self.panel_card.prepare(
+                device,
+                queue,
+                width,
+                height,
+                &[[
+                    -ROOM_BLEED,
+                    -ROOM_BLEED,
+                    width as f32 + 2.0 * ROOM_BLEED,
+                    height as f32 + 2.0 * ROOM_BLEED,
+                ]],
+            );
             self.panel_shadow.prepare(device, queue, width, height, &[]);
             self.panel_border.prepare(device, queue, width, height, &[]);
         } else {
@@ -1415,11 +1468,26 @@ impl TextPipeline {
         // height, centered on the query line's own (UI-height) band.
         let caret_h = m.caret_h * 0.8 * OVERLAY_UI_SCALE;
         let caret_cx = caret_x + m.caret_w * 0.5;
-        // The caret rides the QUERY line through the shared owner (never its own
-        // y math): the query sits at `text_top`, above the header gap, so the
-        // caret takes no candidate-row shift — it stays on the query baseline in
-        // both the flat and faceted pickers.
-        let caret_cy = overlay_query_center(geom.text_top, self.overlay_lh());
+        // The caret rides the QUERY line through the SAME layout the query TEXT
+        // does — its first shaped run's own `line_height`, NOT the bare
+        // `overlay_lh()`. The FLAT pickers inflate the query line's height by
+        // `header_gap` to open the beat before the candidates (`shape_overlay_names`),
+        // and cosmic-text HALF-LEADS the glyphs — it centres them in that taller
+        // line rather than pinning them to the top. So the query text drops by
+        // `header_gap * 0.5`; a caret pinned to `overlay_lh() * 0.5` floated a full
+        // half-beat ABOVE it (the full-bleed caret bug — visible on `Bars`, where
+        // no card frames the mismatch, and present-but-masked on `Pane`). Reading
+        // the run's real `line_height` reproduces the known-good faceted offset
+        // (the caret centre lands a constant ~1/3-row above the baseline) in BOTH
+        // paths, since the faceted query line is NOT inflated (its beat rides the
+        // strip). Fallback to `overlay_lh()` only if shaping yielded no run.
+        let query_line_height = self
+            .panel_buffer
+            .layout_runs()
+            .next()
+            .map(|r| r.line_height)
+            .unwrap_or_else(|| self.overlay_lh());
+        let caret_cy = overlay_query_center(geom.text_top, query_line_height);
         self.panel_caret.prepare(
             queue,
             width,

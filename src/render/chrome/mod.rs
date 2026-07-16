@@ -445,14 +445,18 @@ pub(super) fn overlay_secondary_top(text_top: f32, header_gap: f32) -> f32 {
 }
 
 /// The device-px vertical CENTER of the overlay QUERY (input) line — the row the
-/// amber caret and the query glyphs share. The query sits at the card's inner
-/// text origin (`text_top`), ABOVE the header gap, so it never takes the
-/// candidate-row shift; centering the caret here keeps it on the query line in
-/// both the flat pickers (whose one header line is height-inflated to carry the
-/// gap, its glyphs top-aligned) and the faceted pickers (whose gap rides the
-/// lens strip, the query line left plain). ONE owner, read by
-/// [`TextPipeline::overlay_place_caret`] — the caret can never drift from the
-/// query line's own y again.
+/// amber caret and the query glyphs share. `line_height` is the query line's
+/// ACTUAL shaped height (its first layout run's `line_height`), NOT the bare
+/// [`TextPipeline::overlay_lh`]: the FLAT pickers inflate the query line by
+/// `header_gap` to open the beat before the candidates, and cosmic-text
+/// HALF-LEADS the glyphs (centres them in that taller line), so the query text
+/// sits `header_gap * 0.5` LOWER than the top. Centering the caret on the same
+/// inflated height keeps it on the glyphs; passing the un-inflated `overlay_lh()`
+/// floated the caret a half-beat ABOVE the text (the full-bleed caret bug). The
+/// faceted pickers leave the query line plain (their beat rides the lens strip),
+/// so their run height already equals `overlay_lh()` — byte-identical there. ONE
+/// owner, read by [`TextPipeline::overlay_place_caret`] and the y-agreement
+/// probe, so the caret can never compute its own y and drift from the text.
 pub(super) fn overlay_query_center(text_top: f32, line_height: f32) -> f32 {
     text_top + line_height * 0.5
 }

@@ -1,12 +1,31 @@
 //! PER-ITEM LIST SURFACES round — the law suite for the three INERT-by-default
 //! capabilities (the "Persona list"): `ListStyle` (Pane | Bars), the
 //! RIGHT-ANCHOR MIRROR (`CardAnchor::TopRight`, a first-class anchor value),
-//! and `FacetStyle` (Text | Band). Every capability lands byte-identical
-//! on every world (proven pixel-for-pixel against the main base in the round's
-//! CLI sweep + the inert instance-count law here); the divergent rendering is
-//! reachable only through the `AWL_*_FORCE` probes / the test overrides, and is
-//! proven to be a PERCEPTIBLE, findable change over real pixels (the Wagtail
-//! invisible-row lesson — assert the OUTCOME, not the mechanism).
+//! and `FacetStyle` (Text | Band). Each capability's DEFAULT arm is inert: the
+//! divergent rendering is reachable only through the `AWL_*_FORCE` probes / the
+//! test overrides, and is proven to be a PERCEPTIBLE, findable change over real
+//! pixels (the Wagtail invisible-row lesson — assert the OUTCOME, not the
+//! mechanism).
+//!
+//! THE INERT GUARANTEE — re-scoped (2026-07-16). The gate is NO LONGER
+//! "byte-identical to the `main` base": this refit round ships ONE deliberate
+//! visual change — the QUERY-INPUT BEAT widened from `0.72` to `1.0` of a row
+//! (`OVERLAY_QUERY_BEAT`, a user-directed taste dial), so EVERY summoned
+//! picker's query line and everything below it moves down a fraction vs `main`
+//! by design. Byte-identity-vs-`main` is therefore impossible for any
+//! query-line surface and must not be claimed. What the inert guarantee DOES
+//! assert, two ways:
+//!   1. SELF-CONSISTENCY (`list_and_facet_probe_off_matches_world_default`):
+//!      forcing a probe to its OFF value (`AWL_OVERLAY_LIST_FORCE=pane` /
+//!      `AWL_FACET_STYLE_FORCE=text`) renders BYTE-IDENTICAL to the world's own
+//!      default with NO probe set — the probe's off arm perturbs nothing IN
+//!      THIS worktree. (Both sides carry the widened beat equally, so the beat
+//!      is invisible to this comparison.)
+//!   2. THE MODEL-LEVEL INERT LAW
+//!      (`list_and_facet_default_are_inert_no_bars_no_chips_no_gap`): the
+//!      default draws ZERO bar surfaces and opens ZERO row gap.
+//! Together these pin "the Persona capabilities cost nothing when off" without
+//! the false byte-identity-vs-`main` claim the beat retired.
 
 use super::super::*;
 use super::{headless_dqp, pixeldiff, view};
@@ -212,6 +231,66 @@ fn list_and_facet_default_are_inert_no_bars_no_chips_no_gap() {
     }
 }
 
+/// THE INERT SELF-CONSISTENCY LAW (real pixels) — the re-scoped replacement for
+/// the retired "byte-identical to `main`" gate (see the module doc). Forcing a
+/// probe to its OFF value must render BYTE-IDENTICAL to the world's own default
+/// with NO probe set, IN THIS WORKTREE — so the probe's off arm is proven to
+/// perturb nothing without any claim about `main` (which the widened query beat
+/// legitimately diverges from). Both sides carry the same beat, so it cancels.
+#[test]
+fn list_and_facet_probe_off_matches_world_default() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping list_and_facet_probe_off_matches_world_default: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    // A default (Pane/Text) world — the inert arm this round preserves.
+    theme::set_active_by_name("Currawong").unwrap();
+    p.sync_theme();
+
+    for faceted in [false, true] {
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_title = "themes";
+        v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
+        v.overlay_selected = 3;
+        if faceted {
+            v.overlay_lens = vec![("All".into(), true), ("File".into(), false)];
+        }
+
+        let frame = |p: &mut TextPipeline,
+                     list: Option<theme::ListStyle>,
+                     facet: Option<theme::FacetStyle>| {
+            set_list_style_test_override(list);
+            set_facet_style_test_override(facet);
+            p.set_view(&v);
+            p.prepare(&device, &queue, w, h).unwrap();
+            pixeldiff::render_frame(p, &device, &queue, w, h)
+        };
+
+        // World DEFAULT (no probe) vs probe FORCED to its OFF value.
+        let default_arm = frame(&mut p, None, None);
+        let probe_off = frame(
+            &mut p,
+            Some(theme::ListStyle::Pane),
+            Some(theme::FacetStyle::Text),
+        );
+        set_list_style_test_override(None);
+        set_facet_style_test_override(None);
+
+        pixeldiff::assert_identical(
+            &default_arm,
+            &probe_off,
+            w as i64,
+            h as i64,
+            pixeldiff::Region::canvas(w as i64, h as i64),
+            &format!("Pane/Text probe-off == world default (faceted={faceted})"),
+        );
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 // --- Bars DROP THE PANE; Pane KEEPS it (the card-fill law, gated by style) ----
 
 /// THE PANE-DROP LAW (the user's refit: "with the bars, there shouldn't be a
@@ -403,16 +482,168 @@ fn bars_draw_a_findable_surface_per_row() {
     );
 }
 
-// --- FacetStyle: Band visibly differs from the Text baseline -----------------
+// --- Bars: the query caret sits ON the query text (real pixels) --------------
 
-/// The `Band` skin (the designer pixel-pass winner over the killed `Chips`)
-/// must visibly change the faceted strip vs the `Text` baseline — the active
-/// lens gains a value BAND pill, so the strip row reads perceptibly different.
+/// FULL-BLEED CARET LAW (real pixels): under `Bars` the flat picker draws no
+/// card, and the beat inflates the query line's height by `header_gap` — where
+/// cosmic-text half-leads the glyphs DOWN. A caret pinned to `overlay_lh() *
+/// 0.5` floated a full half-beat ABOVE the text (the designer's full-bleed
+/// caret bug: caret y 73-91 while the glyphs sat at 94-108, ZERO overlap). This
+/// asserts the amber caret's pixel band VERTICALLY OVERLAPS the query glyphs'
+/// pixel band — the OUTCOME (visible alignment), not the geometry the fix and
+/// the probe both compute.
 #[test]
-fn facet_band_differs_from_text_in_the_strip() {
+fn bars_query_caret_overlaps_the_query_text() {
     let (w, h) = (1200u32, 800u32);
     let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
-        eprintln!("skipping facet_band_differs: no wgpu adapter");
+        eprintln!("skipping bars_query_caret_overlaps_the_query_text: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    // Kingfisher: an amber-accent, coloured-ground world where the bug was shot.
+    theme::set_active_by_name("Kingfisher").unwrap();
+    p.sync_theme();
+    crate::render::set_list_style_test_override(Some(theme::ListStyle::Bars {
+        radius: 6.0,
+        gap: 8.0,
+        grow_px: 24.0,
+    }));
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "themes";
+    v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
+    v.overlay_selected = 1;
+    // FLAT path (no lens) — the real theme picker with faceting off, where the
+    // query line itself carries the beat inflation.
+    p.set_view(&v);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let px = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    // The caret sits at the END of "themes › " — scan a tall column strip there
+    // for AMBER pixels (high R, mid G, low B) and for the query TEXT (muted grey,
+    // clearly above the dark room ground) to its LEFT.
+    let idx = |x: i64, y: i64| px[(y * w as i64 + x) as usize];
+    let is_amber = |q: [u8; 4]| q[0] > 180 && q[1] > 100 && q[1] < 200 && q[2] < 110;
+    let (mut a_y0, mut a_y1) = (i64::MAX, i64::MIN);
+    for y in 40..140 {
+        for x in 110..175 {
+            if is_amber(idx(x, y)) {
+                a_y0 = a_y0.min(y);
+                a_y1 = a_y1.max(y);
+            }
+        }
+    }
+    assert!(a_y0 <= a_y1, "amber query caret not found near the query line");
+    // The query GLYPH band: pixels in the title text x-range (40..108) that are
+    // notably brighter than the dark room ground.
+    let ground = idx(700, 60); // empty room, above the first bar
+    let bright = |q: [u8; 4]| {
+        let d = |c: usize| (q[c] as i64 - ground[c] as i64).max(0);
+        d(0) + d(1) + d(2) > 45
+    };
+    let (mut t_y0, mut t_y1) = (i64::MAX, i64::MIN);
+    for y in 40..140 {
+        for x in 40..108 {
+            if bright(idx(x, y)) {
+                t_y0 = t_y0.min(y);
+                t_y1 = t_y1.max(y);
+            }
+        }
+    }
+    assert!(t_y0 <= t_y1, "query text glyphs not found on the query line");
+
+    let a_mid = (a_y0 + a_y1) / 2;
+    // OUTCOME: the caret's vertical centre must land INSIDE the query glyphs'
+    // own vertical band (a small margin for the caret extending a hair past the
+    // x-height top/baseline). The OLD bug put `a_mid` a whole line above `t_y0`.
+    assert!(
+        a_mid >= t_y0 - 3 && a_mid <= t_y1 + 3,
+        "full-bleed caret bug: amber caret band [{a_y0},{a_y1}] (mid {a_mid}) must sit \
+         ON the query text band [{t_y0},{t_y1}], not float above it"
+    );
+    // And a stronger check that the two bands genuinely OVERLAP, not merely touch.
+    let overlap = a_y1.min(t_y1) - a_y0.max(t_y0);
+    assert!(
+        overlap > 0,
+        "caret band [{a_y0},{a_y1}] and text band [{t_y0},{t_y1}] must overlap"
+    );
+
+    crate::render::set_list_style_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// FIRST-SCANLINE LAW (real pixels): the `Bars` full-canvas ROOM plane is drawn
+/// through the panel quad pipeline, which feathers a ~1px antialiased edge. Sized
+/// flush to `[0, 0, w, h]` it left the FIRST pixel row only ~84% covered — a 1px
+/// LIGHTER seam along y = 0 (the designer's first-scanline nit). The room now
+/// bleeds past every canvas edge, so row 0 must be BYTE-IDENTICAL to the interior
+/// room ground.
+#[test]
+fn bars_room_plane_covers_the_first_scanline() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping bars_room_plane_covers_the_first_scanline: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    theme::set_active_by_name("Kingfisher").unwrap();
+    p.sync_theme();
+    crate::render::set_list_style_test_override(Some(theme::ListStyle::Bars {
+        radius: 6.0,
+        gap: 8.0,
+        grow_px: 24.0,
+    }));
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "themes";
+    v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
+    v.overlay_selected = 1;
+    p.set_view(&v);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let px = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    // Sample a stretch of empty room (to the RIGHT of the bars, above/away from any
+    // glyphs): row 0 must match row 6 exactly, channel for channel.
+    let idx = |x: i64, y: i64| px[(y * w as i64 + x) as usize];
+    let interior = idx(800, 6);
+    let mut worst = 0i64;
+    for x in (700..1100).step_by(7) {
+        let top = idx(x, 0);
+        for c in 0..4 {
+            worst = worst.max((top[c] as i64 - interior[c] as i64).abs());
+        }
+    }
+    assert!(
+        worst <= 1,
+        "first-scanline nit: row 0 differs from the interior room ground by {worst} \
+         (the room plane must bleed past y=0, leaving no lighter seam)"
+    );
+
+    crate::render::set_list_style_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+// --- FacetStyle: Band visibly differs from the Text baseline -----------------
+
+/// THE FACET-ARM-DRAWS LAW (instance-count + pixel delta). Born from the
+/// facet-chips GALLERY TRAP (fixed @ e56d689): the retired `Chips` skin parsed
+/// to `None` and SILENTLY rendered the `Text` default, so `kingfisher-facet-
+/// chips.png` came out byte-identical to `-text` — a shot named for a variant
+/// that never fired. `Chips` is dropped for cause (the designer pixel-pass chose
+/// `Band`); this law pins the SURVIVING facet arm honestly, both ways the trap
+/// asked for:
+///   - INSTANCE COUNT: the active-lens mark pipeline (`overlay_lens_underline`)
+///     draws a NON-ZERO instance under BOTH skins — the facet arm is never a
+///     silent no-op (a transparent/empty mark is exactly what shipped invisible
+///     in the Wagtail bug).
+///   - PIXEL DELTA: `Band` renders PERCEPTIBLY DIFFERENT from `Text` in the strip
+///     row (the value pill vs the hairline) — so the two are a real two-way, not
+///     a masquerading duplicate.
+#[test]
+fn facet_band_draws_and_differs_from_text_in_the_strip() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping facet_band_draws_and_differs: no wgpu adapter");
         return;
     };
     let _g = crate::testlock::serial();
@@ -432,10 +663,17 @@ fn facet_band_differs_from_text_in_the_strip() {
     };
 
     let text = frame(&mut p, Some(theme::FacetStyle::Text));
+    let text_marks = p.overlay_lens_underline.instance_count();
     let band = frame(&mut p, Some(theme::FacetStyle::Band));
+    let band_marks = p.overlay_lens_underline.instance_count();
     set_facet_style_test_override(None);
 
-    // The strip row (display line 1) must visibly change under the Band skin.
+    // INSTANCE COUNT: the active-lens mark is actually painted in BOTH skins —
+    // never the silent empty draw the chips shot masqueraded as.
+    assert!(text_marks > 0, "Text facet arm must draw the active-lens hairline (got 0)");
+    assert!(band_marks > 0, "Band facet arm must draw the active-lens pill (got 0)");
+
+    // PIXEL DELTA: the strip row (display line 1) must visibly change under Band.
     let rect = p.overlay_card_rect().expect("overlay card rect");
     let (card_x, card_y, cw) = (rect[0], rect[1], rect[2]);
     let text_top = card_y + 12.0;

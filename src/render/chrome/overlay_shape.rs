@@ -538,8 +538,12 @@ impl TextPipeline {
         // space, no drawn rule). The candidate rows keep their normal height and
         // the selected-row band folds the same gap in through `overlay_row_top`,
         // so the band still lands on each row. `hk` = the header spans' attrs
-        // (taller line only when a gap is set); the query text/caret keep the top
-        // of the line, so the amber caret (centered on the UI row) stays aligned.
+        // (taller line only when a gap is set). NOTE cosmic-text HALF-LEADS the
+        // glyphs into this taller line — the query text sits `header_gap * 0.5`
+        // BELOW the top, NOT pinned to it — so the amber caret centres on this
+        // line's REAL shaped height (`overlay_place_caret` reads the run's own
+        // `line_height`), never the bare `overlay_lh()`, or it floats a half-beat
+        // above the text (the full-bleed caret bug).
         let name_fs = self.overlay_metrics().font_size;
         let header_lh = self.overlay_lh() + geom.header_gap;
         let hk = |c| {
