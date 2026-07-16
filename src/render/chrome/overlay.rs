@@ -19,6 +19,98 @@ use super::*;
 /// rendering (the document, gutter, HUD, ornaments) is untouched.
 pub(in crate::render) const OVERLAY_UI_SCALE: f32 = 0.85;
 
+/// EDGE-INSET token (device px): the calm margin the summoned card holds off the
+/// window's edges when TOP-LEFT anchored, echoing the page column's own
+/// left-margin rhythm so the card reads as *placed*, not stuck in the corner
+/// (composition round item 2 — the old flush 12px hug was too tight for the
+/// top-left anchor to read as deliberate). Collapses toward
+/// [`CARD_EDGE_INSET_FLOOR`] as the window narrows, then the card re-centers and
+/// fills (item 7) — see [`overlay_card_box_policy`].
+pub(in crate::render) const CARD_EDGE_INSET: f32 = 28.0;
+/// The smallest edge pad the card keeps as the window tightens (the narrow +
+/// narrowest regimes of [`overlay_card_box_policy`]).
+pub(in crate::render) const CARD_EDGE_INSET_FLOOR: f32 = 10.0;
+/// The FLAT card's tightest WIDTH cap (device px) — the ONE width owner the
+/// composition round tightened (item 3; the card used to sprawl to half the
+/// window). A single dial the gallery A/Bs.
+pub(in crate::render) const CARD_MAX_W: f32 = 520.0;
+/// The FACETED card's width cap — a touch wider than the flat cap so the whole
+/// lens strip (Time … All) never clips, still tighter than the old 0.58×window.
+pub(in crate::render) const CARD_MAX_W_FACETED: f32 = 600.0;
+
+/// The QUERY-INPUT BEAT (item 4), as a fraction of the overlay row height — the
+/// clear breath between the input line and the first result row. A single dial
+/// the gallery A/Bs; see [`TextPipeline::overlay_header_gap`].
+const OVERLAY_QUERY_BEAT: f32 = 0.72;
+
+/// The foot HINT row height (item 5), as a fraction of the overlay row height —
+/// a compact footer that hugs the card's bottom edge instead of floating a full
+/// row high. A single dial the gallery A/Bs; see [`TextPipeline::overlay_hint_h`].
+const OVERLAY_HINT_ROW: f32 = 0.62;
+
+/// PURE horizontal-placement policy for the summoned card: given the window
+/// width `ww`, the card's WIDE desired width, return its `(left, width)`.
+///
+/// THREE REGIMES (the `adaptive_column` idiom, applied to the takeover card):
+/// - WIDE — hold the desired width; sit one full [`CARD_EDGE_INSET`] in from the
+///   anchored edge (item 2's page-margin rhythm).
+/// - NARROW — the edge inset COLLAPSES toward [`CARD_EDGE_INSET_FLOOR`] so the
+///   card keeps its width as the window tightens (it slides toward the edge
+///   before it shrinks).
+/// - NARROWEST — once even the floor can't seat the width, the card fills the
+///   window minus a floor pad each side and RE-CENTERS (item 7). By construction
+///   `left >= 0` and `left + width <= ww - floor` in every regime, so a card is
+///   always fully on-canvas (the width-sweep law pins this).
+pub(in crate::render) fn overlay_card_box_policy(
+    anchor: theme::CardAnchor,
+    ww: f32,
+    desired_w: f32,
+) -> (f32, f32) {
+    let floor = CARD_EDGE_INSET_FLOOR;
+    let full = CARD_EDGE_INSET;
+    // Never wider than the window minus a floor pad each side (the fill ceiling).
+    let cw = desired_w.min((ww - 2.0 * floor).max(0.0));
+    let free = (ww - cw).max(0.0);
+    // The anchored-edge inset never leaves less than `floor` on the far side.
+    let anchored_max = (ww - floor - cw).max(floor);
+    let left = match anchor {
+        theme::CardAnchor::TopCenter => free * 0.5,
+        // Full inset when there's room, collapsing to the floor as the window
+        // tightens; re-centers (left == floor, symmetric) in the fill regime.
+        theme::CardAnchor::TopLeft => full.min(anchored_max).max(floor).min(free),
+        // The statement dial sweeps the RIGHT inset from full (x_frac 1.0) to the
+        // left edge (0.0 == TopLeft), through the SAME collapse clamp.
+        theme::CardAnchor::Inset { x_frac } => {
+            let span = (ww - cw - 2.0 * full).max(0.0);
+            (full + x_frac.clamp(0.0, 1.0) * span)
+                .min(anchored_max)
+                .max(floor)
+                .min(free)
+        }
+    };
+    (left, cw)
+}
+
+/// TEST-ONLY snapshot of every summoned-overlay row's Y, per element — the fixture
+/// the y-agreement law reads (see [`TextPipeline::overlay_row_y_probe`]).
+#[cfg(test)]
+pub(in crate::render) struct OverlayYProbe {
+    /// The overlay UI row height (device px).
+    pub lh: f32,
+    /// The selected row's band TOP, from the ONE forward owner `overlay_row_top`.
+    pub band_top: f32,
+    /// The selected row's 0-based DISPLAY index (band lands here).
+    pub sel_disp: usize,
+    /// The amber caret's query-line center, from `overlay_query_center`.
+    pub caret_center: f32,
+    /// The query line's own glyph TOP (absolute canvas y).
+    pub query_line_top: f32,
+    /// Candidate-row index → the PRIMARY name's absolute glyph TOP.
+    pub primary: std::collections::BTreeMap<usize, f32>,
+    /// Candidate-row index → the SECONDARY label's absolute glyph TOP.
+    pub secondary: std::collections::BTreeMap<usize, f32>,
+}
+
 impl TextPipeline {
     /// The ONE metric every overlay ROW shapes + measures at: the reading body stepped
     /// down by [`OVERLAY_UI_SCALE`]. [`Self::overlay_remetric`] sets the shared buffers
@@ -36,45 +128,58 @@ impl TextPipeline {
         self.metrics.line_height * OVERLAY_UI_SCALE
     }
 
-    /// THE ONE OWNER of the summoned takeover card's LEFT edge — the
-    /// PALETTE-COMPOSITION round's per-world anchor dial ([`theme::CardAnchor`],
-    /// resolved through [`crate::render::effective_card_anchor`] so the gallery
-    /// probe can A/B it). `TopLeft` (the global default this round) pins the card
-    /// one `margin` in from the canvas edge (more anchored, right side opened for
-    /// the ghost placard); `TopCenter` is the historical centered placement.
-    /// Both flat [`Self::overlay_geometry`] and faceted
-    /// [`TextPipeline::theme_overlay_geometry`] read this, so their card X can
-    /// never disagree; the width, row geometry, and the placard's own
-    /// canvas-corner anchor are untouched. The contextual spell popup does NOT
-    /// call this (it anchors at its word).
-    pub(in crate::render) fn overlay_card_x(&self, width: u32, card_w: f32, margin: f32) -> f32 {
-        match crate::render::effective_card_anchor() {
-            theme::CardAnchor::TopLeft => margin,
-            theme::CardAnchor::TopCenter => (width as f32 - card_w) * 0.5,
-            // FIRETAIL-MAXIMALIST-SHOWCASE round's statement dial: the left
-            // edge sits `x_frac` of the free span in from the left margin —
-            // 0.0 IS TopLeft, 1.0 pins the card's right edge one margin in,
-            // 0.5 IS TopCenter (see `theme::CardAnchor::Inset`'s doc). The
-            // free span floors at 0 (a card as wide as the window clamps to
-            // the margin rather than reporting a negative origin).
-            theme::CardAnchor::Inset { x_frac } => {
-                let free = (width as f32 - card_w - 2.0 * margin).max(0.0);
-                margin + x_frac.clamp(0.0, 1.0) * free
-            }
-        }
+    /// THE ONE OWNER of the summoned takeover card's horizontal BOX — its
+    /// `(left, width)`. Composes three things so the flat [`Self::overlay_geometry`]
+    /// and faceted [`TextPipeline::theme_overlay_geometry`] can never disagree
+    /// about where the card sits OR how wide it is:
+    /// - the per-world ANCHOR ([`theme::CardAnchor`], via
+    ///   [`crate::render::effective_card_anchor`] so the gallery probe A/Bs it);
+    /// - the EDGE-INSET rhythm ([`CARD_EDGE_INSET`], item 2 — a real left margin
+    ///   echoing the page column, not the old flush corner hug);
+    /// - the NARROW-WINDOW fallback (item 7 — the inset collapses toward
+    ///   [`CARD_EDGE_INSET_FLOOR`], then the card re-centers and fills), all in
+    ///   the pure policy [`overlay_card_box_policy`].
+    ///
+    /// The caller passes the card's WIDE desired width (its own `CARD_MAX_W*`
+    /// cap, item 3); the box narrows it only in the fill regime. The placard's
+    /// own canvas-corner anchor is untouched; the contextual spell popup does
+    /// NOT call this (it anchors at its word).
+    pub(in crate::render) fn overlay_card_box(&self, width: u32, desired_w: f32) -> (f32, f32) {
+        overlay_card_box_policy(crate::render::effective_card_anchor(), width as f32, desired_w)
     }
 
-    /// THE HEADER-GAP token (device px): the calm slab of negative space the
-    /// PALETTE-COMPOSITION round inserts after the header rows (query + optional
-    /// lens strip) and before the candidate list, on the palette AND every
-    /// faceted picker uniformly (the divider is negative space, never a drawn
-    /// rule). Sized off the overlay row height so it scales with zoom/DPI like
-    /// every other overlay metric — ~0.55 of a row reads as a clear beat without
-    /// re-opening the "fat lip" of a whole blank row. ONE tunable; both geometry
-    /// owners read it, and the shaper inflates the last header line by exactly
-    /// this. The contextual spell popup passes `0.0` (no header to divide from).
+    /// THE QUERY-INPUT BEAT token (device px): the calm slab of negative space
+    /// inserted after the header rows (query + optional lens strip) and before
+    /// the candidate list, on the palette AND every faceted picker uniformly (the
+    /// divider is negative space, never a drawn rule). Sized off the overlay row
+    /// height so it scales with zoom/DPI like every other overlay metric.
+    ///
+    /// COMPOSITION ROUND (item 4) widened it from ~0.55 to [`OVERLAY_QUERY_BEAT`]
+    /// of a row — a clearer beat between the input line and the first result,
+    /// still short of the "fat lip" of a whole blank row. It is STRUCTURAL, not a
+    /// leading newline (the f2cb656 tripwire): the shaper inflates the last
+    /// header line's REAL glyph metrics by exactly this, and the band, primary
+    /// name, secondary chord, hit-test, and caret all fold it in through the ONE
+    /// y-owner family ([`overlay_row_top`] / [`overlay_secondary_top`]) — so text
+    /// and band move together, never a half-row split. Both geometry owners read
+    /// this; the contextual spell popup passes `0.0` (no header to divide from).
+    /// LIVE-ONLY taste: whether the widened beat reads right needs a human eye.
     pub(in crate::render) fn overlay_header_gap(&self) -> f32 {
-        (self.overlay_lh() * 0.55).round()
+        (self.overlay_lh() * OVERLAY_QUERY_BEAT).round()
+    }
+
+    /// THE HINT-ROW HEIGHT (device px, item 5) — the foot hint reads as the
+    /// card's own bottom EDGE, not a floating orphan row. The user's report ("i
+    /// do see a lip, and its really ugly") was the full-height `lh` row the hint
+    /// used to occupy: a `lh`-tall line with a small glyph at its top left a fat
+    /// empty band below it before the pad, so the hint hovered above the card's
+    /// bottom. This SHORTER line ([`OVERLAY_HINT_ROW`] of a row) hugs the hint
+    /// tight under the last result; the shaper draws it at the LABEL rung, FAINT,
+    /// and BOTH geometry owners shrink the card by `lh - overlay_hint_h()` per
+    /// hint row so the card fits the tighter footer exactly (the
+    /// card-fits-content law follows). Spell popup has no hint (`hint_rows == 0`).
+    pub(in crate::render) fn overlay_hint_h(&self) -> f32 {
+        (self.overlay_lh() * OVERLAY_HINT_ROW).round()
     }
 
     /// Shape + upload the SUMMONED navigation overlay for this frame: a tall
@@ -234,6 +339,70 @@ impl TextPipeline {
             .sum()
     }
 
+    /// TEST HOOK — the Y-AGREEMENT probe: for the currently-prepared overlay, the
+    /// absolute canvas Y-TOP of every candidate row's PRIMARY glyphs
+    /// (`panel_buffer`) and SECONDARY label (`panel_bind_buffer`), keyed by the
+    /// candidate row index, alongside the band top [`overlay_row_top`] draws and
+    /// the caret's query-line center. The `primary`/`secondary` maps let the law
+    /// assert that — per row — the name, the chord column, and the selected-row
+    /// band all share ONE y (no element computes its own row y): the exact
+    /// invariant the composition-round gap broke for the right column. Reads the
+    /// SAME `overlay_geometry` + upload owners (`overlay_secondary_top`) the
+    /// render path uses, so it can never claim an alignment the pixels don't show.
+    #[cfg(test)]
+    pub(in crate::render) fn overlay_row_y_probe(&self) -> OverlayYProbe {
+        use std::collections::BTreeMap;
+        let geom = self.overlay_geometry(self.window_w as u32);
+        let lh = self.overlay_lh();
+        let header_rows = geom.header_rows;
+        let last = header_rows + if geom.theme { geom.plan.len() } else { geom.visible };
+        // Primary rows: absolute top = card text origin + the run's own line_top
+        // (the header-line inflation that carries the gap is baked INTO these
+        // line_tops, so a primary row already sits on the band).
+        let mut primary = BTreeMap::new();
+        for run in self.panel_buffer.layout_runs() {
+            let li = run.line_i;
+            if li >= header_rows && li < last {
+                primary.insert(li - header_rows, geom.text_top + run.line_top);
+            }
+        }
+        // Secondary labels: absolute top = the shared upload owner
+        // (`overlay_secondary_top`, text_top + the gap) + the run's line_top (the
+        // right buffer is uniform-lh, its leading empties supply header_rows*lh).
+        let sec_top = overlay_secondary_top(geom.text_top, geom.header_gap);
+        let mut secondary = BTreeMap::new();
+        for run in self.panel_bind_buffer.layout_runs() {
+            let li = run.line_i;
+            if li >= header_rows && li < last {
+                secondary.insert(li - header_rows, sec_top + run.line_top);
+            }
+        }
+        // The selected row's band top, from the ONE forward owner.
+        let sel_disp = if geom.theme {
+            geom.plan
+                .iter()
+                .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
+                .unwrap_or(0)
+        } else {
+            self.overlay_selected.saturating_sub(geom.top_idx)
+        };
+        let band_top = overlay_row_top(geom.text_top, header_rows, geom.header_gap, sel_disp, lh);
+        OverlayYProbe {
+            lh,
+            band_top,
+            sel_disp,
+            caret_center: overlay_query_center(geom.text_top, lh),
+            query_line_top: self
+                .panel_buffer
+                .layout_runs()
+                .next()
+                .map(|r| geom.text_top + r.line_top)
+                .unwrap_or(geom.text_top),
+            primary,
+            secondary,
+        }
+    }
+
     /// Re-metric BOTH shared overlay buffers to the current zoom so their glyph
     /// line-height matches the highlight/caret rects (which use m.line_height).
     /// Without this the buffer keeps its zoom-1.0 metrics and the selection
@@ -333,20 +502,20 @@ impl TextPipeline {
         let header_gap = self.overlay_header_gap();
         // query + rows/empty + hint + the keybindings tips footer (0 unless summoned).
         let total_rows = header_rows + visible + empty_rows + hint_rows + footer_rows;
-        // RESPONSIVE CARD: prefer half the window, floored at a readable width, and
-        // never wider than the window minus a calm margin — so a NARROW window gets
-        // a card spanning nearly its full width (mirroring the responsive page
-        // column) instead of a fixed-width card whose text column starves. At the
-        // default 1200 canvas this is the same 600 as ever (wide captures are
-        // byte-identical); the floor only lifts sub-1120 windows.
-        let card_w = (width as f32 * 0.5).max(560.0).min(width as f32 - 2.0 * margin);
+        // RESPONSIVE CARD via the ONE horizontal-box owner: the tightened flat
+        // width cap ([`CARD_MAX_W`], item 3) placed with the edge-inset rhythm
+        // (item 2) + the narrow-window collapse/fill fallback (item 7). The box
+        // narrows the width only in the fill regime, so the text column can
+        // never starve.
+        let (card_x, card_w) = self.overlay_card_box(width, CARD_MAX_W);
         let text_w = card_w - 2.0 * pad;
         // The header gap adds to the card height alongside the row stack + padding,
-        // so the card still FITS its content exactly (bottom padding == `pad`).
-        let card_h = total_rows as f32 * self.overlay_lh() + header_gap + 2.0 * pad;
-        // Horizontal anchor via the ONE owner (top-left default this round, or
-        // centered); vertical anchor near the top third (summoned, transient).
-        let card_x = self.overlay_card_x(width, card_w, margin);
+        // so the card still FITS its content exactly (bottom padding == `pad`). The
+        // foot hint (item 5) rides a SHORTER line, so reclaim `lh - hint_h` per
+        // hint row — the card hugs the tighter footer instead of the old lip.
+        let card_h = total_rows as f32 * self.overlay_lh() + header_gap + 2.0 * pad
+            - hint_rows as f32 * (self.overlay_lh() - self.overlay_hint_h());
+        // vertical anchor near the top third (summoned, transient).
         // `self.menubar_reserve()` (`0.0` unless the WEB/LINUX MENU BAR is shown) —
         // the SAME accessor `doc_top`/the margin Outline/the search panel/the debug
         // panel already fold in, so the palette can never disagree with its siblings
@@ -808,10 +977,16 @@ impl TextPipeline {
             }
         }
         if has_right {
+            // The right column's labels lead with `header_rows` EMPTY lines, so
+            // uploading its buffer at `overlay_secondary_top` (text_top + the
+            // header gap) lands label N on candidate row N — the SAME band
+            // `overlay_row_top` draws. Before this it uploaded flush at
+            // `text_top`, missing the gap the primary + band both fold in, so
+            // every chord rode a half-row high (the composition-round bug).
             areas.push(TextArea {
                 buffer: &self.panel_bind_buffer,
                 left: text_left,
-                top: text_top,
+                top: overlay_secondary_top(text_top, geom.header_gap),
                 scale: 1.0,
                 bounds,
                 default_color: muted,
@@ -995,7 +1170,11 @@ impl TextPipeline {
         // height, centered on the query line's own (UI-height) band.
         let caret_h = m.caret_h * 0.8 * OVERLAY_UI_SCALE;
         let caret_cx = caret_x + m.caret_w * 0.5;
-        let caret_cy = geom.text_top + self.overlay_lh() * 0.5;
+        // The caret rides the QUERY line through the shared owner (never its own
+        // y math): the query sits at `text_top`, above the header gap, so the
+        // caret takes no candidate-row shift — it stays on the query baseline in
+        // both the flat and faceted pickers.
+        let caret_cy = overlay_query_center(geom.text_top, self.overlay_lh());
         self.panel_caret.prepare(
             queue,
             width,

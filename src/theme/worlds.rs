@@ -61,7 +61,10 @@ pub const GUMTREE: Theme = Theme {
     // Curated: shows under Day / Literary / Cool; opts OUT of Register (crowded → Bilby/Saltpan/Undertow keep Refined).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Cool") },
     role_overrides: RoleOverrides::NONE,
-    render_caps: RenderCaps::DEFAULT,
+    // LIGHT-WORLD BORDER (composition round item 6, veto 3 adopted: "border on
+    // light worlds totally works") — the summoned card's soft fill barely reads
+    // off a pale ground, so a crisp rim carries its edge. DATA, no code path.
+    render_caps: RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT },
 };
 
 /// Potoroo — dark den-warm nocturne (raw-sienna caret in a burnt-orange room).
@@ -150,7 +153,9 @@ pub const BILBY: Theme = Theme {
     // Curated: shows under Day / Refined; opts OUT of Voice (Literary crowded) + Temperature (Cool crowded).
     tags: ThemeTags { time: Some("Day"), register: Some("Refined"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
-    render_caps: RenderCaps::DEFAULT,
+    // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries the
+    // card edge off the pale ground. DATA, no code path.
+    render_caps: RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT },
 };
 
 /// Saltpan — light sun-bleached salt flat (cinnamon-clay caret on warm ecru).
@@ -201,7 +206,9 @@ pub const SALTPAN: Theme = Theme {
     // Curated: shows under Dawn / Refined; opts OUT of Voice (Literary crowded) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dawn"), register: Some("Refined"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
-    render_caps: RenderCaps::DEFAULT,
+    // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries the
+    // card edge off the pale ground. DATA, no code path.
+    render_caps: RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT },
 };
 
 /// Quokka — light cheerful reef (teal caret cooling a warm peach page).
@@ -243,7 +250,9 @@ pub const QUOKKA: Theme = Theme {
     // Curated: a headliner on ALL four — Dawn / Everyday / Modern / Warm each read clearly on the friendly peach sans.
     tags: ThemeTags { time: Some("Dawn"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Warm") },
     role_overrides: RoleOverrides::NONE,
-    render_caps: RenderCaps::DEFAULT,
+    // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries the
+    // card edge off the pale ground. DATA, no code path.
+    render_caps: RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT },
 };
 
 /// Undertow — dark deep midnight current (hot indian-lake caret in violet dark).
@@ -675,6 +684,9 @@ pub const GALAH: Theme = Theme {
             scale: 3.0,
             ink: PlacardInk::Ghost,
         },
+        // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries
+        // the card edge off the pale ground.
+        elevation: Elevation::Bordered,
         ..RenderCaps::DEFAULT
     },
 };
@@ -732,6 +744,9 @@ pub const MAGPIE: Theme = Theme {
             scale: 3.0,
             ink: PlacardInk::Ghost,
         },
+        // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries
+        // the card edge off the pale ground.
+        elevation: Elevation::Bordered,
         ..RenderCaps::DEFAULT
     },
 };

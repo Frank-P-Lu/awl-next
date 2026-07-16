@@ -132,11 +132,12 @@ fn inset_anchor_sweeps_from_topleft_through_center_to_right_pinned() {
         i5[0],
         tc[0]
     );
-    // 1.0: right edge = canvas width - margin (12, the overlay margin).
+    // 1.0: right edge = canvas width - the edge inset (CARD_EDGE_INSET, 28, the
+    // composition round's page-margin rhythm — up from the old flush 12).
     let right = i1[0] + i1[2];
     assert!(
-        (right - (1200.0 - 12.0)).abs() < 0.51,
-        "Inset 1.0 pins the card's right edge one margin in (right {right})"
+        (right - (1200.0 - 28.0)).abs() < 0.51,
+        "Inset 1.0 pins the card's right edge one edge-inset in (right {right})"
     );
     // Monotone: the dial genuinely sweeps rightward.
     assert!(i0[0] < i5[0] && i5[0] < i1[0], "x_frac sweeps monotonically right");

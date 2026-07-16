@@ -5,7 +5,167 @@
 //! the spell/replace panels + the rest of the overlay-row contract.
 
 use super::super::*;
-use super::{headless_pipeline, view};
+use super::{headless_dqp, headless_pipeline, view};
+
+/// PURE GEOMETRY LAW (no GPU) — the secondary column and the selected-row band
+/// share ONE y-origin. A right-column buffer is uniform-line-height and leads
+/// with `header_rows` empty lines, so uploading it at
+/// [`chrome::overlay_secondary_top`] must land label N exactly on the band
+/// [`chrome::overlay_row_top`] draws for candidate row N — for EVERY header
+/// count (0 spell, 1 flat/nav, 2 faceted) and EVERY header gap. This is the
+/// invariant the composition-round header gap broke (the right column stayed
+/// flush at `text_top`); no element may compute its own row y again.
+#[test]
+fn overlay_secondary_column_shares_the_band_row_origin() {
+    const TEXT_TOP: f32 = 56.0;
+    const LH: f32 = 27.2;
+    for &header_rows in &[0usize, 1, 2] {
+        for &gap in &[0.0f32, 5.0, 15.0] {
+            let sec_top = chrome::overlay_secondary_top(TEXT_TOP, gap);
+            for r in 0usize..8 {
+                // Label N sits at `sec_top + (header_rows + r) leading lines`.
+                let label_top = sec_top + (header_rows as f32 + r as f32) * LH;
+                let band_top = chrome::overlay_row_top(TEXT_TOP, header_rows, gap, r, LH);
+                assert!(
+                    (label_top - band_top).abs() < 1e-3,
+                    "secondary label row {r} (hdr={header_rows}, gap={gap}) at {label_top} \
+                     must land on the band at {band_top}"
+                );
+            }
+        }
+    }
+}
+
+/// WIDTH-SWEEP LAW (item 7) — the summoned card stays fully on-canvas with a
+/// margin no smaller than the floor at EVERY window width, for every anchor: the
+/// edge inset collapses toward [`chrome::CARD_EDGE_INSET_FLOOR`] as the window
+/// tightens, then the card re-centers and fills. Pure (no GPU) so it always
+/// runs. Samples very-narrow → wide.
+#[test]
+fn overlay_card_box_stays_on_canvas_across_the_width_sweep() {
+    let floor = chrome::CARD_EDGE_INSET_FLOOR;
+    let anchors = [
+        theme::CardAnchor::TopLeft,
+        theme::CardAnchor::TopCenter,
+        theme::CardAnchor::Inset { x_frac: 0.5 },
+        theme::CardAnchor::Inset { x_frac: 1.0 },
+    ];
+    // Widths from a tight editor window up to a big monitor, both card caps.
+    for &desired in &[chrome::CARD_MAX_W, chrome::CARD_MAX_W_FACETED] {
+        for ww in (320u32..=1800).step_by(40) {
+            let ww = ww as f32;
+            for &anchor in &anchors {
+                let (left, w) = chrome::overlay_card_box_policy(anchor, ww, desired);
+                let right = left + w;
+                let ctx = format!("ww={ww} desired={desired} anchor={anchor:?}");
+                assert!(w > 24.0, "{ctx}: card width {w} must leave room for text");
+                assert!(left >= floor - 0.01, "{ctx}: left margin {left} >= floor {floor}");
+                assert!(
+                    right <= ww - floor + 0.01,
+                    "{ctx}: right edge {right} must keep a floor margin inside {ww}"
+                );
+                assert!(w <= desired + 0.01, "{ctx}: never wider than desired {desired}");
+                // FILL REGIME: once the desired width can't seat with floor pads,
+                // the card fills (ww - 2*floor) and re-centers (symmetric margins).
+                if desired > ww - 2.0 * floor {
+                    assert!(
+                        (w - (ww - 2.0 * floor)).abs() < 0.01,
+                        "{ctx}: fill regime card must span the window minus floor pads"
+                    );
+                    let right_margin = ww - right;
+                    assert!(
+                        (left - right_margin).abs() < 1.0,
+                        "{ctx}: fill regime re-centers (left {left} ~ right {right_margin})"
+                    );
+                }
+            }
+        }
+    }
+    // WIDE: the top-left card holds the FULL edge inset (item 2's page rhythm).
+    let (left, _) = chrome::overlay_card_box_policy(theme::CardAnchor::TopLeft, 1200.0, chrome::CARD_MAX_W);
+    assert!(
+        (left - chrome::CARD_EDGE_INSET).abs() < 0.01,
+        "a wide window seats the card one full edge inset ({}) in, got {left}",
+        chrome::CARD_EDGE_INSET
+    );
+}
+
+/// Y-AGREEMENT OUTCOME LAW (Wagtail-lesson: assert what the shaped buffers +
+/// upload owners actually place, not a mechanism count) — across FLAT and
+/// FACETED pickers and three worlds, every candidate row's PRIMARY name, its
+/// SECONDARY chord label, and (for the selected row) the highlight BAND all sit
+/// on ONE y; and the amber caret rides the query line. Every element reads the
+/// shared owners (`overlay_row_top` / `overlay_secondary_top` /
+/// `overlay_query_center`) through [`TextPipeline::overlay_row_y_probe`], the
+/// same geometry the render path uploads from — so a shortcut can never ride a
+/// half-row high of its row again (the user-reported composition-round bug).
+#[test]
+fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping overlay_row_elements_agree_in_y: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    // A binding on EVERY row so both columns are present per candidate row.
+    let items: Vec<String> = (0..8).map(|i| format!("Command number {i}")).collect();
+    let binds: Vec<String> = (0..8).map(|i| format!("C-{i}")).collect();
+
+    for world in ["Currawong", "Saltpan", "Wagtail"] {
+        theme::set_active_by_name(world).unwrap();
+        p.sync_theme();
+        for faceted in [false, true] {
+            let mut v = view("hello\n", 0, 0);
+            v.overlay_active = true;
+            v.overlay_items = items.clone();
+            v.overlay_bindings = binds.clone();
+            v.overlay_selected = 3;
+            if faceted {
+                v.overlay_lens = vec![("All".into(), true), ("File".into(), false)];
+            }
+            p.set_view(&v);
+            p.prepare(&device, &queue, 1200, 800).unwrap();
+            let pr = p.overlay_row_y_probe();
+            let ctx = format!("world={world} faceted={faceted}");
+
+            // Per row: the name and the chord label sit on the same y.
+            for (row, &prim) in &pr.primary {
+                let sec = pr.secondary.get(row).copied().unwrap_or_else(|| {
+                    panic!("{ctx}: row {row} has a primary name but no secondary label")
+                });
+                assert!(
+                    (prim - sec).abs() <= 1.0,
+                    "{ctx}: row {row} primary y={prim} vs secondary y={sec} must agree \
+                     (the shortcut must not ride high of its name)"
+                );
+            }
+            // The selected row's band sits on its primary name.
+            let sel_prim = pr.primary.get(&pr.sel_disp).copied().unwrap_or_else(|| {
+                panic!("{ctx}: selected display row {} has no primary run", pr.sel_disp)
+            });
+            assert!(
+                (sel_prim - pr.band_top).abs() <= 1.0,
+                "{ctx}: selected band top {} must sit on its name top {sel_prim}",
+                pr.band_top
+            );
+            // The caret rides the query line (centered on it, never above/below).
+            assert!(
+                pr.caret_center >= pr.query_line_top
+                    && pr.caret_center <= pr.query_line_top + pr.lh,
+                "{ctx}: caret center {} must sit on the query line [{}, {}]",
+                pr.caret_center,
+                pr.query_line_top,
+                pr.query_line_top + pr.lh
+            );
+            assert!(
+                (pr.caret_center - (pr.query_line_top + pr.lh * 0.5)).abs() <= 1.0,
+                "{ctx}: caret center {} must be centered on the query row",
+                pr.caret_center
+            );
+        }
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}
 
 #[test]
 fn gutter_visible_only_in_page_mode_and_dim_overlay_tracks_takeover() {
