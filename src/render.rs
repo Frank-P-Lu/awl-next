@@ -2214,13 +2214,63 @@ fn parse_list_style_force(s: &str) -> Option<theme::ListStyle> {
     None
 }
 
+/// The three states an `AWL_*_FORCE` dev knob can be in. The `Retired` arm is
+/// the one the facet-chips GALLERY TRAP lived in: the killed `chips` skin word
+/// parsed to `None` and SILENTLY fell back to the world default, so a shot named
+/// `…-chips.png` came out byte-identical to `…-text.png` with no signal that the
+/// variant never rendered. [`read_forced_knob`] turns that arm LOUD.
+#[derive(Debug)]
+enum ForcedKnob<T> {
+    /// Var unset — the world's own default, silent (byte-identical unset run).
+    Unset,
+    /// Var set to a recognized value.
+    Parsed(T),
+    /// Var SET but the value is retired/typo'd — falls back to the world default,
+    /// but noisily (a re-shoot of a killed variant must not masquerade as real).
+    Retired,
+}
+
+/// Pure classifier for a force knob (testable without touching `std::env`): map
+/// the raw var value through `parse`, distinguishing UNSET from SET-BUT-BAD.
+fn classify_forced_knob<T>(raw: Option<&str>, parse: impl Fn(&str) -> Option<T>) -> ForcedKnob<T> {
+    match raw {
+        None => ForcedKnob::Unset,
+        Some(s) => match parse(s) {
+            Some(v) => ForcedKnob::Parsed(v),
+            None => ForcedKnob::Retired,
+        },
+    }
+}
+
+/// Read a memoized `AWL_*_FORCE` dev knob. A recognized value forces the render;
+/// UNSET is silent (world default); SET-BUT-UNRECOGNIZED emits a one-line stderr
+/// note naming the value + the grammar before falling back — so a stale re-shoot
+/// of a retired variant (the killed `chips` skin) is caught at shot time instead
+/// of producing a silent duplicate of the default.
+fn read_forced_knob<T>(var: &str, grammar: &str, parse: impl Fn(&str) -> Option<T>) -> Option<T> {
+    let raw = std::env::var(var).ok();
+    match classify_forced_knob(raw.as_deref(), &parse) {
+        ForcedKnob::Parsed(v) => Some(v),
+        ForcedKnob::Unset => None,
+        ForcedKnob::Retired => {
+            eprintln!(
+                "awl: {var}={:?} is not a recognized value ({grammar}); using the world default",
+                raw.unwrap_or_default()
+            );
+            None
+        }
+    }
+}
+
 /// The `AWL_OVERLAY_LIST_FORCE` dev knob, read ONCE and memoized.
 fn awl_list_style_force() -> &'static Option<theme::ListStyle> {
     static ONCE: std::sync::OnceLock<Option<theme::ListStyle>> = std::sync::OnceLock::new();
     ONCE.get_or_init(|| {
-        std::env::var("AWL_OVERLAY_LIST_FORCE")
-            .ok()
-            .and_then(|s| parse_list_style_force(&s))
+        read_forced_knob(
+            "AWL_OVERLAY_LIST_FORCE",
+            "pane | bars | bars:<radius>:<gap>:<grow>",
+            parse_list_style_force,
+        )
     })
 }
 
@@ -2256,7 +2306,9 @@ pub(crate) fn effective_list_style() -> theme::ListStyle {
 
 /// `AWL_FACET_STYLE_FORCE` grammar: `"text"` / `"band"`. (The `"chips"` skin was
 /// killed in the designer pixel-pass — `Band` won.) Malformed / retired →
-/// `None` (the world's own `render_caps.facet_style`).
+/// `None` (the world's own `render_caps.facet_style`); a SET-but-unrecognized
+/// value is reported to stderr by [`read_forced_knob`] before it falls back, so
+/// a re-shoot of the killed `chips` skin can't masquerade as a real variant.
 fn parse_facet_style_force(s: &str) -> Option<theme::FacetStyle> {
     match s.trim().to_ascii_lowercase().as_str() {
         "text" => Some(theme::FacetStyle::Text),
@@ -2268,11 +2320,7 @@ fn parse_facet_style_force(s: &str) -> Option<theme::FacetStyle> {
 /// The `AWL_FACET_STYLE_FORCE` dev knob, read ONCE and memoized.
 fn awl_facet_style_force() -> &'static Option<theme::FacetStyle> {
     static ONCE: std::sync::OnceLock<Option<theme::FacetStyle>> = std::sync::OnceLock::new();
-    ONCE.get_or_init(|| {
-        std::env::var("AWL_FACET_STYLE_FORCE")
-            .ok()
-            .and_then(|s| parse_facet_style_force(&s))
-    })
+    ONCE.get_or_init(|| read_forced_knob("AWL_FACET_STYLE_FORCE", "text | band", parse_facet_style_force))
 }
 
 /// TEST-ONLY escape hatch for the facet style (mirrors

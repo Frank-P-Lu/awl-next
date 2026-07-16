@@ -45,6 +45,43 @@ fn parse_facet_style_force_grammar() {
     assert_eq!(parse_facet_style_force(""), None);
 }
 
+/// The force-knob classifier must tell UNSET (silent world default) apart from
+/// SET-BUT-RETIRED (the killed `chips` word) — the reader turns the latter LOUD.
+/// This is the guard against the facet-chips GALLERY TRAP: a re-shoot forcing a
+/// retired variant silently produced a byte-identical duplicate of `text`.
+#[test]
+fn forced_knob_classifies_unset_parsed_and_retired() {
+    // Unset → the world's own default, no note.
+    assert!(matches!(
+        classify_forced_knob(None, parse_facet_style_force),
+        ForcedKnob::Unset
+    ));
+    // A recognized value → Parsed.
+    assert!(matches!(
+        classify_forced_knob(Some("band"), parse_facet_style_force),
+        ForcedKnob::Parsed(theme::FacetStyle::Band)
+    ));
+    // The KILLED `chips` skin, or any typo, but SET → Retired (loud fallback):
+    // never a silent duplicate of the default masquerading under a `-chips` name.
+    assert!(matches!(
+        classify_forced_knob(Some("chips"), parse_facet_style_force),
+        ForcedKnob::Retired
+    ));
+    assert!(matches!(
+        classify_forced_knob(Some("pill"), parse_facet_style_force),
+        ForcedKnob::Retired
+    ));
+    // The list-style knob shares the classifier: a retired `capsule` word is loud.
+    assert!(matches!(
+        classify_forced_knob(Some("capsule"), parse_list_style_force),
+        ForcedKnob::Retired
+    ));
+    assert!(matches!(
+        classify_forced_knob(None, parse_list_style_force),
+        ForcedKnob::Unset
+    ));
+}
+
 #[test]
 fn parse_overlay_anchor_force_accepts_topright_as_the_mirror() {
     for s in ["tr", "topright", "right", "mirror", "MIRROR", "Right"] {
