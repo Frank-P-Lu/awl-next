@@ -12,6 +12,8 @@ Verified via `gh repo view`: visibility PUBLIC, Actions enabled. Standard-runner
 
 ## 🔒 CLAIMS — 2026-07-16 OVERNIGHT BATCH (claude; five parallel worktree streams, one merge train; board writes orchestrator-only per README)
 
+- ⌨️ **DATA-DRIVEN KEYMAP DISPATCH (Codex build)** — ✅ LANDED @ 99e9733 (user "yeah land the keymap branch!", 2026-07-16; pushed, CI 29474678692 green; suite 2240/0). Codex patch byte-identical + 3 review fixes (truthful TOML header, re-scoped tautology docs, frozen chord snapshot — mutation-proven). Review: reports/2026-07-16-codex-keymap-review.md.
+
 _Fast-follow d4ae64d (Wagtail InverseFill selected-row fix, f2cb656) landed + pushed ahead of the streams. Batch train landed 4/5 @ 9098be6, CI run 29440271295 fully green (linux job = canary-fix proof)._
 
 - 🔥 FIRETAIL FLIP-ROUND PICKS (user, 2026-07-16, from the dial gallery): placard = BL, BIG + BOLD (the combo-shot size) ✓ · chrome face = ARCHIVO BLACK ✓ (flip round fetches + subsets + licenses it into assets; OFL verified in-file) · wild-menu slant = PARKED (user: slanting rows inside one pane "just doesn't work" — correct; re-probe as bars+slant AFTER the list-surfaces round B) · anchor inset + motion = STILL OPEN (anchor from d2 shots; motion needs one live minute). FONT-CURATION POLICY REVISED (user, 2026-07-16: "it doesn't have to be loud… it could also signal being refined"): the chrome face is a CHARACTER dial, not just loudness — TWO bundled voices now: Archivo Black (loud) + Abril Fatface (refined), assigned by the Register tag; ~2-3 ever, curation-gated; worlds without an assigned voice keep their display face.

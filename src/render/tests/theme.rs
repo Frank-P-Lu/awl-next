@@ -12,17 +12,14 @@ fn theme_font_switch_reshapes_document() {
     // The caret-x reads below fold BOTH globals: the theme font (the shaped
     // advances) AND the page state (`column_width()` folds `page_on()` /
     // `measure()` — geometry.rs — into the wrap width + text_left every x is
-    // measured from). Other tests flip the page globals under page::test_lock()
-    // (measure 15/40/50…), so reading them here with only the theme lock raced
-    // a parallel page write — the historical parallel-run flake of this very
-    // test. Hold both, in the suite-wide theme → page order (see page::test_lock()'s doc).
+    // measured from). Other tests flip those globals (measure 15/40/50…), so
+    // the historical test raced a parallel page write.
     // The caret x is also ANCHOR-keyed (Morph shifts one cell back, and with no
     // override the mode DEFAULTS off the active theme's font — proportional
-    // Gumtree would flip it to Morph mid-test); hold the caret lock and pin
-    // BLOCK so the x reads stay on the cursor cell across the world switches.
-    let _t = crate::testlock::serial();
+    // Gumtree would flip it to Morph mid-test). THE one process-wide reentrant
+    // guard covers theme + page + caret together; pin BLOCK so the x reads stay
+    // on the cursor cell across the world switches.
     let _g = crate::testlock::serial();
-    let _c = crate::testlock::serial();
     crate::caret::set_mode(CaretMode::Block);
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping theme_font_switch_reshapes_document: no wgpu adapter");

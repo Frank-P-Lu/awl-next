@@ -101,6 +101,10 @@ fn spell_panel_floats_at_the_word_not_center_screen() {
 /// width tracks the content, not the (fixed) anchor word.
 #[test]
 fn spell_panel_width_fits_longest_suggestion_not_the_word() {
+    // Shaping reads the process-global effective chrome face. Keep the whole
+    // setup/measure/assert window under THE one reentrant global-state guard so
+    // a parallel chrome-face override cannot leak into either width reading.
+    let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping spell_panel_width_fits_longest_suggestion_not_the_word: no wgpu adapter");
         return;

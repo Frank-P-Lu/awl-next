@@ -26,13 +26,28 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A fresh, uniquely-named tempdir under the OS temp root (no `tempfile` dep —
-/// mirrors `tests/fault_kill9.rs`).
+/// Atomically claim a fresh tempdir under the OS temp root (no `tempfile` dep).
+///
+/// This integration test is its own process, so the main binary's in-process
+/// `crate::testlock::serial()` cannot coordinate it with another Cargo test
+/// executable. A PID-only remove-then-create path is not ownership: another
+/// live/stale runner can already own that path, and deleting it makes the
+/// canary snapshot observe the other process's writes. `create_dir` is the
+/// cross-process claim; an occupied candidate is left untouched and we try the
+/// next deterministic suffix. The caller still removes its claimed tree only
+/// after success, leaving a failed run's tree available for diagnosis.
 fn tmp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("awl-hermetic-canary-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    let root = std::env::temp_dir();
+    let pid = std::process::id();
+    for suffix in 0_u64.. {
+        let dir = root.join(format!("awl-hermetic-canary-{tag}-{pid}-{suffix}"));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => panic!("failed to claim canary tempdir {}: {e}", dir.display()),
+        }
+    }
+    unreachable!("the u64 tempdir suffix space is inexhaustible in one test run")
 }
 
 /// Recursive snapshot of a tree: every path (relative to `root`) → its bytes
