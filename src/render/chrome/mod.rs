@@ -518,6 +518,16 @@ pub(super) fn bar_rect_selected(
 /// is the number of drawn display rows ABOVE the hint (the flat window's
 /// `visible + empty` or the theme plan's line count); the y is the ONE
 /// [`overlay_row_top`] owner every other row reads, so plate and hint can't drift.
+///
+/// V8 — `hug` gates the HORIZONTAL span exactly like the ROWS do
+/// ([`theme::BarExtent::HugText`]): under a hugging list style the footer plate
+/// HUGS its own content (`Some((text_left, footer_content_px))` → the shared
+/// [`bar_hug_span`] rule) instead of a lone full-width plate stretched under
+/// ragged hugging rows (the "all rows hug" taste-gate finding — a single wide bar
+/// under the pills read as out of family). Full-width bars pass `None` and keep
+/// the byte-identical `card_w`-spanning plate. The footer-over-poster guarantee
+/// survives either way: the plate still covers exactly the footer glyphs (plus
+/// [`BAR_TEXT_PAD`]), so a placard behind it can't bleed into the footer text.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn footer_plate_rect(
     text_top: f32,
@@ -528,14 +538,14 @@ pub(super) fn footer_plate_rect(
     card_x: f32,
     card_w: f32,
     card_bottom: f32,
+    hug: Option<(f32, f32)>,
 ) -> [f32; 4] {
     let hint_top = overlay_row_top(text_top, header_rows, header_gap, content_rows, line_height);
-    [
-        card_x + BAR_SIDE_INSET,
-        hint_top,
-        (card_w - 2.0 * BAR_SIDE_INSET).max(1.0),
-        (card_bottom - hint_top).max(1.0),
-    ]
+    let (x, w) = match hug {
+        Some((text_left, content_px)) => bar_hug_span(card_x, card_w, text_left, content_px),
+        None => bar_full_span(card_x, card_w),
+    };
+    [x, hint_top, w, (card_bottom - hint_top).max(1.0)]
 }
 
 /// The device-px TOP a uniform-line-height RIGHT-COLUMN buffer must be uploaded

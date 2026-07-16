@@ -1437,6 +1437,14 @@ impl TextPipeline {
                     } else {
                         geom.visible + geom.empty.is_some() as usize
                     };
+                    // V8 — under HUG bars the footer plate hugs its own content
+                    // (same padding rule as the rows), so it never reads as a lone
+                    // full-width plate stretched under the ragged pills. Measured
+                    // from the SAME just-shaped `panel_buffer` as the row widths
+                    // (read before the &mut prepare calls below, like `primary_px`).
+                    let footer_hug = hug.then(|| {
+                        (geom.text_left, self.overlay_footer_content_px(geom, content_rows))
+                    });
                     unsel.push(super::footer_plate_rect(
                         geom.text_top,
                         geom.header_rows,
@@ -1446,6 +1454,7 @@ impl TextPipeline {
                         geom.card_x,
                         geom.card_w,
                         geom.card_y + geom.card_h,
+                        footer_hug,
                     ));
                 }
                 // The SELECTED bar: its natural span (full or hugged), grown

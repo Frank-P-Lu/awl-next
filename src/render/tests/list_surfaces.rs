@@ -987,6 +987,49 @@ fn bar_hug_span_hugs_content_and_rags_by_length() {
     );
 }
 
+/// V8 — the FOOTER PLATE follows the SAME hug rule as the rows: under a hugging
+/// list style (`hug = Some`) the plate HUGS its footer content (a lone full-width
+/// plate under ragged pills read as out of family — the "all rows hug" finding);
+/// full-width bars (`hug = None`) keep the byte-identical `card_w`-spanning plate.
+/// EITHER way the plate still COVERS the footer glyphs (right edge >= text_left +
+/// content_px), so the footer-over-poster legibility guarantee survives the hug.
+/// The vertical span (top, height) is hug-independent — only the horizontal moves.
+#[test]
+fn footer_plate_hugs_content_under_hug_bars() {
+    let (text_top, header_rows, header_gap) = (100.0, 1usize, 12.0);
+    let (content_rows, lh) = (8usize, 30.0);
+    let (card_x, card_w, card_bottom) = (60.0, 620.0, 520.0);
+    let text_left = card_x + chrome::BAR_SIDE_INSET + chrome::BAR_TEXT_PAD;
+    let content_px = 240.0; // a footer narrower than the full card width
+
+    let full = chrome::footer_plate_rect(
+        text_top, header_rows, header_gap, content_rows, lh, card_x, card_w, card_bottom, None,
+    );
+    let hug = chrome::footer_plate_rect(
+        text_top, header_rows, header_gap, content_rows, lh, card_x, card_w, card_bottom,
+        Some((text_left, content_px)),
+    );
+
+    // Full-width arm is the historical `card_w`-spanning plate, inset each side.
+    let (fx, fw) = chrome::bar_full_span(card_x, card_w);
+    assert!((full[0] - fx).abs() < 1e-3 && (full[2] - fw).abs() < 1e-3, "None → full-width plate");
+
+    // Hug arm shares the full-width LEFT edge but is much narrower (out-of-family
+    // full-width plate under ragged pills is gone).
+    assert!((hug[0] - full[0]).abs() < 1e-3, "the hug plate shares the full-width LEFT edge");
+    assert!(hug[2] < full[2] - 100.0, "the hug plate is much narrower than full width: {hug:?} vs {full:?}");
+
+    // …yet still COVERS the footer glyphs + pad (legibility over a placard holds).
+    assert!(
+        hug[0] + hug[2] >= text_left + content_px - 1e-3,
+        "the hug plate still covers the footer content (right edge {:.1} >= text end {:.1})",
+        hug[0] + hug[2], text_left + content_px,
+    );
+
+    // Vertical span is hug-independent — only the horizontal changed.
+    assert!((hug[1] - full[1]).abs() < 1e-3 && (hug[3] - full[3]).abs() < 1e-3, "y-span is hug-independent");
+}
+
 /// TEXT-HUGGING BARS (real pixels) — with SHORT candidate names and no right
 /// column, `HugText` leaves the RIGHT side of each row as bare ROOM (ragged),
 /// where `FullWidth` fills it edge-to-edge with the bar. So a region on the

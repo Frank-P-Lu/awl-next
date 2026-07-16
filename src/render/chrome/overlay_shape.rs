@@ -888,4 +888,27 @@ impl TextPipeline {
         m
     }
 
+    /// V8 — the WIDEST shaped FOOTER content line (px) in the just-shaped
+    /// `panel_buffer`: the dim foot-hint plus the keybindings-tips lines, which
+    /// all sit BELOW the `content_rows` candidate/empty lines (`line_i >=
+    /// header_rows + content_rows`). Read so the [`super::footer_plate_rect`] can
+    /// HUG the footer text under [`theme::BarExtent::HugText`] instead of drawing
+    /// a lone full-width plate under hugging rows — the SAME shaped glyphs the
+    /// footer draws from, so plate and text can't disagree. `0.0` when there is no
+    /// footer content (the plate then collapses to its 1px floor, never drawn).
+    pub(in crate::render) fn overlay_footer_content_px(
+        &self,
+        geom: &OverlayGeom,
+        content_rows: usize,
+    ) -> f32 {
+        let first = geom.header_rows + content_rows;
+        let mut w = 0.0f32;
+        for run in self.panel_buffer.layout_runs() {
+            if run.line_i >= first {
+                w = w.max(run.line_w);
+            }
+        }
+        w
+    }
+
 }
