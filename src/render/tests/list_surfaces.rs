@@ -684,3 +684,226 @@ fn facet_band_draws_and_differs_from_text_in_the_strip() {
         "facet Band vs Text strip",
     );
 }
+
+// --- Bars DROP THE PANE for EVERY overlay kind (the no-wildcard card-fill law) -
+
+/// THE PER-KIND PANE-DROP LAW (user-caught bug, 2026-07-16): the no-pane-under-
+/// Bars change reached the THEME picker but NOT the go-to / faceted kinds — the
+/// maximalist shot showed a full BORDERED card behind the bars, the selected bar
+/// overflowing its right edge (the jut colliding with a wall that shouldn't
+/// exist). The fix lives at the ONE overlay-card paint owner
+/// (`overlay_draw_card`), gated only by `effective_list_style()` — never per
+/// kind — so this law enumerates `OverlayKind::ALL` with a NO-WILDCARD match and
+/// proves, for EVERY kind, that Bars drops the boxed pane:
+///   - the contextual SPELL popup is the ONE kind that legitimately stays a
+///     RAISED float panel (a popup over the doc, not a centered list card); it
+///     draws NO list-card fill (`panel_card == 0`) — its elevation rides the
+///     separate `float_*` pipelines.
+///   - EVERY other kind: ZERO card BORDER + ZERO card SHADOW (no boxed
+///     elevation), exactly ONE full-canvas ROOM VEIL (`panel_card == 1`, not a
+///     boxed card), a bar per row, and the selected bar drawn — so its `grow_px`
+///     jut has NO card wall to clip against (the board bug). Faceting kinds are
+///     driven through the `geom.theme` card path too (an active lens strip),
+///     since the board bug lived on the FACETED card, not the flat one.
+/// A new `OverlayKind` fails to compile here until it declares which regime it
+/// is — the structural guard against a future per-kind card special case.
+#[test]
+fn bars_drop_the_pane_for_every_overlay_kind() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping bars_drop_the_pane_for_every_overlay_kind: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+    set_list_style_test_override(Some(theme::ListStyle::Bars {
+        radius: 6.0,
+        gap: 10.0,
+        grow_px: 24.0,
+    }));
+
+    use crate::overlay::OverlayKind;
+    for kind in OverlayKind::ALL {
+        // NO-WILDCARD: Spell is the sole contextual FLOAT panel; every other kind
+        // is a centered list card that must drop its boxed pane under Bars.
+        let is_float = match kind {
+            OverlayKind::Spell => true,
+            OverlayKind::Theme
+            | OverlayKind::Goto
+            | OverlayKind::Browse
+            | OverlayKind::Project
+            | OverlayKind::Command
+            | OverlayKind::History
+            | OverlayKind::Settings
+            | OverlayKind::Caret
+            | OverlayKind::Dictionary
+            | OverlayKind::CjkLang
+            | OverlayKind::MoveDest
+            | OverlayKind::Keybindings
+            | OverlayKind::Assets
+            | OverlayKind::Rename
+            | OverlayKind::InsertLink => false,
+        };
+
+        let mut v = view("the quick brown fox jumps\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = (0..6).map(|i| format!("Item {i}")).collect();
+        v.overlay_selected = 2;
+        v.overlay_hint = "hint".into();
+        if is_float {
+            // the contextual spell popup, anchored at the word "quick" (cols 4..9)
+            v.overlay_spell = Some((0, 4, 9));
+        } else if crate::facets::scheme(kind).is_some() {
+            // exercise the FACETED (`geom.theme`) card path too — the board bug
+            // lived on the faceted card. An active lens gives the strip a target.
+            v.overlay_lens = vec![("All".into(), true), ("File".into(), false)];
+        }
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+
+        if is_float {
+            // Spell: a raised float panel, NOT a list card — its own elevation is
+            // correct. The list-card fill stays empty for it.
+            assert_eq!(
+                p.panel_card.instance_count(),
+                0,
+                "{kind:?}: the spell float popup draws no list-card fill"
+            );
+            continue;
+        }
+        assert_eq!(
+            p.panel_border.instance_count(),
+            0,
+            "{kind:?}: Bars draws NO card border (the wall the selected bar's grow collided with)"
+        );
+        assert_eq!(
+            p.panel_shadow.instance_count(),
+            0,
+            "{kind:?}: Bars draws NO card shadow (no boxed elevation)"
+        );
+        assert_eq!(
+            p.panel_card.instance_count(),
+            1,
+            "{kind:?}: Bars paints exactly ONE full-canvas room veil, not a boxed card"
+        );
+        assert!(
+            p.overlay_bars.instance_count() > 0,
+            "{kind:?}: Bars draws a surface per row"
+        );
+        assert_eq!(
+            p.overlay_rows.instance_count(),
+            1,
+            "{kind:?}: the selected bar is drawn — unclipped, no card wall (grow geometry proven by selected_bar_grows_wider_toward_the_open_margin_and_mirrors)"
+        );
+    }
+
+    set_list_style_test_override(None);
+    set_card_anchor_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+// --- Bars: the foot hint stays legible over a giant corner PLACARD ------------
+
+/// THE FOOTER-OVER-POSTER GUARANTEE (taste-gate finding): under Bars the pane is
+/// dropped, so a giant corner PLACARD (`TitleStyle::Placard` — Firetail's
+/// wordmark, bottom-left anchored, bleeding UP) sat directly BEHIND the dim
+/// foot-hint row and drowned it — the muted glyphs and the poster letters at
+/// near-equal value (DESIGN §5's legibility floor breached). The fix lays an
+/// opaque whisper-value PLATE (`footer_plate_rect`, drawn in the bars' z-slot —
+/// over the placard, under the text) across the hint/footer zone, so the footer
+/// keeps its designed ground no matter what the wordmark does behind it.
+///
+/// This asserts the OUTCOME over real pixels, both directions of the trap:
+///   - WITNESS the poster is genuinely LOUD (the test is not vacuous): a
+///     bottom-left region shows a big value swing between placard-ON and
+///     placard-OFF.
+///   - The FOOTER band is IMMUNE to it: with the plate, the footer zone renders
+///     the SAME with or without the giant wordmark behind it — the poster can no
+///     longer bleed into the footer's ground. Remove the plate and the poster
+///     leaks straight through, and this delta blows past the floor.
+#[test]
+fn bars_footer_stays_legible_over_a_giant_placard() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping bars_footer_stays_legible_over_a_giant_placard: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    // Firetail: a DARK world that actually ships a placard — the poster ink lifts
+    // toward `base_content` (light) over the dark ground, the worst-case contrast.
+    theme::set_active_by_name("Firetail").unwrap();
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+    set_list_style_test_override(Some(theme::ListStyle::Bars {
+        radius: 6.0,
+        gap: 10.0,
+        grow_px: 24.0,
+    }));
+
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "commands";
+    v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
+    v.overlay_selected = 2;
+    v.overlay_hint = "up/dn move    run    esc close".into();
+    v.overlay_window_rows = 12;
+
+    let render_with = |p: &mut TextPipeline, ts: theme::TitleStyle| {
+        set_title_style_test_override(Some(ts));
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        pixeldiff::render_frame(p, &device, &queue, w, h)
+    };
+
+    // WORST CASE: a big BOLD wordmark anchored bottom-left, bleeding up behind
+    // the footer.
+    let loud = theme::TitleStyle::Placard {
+        corner: theme::PlacardCorner::BL,
+        scale: 5.0,
+        ink: theme::PlacardInk::Bold,
+    };
+    let a = render_with(&mut p, loud);
+    // Geometry (title-style-independent — the placard is a canvas watermark, not
+    // part of the card layout), read after prepare.
+    let rect = p.overlay_card_rect().expect("overlay card rect");
+    let (card_x, card_y, card_w, card_h) = (rect[0], rect[1], rect[2], rect[3]);
+    let lh = p.overlay_lh();
+    let hg = p.overlay_header_gap();
+    // Flat picker: 8 item rows above the hint (content_rows), then the hint.
+    let content_rows = 8usize;
+    let hint_top = chrome::overlay_row_top(card_y + 12.0, 1, hg, content_rows, lh);
+    let card_bottom = card_y + card_h;
+
+    // CONTROL: no placard at all.
+    let b = render_with(&mut p, theme::TitleStyle::InlinePrefix);
+    set_title_style_test_override(None);
+    set_list_style_test_override(None);
+    set_card_anchor_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+
+    let (wi, hi) = (w as i64, h as i64);
+    // FOOTER band: from the hint row's top down to the card bottom (the plate).
+    let inset = chrome::BAR_SIDE_INSET as i64;
+    let fx = card_x as i64 + inset + 2;
+    let fy = hint_top as i64;
+    let fw = (card_w as i64 - 2 * inset - 4).max(2);
+    let fh = (card_bottom - hint_top).max(2.0) as i64;
+    let a_footer = avg(&a, wi, hi, fx, fy, fw, fh);
+    let b_footer = avg(&b, wi, hi, fx, fy, fw, fh);
+
+    // WITNESS region: bottom-left canvas, where the BL wordmark bleeds — pure
+    // poster under `a`, plain ground under `b`.
+    let a_poster = avg(&a, wi, hi, 30, hi - 90, 140, 60);
+    let b_poster = avg(&b, wi, hi, 30, hi - 90, 140, 60);
+
+    let poster_swing = redmean(a_poster, b_poster);
+    let footer_delta = redmean(a_footer, b_footer);
+
+    assert!(
+        poster_swing > 20.0,
+        "witness: the giant BL wordmark must render loudly (poster region redmean {poster_swing:.1}) — else this law is vacuous"
+    );
+    assert!(
+        footer_delta < 8.0,
+        "the footer ground must be IMMUNE to the poster behind it (plate guarantee): with-vs-without the wordmark the footer band changed by redmean {footer_delta:.1} (poster swung {poster_swing:.1})"
+    );
+}

@@ -1366,7 +1366,7 @@ impl TextPipeline {
                 } else {
                     (0..geom.visible).collect()
                 };
-                let unsel: Vec<[f32; 4]> = item_rows
+                let mut unsel: Vec<[f32; 4]> = item_rows
                     .iter()
                     .copied()
                     .filter(|k| Some(*k) != sel_disp)
@@ -1381,6 +1381,31 @@ impl TextPipeline {
                         bar_rect_unselected(geom.card_x, geom.card_w, top + bar_off, bar_h)
                     })
                     .collect();
+                // THE FOOTER-OVER-POSTER GUARANTEE (taste-gate finding): under
+                // Bars the pane is dropped, so a giant corner PLACARD bleeds up
+                // behind the dim foot-hint / keybindings-tips footer and the muted
+                // glyphs drown in the poster letters. Lay an opaque whisper-value
+                // plate over that zone (same `overlay_bars` z-slot — over the
+                // placard, under the text) so the footer keeps its designed
+                // ground. Only when the picker HAS a footer (`hint`/`tips`);
+                // shares the ONE `overlay_row_top` owner via `footer_plate_rect`.
+                if geom.hint_rows + geom.footer_rows > 0 {
+                    let content_rows = if geom.theme {
+                        geom.plan.len()
+                    } else {
+                        geom.visible + geom.empty.is_some() as usize
+                    };
+                    unsel.push(super::footer_plate_rect(
+                        geom.text_top,
+                        geom.header_rows,
+                        geom.header_gap,
+                        content_rows,
+                        lh,
+                        geom.card_x,
+                        geom.card_w,
+                        geom.card_y + geom.card_h,
+                    ));
+                }
                 // Grow toward the open margin — RIGHT by default, mirrored LEFT under
                 // a right-anchored (`TopRight`) card (the ONE pure owner).
                 let sel = match sel_top {

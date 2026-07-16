@@ -427,6 +427,41 @@ pub(super) fn bar_rect_selected(
     [x, top, w.max(1.0), bar_h]
 }
 
+/// PURE geometry — the FOOTER-PLATE rect `[x, y, w, h]` under
+/// [`theme::ListStyle::Bars`]: an opaque value band spanning the hint + footer
+/// zone (from the first hint row's top DOWN to the card bottom), inset like the
+/// bars ([`BAR_SIDE_INSET`]). THE FOOTER-OVER-POSTER GUARANTEE (the taste-gate
+/// finding): with the pane dropped, a giant corner PLACARD (`TitleStyle::Placard`
+/// — Firetail's wordmark) bleeds UP behind the dim foot-hint row, so the muted
+/// hint glyphs drowned in the poster letters (contrast collapse, DESIGN §5's
+/// legibility floor). This plate draws in the SAME z-slot as the bars (over the
+/// placard, under the overlay text — see `draw_overlay_card`) at the whisper
+/// [`theme::overlay_bar_unselected`] value, so it HIDES the poster exactly where
+/// the footer sits and restores the hint's designed ground (the same near-ground
+/// value the query line already reads on). Value only, never amber. `content_rows`
+/// is the number of drawn display rows ABOVE the hint (the flat window's
+/// `visible + empty` or the theme plan's line count); the y is the ONE
+/// [`overlay_row_top`] owner every other row reads, so plate and hint can't drift.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn footer_plate_rect(
+    text_top: f32,
+    header_rows: usize,
+    header_gap: f32,
+    content_rows: usize,
+    line_height: f32,
+    card_x: f32,
+    card_w: f32,
+    card_bottom: f32,
+) -> [f32; 4] {
+    let hint_top = overlay_row_top(text_top, header_rows, header_gap, content_rows, line_height);
+    [
+        card_x + BAR_SIDE_INSET,
+        hint_top,
+        (card_w - 2.0 * BAR_SIDE_INSET).max(1.0),
+        (card_bottom - hint_top).max(1.0),
+    ]
+}
+
 /// The device-px TOP a uniform-line-height RIGHT-COLUMN buffer must be uploaded
 /// at so its chord/time labels — which lead with `header_rows` empty lines —
 /// land EXACTLY on the candidate band [`overlay_row_top`] draws. The secondary
