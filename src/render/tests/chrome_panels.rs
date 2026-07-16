@@ -86,7 +86,10 @@ fn spell_panel_floats_at_the_word_not_center_screen() {
     p.prepare(&device, &queue, 1200, 800).unwrap();
     let [cx, _cy, cw, _ch] = p.overlay_card_rect().expect("the takeover overlay has a card");
     assert!(cw >= 360.0, "a takeover overlay is a wide card: w={cw}");
-    assert!((cx - 12.0).abs() < 2.0, "the takeover card anchors top-left, one margin in: x={cx}");
+    assert!(
+        (cx - chrome::CARD_EDGE_INSET).abs() < 2.0,
+        "the takeover card anchors top-left, one edge inset in: x={cx}"
+    );
     assert_eq!(p.float_card.instance_count(), 0, "a takeover overlay parks the float card");
     assert_eq!(p.panel_card.instance_count(), 1, "a takeover overlay uses the flat card");
 }
@@ -785,33 +788,35 @@ fn faceted_palette_shapes_the_chord_column_aligned_to_its_rows() {
     }
 }
 
-/// RESPONSIVE CARD: at the minimum window width the centered picker card spans
-/// nearly the full window (window − 2·margin), mirroring the responsive page
-/// column, instead of the old fixed 360 that starved the text column; at the
-/// default 1200 canvas it stays the familiar 600 (wide captures byte-identical).
+/// RESPONSIVE CARD (composition round items 3 + 7): at a wide canvas the flat
+/// card holds the tightened cap [`chrome::CARD_MAX_W`] (narrower than the old
+/// sprawling 600); as the window narrows past the point the cap can seat with
+/// floor pads, the card RE-CENTERS and fills the window minus a floor pad each
+/// side (`window − 2·floor`), mirroring the responsive page column.
 #[test]
 fn overlay_card_spans_nearly_the_full_narrow_window() {
-    let _t = crate::testlock::serial();
     let _g = crate::testlock::serial();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping overlay_card_spans_nearly_the_full_narrow_window: no wgpu adapter");
         return;
     };
+    let floor = chrome::CARD_EDGE_INSET_FLOOR;
     let mut v = view("hello\n", 0, 0);
     v.overlay_active = true;
     v.overlay_items = vec!["Alpha".into(), "Beta".into()];
     p.set_view(&v);
 
-    // Minimum window (≈ 30 columns + insets): the card spans window − 24.
+    // Narrow window: the fill regime — the card spans window − 2·floor, centered.
     p.set_size(464.0, 600.0);
     let [x, _y, w, _h] = p.overlay_card_rect().expect("overlay card");
-    assert!((w - 440.0).abs() < 0.5, "narrow card spans nearly the window: w={w}");
-    assert!((x - 12.0).abs() < 0.5, "with the calm 12px margin: x={x}");
+    assert!((w - (464.0 - 2.0 * floor)).abs() < 0.5, "narrow card fills the window: w={w}");
+    assert!((x - floor).abs() < 0.5, "re-centered to the floor pad: x={x}");
 
-    // Default canvas: the same half-window card as ever.
+    // Default canvas: the tightened flat width cap (item 3), one edge inset in.
     p.set_size(1200.0, 800.0);
-    let [_x, _y, w, _h] = p.overlay_card_rect().expect("overlay card");
-    assert!((w - 600.0).abs() < 0.5, "wide card is unchanged: w={w}");
+    let [x, _y, w, _h] = p.overlay_card_rect().expect("overlay card");
+    assert!((w - chrome::CARD_MAX_W).abs() < 0.5, "wide card holds the tightened cap: w={w}");
+    assert!((x - chrome::CARD_EDGE_INSET).abs() < 0.5, "one full edge inset in: x={x}");
 }
 
 /// KEY-HINT KEYCAPS: ↵ (Return) and ⇥ (Tab) are classified as SYMBOLS (so the hint
@@ -1181,6 +1186,55 @@ fn overlay_card_fits_its_content_no_fat_bottom_lip() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
+/// HINT-LIP LAW (item 5) — the foot hint reads as the card's bottom EDGE, not a
+/// floating orphan: it rides a SHORTER line ([`TextPipeline::overlay_hint_h`],
+/// below a full row) that hugs tight under the last result, and the card's
+/// bottom padding is the `pad` token below THAT compact strip — never the fat
+/// empty band the user reported ("i do see a lip, and its really ugly"). The
+/// card-fits-content geometry is recomputed independently (the Wagtail lesson).
+#[test]
+fn overlay_hint_footer_is_compact_and_hugs_the_card_bottom() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping overlay_hint_footer_is_compact_and_hugs_the_card_bottom: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let pad = 12.0_f32;
+    for world in ["Kingfisher", "Saltpan", "Wagtail"] {
+        theme::set_active_by_name(world).unwrap();
+        p.sync_theme();
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+        v.overlay_selected = 0;
+        v.overlay_hint = "↵ open   ⎋ close".into();
+        p.set_view(&v);
+
+        let [_x, card_y, _w, card_h] = p.overlay_card_rect().expect("an open card");
+        let (_t, lines, _s, _rh, _c) = p.overlay_window_report().expect("a window report");
+        let lh = p.overlay_lh();
+        let gap = p.overlay_header_gap();
+        let hint_h = p.overlay_hint_h();
+
+        // The hint row is SHORTER than a full result row — the lip is gone.
+        assert!(
+            hint_h < lh - 1.0,
+            "{world}: hint row {hint_h:.1} must be shorter than a full row {lh:.1}"
+        );
+        // The hint hugs the bottom: below its compact strip sits exactly `pad`.
+        // header (1, flat) + `lines` candidates at `lh` + the gap, then the hint
+        // at `hint_h`, then the bottom `pad` == card bottom.
+        let text_top = card_y + pad;
+        let hint_bottom = text_top + (1 + lines) as f32 * lh + gap + hint_h;
+        let below = (card_y + card_h) - hint_bottom;
+        assert!(
+            (below - pad).abs() < 0.6,
+            "{world}: hint hugs the card bottom (below={below:.1}, want ~{pad}) — no fat lip"
+        );
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 #[test]
 fn overlay_card_anchor_is_data_top_left_default_center_reachable() {
     let Some(mut p) = headless_pipeline() else {
@@ -1188,7 +1242,8 @@ fn overlay_card_anchor_is_data_top_left_default_center_reachable() {
         return;
     };
     let _g = crate::testlock::serial();
-    let margin = 12.0_f32;
+    // The composition round widened the flush 12px hug to a real edge inset.
+    let edge_inset = chrome::CARD_EDGE_INSET;
     let width = 1200u32;
 
     let mut v = view("hello\n", 0, 0);
@@ -1197,11 +1252,11 @@ fn overlay_card_anchor_is_data_top_left_default_center_reachable() {
     v.overlay_selected = 0;
 
     // DEFAULT (this round's flip): every world anchors TOP-LEFT — the card's
-    // left edge sits one margin in from the canvas edge.
+    // left edge sits one EDGE INSET in from the canvas edge (item 2's page rhythm).
     set_card_anchor_test_override(None);
     p.set_view(&v);
     let [x_tl, _y, _w, _h] = p.overlay_card_rect().expect("an open card");
-    assert!((x_tl - margin).abs() < 0.01, "default anchor is top-left: x={x_tl}");
+    assert!((x_tl - edge_inset).abs() < 0.01, "default anchor is top-left: x={x_tl}");
 
     // TOP-CENTER stays reachable as a data value (the one-line revert / the
     // gallery A/B): the card re-centers under the top third.

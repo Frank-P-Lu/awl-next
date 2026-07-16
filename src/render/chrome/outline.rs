@@ -394,22 +394,71 @@ impl TextPipeline {
         self.outline_layout(height).is_some()
     }
 
-    /// PROBE-ONLY (env `AWL_LAVA_BOTH=plate|band`, gallery-only): the OUTLINE
-    /// rail's own band rect `[left, top, right, bottom]` (px) — the block the
-    /// `plate` audition plates and the `band` audition locally carves, so a
-    /// headed lava doc can be auditioned both-sides. Derived from the SAME
-    /// [`Self::outline_layout`] owner the outline's pixels ride (its `right_edge`,
-    /// `avail`, `top`, and stacked row heights incl. group gaps). `None` when the
-    /// outline is hidden. NOTHING SHIPS — only consulted under the env knob.
-    pub(in crate::render) fn outline_band_rect(&self, height: u32) -> Option<[f32; 4]> {
-        let layout = self.outline_layout(height)?;
+    /// FROST PILL RECTS (the shipped headed-doc lava treatment): one rounded-pill
+    /// rect `[left, top, right, bottom]` (device px) hugging EACH drawn outline
+    /// entry's text extents + comfortable padding — the regions
+    /// [`TextPipeline::prepare_lava_layer`] uploads for the lava field to render
+    /// FROSTED behind (a softened SMOOTH-field blur + a value dim), so the dim
+    /// outline ink keeps its contrast while the lamp stays alive between and around
+    /// the pills. EMPTY when the outline is HIDDEN (no rail ink → no frost, so a
+    /// heading-less doc stays byte-identical to the both-margins behaviour), and
+    /// capped at [`crate::lava::MAX_FROST_PILLS`].
+    ///
+    /// Derived from the SAME [`Self::outline_layout`] + [`Self::outline_pixel_fit`]
+    /// owners the outline's own pixels ride — its follow slice, group gaps,
+    /// `top`/`row_h`, per-row MEASURED width (`measure_outline_label_px`), and the
+    /// column-hugging left origin ([`outline_block_left`], from the block's natural
+    /// width) — so a pill can never drift from the row it frosts. `&mut self`
+    /// because the per-row pixel measurement genuinely shapes text (a throwaway on
+    /// `outline_buffer`, re-shaped for real by the later `prepare_outline`).
+    pub(in crate::render) fn lava_frost_pill_rects(&mut self, height: u32) -> Vec<[f32; 4]> {
+        let Some(mut layout) = self.outline_layout(height) else {
+            return Vec::new();
+        };
+        // Correct each label to its MEASURED pixel width (the same fit the draw
+        // applies), so pill widths match the drawn glyphs exactly.
+        self.outline_pixel_fit(&mut layout);
         let label = crate::markdown::type_scale::LABEL;
         let row_h = self.metrics.line_height * label;
-        let gap_count = layout.lines.iter().filter(|r| r.gap_before).count();
-        let block_h =
-            layout.lines.len() as f32 * row_h + gap_count as f32 * row_h * OUTLINE_GAP_ROWS + 1.0;
-        let left = (layout.right_edge - layout.avail).max(0.0);
-        Some([left, layout.top, layout.right_edge, layout.top + block_h])
+        if row_h <= 0.0 {
+            return Vec::new();
+        }
+        // Per-row MEASURED width + the block's natural width → the column-hugging
+        // left origin (mirrors `prepare_outline`'s own measure-then-place).
+        let widths: Vec<f32> = layout
+            .lines
+            .iter()
+            .map(|r| self.measure_outline_label_px(&r.label))
+            .collect();
+        let block_w = widths.iter().copied().fold(0.0_f32, f32::max);
+        let left = outline_block_left(layout.right_edge, block_w, crate::render::TEXT_LEFT);
+        let pad_x = crate::lava::FROST_PILL_PAD_X * self.metrics.zoom;
+        let inset_y = row_h * crate::lava::FROST_PILL_INSET_Y_FRAC;
+        let mut rects = Vec::with_capacity(layout.lines.len());
+        // Walk each row's own y-band (matching `outline_hit_line`'s stacking: a
+        // half-row group gap ABOVE a group-opening row, each row its own `row_h`),
+        // and hug its text extents `[left, left + width]` with padding, inset from
+        // the line box so the lamp breathes BETWEEN consecutive pills.
+        let mut y = layout.top;
+        for (i, row) in layout.lines.iter().enumerate() {
+            if row.gap_before {
+                y += row_h * OUTLINE_GAP_ROWS;
+            }
+            let w = widths[i];
+            if w > 0.0 {
+                rects.push([
+                    (left - pad_x).max(0.0),
+                    y + inset_y,
+                    left + w + pad_x,
+                    y + row_h - inset_y,
+                ]);
+            }
+            y += row_h;
+            if rects.len() >= crate::lava::MAX_FROST_PILLS {
+                break;
+            }
+        }
+        rects
     }
 
     /// PERSISTENT MARGIN OUTLINE: the CURRENT heading's [`ancestor_chain`] — the

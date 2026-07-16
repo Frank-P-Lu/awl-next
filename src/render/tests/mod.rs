@@ -74,6 +74,33 @@ pub(super) fn headless_pipeline() -> Option<TextPipeline> {
     })
 }
 
+/// A `(Device, Queue, TextPipeline)` triple sized `w`×`h`, or `None` on a
+/// GPU-less machine — for tests that must READ what a real `prepare()` left in
+/// the pipeline (instance counts, shaped-buffer geometry) and so need a device
+/// and queue of their own to drive it.
+pub(super) fn headless_dqp(w: f32, h: f32) -> Option<(wgpu::Device, wgpu::Queue, TextPipeline)> {
+    pollster::block_on(async {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("awl test device (dqp)"),
+                ..Default::default()
+            })
+            .await
+            .ok()?;
+        let cache = Cache::new(&device);
+        let mut p =
+            TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+        p.set_size(w, h);
+        Some((device, queue, p))
+    })
+}
+
 pub(super) fn view(text: &str, line: usize, col: usize) -> ViewState {
     ViewState {
         text: text.to_string(),

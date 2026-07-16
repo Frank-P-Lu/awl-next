@@ -625,29 +625,39 @@ impl TextPipeline {
             }
             spans.push((msg.as_str(), mk(muted)));
         }
-        // The quiet control-hint row, last, always in the DIM token. Carries its own
-        // leading newline so it sits one line below the final candidate. Its keycap
-        // glyphs (↵ ⇥ ⌘ … ) ride the SYMBOL_FAMILY face — split into symbol / non-
-        // symbol runs exactly like the chord column — so a hint that teaches a
-        // key with a glyph (`↵ restore`) renders it instead of tofu.
-        let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
-        let hint_line = if geom.hint.is_empty() {
-            String::new()
-        } else {
-            format!("\n{}", geom.hint)
+        // The quiet control-hint row, last. LIP FIX (item 5): a leading "\n"
+        // breaks the last candidate line at its NORMAL height, then the hint
+        // TEXT rides a SHORTER line ([`Self::overlay_hint_h`]) at the LABEL rung
+        // — a compact footer that hugs the card's bottom edge instead of
+        // floating a full row high (the ugly "lip"). Both geometry owners shrink
+        // the card by `lh - overlay_hint_h()` so it fits this tighter strip
+        // exactly. Its keycap glyphs (↵ ⇥ ⌘ … ) ride the SYMBOL_FAMILY face —
+        // split into symbol / non-symbol runs exactly like the chord column — so
+        // a hint that teaches a key with a glyph (`↵ restore`) renders it.
+        let hint_fs = name_fs * crate::markdown::type_scale::LABEL;
+        let hint_h = self.overlay_hint_h();
+        let hk_hint = |c| mk(c).metrics(GlyphMetrics::new(hint_fs, hint_h));
+        let sym_hint = |c| {
+            Attrs::new()
+                .family(Family::Name(SYMBOL_FAMILY))
+                .color(c)
+                .metrics(GlyphMetrics::new(hint_fs, hint_h))
         };
         if geom.hint_rows > 0 {
+            // Break the last candidate line at its own (normal) height first.
+            spans.push(("\n", mk(muted)));
+            let h = geom.hint.as_str();
             let mut last = 0usize;
-            for run in symbol_runs(&hint_line) {
+            for run in symbol_runs(h) {
                 if run.start > last {
-                    spans.push((&hint_line[last..run.start], mk(muted)));
+                    spans.push((&h[last..run.start], hk_hint(muted)));
                 }
                 let end = run.end;
-                spans.push((&hint_line[run], sym(muted)));
+                spans.push((&h[run], sym_hint(muted)));
                 last = end;
             }
-            if last < hint_line.len() {
-                spans.push((&hint_line[last..], mk(muted)));
+            if last < h.len() {
+                spans.push((&h[last..], hk_hint(muted)));
             }
         }
         // KEYBINDINGS TIPS FOOTER: the quiet "your top 3" band below the hint (chrome,
@@ -660,6 +670,7 @@ impl TextPipeline {
         let footer_lines: Vec<String> = geom.footer.iter().map(|t| format!("\n{t}")).collect();
         if geom.footer_rows > 0 {
             let faint = theme::faint().to_glyphon();
+            let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
             spans.push(("\n", mk(faint))); // the blank separator line
             for line in &footer_lines {
                 let mut last = 0usize;

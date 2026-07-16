@@ -263,6 +263,118 @@ fn tight_list_item_text_survives_into_both_emitters() {
     }
 }
 
+/// LAW: the PER-ELEMENT coverage sweep. Walk the parsed fixture tree and gather
+/// EVERY leaf text fragment across the WHOLE covered surface — heading, paragraph,
+/// blockquote, list item (nested included), table head + body cell, fenced-code
+/// line — then assert each one survives into BOTH emitted documents: the docx
+/// `<w:t>` run text AND the HTML body. This generalizes the tight-list guard
+/// (`tight_list_item_text_survives_into_both_emitters`, the c9bead0 bug class)
+/// from lists to the entire element roster, so ANY element the emitter silently
+/// drops — not just the one bug we already caught — fails a test.
+///
+/// Image alt is deliberately excluded: a RESOLVED image carries its alt in a
+/// `descr`/`alt` ATTRIBUTE, not a text run, so it is not a `<w:t>` fragment.
+#[test]
+fn every_fixture_text_fragment_survives_into_both_emitters() {
+    /// Gather the leaf text of an inline subtree (skips resolved-image alt).
+    fn inline_fragments(inlines: &[Inline], out: &mut Vec<String>) {
+        for inl in inlines {
+            match inl {
+                Inline::Text(t) | Inline::Code(t) => out.push(t.clone()),
+                Inline::Strong(c)
+                | Inline::Emphasis(c)
+                | Inline::Strikethrough(c)
+                | Inline::Highlight(c)
+                | Inline::Link { children: c, .. } => inline_fragments(c, out),
+                Inline::Image { .. } | Inline::SoftBreak | Inline::HardBreak => {}
+            }
+        }
+    }
+    fn block_fragments(blocks: &[Block], out: &mut Vec<String>) {
+        for b in blocks {
+            match b {
+                Block::Heading { inlines, .. } | Block::Paragraph(inlines) => {
+                    inline_fragments(inlines, out)
+                }
+                Block::BlockQuote(inner) => block_fragments(inner, out),
+                Block::CodeBlock { code, .. } => {
+                    // The docx emitter splits code into one run per line
+                    // (separated by `<w:br/>`), so assert at line granularity.
+                    for line in code.split('\n') {
+                        out.push(line.to_string());
+                    }
+                }
+                Block::List(list) => {
+                    for it in &list.items {
+                        block_fragments(&it.blocks, out);
+                    }
+                }
+                Block::Table(t) => {
+                    for cell in &t.head {
+                        inline_fragments(cell, out);
+                    }
+                    for row in &t.rows {
+                        for cell in row {
+                            inline_fragments(cell, out);
+                        }
+                    }
+                }
+                Block::Rule => {}
+            }
+        }
+    }
+
+    let doc = model::parse(FIXTURE);
+    let mut fragments = Vec::new();
+    block_fragments(&doc.blocks, &mut fragments);
+    // The fixture is rich enough that the sweep is a real net (guards against a
+    // future refactor that silently empties the collection and passes vacuously).
+    assert!(
+        fragments.iter().filter(|f| !f.trim().is_empty()).count() >= 25,
+        "fixture fragment collection looks too small ({} non-empty): {fragments:?}",
+        fragments.iter().filter(|f| !f.trim().is_empty()).count()
+    );
+
+    let html = to_html(FIXTURE, &fixture_images());
+    let docx = to_docx(FIXTURE, &fixture_images());
+    let doc_xml = String::from_utf8(unzip_stored(&docx)["word/document.xml"].clone()).unwrap();
+    let docx_text = docx_run_text(&doc_xml);
+
+    for frag in &fragments {
+        let f = frag.trim();
+        if f.is_empty() {
+            continue;
+        }
+        assert!(
+            docx_text.contains(f),
+            "DOCX dropped text fragment {f:?}\n(all run text: {docx_text:?})"
+        );
+        assert!(html.contains(f), "HTML dropped text fragment {f:?}");
+    }
+}
+
+/// Concatenate the text content of every `<w:t xml:space="preserve">…</w:t>` run
+/// in `document.xml`, un-escaping the three XML text entities, so a coverage
+/// assertion can search the ACTUAL emitted run text (not attributes/markup).
+fn docx_run_text(doc_xml: &str) -> String {
+    const OPEN: &str = "<w:t xml:space=\"preserve\">";
+    const CLOSE: &str = "</w:t>";
+    let mut out = String::new();
+    let mut rest = doc_xml;
+    while let Some(i) = rest.find(OPEN) {
+        rest = &rest[i + OPEN.len()..];
+        match rest.find(CLOSE) {
+            Some(j) => {
+                out.push_str(&rest[..j]);
+                rest = &rest[j + CLOSE.len()..];
+            }
+            None => break,
+        }
+    }
+    // Un-escape in the order that avoids double-decoding `&amp;lt;` → `<`.
+    out.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+}
+
 // --- HTML emitter -----------------------------------------------------------
 
 #[test]
