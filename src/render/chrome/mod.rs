@@ -108,15 +108,19 @@ pub(in crate::render) struct PanelShape {
 }
 
 /// Where a pointer landed when hit-tested against the summoned find/replace panel
-/// (`TextPipeline::panel_hit`), for CLICK-TO-SWITCH-FIELD: on the FIND row (focus
-/// the query), on the REPLACE row (focus the replacement), or `Elsewhere` inside
-/// the card (the key-hint line / inter-row gaps — the caller swallows it as a calm
-/// no-op). A pointer OFF the card returns `None`, so the caller lets the press fall
-/// through to the document. Row 0 = find, row 1 = replace (present only once the
-/// replace field is revealed) — read from the SAME `panel_layout` the fields draw
-/// from, so a click can never disagree with where a field is painted.
+/// (`TextPipeline::panel_hit`): on the `Aa` CASE-TOGGLE cell (flip case
+/// sensitivity), on the FIND row off that cell (focus the query), on the REPLACE
+/// row (focus the replacement), or `Elsewhere` inside the card (the key-hint line
+/// / inter-row gaps — the caller swallows it as a calm no-op). A pointer OFF the
+/// card returns `None`, so the caller lets the press fall through to the document.
+/// Row 0 = find (with the `Aa` cell at its right edge), row 1 = replace (present
+/// only once the replace field is revealed) — read from the SAME `panel_layout`
+/// the fields draw from, so a click can never disagree with where a field is
+/// painted. The `App::panel_click` match is no-wildcard, so a new affordance
+/// cannot ship without a wired click arm.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PanelHit {
+    CaseToggle,
     Find,
     Replace,
     Elsewhere,

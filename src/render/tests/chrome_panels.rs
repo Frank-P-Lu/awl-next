@@ -300,7 +300,7 @@ fn panel_hit_maps_the_pointer_to_the_find_or_replace_field() {
     p.set_view(&v);
     // Shape the panel so panel_layout has real rows to measure.
     let shape = p.panel_shape_text(width);
-    let ([card_x, card_y, card_w, card_h], _tl, text_top, _cx) =
+    let ([card_x, card_y, card_w, card_h], text_left, text_top, _cx) =
         p.panel_layout(width, shape.caret_byte, shape.caret_fallback_chars, shape.caret_row);
     let lh = p.metrics.line_height;
     let mid = card_x + card_w * 0.5; // safely inside the card horizontally
@@ -309,6 +309,12 @@ fn panel_hit_maps_the_pointer_to_the_find_or_replace_field() {
     assert_eq!(p.panel_hit(mid, text_top + 1.5 * lh), Some(PanelHit::Replace));
     // The key-hint line (row 2) is inside the card but not editable -> Elsewhere.
     assert_eq!(p.panel_hit(mid, text_top + 2.5 * lh), Some(PanelHit::Elsewhere));
+    // The `Aa` cell at the right edge of the find row -> CaseToggle (NOT Find):
+    // the click driver for the case toggle whose only keyboard door is ⌘⌥C. (The
+    // card is widened by the key-hint row, so `mid` sits past the find text on row
+    // 0 and stays Find; only the shaped Aa cell resolves to CaseToggle.)
+    let aa_mid = aa_cell_center(&p, text_left);
+    assert_eq!(p.panel_hit(aa_mid, text_top + 0.5 * lh), Some(PanelHit::CaseToggle));
     // Off the card (far left / above / below) -> None: the press falls through.
     assert_eq!(p.panel_hit(card_x - 20.0, text_top + 0.5 * lh), None);
     assert_eq!(p.panel_hit(mid, card_y - 5.0), None);
@@ -336,10 +342,80 @@ fn panel_hit_maps_the_pointer_to_the_find_or_replace_field() {
     assert!(top1 + 1.5 * lh > _cy1 + ch1, "replace band is below the 1-row card");
     assert_eq!(p.panel_hit(mid1, top1 + 1.5 * lh), None);
 
+    // On the ONE-row plain find panel the `Aa` cell is still a click target.
+    let aa_mid1 = aa_cell_center(&p, _t1);
+    assert_eq!(p.panel_hit(aa_mid1, top1 + 0.5 * lh), Some(PanelHit::CaseToggle));
+
     // Panel DOWN -> always None (the press falls through to the document).
     let v2 = view("hello\nhello\n", 0, 0); // search_active defaults false
     p.set_view(&v2);
     assert_eq!(p.panel_hit(mid1, top1 + 0.5 * lh), None);
+}
+
+/// Physical x-centre of the shaped `Aa` cell on the find row (line 0) — the last
+/// two glyphs of the row, mirroring `TextPipeline::panel_case_toggle_span` (which
+/// is module-private). `text_left` is `panel_layout`'s inner text origin.
+fn aa_cell_center(p: &TextPipeline, text_left: f32) -> f32 {
+    for run in p.panel_buffer.layout_runs() {
+        if run.line_i != 0 {
+            continue;
+        }
+        let n = run.glyphs.len();
+        let a = &run.glyphs[n - 2];
+        let z = &run.glyphs[n - 1];
+        return (text_left + a.x + text_left + z.x + z.w) * 0.5;
+    }
+    panic!("the find row shaped no glyphs");
+}
+
+/// THE CLICK-REACHABILITY LAW. Every `PanelHit` variant must be reachable by SOME
+/// pointer against the shaped panel. The `match` is NO-WILDCARD, so a new variant
+/// fails to compile until it names a pointer here (and a wired arm in
+/// `App::panel_click`) — a dead click affordance cannot ship. Reuses the SAME
+/// `panel_layout`/`panel_shape_text` the fields draw from, so a reachable pointer
+/// here is a reachable pointer live.
+#[test]
+fn every_panel_hit_variant_is_reachable_by_a_click() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping every_panel_hit_variant_is_reachable_by_a_click: no wgpu adapter");
+        return;
+    };
+    let width = p.window_w as u32;
+    // Replace revealed so all three rows (find / replace / key-hint) exist.
+    let mut v = view("hello\nhello\n", 0, 0);
+    v.search_active = true;
+    v.search_query = "hello".into();
+    v.search_matches = vec![((0, 0), (0, 5)), ((1, 0), (1, 5))];
+    v.search_current = Some(0);
+    v.search_replace_active = true;
+    v.search_replacement = "world".into();
+    p.set_view(&v);
+    let shape = p.panel_shape_text(width);
+    let ([card_x, _cy, card_w, _ch], text_left, text_top, _cx) =
+        p.panel_layout(width, shape.caret_byte, shape.caret_fallback_chars, shape.caret_row);
+    let lh = p.metrics.line_height;
+    let mid = card_x + card_w * 0.5;
+    let aa_mid = aa_cell_center(&p, text_left);
+
+    for variant in [
+        PanelHit::CaseToggle,
+        PanelHit::Find,
+        PanelHit::Replace,
+        PanelHit::Elsewhere,
+    ] {
+        // NO-WILDCARD: a new PanelHit variant forces a pointer arm here.
+        let (px, py) = match variant {
+            PanelHit::CaseToggle => (aa_mid, text_top + 0.5 * lh),
+            PanelHit::Find => (mid, text_top + 0.5 * lh),
+            PanelHit::Replace => (mid, text_top + 1.5 * lh),
+            PanelHit::Elsewhere => (mid, text_top + 2.5 * lh),
+        };
+        assert_eq!(
+            p.panel_hit(px, py),
+            Some(variant),
+            "{variant:?} must be reachable by a click"
+        );
+    }
 }
 
 /// WEB/LINUX MENU BAR YIELD: the top-right search panel's card, like the margin

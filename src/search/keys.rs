@@ -1,8 +1,9 @@
 //! The ONE search/replace KEY-INTERCEPTION seam. While the isearch panel is
 //! open, EVERY key belongs to the search surface — printable chars extend the
-//! focused field, Backspace shortens it, C-s/C-r/arrows step matches, M-c
-//! toggles case, Tab/Cmd-R move between the find and replace fields, Enter
-//! accepts / replaces, Cmd-Enter replaces all, Esc/C-g aborts — and nothing
+//! focused field, Backspace shortens it, C-s/C-r/arrows step matches, ⌘⌥c (mac)
+//! / M-c (Linux) toggles case, Tab/Cmd-R move between the find and replace
+//! fields, Enter accepts / replaces, Cmd-Enter replaces all, Esc/C-g aborts —
+//! and nothing
 //! ever reaches the keymap. BOTH drivers route through [`intercept`]: the live
 //! window's `App::handle_search_key` (a thin delegate) and the headless
 //! `--keys` replay's search guard (`main/run.rs::replay_keys_mode`), so live
@@ -53,11 +54,12 @@ pub fn intercept(
             // next match, Cmd-Shift-F the previous (so you can pass a match without
             // replacing it), Cmd-Option-F reveals+toggles the replace field, Cmd-R
             // focuses the replace field (the headline door — a fresh Cmd-R opened
-            // the panel on the find field), and Cmd-G / Cmd-Shift-G MIRROR Cmd-F /
-            // Cmd-Shift-F's plain step (P2 — the deeper macOS find-next/previous
-            // idiom, alongside Cmd-F's own in-panel step; Cmd-Option-G has no
-            // Option-toggle counterpart, so it is simply consumed, no-op). Other
-            // Super combos are consumed.
+            // the panel on the find field), Cmd-Option-C toggles case sensitivity
+            // (the MAC-REACHABLE case toggle — see below), and Cmd-G / Cmd-Shift-G
+            // MIRROR Cmd-F / Cmd-Shift-F's plain step (P2 — the deeper macOS
+            // find-next/previous idiom, alongside Cmd-F's own in-panel step;
+            // Cmd-Option-G has no Option-toggle counterpart, so it is simply
+            // consumed, no-op). Other Super combos are consumed.
             if sup && !ctrl {
                 if c.eq_ignore_ascii_case(&'f') {
                     if alt {
@@ -69,6 +71,15 @@ pub fn intercept(
                     } else {
                         return step(search, buffer, Direction::Forward);
                     }
+                } else if c.eq_ignore_ascii_case(&'c') && alt {
+                    // Cmd-Option-C (⌘⌥C): toggle case sensitivity. This is the
+                    // MAC-REACHABLE case toggle — a bare Option-c composes to 'ç'
+                    // on macOS (the logical key never arrives as 'c'+Alt), so the
+                    // M-c arm below only fires on Linux. Holding Cmd suppresses the
+                    // accent composition so ⌘⌥C delivers a plain 'c' — the same
+                    // reason the ⌘⌥F replace-toggle above works. Mirrors VS Code's
+                    // ⌥⌘C "match case" idiom.
+                    toggle_case_and_jump(search, buffer);
                 } else if c.eq_ignore_ascii_case(&'g') && !alt {
                     if shift {
                         return step(search, buffer, Direction::Backward);
@@ -91,12 +102,11 @@ pub fn intercept(
                 }
             } else if alt && !ctrl {
                 if matches!(c, 'c' | 'C') {
-                    // M-c / Alt+c toggles case sensitivity.
-                    let hay = buffer.text();
-                    if let Some(st) = search.as_mut() {
-                        st.toggle_case(&hay);
-                    }
-                    jump_to_current(search, buffer);
+                    // M-c / Alt+c toggles case sensitivity — the LINUX slot (on
+                    // macOS Option-c composes to 'ç' and never reaches here; use
+                    // ⌘⌥C above). Kept as the emacs-flavour door where Alt+letter
+                    // arrives un-composed.
+                    toggle_case_and_jump(search, buffer);
                 }
             } else if !c.is_control() {
                 // Self-insert into the FOCUSED field. The replacement is not
@@ -205,6 +215,19 @@ fn step(
     };
     jump_to_current(search, buffer);
     recoil
+}
+
+/// Toggle case sensitivity and re-anchor the caret on the (recomputed) current
+/// match. The ONE owner of the toggle-case key path — both the mac ⌘⌥C door and
+/// the Linux M-c door route through it (merge, don't align), so they can never
+/// disagree on the recompute + caret-follow. Also the effect the panel's "Aa"
+/// click drives (`App::panel_click`).
+fn toggle_case_and_jump(search: &mut Option<SearchState>, buffer: &mut Buffer) {
+    let hay = buffer.text();
+    if let Some(st) = search.as_mut() {
+        st.toggle_case(&hay);
+    }
+    jump_to_current(search, buffer);
 }
 
 /// Move the real buffer cursor onto the current match (if any) so the amber
@@ -368,6 +391,7 @@ mod tests {
 
     #[test]
     fn alt_c_toggles_case_sensitivity() {
+        // The LINUX slot: bare Alt+c (un-composed) toggles case.
         let (mut search, mut buffer) = open("Hello HELLO hello");
         type_str(&mut search, &mut buffer, "hello");
         assert_eq!(search.as_ref().unwrap().hit_count(), 3);
@@ -377,6 +401,28 @@ mod tests {
         assert_eq!(st.hit_count(), 1);
         intercept(&mut search, &mut buffer, &ch("C"), ModifiersState::ALT);
         assert!(!search.as_ref().unwrap().is_case_sensitive());
+    }
+
+    /// THE MAC-REACHABILITY FIX: ⌘⌥C toggles case + re-anchors the caret. Bare
+    /// Option-c composes to 'ç' on macOS and never reaches the M-c arm, so this
+    /// Cmd-suppressed chord is the only keyboard door to the case toggle on the
+    /// advertised keymap — the affordance the user reported as unreachable.
+    #[test]
+    fn cmd_option_c_toggles_case_sensitivity_and_reanchors() {
+        let (mut search, mut buffer) = open("Hello HELLO hello");
+        type_str(&mut search, &mut buffer, "hello");
+        assert_eq!(search.as_ref().unwrap().hit_count(), 3);
+        let cmd_opt = ModifiersState::SUPER | ModifiersState::ALT;
+        // Case ON: only the exact-case "hello" survives; the caret follows it.
+        assert_eq!(intercept(&mut search, &mut buffer, &ch("c"), cmd_opt), None);
+        let st = search.as_ref().unwrap();
+        assert!(st.is_case_sensitive());
+        assert_eq!(st.hit_count(), 1);
+        assert_eq!(buffer.cursor_char(), 12, "the caret re-anchored on the surviving match");
+        // Uppercase variant (⌘⌥⇧C emits 'C') toggles back off.
+        intercept(&mut search, &mut buffer, &ch("C"), cmd_opt | ModifiersState::SHIFT);
+        assert!(!search.as_ref().unwrap().is_case_sensitive());
+        assert_eq!(buffer.text(), "Hello HELLO hello", "the document is never touched");
     }
 
     /// Tab reveals the replace row then flips focus; Cmd-R forces focus into the
@@ -468,5 +514,129 @@ mod tests {
             assert_eq!(st.query(), "beta", "the query is unchanged");
         }
         assert_eq!(buffer.text(), "alpha beta alpha");
+    }
+
+    /// THE KEY-REACHABILITY LAW. Every in-panel KEYBOARD affordance must drive an
+    /// observable effect through the ONE `intercept` seam. The `match` is
+    /// NO-WILDCARD, so a new `PanelKeyAffordance` fails to compile until it has a
+    /// driving arm here — a dead in-panel key (the ⌥c-on-mac class the user
+    /// reported, where the case toggle was reachable by NOTHING) cannot ship.
+    /// Every arm exercises the chord on the ADVERTISED (mac) keymap where one
+    /// exists — ToggleCase uses ⌘⌥C, not the Linux-only M-c.
+    #[test]
+    fn every_panel_key_affordance_is_drivable() {
+        let _g = crate::testlock::serial();
+        crate::search::clear_last_query();
+        #[derive(Clone, Copy, Debug)]
+        enum PanelKeyAffordance {
+            TypeQuery,
+            Backspace,
+            NextMatch,
+            PrevMatch,
+            ToggleCase,
+            FieldSwitch,
+            ReplaceCurrent,
+            ReplaceAll,
+            Accept,
+            Abort,
+        }
+        use PanelKeyAffordance::*;
+        let cmd = ModifiersState::SUPER;
+        let ctrl = ModifiersState::CONTROL;
+        let cmd_opt = ModifiersState::SUPER | ModifiersState::ALT;
+        for aff in [
+            TypeQuery,
+            Backspace,
+            NextMatch,
+            PrevMatch,
+            ToggleCase,
+            FieldSwitch,
+            ReplaceCurrent,
+            ReplaceAll,
+            Accept,
+            Abort,
+        ] {
+            match aff {
+                TypeQuery => {
+                    let (mut s, mut b) = open("x.x.x");
+                    type_str(&mut s, &mut b, "x");
+                    assert_eq!(s.as_ref().unwrap().query(), "x", "TypeQuery extends the query");
+                }
+                Backspace => {
+                    let (mut s, mut b) = open("x.x.x");
+                    type_str(&mut s, &mut b, "xy");
+                    intercept(&mut s, &mut b, &named(NamedKey::Backspace), NONE);
+                    assert_eq!(s.as_ref().unwrap().query(), "x", "Backspace shortens the query");
+                }
+                NextMatch => {
+                    let (mut s, mut b) = open("x.x.x");
+                    type_str(&mut s, &mut b, "x");
+                    intercept(&mut s, &mut b, &ch("s"), ctrl);
+                    assert_eq!(b.cursor_char(), 2, "NextMatch advances the caret");
+                }
+                PrevMatch => {
+                    let (mut s, mut b) = open("x.x.x");
+                    type_str(&mut s, &mut b, "x");
+                    intercept(&mut s, &mut b, &named(NamedKey::ArrowDown), NONE); // ->2
+                    intercept(&mut s, &mut b, &ch("r"), ctrl); // ->0
+                    assert_eq!(b.cursor_char(), 0, "PrevMatch steps the caret back");
+                }
+                ToggleCase => {
+                    let (mut s, mut b) = open("Hi HI hi");
+                    type_str(&mut s, &mut b, "hi");
+                    let before = s.as_ref().unwrap().hit_count();
+                    intercept(&mut s, &mut b, &ch("c"), cmd_opt);
+                    assert!(
+                        s.as_ref().unwrap().is_case_sensitive(),
+                        "ToggleCase flips via the mac-reachable ⌘⌥C"
+                    );
+                    assert_ne!(
+                        s.as_ref().unwrap().hit_count(),
+                        before,
+                        "the match set recomputed on toggle"
+                    );
+                }
+                FieldSwitch => {
+                    let (mut s, mut b) = open("x.x.x");
+                    intercept(&mut s, &mut b, &named(NamedKey::Tab), NONE);
+                    assert!(
+                        s.as_ref().unwrap().is_editing_replacement(),
+                        "FieldSwitch reveals + focuses the replace field"
+                    );
+                }
+                ReplaceCurrent => {
+                    let (mut s, mut b) = open("x.x.x");
+                    type_str(&mut s, &mut b, "x");
+                    intercept(&mut s, &mut b, &named(NamedKey::Tab), NONE);
+                    type_str(&mut s, &mut b, "Y");
+                    intercept(&mut s, &mut b, &named(NamedKey::Enter), NONE);
+                    assert_eq!(b.text(), "Y.x.x", "ReplaceCurrent swaps one match");
+                }
+                ReplaceAll => {
+                    let (mut s, mut b) = open("x.x.x");
+                    type_str(&mut s, &mut b, "x");
+                    intercept(&mut s, &mut b, &named(NamedKey::Tab), NONE);
+                    type_str(&mut s, &mut b, "Y");
+                    intercept(&mut s, &mut b, &named(NamedKey::Enter), cmd);
+                    assert_eq!(b.text(), "Y.Y.Y", "ReplaceAll swaps every match");
+                }
+                Accept => {
+                    let (mut s, mut b) = open("x.x.x");
+                    type_str(&mut s, &mut b, "x");
+                    intercept(&mut s, &mut b, &named(NamedKey::Enter), NONE);
+                    assert!(s.is_none(), "Accept closes the panel");
+                }
+                Abort => {
+                    let mut b = Buffer::from_str("x.x.x");
+                    b.set_cursor(1);
+                    let mut s = Some(SearchState::start(1, Direction::Forward));
+                    type_str(&mut s, &mut b, "x");
+                    intercept(&mut s, &mut b, &named(NamedKey::Escape), NONE);
+                    assert!(s.is_none(), "Abort closes the panel");
+                    assert_eq!(b.cursor_char(), 1, "Abort restores the origin caret");
+                }
+            }
+        }
+        crate::search::clear_last_query();
     }
 }
