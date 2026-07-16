@@ -1281,6 +1281,22 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
         Mode::BenchThemeBurst => crate::render::framebench::run_theme_burst(),
         Mode::BenchZoomBurst => crate::render::framebench::run_zoom_burst(),
         Mode::BenchSuite { baseline } => crate::render::benchsuite::run(baseline),
+        #[cfg(not(target_arch = "wasm32"))]
+        Mode::SoakGpu(config) => {
+            let root = std::env::temp_dir().join(format!("awl-soak-gpu-{}", std::process::id()));
+            std::fs::create_dir_all(&root)?;
+            let result = app::run(
+                None,
+                root.clone(),
+                None,
+                None,
+                Config::empty(),
+                false,
+                Some(config),
+            );
+            let _ = std::fs::remove_dir(&root);
+            result
+        }
         Mode::Windowed {
             file,
             root,
@@ -1296,7 +1312,10 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             // Pass the RAW flags + config; `App::new` folds them (flag > config >
             // default) and re-folds on a live config reload. `wait` (native-only,
             // the single-instance daemon's `--wait`) rides straight through.
-            app::run(file, active_root, workspace, notes_root, config, wait)
+            #[cfg(not(target_arch = "wasm32"))]
+            { app::run(file, active_root, workspace, notes_root, config, wait, None) }
+            #[cfg(target_arch = "wasm32")]
+            { app::run(file, active_root, workspace, notes_root, config, wait) }
         }
     }
 }

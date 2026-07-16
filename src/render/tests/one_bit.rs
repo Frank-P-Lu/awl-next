@@ -633,6 +633,56 @@ fn every_overlay_kind_is_classified_and_the_two_families_render_as_declared() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
+/// LIGHT-WORLD BORDER LAW (composition round item 6, veto 3 adopted: "border on
+/// light worlds totally works") — every LIGHT world (a pale ground,
+/// `dark == false`) carries [`theme::Elevation::Bordered`], so the summoned
+/// card's soft fill gains a crisp rim off the pale ground instead of dissolving
+/// into it. STRUCTURAL sweep over the whole roster (a light world may never ship
+/// Flat again — DATA, no code path), PLUS a real render asserting `panel_border`
+/// draws on a light world and stays parked on a Flat dark world (the OUTCOME,
+/// the Wagtail lesson).
+#[test]
+fn light_worlds_carry_the_summoned_card_border() {
+    // STRUCTURAL: every light-ground world is Bordered (Wagtail is dark/one-bit,
+    // so the `dark == false` gate excludes it — it carries its own border via
+    // the one-bit path already law-tested above).
+    for t in theme::THEMES.iter() {
+        if !t.dark {
+            assert_eq!(
+                t.render_caps.elevation,
+                theme::Elevation::Bordered,
+                "{}: a light-ground world must carry the summoned-card border",
+                t.name
+            );
+        }
+    }
+
+    // OUTCOME: the border actually draws on a light world, and a Flat dark world
+    // keeps its border parked (byte-identical to before this round).
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping light_worlds_carry_the_summoned_card_border: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+    v.overlay_selected = 0;
+    for (world, want_border) in [("Saltpan", true), ("Galah", true), ("Tawny", false)] {
+        theme::set_active_by_name(world).unwrap();
+        p.sync_theme();
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        let n = p.panel_border.instance_count();
+        if want_border {
+            assert!(n > 0, "{world}: the light-world card border must draw (got {n} instances)");
+        } else {
+            assert_eq!(n, 0, "{world}: a Flat dark world keeps `panel_border` parked");
+        }
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 /// THE PICKER-ROW-HIGHLIGHT report's selected-row half, at the INSTANCE-COUNT
 /// seam. The old framebuffer invert (`overlay_rows_invert`) is RETIRED: every
 /// world — 1-bit included — now drives the ONE `overlay_rows` fill pipeline for

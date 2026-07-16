@@ -43,7 +43,7 @@ const EXPECTED: &[(&str, usize)] = &[
     // usable window (spell dictionary / clipboard / render-state init, the
     // daemon socket) — none has a `self.notice` seam to route through this
     // early, and each is a one-time, non-recurring condition.
-    ("app.rs", 4),
+    ("app.rs", 5),
     // "follow link: could not open …" — a rare OS-handoff failure
     // (C-c C-o). Flagged as a future notice-routing candidate, not fixed
     // this round (out of the reported bug's scope).
@@ -58,9 +58,12 @@ const EXPECTED: &[(&str, usize)] = &[
     // added ONE more (`open_guide`'s on-disk-refresh failure), mirroring
     // `open_credits`'s existing one verbatim.
     ("app/files.rs", 13),
-    // GPU/render-pipeline errors (`prepare`/`render`/surface validation) —
-    // there is no frame to paint a notice INTO when these fire.
-    ("app/gpu.rs", 3),
+    // GPU/render-pipeline errors (`prepare`/`render`) retain a stderr
+    // diagnostic while App-owned recovery also paints the calm notice.
+    ("app/gpu.rs", 2),
+    // Classified callback/device/surface failures are logged once at the
+    // App recovery seam as well as being routed through the visible notice.
+    ("app/window.rs", 1),
     ("app/session.rs", 1),
     ("app/stats.rs", 1),
     // `--bench-typing`'s tabular CLI output.
@@ -111,6 +114,12 @@ const EXPECTED: &[(&str, usize)] = &[
     // same CLI-harness class as the four bench entries above.
     ("render/benchsuite/mod.rs", 12),
     ("render/benchsuite/report.rs", 9),
+    // `--soak-gpu`'s bounded native-probe report is CLI product: result,
+    // counters (incl. the per-cause `skipped_by_kind` breakdown), memory
+    // summaries, recovery timings, and explicit defects. All print sites live
+    // in the report submodule; `soak_gpu/mod.rs` (the schedule/observe half)
+    // prints nothing, so it does not appear here.
+    ("soak_gpu/report.rs", 8),
 ];
 
 /// The pure per-line needle counter: matches `println!(` / `eprintln!(` as a

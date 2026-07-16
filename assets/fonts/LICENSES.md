@@ -71,13 +71,15 @@ URL) — the authoritative ground truth, not an assumption.
 | `JetBrainsMono-Bold.ttf` | JetBrains Mono | The JetBrains Mono Project Authors | JetBrains Mono (trademark) | SIL OFL 1.1 | github.com/JetBrains/JetBrainsMono (Google Fonts ofl/jetbrainsmono, variable, instanced `wght=700`) |
 | `Iosevka-Bold.ttf` | Iosevka | Renzhi Li (aka. Belleve Invis) | — | SIL OFL 1.1 | github.com/be5invis/Iosevka (PkgTTF-Iosevka, static Bold) |
 | `MonaspaceXenon-Bold.ttf` | Monaspace Xenon | GitHub, Inc. (copyright in name ID 7) | Monaspace, Monaspace Xenon (+ Argon/Neon/Radon/Krypton) | SIL OFL 1.1 | github.com/githubnext/monaspace (variable, instanced `wght=700 wdth=100 slnt=0`) |
+| `ArchivoBlack-Regular.ttf` | Archivo Black | The Archivo Black Project Authors | — | SIL OFL 1.1 | github.com/Omnibus-Type/ArchivoBlack (Google Fonts ofl/archivoblack, static Black, subset to Latin + punctuation) |
+| `AbrilFatface-Regular.ttf` | Abril Fatface | TypeTogether (www.type-together.com) | Abril, Abril Fatface | SIL OFL 1.1 | github.com/google/fonts (ofl/abrilfatface, static Regular, subset to Latin + punctuation) |
 | `AwlMarks.ttf` | Awl Marks | EB Garamond, Noto (Adobe), Iosevka (Renzhi Li), Junicode (Peter S. Baker) — Project Authors, per glyph source | — | SIL OFL 1.1 (composed from OFL sources — see note below) | github.com/octaviopardo/EBGaramond12; github.com/notofonts (Noto Sans Symbols 2); github.com/be5invis/Iosevka; github.com/psb1558/Junicode-font |
 
 Most faces here are single-weight instances (Regular, except IBM Plex Mono which
 ships Light/300); the CJK faces are subset to their target script's code-point
-range (JIS X 0208 / GB 2312 / KS X 1001), and the text/ornament faces (Fira
-Sans, Iosevka, Bitter, Junicode) are subset to their needed code-point
-ranges, as described in `CLAUDE.md`. Subsetting and single-weight instancing are
+range (JIS X 0208 / GB 2312 / KS X 1001), and the text/ornament/chrome faces
+(Fira Sans, Iosevka, Bitter, Junicode, Archivo Black, Abril Fatface) are subset
+to their needed code-point ranges, as described in `CLAUDE.md`. Subsetting and single-weight instancing are
 permitted modifications under the OFL (the fonts remain OFL, unsold by
 themselves, reserved names untouched).
 
@@ -105,6 +107,23 @@ rare transliteration/combining marks (Ṅ Ṡ Ṧ Ṩ Ẏ + combining hook/ring-
 dot-below) are absent from the upstream Fraunces variable source itself, so no
 `wght=700` instance can carry them; every other bold matches its Regular's
 coverage exactly.
+
+The **`ArchivoBlack-Regular.ttf`** and **`AbrilFatface-Regular.ttf`** faces are
+the CHROME-VOICES round's two curated overlay-CHROME voices — a distinctive face
+for a world's summoned-overlay chrome only (placard wordmark / inline title
+prefix / lens-strip labels), never a list row, the query line, or the writing
+column. **Archivo Black** is the LOUD voice (Firetail's pick): a single heavy
+Omnibus-Type display weight whose `OS/2.usWeightClass` is 400 — verified in the
+downloaded file's own `name`/`OS/2` tables — so a plain `Weight::NORMAL` request
+matches it (no `mono_safe_weight` exception, the opposite corner of the IBM Plex
+Light trap). **Abril Fatface** is the REFINED voice: a high-contrast TypeTogether
+Didone display Regular (usWeightClass 400) with embedded Reserved Font Names
+"Abril" and "Abril Fatface" (preserved through the subset). Both were fetched
+from `google/fonts` `ofl/`, their OFL-1.1 grant re-read from each file's own name
+table (nameID 0 copyright + nameID 13 license, unchanged by the subset), and
+subset with `pyftsubset` to Latin (U+0020–017F) + typographic/code punctuation.
+Abril is registered but assigned to no world's data yet (gallery-only, pending
+the user's veto pass); Firetail alone names Archivo Black on its `chrome_face`.
 
 **`AwlMarks.ttf` provenance (composed from OFL sources):** the rebuilt symbol /
 ornament face is a hand-merged subset — decomposed glyph outlines copied from
