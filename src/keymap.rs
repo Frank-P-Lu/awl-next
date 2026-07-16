@@ -1577,6 +1577,108 @@ pub fn parse_binding(spec: &str) -> Result<Chord, String> {
 mod tests {
     use super::*;
 
+    /// The live catalog rendered as one `slug|native@mac|native@linux|emacs`
+    /// line per command, newline-terminated — the value feeding the frozen
+    /// `catalog_chord_snapshot_is_frozen` guard. `native@mac`/`native@linux` go
+    /// through `commands::resolved_native` (the one owner of the Cmd->Ctrl
+    /// translation + override table); the emacs slot is convention-agnostic text.
+    fn catalog_chord_snapshot() -> String {
+        let mut out = String::new();
+        for c in crate::commands::COMMANDS.iter() {
+            out.push_str(&format!(
+                "{}|{}|{}|{}\n",
+                crate::commands::slug(c.name),
+                crate::commands::resolved_native(c, Convention::Mac),
+                crate::commands::resolved_native(c, Convention::Linux),
+                c.emacs,
+            ));
+        }
+        out
+    }
+
+    const CATALOG_CHORD_SNAPSHOT: &str = "\
+go_to_file|Cmd-O|C-o|
+switch_project|Cmd-S-p|C-S-p|
+recent_projects|||
+browse_files|||
+go_to_heading|||
+spell_suggestions|Cmd-;|C-;|
+version_history|Cmd-S-h|C-S-h|
+clean_unused_assets|||
+keep_version|||
+last_file|C-Tab|C-Tab|
+new_note|Cmd-N|C-n|
+move_note|||
+rename_note|||
+duplicate_note|||
+finish_file|Cmd-W|C-w|
+follow_link|||C-c C-o
+switch_theme|Cmd-T|C-t|
+caret_style|||
+dictionary|||
+toggle_spellcheck|||
+toggle_hidden_files|Cmd-S-.|C-S-.|
+toggle_caret_style|||
+toggle_page_mode|||
+toggle_writing_nits|||
+widen_page|||
+narrow_page|||
+reset_page_width|||
+toggle_debug|||
+toggle_outline|Cmd-S-o|C-S-o|
+toggle_typewriter_scroll|||
+toggle_menu_bar|||
+about|||
+credits|||
+guide|||
+lifetime_stats|||
+line_endings|||
+align_table|||
+report_a_problem|||
+download_file|||
+check_for_updates|||
+blockquote|||
+bullet_list|||
+numbered_list|||
+task_list|Cmd-S-l|C-S-l|
+heading|||
+code_block|||
+bold|Cmd-B|C-b|
+italic|Cmd-I|C-i|
+inline_code|Cmd-E|C-e|
+highlight|||
+strikethrough|||
+export_as_word|||
+export_as_html|||
+insert_link|Cmd-K|C-k|
+save|Cmd-S|C-s|
+quit|Cmd-Q|C-q|
+search_forward|Cmd-F|C-f|C-s
+search_backward|Cmd-S-f|C-S-f|C-r
+find_and_replace|Cmd-R|C-r|
+undo|Cmd-Z|C-z|C-/
+redo|Cmd-S-z|C-S-z|
+copy|Cmd-C|C-c|
+cut|Cmd-X|C-x|C-w
+paste|Cmd-V|C-v|C-y
+select_all|Cmd-A|C-a|
+zoom_in|Cmd-=|C-=|
+zoom_out|Cmd--|C--|
+reset_zoom|Cmd-0|C-0|
+forward_word|M-Right|M-Right|
+backward_word|M-Left|M-Left|
+line_start|Cmd-Left|Home|C-a
+line_end|Cmd-Right|End|C-e
+document_start|Cmd-Up|C-Home|
+document_end|Cmd-Down|C-End|
+forward_char|||C-f
+backward_char|||C-b
+next_line|||C-n
+previous_line|||C-p
+settings|Cmd-,|C-,|
+keybindings|||
+";
+
     // CONVENTION-PROOF SHADOW: the vast majority of this module's tests build a
     // bare `KeymapState::new()`/`with_overrides(..)` and assert MAC-native
     // outcomes (`"Cmd-…"`-shaped expectations, retired-emacs-default checks,
@@ -2500,6 +2602,39 @@ mod tests {
         assert_eq!(km4.resolve(&ch("c"), &ctrl()), Action::BeginPrefix);
     }
 
+    /// THE FROZEN CATALOG-CHORD SNAPSHOT (structural per-command value pinning).
+    /// Because catalog labels and dispatch now share ONE seed
+    /// (`assets/keymap-defaults.toml`), the exhaustive agreement sweeps
+    /// (`commands::tests::catalog_and_keymap_agree_on_every_default_chord`,
+    /// `every_catalog_default_slot_dispatches_through_real_keymap_under_both_conventions_and_flavors`)
+    /// can no longer catch a wrong default CHORD — they read the same parse on
+    /// both sides. This table restores that guard: a checked-in literal of every
+    /// command's slug -> resolved chord strings across BOTH slots and BOTH
+    /// conventions (`native@mac | native@linux | emacs`). Adding, retyping, or
+    /// removing a default chord in the TOML shifts exactly one line here and
+    /// fails this test, forcing a conscious re-freeze — nothing about a new
+    /// command's chords can slip past silently.
+    ///
+    /// REGENERATED DELIBERATELY, never auto-synced: run
+    /// `cargo test -p awl print_catalog_chord_snapshot -- --ignored --nocapture`,
+    /// eyeball the diff, and paste the block below (the `print_full_catalog_snapshot`
+    /// precedent). The manual step IS the point — an accidental chord change must
+    /// cost a visible, reviewed edit, not a rubber-stamp.
+    #[test]
+    fn catalog_chord_snapshot_is_frozen() {
+        assert_eq!(catalog_chord_snapshot(), CATALOG_CHORD_SNAPSHOT);
+    }
+
+    /// Regeneration tool for `catalog_chord_snapshot_is_frozen` — prints the
+    /// exact block to paste into `CATALOG_CHORD_SNAPSHOT`. `#[ignore]`d (zero
+    /// cost to the normal suite), a reusable tool, not a law with its own
+    /// failure mode.
+    #[test]
+    #[ignore]
+    fn print_catalog_chord_snapshot() {
+        print!("{}", catalog_chord_snapshot());
+    }
+
     /// THE DISPLACED-LIST LAW: drives a REAL `Convention::Linux` `KeymapState`
     /// over every documented collision chord (the table above the keep helpers)
     /// and asserts it resolves to the NATIVE meaning — then sweeps every OTHER
@@ -2931,6 +3066,14 @@ mod tests {
     /// Mac has no collision exceptions. Linux's native flavor names its two
     /// intentional policy exceptions (native-wins displacement and C-k's keep
     /// floor); the emacs flavor restores every displaced emacs slot.
+    ///
+    /// SCOPE: since catalog slots and dispatch share one seed, the chord-VALUE
+    /// axis here is a round-trip — this law does NOT pin which chord a command
+    /// carries. It pins that every seeded slot DISPATCHES (reaches `resolve` and
+    /// fires) and that the hand-written Linux POLICY layer (displacement / keep /
+    /// flavor) routes each slot correctly. The literal VALUE oracle is
+    /// `mac_convention_is_byte_identical_to_the_pre_round_table` +
+    /// `catalog_chord_snapshot_is_frozen`.
     #[test]
     fn every_catalog_default_slot_dispatches_through_real_keymap_under_both_conventions_and_flavors() {
         for command in crate::commands::COMMANDS.iter() {

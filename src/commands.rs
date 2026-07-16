@@ -1835,12 +1835,19 @@ mod tests {
 
     #[test]
     fn catalog_and_keymap_agree_on_every_default_chord() {
-        // THE AGREEMENT SWEEP: the catalog's binding labels are DATA (the palette
-        // teaches them; the rebind menu edits them) while the keymap's dispatch
-        // dispatch is seeded from the same source — this loop pins the two
-        // together for EVERY command, so a chord shown in Cmd-P always fires
-        // exactly that command
-        // and a `[keys]` entry always finds its action.
+        // THE AGREEMENT SWEEP: the catalog's binding labels and the keymap's
+        // dispatch are now SEEDED FROM ONE SOURCE (assets/keymap-defaults.toml).
+        // On the chord-VALUE axis this loop is therefore a round-trip — it can
+        // no longer catch a wrong default chord, because dispatch and
+        // expectation read the same parse. What it STILL genuinely verifies is
+        // the SEED-TO-DISPATCH ROUND-TRIP (every seeded slot actually reaches
+        // `resolve` and fires its command, so `[keys]` can always address it)
+        // PLUS the hand-written Linux POLICY layer below (translation, override,
+        // displacement, keep) which is NOT seeded from the TOML. The VALUE
+        // oracle — "this specific command resolves to this specific chord" — is
+        // the checked-in literal snapshots
+        // (`keymap::tests::mac_convention_is_byte_identical_to_the_pre_round_table`
+        // and `keymap::tests::catalog_chord_snapshot_is_frozen`), NOT this sweep.
         //
         // CONVENTION-PROOF (per-convention, not just whichever is ambient):
         // `c.native` is always stored in MAC-LITERAL form ("Cmd-O") — under
