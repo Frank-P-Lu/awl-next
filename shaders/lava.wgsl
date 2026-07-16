@@ -64,13 +64,16 @@ struct Globals {
     // The GUTTER's local corner carve rect [left, top, right, bottom] (px), used
     // when `gutter == 1`. All-zero otherwise.
     gutter_rect: vec4<f32>,
-    // PROBE-ONLY (env AWL_LAVA_BOTH, gallery-only): the OUTLINE rail band rect
-    // [left, top, right, bottom] (px) for the `plate`/`band` auditions. Inert
-    // when `probe.x == 0` (every ship frame).
-    outline_rect: vec4<f32>,
-    // PROBE-ONLY: [mode, column_dim, 0, 0] — mode 0 ship / 1 plate / 2 band /
-    // 3 bleed; column_dim = the full-bleed under-column alpha floor. 0 in ship.
-    probe: vec4<f32>,
+    // FROST params [dim, blur_px, feather_px, pill_count]: the per-entry frost
+    // pill treatment (the shipped headed-doc default). `pill_count` (w) is how
+    // many `pills` are live — 0 in every non-frost frame (non-lava world, no
+    // outline, or AWL_LAVA_FROST=off), so the frost path is inert. MUST match
+    // `lava::frost_pixel` / `lava::frost_pill_coverage`.
+    frost: vec4<f32>,
+    // The FROST PILL rects [left, top, right, bottom] (px), one per drawn outline
+    // entry — the regions the lamp renders FROSTED behind. Only the first
+    // `frost.w` are live (all-zero otherwise). MUST match `lava::MAX_FROST_PILLS`.
+    pills: array<vec4<f32>, 48>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -143,6 +146,23 @@ fn metaball_field(px: vec2<f32>) -> f32 {
     return total;
 }
 
+// The SOFTENED (blurred) field behind a frost pill: `metaball_field` averaged
+// over a 3x3 tap cross at `blur` px spacing. Averaging the RAW field (never the
+// posterized color) widens each blob's edge without ever sampling the Bayer grid
+// — the Mangrove REQUIREMENT (blurring the ordered dither makes cross moiré).
+// MUST match `lava::frost_field`.
+fn frost_field(px: vec2<f32>, blur: f32) -> f32 {
+    var acc = 0.0;
+    for (var j = 0; j < 3; j = j + 1) {
+        let oy = (f32(j) - 1.0) * blur;
+        for (var i = 0; i < 3; i = i + 1) {
+            let ox = (f32(i) - 1.0) * blur;
+            acc = acc + metaball_field(px + vec2<f32>(ox, oy));
+        }
+    }
+    return acc / 9.0;
+}
+
 // The classic 8x8 ordered (Bayer) dither matrix — the SAME values as
 // `shaders/background.wgsl`'s BAYER8 (a small, accepted cross-shader
 // duplication; the product's own copy stays the single source of truth).
@@ -185,22 +205,19 @@ fn rect_dist_outside(p: vec2<f32>, rect: vec4<f32>) -> f32 {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let x = in.px.x;
     let mode = g.margin.w;
-    let probe = u32(g.probe.x + 0.5);
     // `dist_outside`: positive in a lava-bearing margin, <= 0 inside a no-lava
     // zone. Ordinarily the one zone is the writing column (both edges via
-    // max()); with the LEFT-MARGIN RAIL carved (`g.rail == 1u` — the OUTLINE
-    // draws there, a headed doc) the whole LEFT margin joins it — only the
-    // RIGHT margin's distance counts, so the rail renders the flat ground
-    // (and, through `could_glow` below, sheds the left-edge bleed a flat rail
-    // would make read as an unexplained tint). The `plate`/`band` probes
-    // deliberately DON'T full-carve — they let a headed doc keep both margins.
-    // The lava is ALWAYS margins-only (ship), so `mode` is 1.0 (hard) or 2.0
-    // (glow) — never 0. `mask` = 0 at the zone edge, ramping to full strength
-    // `gap` px further out into the margin, so the field fades entirely OUTSIDE
-    // the zones and the page (and a carved rail) stays a clean flat ground.
-    // MUST match `lava::rail_dist_outside`/`lava::lava_mask` (the Rust mirror).
+    // max()). The `g.rail == 1u` full-carve branch (the OLD whole-left-margin
+    // treatment) stays wired for the one-line data revert (`lava::
+    // FROST_RAIL_DEFAULT` false) — under the shipped FROST default it is never
+    // set, so a headed doc keeps BOTH margins alive and the frost pills below
+    // carry legibility. The lava is ALWAYS margins-only (ship), so `mode` is 1.0
+    // (hard) or 2.0 (glow) — never 0. `mask` = 0 at the zone edge, ramping to
+    // full strength `gap` px further out into the margin, so the field fades
+    // entirely OUTSIDE the zones and the page (and a carved rail) stays a clean
+    // flat ground. MUST match `lava::rail_dist_outside`/`lava::lava_mask`.
     let dist_all = max(g.margin.x - x, x - g.margin.y);
-    let rail_on = g.rail == 1u && probe != 1u && probe != 2u;
+    let rail_on = g.rail == 1u;
     let dist_outside = select(dist_all, x - g.margin.y, rail_on);
     let gap = max(g.margin.z, 1.0);
     var mask = smoothstep(0.0, gap, dist_outside);
@@ -213,45 +230,29 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         mask = mask * smoothstep(0.0, gap, rect_dist_outside(in.px, g.gutter_rect));
     }
 
-    // PROBE `band` (gallery-only): a local band carve around the OUTLINE rail,
-    // so a headed doc keeps both margins outside the rail's own band. Its
-    // left-edge glow is shed locally too (see `near_rail_edge` below) — the
-    // carve and the glow-shed cover the SAME rail band, never the far margin.
-    if (probe == 2u) {
-        mask = mask * smoothstep(0.0, gap, rect_dist_outside(in.px, g.outline_rect));
-    }
-
-    // FULL-BLEED probe: the lamp continues UNDER the writing column at a faint,
-    // heavily value-dimmed alpha floor, so the document floats over one field.
-    let bleed = probe == 3u;
-
     // EDGE-GLOW: within the short bleed distance INSIDE the column, a faint,
-    // field-driven tail may show (glow mode only). The `plate`/`band` probes
-    // shed it ONLY where their local rail treatment sits — the LEFT edge, within
-    // the rail band's own vertical extent — so a flat local band (or solid plate)
-    // sheds the same left-edge bleed a carved rail does WITHOUT touching the
-    // opposite margin's ordinary glow. `x - g.margin.x < GLOW_BLEED_PX` is TRUE
-    // only for the LEFT-edge tail (the RIGHT edge sits a full column-width away),
-    // so the right margin's edge-glow survives both probes untouched.
-    let rail_probe = probe == 1u || probe == 2u;
-    let in_rail_band_y = in.px.y >= g.outline_rect.y && in.px.y <= g.outline_rect.w;
-    let near_rail_edge = rail_probe && in_rail_band_y && (x - g.margin.x) < GLOW_BLEED_PX;
-    let could_glow = mode > 1.5 && !near_rail_edge && dist_outside < 0.0 && dist_outside > -GLOW_BLEED_PX;
+    // field-driven tail may show (glow mode only). `x - g.margin.x < GLOW_BLEED_PX`
+    // is TRUE only for the LEFT-edge tail (the RIGHT edge sits a full column-width
+    // away), so both margins' edge-glow read symmetrically.
+    let could_glow = mode > 1.5 && dist_outside < 0.0 && dist_outside > -GLOW_BLEED_PX;
 
-    // PROBE `plate` (gallery-only): a SOLID ground plate behind just the rail
-    // entries — opaque ground inside the outline band, lava both sides elsewhere.
-    // The plate-to-column boundary reads as a clean solid floor: the left-edge
-    // glow tail is shed inside the rail band (`near_rail_edge`), so no hair of
-    // blob crest bleeds across the plate's edge.
-    if (probe == 1u && rect_dist_outside(in.px, g.outline_rect) <= 0.0) {
-        return vec4<f32>(g.ground.rgb, 1.0);
+    // FROST AMOUNT: max coverage over every drawn outline entry's pill (0 in a
+    // non-frost frame — `pill_count == 0`). A pixel inside ANY pill frosts; the
+    // lamp stays fully alive between and around them. MUST match `lava::
+    // frost_amount` / `frost_pill_coverage`.
+    let pill_count = u32(g.frost.w + 0.5);
+    let feather = max(g.frost.z, 1.0);
+    var frost_amt = 0.0;
+    for (var pi = 0u; pi < pill_count; pi = pi + 1u) {
+        let d = rect_dist_outside(in.px, g.pills[pi]);
+        let cov = 1.0 - smoothstep(-feather, 0.0, d);
+        frost_amt = max(frost_amt, cov);
     }
 
     // Deep inside the column with no glow possible: the fragment is fully
     // TRANSPARENT so the flat base_100 page clear shows through untouched — both
-    // a legibility guarantee and a free perf win (most of a page's pixels). The
-    // full-bleed probe skips this (it fills the column instead).
-    if (mask < 0.02 && !could_glow && !bleed) {
+    // a legibility guarantee and a free perf win (most of a page's pixels).
+    if (mask < 0.02 && !could_glow) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
@@ -290,11 +291,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var out_rgb = margin_rgb;
     var out_a = mask;
 
-    // FULL-BLEED probe (gallery-only): under the column the mask is ~0, but the
-    // lamp keeps a faint value-dimmed presence there — the field's own color at a
-    // low alpha floor, so the document reads over one continuous ground.
-    if (bleed) {
-        out_a = max(out_a, g.probe.y * clamp(edge_t, 0.0, 1.0));
+    // FROST PILLS: behind each drawn outline entry, soften the SMOOTH field (a
+    // blurred sample — never the dithered grid, the Mangrove palette-blur lesson)
+    // and value-dim it toward the flat ground so the dim outline ink keeps its
+    // contrast, while the lamp stays fully alive between and around the pills.
+    // MUST match `lava::frost_pixel`.
+    if (frost_amt > 0.0) {
+        let fb = frost_field(in.px, g.frost.y);
+        let edge_b = smoothstep(THRESHOLD - EDGE_WIDTH, THRESHOLD + EDGE_WIDTH, fb);
+        let core_b = smoothstep(THRESHOLD, THRESHOLD + CORE_WIDTH, fb);
+        let blob_b = mix(g.blob_lo.rgb, g.blob_hi.rgb, core_b);
+        let smooth_b = mix(g.ground.rgb, blob_b, edge_b);
+        // VALUE DIM toward the flat ground (g.frost.x), guaranteeing ink contrast.
+        let frost_rgb = mix(smooth_b, g.ground.rgb, g.frost.x);
+        out_rgb = mix(out_rgb, frost_rgb, frost_amt);
     }
 
     if (could_glow) {

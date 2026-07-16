@@ -199,6 +199,11 @@ web-sys = { version = "0.3", features = [
 
 [dev-dependencies]
 serde_json = "1.0.150"
+# PNG decode for the RENDERED-PIXEL frost regression (`tests/frost_rail_pixels.rs`,
+# the appearance-oracle guard CLAUDE.md's tripwire demands). Same version + feature
+# set as the runtime `image` dependency above, so no extra crate is compiled — a
+# dev-dep is simply how an integration test (separate crate) reaches the decoder.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 # WGSL->GLSL ES 300 (WebGL2) offline shader validation for the DITHER round's
 # shader changes (`render::tests::webgl_shader_validation`) — same naga
 # version wgpu 29.0.3 already pulls in transitively, pinned exact so this
