@@ -115,8 +115,11 @@ const EXPECTED: &[(&str, usize)] = &[
     ("render/benchsuite/mod.rs", 12),
     ("render/benchsuite/report.rs", 9),
     // `--soak-gpu`'s bounded native-probe report is CLI product: result,
-    // counters, memory summaries, recovery timings, and explicit defects.
-    ("soak_gpu.rs", 7),
+    // counters (incl. the per-cause `skipped_by_kind` breakdown), memory
+    // summaries, recovery timings, and explicit defects. All print sites live
+    // in the report submodule; `soak_gpu/mod.rs` (the schedule/observe half)
+    // prints nothing, so it does not appear here.
+    ("soak_gpu/report.rs", 8),
 ];
 
 /// The pure per-line needle counter: matches `println!(` / `eprintln!(` as a

@@ -43,7 +43,7 @@ impl App {
             }
             gpu::GpuFrameOutcome::Skipped(skip) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Some(soak) = self.soak.as_mut() { soak.observe_frame(crate::soak_gpu::FrameOutcome::Skipped, false); }
+                if let Some(soak) = self.soak.as_mut() { soak.observe_frame(crate::soak_gpu::FrameOutcome::Skipped(soak_skip_kind(skip)), false); }
                 let action = gpu_skip_action(skip, self.gpu_timeout_streak);
                 self.gpu_timeout_streak = if skip == gpu::GpuFrameSkip::Timeout {
                     self.gpu_timeout_streak.saturating_add(1)
@@ -68,7 +68,7 @@ impl App {
             }
             gpu::GpuFrameOutcome::Fault(fault) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Some(soak) = self.soak.as_mut() { soak.observe_frame(crate::soak_gpu::FrameOutcome::Skipped, false); }
+                if let Some(soak) = self.soak.as_mut() { soak.observe_frame(crate::soak_gpu::FrameOutcome::Skipped(crate::soak_gpu::SkipKind::Fault), false); }
                 self.handle_gpu_fault(event_loop, fault);
                 Err(())
             }
@@ -89,6 +89,19 @@ impl App {
         self.focused = true;
         self.lava_tick_at = None;
         if let Some(gpu) = self.gpu.as_ref() { gpu.window.request_redraw(); }
+    }
+
+    /// `WindowEvent::Occluded`: the window's compositor visibility changed.
+    /// When it becomes VISIBLE again (`occluded == false`), request a redraw —
+    /// the GPU skip path parked `Occluded → WaitForWake` with no retry timer, so
+    /// without this wake an un-occluded window could sit un-repainted until some
+    /// unrelated event happened to arrive. Becoming occluded needs no action
+    /// (the next acquire returns `Occluded` and re-parks the loop). The decision
+    /// is the pure `occluded_change_wants_redraw` so it is unit-testable.
+    pub(super) fn on_occluded(&mut self, occluded: bool) {
+        if occluded_change_wants_redraw(occluded) {
+            if let Some(gpu) = self.gpu.as_ref() { gpu.window.request_redraw(); }
+        }
     }
 
     pub(super) fn on_focus_lost(&mut self) {
@@ -312,7 +325,7 @@ impl App {
         let fault = self.gpu.as_ref().and_then(|g| g.take_faults().into_iter().next());
         if let Some(fault) = fault {
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some(soak) = self.soak.as_mut() { soak.observe_frame(crate::soak_gpu::FrameOutcome::Skipped, false); }
+            if let Some(soak) = self.soak.as_mut() { soak.observe_frame(crate::soak_gpu::FrameOutcome::Skipped(crate::soak_gpu::SkipKind::Fault), false); }
             self.handle_gpu_fault(event_loop, fault);
             event_loop.set_control_flow(ControlFlow::Wait);
             return;

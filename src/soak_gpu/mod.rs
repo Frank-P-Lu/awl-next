@@ -9,6 +9,9 @@
 
 use std::time::{Duration, Instant};
 
+mod report;
+pub(crate) use report::Report;
+
 pub(crate) const DEFAULT_DURATION: Duration = Duration::from_secs(15 * 60);
 pub(crate) const RESIZE_TARGET: u32 = 300;
 pub(crate) const THEME_TARGET: u32 = 300;
@@ -46,7 +49,60 @@ pub(crate) enum Stimulus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FrameOutcome {
     Presented,
-    Skipped,
+    Skipped(SkipKind),
+}
+
+/// The reason a frame did not present, mirrored from the live GPU skip/fault
+/// taxonomy so the probe can count each cause SEPARATELY. Collapsing these into
+/// a single `skipped` total is exactly what hid the zero-drawable
+/// investigation: 30s of pure `Occluded` skips read identically to a timeout
+/// storm. Per-kind counters make that self-diagnosing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SkipKind {
+    Timeout,
+    Occluded,
+    SurfaceReconfigured,
+    SurfaceRecreated,
+    PrepareFailed,
+    /// A classified fault (OOM / device-lost / surface-lost / validation) whose
+    /// frame is dropped while App-owned recovery runs.
+    Fault,
+}
+
+impl SkipKind {
+    /// Every variant, in the fixed order the report prints — the array's length
+    /// IS the counter table's width (a new variant fails to compile the
+    /// `[u64; SkipKind::ALL.len()]` counter until it is added here).
+    pub(crate) const ALL: [SkipKind; 6] = [
+        Self::Timeout,
+        Self::Occluded,
+        Self::SurfaceReconfigured,
+        Self::SurfaceRecreated,
+        Self::PrepareFailed,
+        Self::Fault,
+    ];
+
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::Timeout => 0,
+            Self::Occluded => 1,
+            Self::SurfaceReconfigured => 2,
+            Self::SurfaceRecreated => 3,
+            Self::PrepareFailed => 4,
+            Self::Fault => 5,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::Occluded => "occluded",
+            Self::SurfaceReconfigured => "reconfigured",
+            Self::SurfaceRecreated => "recreated",
+            Self::PrepareFailed => "prepare_failed",
+            Self::Fault => "fault",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -62,6 +118,10 @@ struct Counts {
     acquires: u64,
     presents: u64,
     skipped: u64,
+    /// Per-cause skip tally, indexed by [`SkipKind::index`]. The `skipped` total
+    /// above is their sum; keeping both lets the report print the breakdown
+    /// without losing the one-number headline.
+    skipped_by_kind: [u64; SkipKind::ALL.len()],
     resizes: u32,
     themes: u32,
     overlays: u32,
@@ -147,28 +207,55 @@ impl Controller {
                 return Some(Stimulus::Inject(kind));
             }
         }
-        let want_resize = due(RESIZE_TARGET, fraction);
-        if self.scheduled_resizes < want_resize {
-            let i = self.scheduled_resizes;
-            self.scheduled_resizes += 1;
-            let sizes = [(960, 640), (1280, 800), (1100, 720), (1440, 900)];
-            let (width, height) = sizes[i as usize % sizes.len()];
-            return Some(Stimulus::Resize { width, height });
+        // Interleave the three periodic stimuli by NORMALIZED LAG rather than
+        // draining one kind before the next. The old drain order let resize
+        // demand monopolize the schedule: the live loop emits at most one
+        // resize per tick (the batch breaks on it), so as `fraction` crept up
+        // resize was perpetually "due" and re-selected first every tick, and
+        // themes/overlays stayed at zero (themes=0/overlays=0 at 6s). Picking
+        // the kind furthest behind its own quota (deficit ÷ its target) keeps
+        // all three progressing together; ties resolve resize→theme→overlay.
+        let periodic = [
+            (self.scheduled_resizes, due(RESIZE_TARGET, fraction), RESIZE_TARGET),
+            (self.scheduled_themes, due(THEME_TARGET, fraction), THEME_TARGET),
+            (
+                self.scheduled_overlay_toggles,
+                due(OVERLAY_TARGET * 2, fraction),
+                OVERLAY_TARGET * 2,
+            ),
+        ];
+        let mut choice: Option<usize> = None;
+        let mut best_lag = 0.0_f64;
+        for (i, &(scheduled, want, target)) in periodic.iter().enumerate() {
+            if scheduled < want {
+                let lag = f64::from(want - scheduled) / f64::from(target);
+                if choice.is_none() || lag > best_lag {
+                    choice = Some(i);
+                    best_lag = lag;
+                }
+            }
         }
-        let want_theme = due(THEME_TARGET, fraction);
-        if self.scheduled_themes < want_theme {
-            self.scheduled_themes += 1;
-            return Some(Stimulus::ThemeNext);
+        match choice {
+            Some(0) => {
+                let i = self.scheduled_resizes;
+                self.scheduled_resizes += 1;
+                let sizes = [(960, 640), (1280, 800), (1100, 720), (1440, 900)];
+                let (width, height) = sizes[i as usize % sizes.len()];
+                Some(Stimulus::Resize { width, height })
+            }
+            Some(1) => {
+                self.scheduled_themes += 1;
+                Some(Stimulus::ThemeNext)
+            }
+            Some(2) => {
+                self.scheduled_overlay_toggles += 1;
+                self.overlay_open = !self.overlay_open;
+                Some(Stimulus::Overlay {
+                    open: self.overlay_open,
+                })
+            }
+            _ => None,
         }
-        let want_toggles = due(OVERLAY_TARGET * 2, fraction);
-        if self.scheduled_overlay_toggles < want_toggles {
-            self.scheduled_overlay_toggles += 1;
-            self.overlay_open = !self.overlay_open;
-            return Some(Stimulus::Overlay {
-                open: self.overlay_open,
-            });
-        }
-        None
     }
 
     pub(crate) fn observe_backend(&mut self, backend: impl Into<String>) {
@@ -180,7 +267,10 @@ impl Controller {
         self.counts.acquires += u64::from(acquired);
         match outcome {
             FrameOutcome::Presented => self.counts.presents += 1,
-            FrameOutcome::Skipped => self.counts.skipped += 1,
+            FrameOutcome::Skipped(kind) => {
+                self.counts.skipped += 1;
+                self.counts.skipped_by_kind[kind.index()] += 1;
+            }
         }
     }
 
@@ -240,8 +330,8 @@ impl Controller {
             elapsed: now.duration_since(self.started),
             backend: self.backend.clone(),
             counts: self.counts,
-            rss: summarize(&rss),
-            metal: summarize(&metal),
+            rss: report::summarize(&rss),
+            metal: report::summarize(&metal),
             recovery_ms: self.recovery_ms,
             required_cycles_met: self.counts.resizes >= RESIZE_TARGET
                 && self.counts.themes >= THEME_TARGET
@@ -261,133 +351,6 @@ fn fault_index(kind: FaultKind) -> usize {
         FaultKind::SurfaceLost => 1,
         FaultKind::DeviceLost => 2,
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Summary {
-    pub min_bytes: u64,
-    pub median_bytes: u64,
-    pub peak_bytes: u64,
-    pub end_median_bytes: u64,
-    pub slope_bytes_per_min: f64,
-}
-
-fn summarize(samples: &[(f64, u64)]) -> Option<Summary> {
-    if samples.is_empty() {
-        return None;
-    }
-    let values: Vec<_> = samples.iter().map(|(_, v)| *v).collect();
-    let tail_len = values.len().div_ceil(10).max(1);
-    Some(Summary {
-        min_bytes: *values.iter().min().unwrap(),
-        median_bytes: median(&values),
-        peak_bytes: *values.iter().max().unwrap(),
-        end_median_bytes: median(&values[values.len() - tail_len..]),
-        slope_bytes_per_min: least_squares_slope(samples) * 60.0,
-    })
-}
-
-fn median(values: &[u64]) -> u64 {
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable();
-    let mid = sorted.len() / 2;
-    if sorted.len() % 2 == 0 {
-        sorted[mid - 1] / 2 + sorted[mid] / 2 + (sorted[mid - 1] % 2 + sorted[mid] % 2) / 2
-    } else {
-        sorted[mid]
-    }
-}
-
-fn least_squares_slope(samples: &[(f64, u64)]) -> f64 {
-    if samples.len() < 2 {
-        return 0.0;
-    }
-    let n = samples.len() as f64;
-    let mean_x = samples.iter().map(|(x, _)| x).sum::<f64>() / n;
-    let mean_y = samples.iter().map(|(_, y)| *y as f64).sum::<f64>() / n;
-    let numerator = samples
-        .iter()
-        .map(|(x, y)| (x - mean_x) * (*y as f64 - mean_y))
-        .sum::<f64>();
-    let denominator = samples
-        .iter()
-        .map(|(x, _)| (x - mean_x).powi(2))
-        .sum::<f64>();
-    if denominator == 0.0 {
-        0.0
-    } else {
-        numerator / denominator
-    }
-}
-
-pub(crate) struct Report {
-    elapsed: Duration,
-    backend: Option<String>,
-    counts: Counts,
-    rss: Option<Summary>,
-    metal: Option<Summary>,
-    recovery_ms: [Option<f64>; 3],
-    required_cycles_met: bool,
-}
-
-impl Report {
-    pub(crate) fn passed(&self) -> bool {
-        self.backend.is_some()
-            && self.counts.acquires > 0
-            && self.counts.presents > 0
-            && self.required_cycles_met
-            && self.recovery_ms.iter().all(Option::is_some)
-            && self.rss.is_some()
-            && (!cfg!(target_os = "macos") || self.metal.is_some())
-    }
-
-    pub(crate) fn print(&self) {
-        println!(
-            "soak-gpu result: {}",
-            if self.passed() { "PASS" } else { "FAIL" }
-        );
-        println!(
-            "elapsed_s={:.3} backend={} frames={} acquires={} presents={} skipped={} resizes={} themes={} overlay_cycles={} faults={}",
-            self.elapsed.as_secs_f64(),
-            self.backend.as_deref().unwrap_or("absent"),
-            self.counts.frames,
-            self.counts.acquires,
-            self.counts.presents,
-            self.counts.skipped,
-            self.counts.resizes,
-            self.counts.themes,
-            self.counts.overlays,
-            self.counts.faults
-        );
-        print_summary("rss", self.rss);
-        print_summary("metal", self.metal);
-        println!(
-            "recovery_ms oom={} surface_lost={} device_lost={}",
-            fmt_optional(self.recovery_ms[0]),
-            fmt_optional(self.recovery_ms[1]),
-            fmt_optional(self.recovery_ms[2])
-        );
-        if self.counts.acquires == 0 || self.counts.presents == 0 {
-            println!("defect: real native surface acquire+present path was not proven");
-        }
-        if cfg!(target_os = "macos") && self.metal.is_none() {
-            println!("defect: Metal currentAllocatedSize samples were absent");
-        }
-    }
-}
-
-fn print_summary(label: &str, summary: Option<Summary>) {
-    match summary {
-        Some(s) => println!(
-            "{label}_bytes min={} median={} peak={} end_median={} slope_per_min={:.3}",
-            s.min_bytes, s.median_bytes, s.peak_bytes, s.end_median_bytes, s.slope_bytes_per_min
-        ),
-        None => println!("{label}_bytes absent"),
-    }
-}
-
-fn fmt_optional(value: Option<f64>) -> String {
-    value.map_or_else(|| "absent".to_string(), |v| format!("{v:.3}"))
 }
 
 #[cfg(target_os = "macos")]
@@ -462,22 +425,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn report_math_pins_median_tail_and_slope() {
-        let s = summarize(&[(0.0, 100), (1.0, 110), (2.0, 120), (3.0, 130), (4.0, 140)]).unwrap();
-        assert_eq!(
-            (
-                s.min_bytes,
-                s.median_bytes,
-                s.peak_bytes,
-                s.end_median_bytes
-            ),
-            (100, 120, 140, 140)
-        );
-        assert!((s.slope_bytes_per_min - 600.0).abs() < 1e-9);
-        assert_eq!(median(&[u64::MAX - 1, u64::MAX]), u64::MAX - 1);
-    }
-
-    #[test]
     fn accelerated_schedule_reaches_every_cycle_and_fault() {
         let start = Instant::now();
         let mut c = Controller::new_at(
@@ -499,38 +446,48 @@ mod tests {
         );
     }
 
+    /// Walking real time in small ticks — at most one resize/inject emitted per
+    /// tick, exactly like the live `drive_gpu_soak` batch — every periodic kind
+    /// must be making progress well before the end. The OLD drain order left
+    /// themes and overlays at ZERO here (resize was perpetually "due" and won
+    /// every tick); the normalized-lag interleave keeps all three moving.
     #[test]
-    fn report_refuses_missing_real_surface_proof() {
-        let complete = Counts {
-            acquires: 1,
-            presents: 1,
-            resizes: RESIZE_TARGET,
-            themes: THEME_TARGET,
-            overlays: OVERLAY_TARGET,
-            faults: 3,
-            ..Counts::default()
-        };
-        let memory = Summary {
-            min_bytes: 1,
-            median_bytes: 1,
-            peak_bytes: 1,
-            end_median_bytes: 1,
-            slope_bytes_per_min: 0.0,
-        };
-        let mut report = Report {
-            elapsed: Duration::from_secs(1),
-            backend: Some("Metal".to_string()),
-            counts: complete,
-            rss: Some(memory),
-            metal: Some(memory),
-            recovery_ms: [Some(1.0); 3],
-            required_cycles_met: true,
-        };
-        assert!(report.passed());
-        report.counts.presents = 0;
-        assert!(!report.passed());
-        report.counts.presents = 1;
-        report.backend = None;
-        assert!(!report.passed());
+    fn interleaved_schedule_never_starves_themes_or_overlays() {
+        let start = Instant::now();
+        let dur = Duration::from_secs(600);
+        let mut c = Controller::new_at(SoakConfig { duration: dur }, start);
+        assert_eq!(c.next_stimulus(start), Some(Stimulus::SetLavaTheme));
+        let steps = 2000u32;
+        for step in 1..=steps {
+            let now = start + dur.mul_f64(f64::from(step) / f64::from(steps))
+                - Duration::from_millis(1);
+            for _ in 0..32 {
+                let Some(s) = c.next_stimulus(now) else { break };
+                if matches!(s, Stimulus::Resize { .. } | Stimulus::Inject(_)) {
+                    break;
+                }
+            }
+            if step == steps * 2 / 5 {
+                assert!(c.scheduled_resizes > 0, "resizes starved");
+                assert!(c.scheduled_themes > 0, "themes starved");
+                assert!(c.scheduled_overlay_toggles > 0, "overlays starved");
+            }
+        }
+    }
+
+    /// A skip is tallied both in the headline total and in its own per-kind
+    /// bucket, so 30s of pure occlusion never masquerades as a timeout storm.
+    #[test]
+    fn observe_frame_tracks_skip_kind_separately() {
+        let mut c = Controller::new_at(SoakConfig::default(), Instant::now());
+        c.observe_frame(FrameOutcome::Skipped(SkipKind::Occluded), false);
+        c.observe_frame(FrameOutcome::Skipped(SkipKind::Occluded), false);
+        c.observe_frame(FrameOutcome::Skipped(SkipKind::Timeout), false);
+        c.observe_frame(FrameOutcome::Presented, true);
+        assert_eq!(c.counts.skipped, 3);
+        assert_eq!(c.counts.presents, 1);
+        assert_eq!(c.counts.skipped_by_kind[SkipKind::Occluded.index()], 2);
+        assert_eq!(c.counts.skipped_by_kind[SkipKind::Timeout.index()], 1);
+        assert_eq!(c.counts.skipped_by_kind[SkipKind::Fault.index()], 0);
     }
 }

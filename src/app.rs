@@ -301,6 +301,27 @@ fn gpu_skip_action(skip: gpu::GpuFrameSkip, timeout_streak: u8) -> GpuSkipAction
 fn keep_gpu_loop_hot(animating: bool, frame_presented: bool) -> bool {
     animating && frame_presented
 }
+/// Map a live GPU skip cause onto the soak probe's [`crate::soak_gpu::SkipKind`]
+/// so each cause is counted SEPARATELY (the collapse into one `skipped` total is
+/// what hid the zero-drawable occlusion investigation).
+#[cfg(not(target_arch = "wasm32"))]
+fn soak_skip_kind(skip: gpu::GpuFrameSkip) -> crate::soak_gpu::SkipKind {
+    match skip {
+        gpu::GpuFrameSkip::Timeout => crate::soak_gpu::SkipKind::Timeout,
+        gpu::GpuFrameSkip::Occluded => crate::soak_gpu::SkipKind::Occluded,
+        gpu::GpuFrameSkip::SurfaceReconfigured => crate::soak_gpu::SkipKind::SurfaceReconfigured,
+        gpu::GpuFrameSkip::SurfaceRecreated => crate::soak_gpu::SkipKind::SurfaceRecreated,
+        gpu::GpuFrameSkip::PrepareFailed => crate::soak_gpu::SkipKind::PrepareFailed,
+    }
+}
+/// `WindowEvent::Occluded`: whether an occlusion CHANGE should schedule a
+/// repaint. The GPU skip path parks `Occluded → WaitForWake` with no retry
+/// timer, so an un-occlusion (`false`) is the wake that must request a redraw;
+/// becoming occluded (`true`) needs nothing — the next acquire returns
+/// `Occluded` and re-parks the loop. Pure so it is unit-testable off-window.
+fn occluded_change_wants_redraw(occluded: bool) -> bool {
+    !occluded
+}
 
 struct Gpu {
     instance: wgpu::Instance,
@@ -1366,6 +1387,15 @@ impl App {
                     if !open && self.overlay.is_none() { if let Some(s) = self.soak.as_mut() { s.observe_overlay_cycle(); } }
                 }
                 crate::soak_gpu::Stimulus::Inject(kind) => {
+                    // LIMITATION (acceptable): `soak_recovery_pending` is a
+                    // single slot, so two injections landing before a present
+                    // observes the first recovery would drop the earlier
+                    // timing. The schedule cannot reach that state — each fault
+                    // kind is injected EXACTLY ONCE (`Controller::injected` is a
+                    // one-shot latch per kind) and the batch loop above STOPS on
+                    // any `Inject`, so at most one injection is issued per tick
+                    // and the next present clears the slot before the following
+                    // kind can fire. A queue would be dead generality here.
                     self.soak_recovery_pending = Some(kind);
                     if let Some(gpu) = self.gpu.as_mut() { match kind {
                         crate::soak_gpu::FaultKind::OutOfMemory => gpu.inject_fault(gpu::GpuFaultInjection::OutOfMemory),
@@ -1647,6 +1677,7 @@ impl ApplicationHandler<AwlEvent> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Focused(true) => self.on_focus_gained(),
             WindowEvent::Focused(false) => self.on_focus_lost(),
+            WindowEvent::Occluded(occluded) => self.on_occluded(occluded),
             WindowEvent::Resized(size) => self.on_resized(event_loop, size),
             WindowEvent::Moved(position) => self.on_moved(position),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -2182,6 +2213,15 @@ mod tests {
             gpu_skip_action(gpu::GpuFrameSkip::PrepareFailed, 0),
             GpuSkipAction::HoldWithNotice("graphics skipped one frame — editing is safe"),
         );
+    }
+
+    #[test]
+    fn un_occlusion_wakes_a_repaint_and_occlusion_does_not() {
+        // `Occluded → WaitForWake` arms no retry timer, so the un-occlude edge
+        // (`false`) is the one that must schedule a redraw; becoming occluded
+        // parks the loop and needs no frame.
+        assert!(occluded_change_wants_redraw(false));
+        assert!(!occluded_change_wants_redraw(true));
     }
 
     #[test]
