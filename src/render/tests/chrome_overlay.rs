@@ -121,7 +121,9 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
             v.overlay_bindings = binds.clone();
             v.overlay_selected = 3;
             if faceted {
-                v.overlay_lens = vec![("All".into(), true), ("File".into(), false)];
+                // Make a real FACET active (index >= 1) so the active-lens
+                // underline is recorded — the C2 y-owner assertion below reads it.
+                v.overlay_lens = vec![("All".into(), false), ("File".into(), true)];
             }
             p.set_view(&v);
             p.prepare(&device, &queue, 1200, 800).unwrap();
@@ -162,6 +164,29 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
                 "{ctx}: caret center {} must be centered on the query row",
                 pr.caret_center
             );
+            // C2 STRIP-UNDERLINE Y-OWNER LAW (the element round A's law missed):
+            // a faceted card records an active-lens underline; it MUST sit BELOW
+            // the strip label's shaped baseline (never mid-glyph — the
+            // Tawny/Firetail strike-through) and stay within the strip row box.
+            if faceted {
+                let base = pr.strip_baseline.unwrap_or_else(|| {
+                    panic!("{ctx}: a faceted card must expose a strip baseline")
+                });
+                let bottom = pr.strip_line_bottom.unwrap();
+                let uy = pr.strip_underline_y.unwrap_or_else(|| {
+                    panic!("{ctx}: an active facet must record an underline y")
+                });
+                assert!(
+                    uy >= base,
+                    "{ctx}: underline y={uy} must sit at/below the strip baseline \
+                     {base} (never strike through the label)"
+                );
+                assert!(
+                    uy <= bottom + 0.5,
+                    "{ctx}: underline y={uy} must stay within the strip row \
+                     (bottom {bottom})"
+                );
+            }
         }
     }
     theme::set_active(theme::DEFAULT_THEME);

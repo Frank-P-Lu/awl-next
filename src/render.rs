@@ -1807,6 +1807,41 @@ pub(crate) fn effective_title_style() -> theme::TitleStyle {
     }
 }
 
+/// THE ONE PURE OWNER of a placard's COMPLEMENTARY corner (COMPOSITION-C2): a
+/// [`theme::PlacardCorner::Auto`] wordmark derives its canvas corner from the
+/// card's own [`theme::CardAnchor`] so the poster lands OPPOSITE the command
+/// surface — never under the card, always a balanced diagonal. Card top-left →
+/// poster bottom-RIGHT; a right-shifted card (`Inset` past centre) → bottom-LEFT;
+/// a top-centred card → bottom-right by default. An explicit corner in the
+/// world's data (Firetail's `BL`) is passed through UNCHANGED — this only
+/// resolves `Auto`. Read by [`TextPipeline::overlay_shape_placard`].
+pub(crate) fn derived_placard_corner(
+    corner: theme::PlacardCorner,
+    anchor: theme::CardAnchor,
+) -> theme::PlacardCorner {
+    use theme::{CardAnchor, PlacardCorner};
+    if corner != PlacardCorner::Auto {
+        return corner;
+    }
+    match anchor {
+        // The card hugs the LEFT → the wordmark takes the opposite bottom corner.
+        CardAnchor::TopLeft => PlacardCorner::BR,
+        // A centred card leaves both bottom corners free; bottom-right is the
+        // calm default (a world dials bottom-left by shipping an explicit `BL`).
+        CardAnchor::TopCenter => PlacardCorner::BR,
+        // A right-shifted statement card → the wordmark drops to bottom-LEFT
+        // (the `Inset` half-and-past composition); a left-of-centre inset keeps
+        // the diagonal to bottom-right.
+        CardAnchor::Inset { x_frac } => {
+            if x_frac >= 0.5 {
+                PlacardCorner::BL
+            } else {
+                PlacardCorner::BR
+            }
+        }
+    }
+}
+
 /// DEV-ONLY probe for the PALETTE-COMPOSITION round's overlay-ANCHOR A/B
 /// (`gallery/palette-composition/`'s top-left-vs-top-center card shots) —
 /// mirrors [`awl_overlay_style_force`]'s idiom exactly. `AWL_OVERLAY_ANCHOR_FORCE`

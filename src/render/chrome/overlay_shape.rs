@@ -42,8 +42,10 @@ fn placard_origin(
     inset: f32,
 ) -> (f32, f32) {
     let (ax, ay, aw, ah) = anchor;
+    // `Auto` is resolved to a concrete corner by `derived_placard_corner` before
+    // this pure placer runs; the arms below fall it back to LEFT/BOTTOM defensively.
     let x = match corner {
-        theme::PlacardCorner::TL | theme::PlacardCorner::BL => {
+        theme::PlacardCorner::TL | theme::PlacardCorner::BL | theme::PlacardCorner::Auto => {
             (ax + inset).min((ax + aw - w).max(ax))
         }
         theme::PlacardCorner::TR | theme::PlacardCorner::BR => (ax + aw - inset - w).max(ax),
@@ -52,7 +54,9 @@ fn placard_origin(
         theme::PlacardCorner::TL | theme::PlacardCorner::TR => {
             (ay + inset).min((ay + ah - h).max(ay))
         }
-        theme::PlacardCorner::BL | theme::PlacardCorner::BR => (ay + ah - inset - h).max(ay),
+        theme::PlacardCorner::BL | theme::PlacardCorner::BR | theme::PlacardCorner::Auto => {
+            (ay + ah - inset - h).max(ay)
+        }
     };
     (x, y)
 }
@@ -151,6 +155,9 @@ impl TextPipeline {
             theme::TitleStyle::Placard { corner, scale, ink } => (corner, scale, ink),
             theme::TitleStyle::InlinePrefix => return None,
         };
+        // Resolve an `Auto` corner COMPLEMENTARY to the card anchor (the ONE pure
+        // owner) so the wordmark lands opposite the command surface, never under it.
+        let corner = crate::render::derived_placard_corner(corner, crate::render::effective_card_anchor());
         let font_size = self.metrics.font_size * crate::markdown::type_scale::TITLE * scale;
         // A generous plain leading — no body text ever sits inside a
         // single-line wordmark box to match against.
@@ -502,6 +509,50 @@ impl TextPipeline {
         }
     }
 
+    /// ONE OWNER of the summoned card's FOOT-HINT spans (the "↑/↓ move …" control
+    /// row) — appends the break-`\n` (at the prior row's NORMAL height) then the hint
+    /// TEXT on a SHORTER line ([`Self::overlay_hint_h`]) at the LABEL rung, keycap
+    /// glyphs (↵ ⇥ ⌘ …) split onto the SYMBOL_FAMILY face. Shared by the flat
+    /// ([`Self::shape_overlay_names`]) and faceted/theme
+    /// ([`Self::shape_theme_spans`]) shapers so EVERY `OverlayKind`'s footer carries
+    /// IDENTICAL bottom geometry (the C2 footer-drift fix — before this the theme /
+    /// faceted path drew the hint at FULL row height while the flat path drew it
+    /// compact, so the card's bottom pad differed per kind). The card-height owners
+    /// ([`overlay_geometry`] / [`theme_geometry`]) reclaim `lh - hint_h` per hint row
+    /// to match this compact strip exactly.
+    pub(super) fn push_overlay_hint_spans<'a>(
+        &self,
+        spans: &mut Vec<(&'a str, glyphon::Attrs<'a>)>,
+        hint: &'a str,
+        muted: glyphon::Color,
+    ) {
+        let name_fs = self.overlay_metrics().font_size;
+        let hint_fs = name_fs * crate::markdown::type_scale::LABEL;
+        let hint_h = self.overlay_hint_h();
+        let base = panel_attrs();
+        let hk_hint = |c| base.clone().color(c).metrics(GlyphMetrics::new(hint_fs, hint_h));
+        let sym_hint = |c| {
+            Attrs::new()
+                .family(Family::Name(SYMBOL_FAMILY))
+                .color(c)
+                .metrics(GlyphMetrics::new(hint_fs, hint_h))
+        };
+        // Break the last content line at its OWN (normal) height first.
+        spans.push(("\n", base.clone().color(muted)));
+        let mut last = 0usize;
+        for run in symbol_runs(hint) {
+            if run.start > last {
+                spans.push((&hint[last..run.start], hk_hint(muted)));
+            }
+            let end = run.end;
+            spans.push((&hint[run], sym_hint(muted)));
+            last = end;
+        }
+        if last < hint.len() {
+            spans.push((&hint[last..], hk_hint(muted)));
+        }
+    }
+
     /// Shape the overlay's LEFT column into `panel_buffer`: the `› query` line (when
     /// the picker has one), the candidate `rows` (pre-budgeted by the caller through
     /// [`rowlayout`]), and the dim foot hint. Carved verbatim out of the old inline
@@ -634,31 +685,9 @@ impl TextPipeline {
         // exactly. Its keycap glyphs (↵ ⇥ ⌘ … ) ride the SYMBOL_FAMILY face —
         // split into symbol / non-symbol runs exactly like the chord column — so
         // a hint that teaches a key with a glyph (`↵ restore`) renders it.
-        let hint_fs = name_fs * crate::markdown::type_scale::LABEL;
-        let hint_h = self.overlay_hint_h();
-        let hk_hint = |c| mk(c).metrics(GlyphMetrics::new(hint_fs, hint_h));
-        let sym_hint = |c| {
-            Attrs::new()
-                .family(Family::Name(SYMBOL_FAMILY))
-                .color(c)
-                .metrics(GlyphMetrics::new(hint_fs, hint_h))
-        };
         if geom.hint_rows > 0 {
-            // Break the last candidate line at its own (normal) height first.
-            spans.push(("\n", mk(muted)));
-            let h = geom.hint.as_str();
-            let mut last = 0usize;
-            for run in symbol_runs(h) {
-                if run.start > last {
-                    spans.push((&h[last..run.start], hk_hint(muted)));
-                }
-                let end = run.end;
-                spans.push((&h[run], sym_hint(muted)));
-                last = end;
-            }
-            if last < h.len() {
-                spans.push((&h[last..], hk_hint(muted)));
-            }
+            // The compact foot-hint through the ONE shared owner (C2 footer-drift).
+            self.push_overlay_hint_spans(&mut spans, geom.hint.as_str(), muted);
         }
         // KEYBINDINGS TIPS FOOTER: the quiet "your top 3" band below the hint (chrome,
         // like the hint line — NOT selectable rows). Each tip a FAINT line (fainter than

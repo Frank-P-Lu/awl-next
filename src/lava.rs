@@ -84,14 +84,22 @@ pub const MAX_BLOBS: usize = 8;
 /// only occludes/reveals this same composition instead of manufacturing two
 /// separately-sized side lamps.
 pub const BACKDROP_BLOBS: [[f32; 4]; 8] = [
-    [0.08, 0.18, 0.14, 0.90],
-    [0.16, 0.50, 0.18, 1.05],
-    [0.12, 0.82, 0.16, 0.95],
-    [0.38, 0.68, 0.21, 1.10],
-    [0.58, 0.30, 0.20, 1.00],
-    [0.86, 0.18, 0.14, 0.90],
-    [0.82, 0.50, 0.18, 1.05],
-    [0.88, 0.82, 0.16, 0.95],
+    // COMPOSITION-C2: radii shrunk ~15% (user — "starting lava lamp spots… kinda
+    // massive"). Centers/weights and the whole authored COMPOSITION are unchanged,
+    // so more calm ground shows between/around the lamps while the layout still
+    // reads as one continuous field. SHARED by both lava worlds (Firetail +
+    // Mangrove read the same field — a per-world fork for the identical "a tad
+    // smaller" ask would be machinery the design doesn't need; the shrink IS the
+    // data). Every lava LAW (figure/ground at worst phase, rail-flat, frost,
+    // seamless loop) re-verified green after the shrink.
+    [0.08, 0.18, 0.120, 0.90],
+    [0.16, 0.50, 0.153, 1.05],
+    [0.12, 0.82, 0.136, 0.95],
+    [0.38, 0.68, 0.178, 1.10],
+    [0.58, 0.30, 0.170, 1.00],
+    [0.86, 0.18, 0.120, 0.90],
+    [0.82, 0.50, 0.153, 1.05],
+    [0.88, 0.82, 0.136, 0.95],
 ];
 
 // --- FROST RAIL constants (the shipped headed-doc treatment) ------------------
@@ -921,8 +929,9 @@ mod tests {
             assert!((0.0..=1.0).contains(&b[0]));
             assert!((0.0..=1.0).contains(&b[1]));
             assert!(
-                b[2] * vp.1 >= 100.0,
-                "backdrop blob is substantial at 1200×800"
+                b[2] * vp.1 >= 90.0,
+                "backdrop blob is substantial at 1200×800 (floor lowered from 100 \
+                 to 90 for the COMPOSITION-C2 ~15% shrink — still a real lamp, not a dot)"
             );
         }
     }
