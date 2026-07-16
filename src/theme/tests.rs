@@ -1770,6 +1770,10 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 // INERT on every world — the silent pole included.
                 chrome_face: model::ChromeFace::Body,
                 motion: model::MotionJuice::CALM,
+                // PER-ITEM LIST SURFACES round: both new dials landed INERT on
+                // every world — the silent pole included.
+                list_style: model::ListStyle::Pane,
+                facet_style: model::FacetStyle::Text,
             },
             // LIGHT-WORLD BORDER (composition round item 6): the four remaining
             // pale-ground worlds gain the summoned-card border, DATA-only.

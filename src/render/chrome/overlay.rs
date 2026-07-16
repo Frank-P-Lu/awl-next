@@ -43,6 +43,11 @@ pub(in crate::render) const CARD_MAX_W_FACETED: f32 = 600.0;
 /// the gallery A/Bs; see [`TextPipeline::overlay_header_gap`].
 const OVERLAY_QUERY_BEAT: f32 = 0.72;
 
+/// PER-ITEM LIST SURFACES round — the corner radius (device px) of a faceted
+/// strip CHIP / active BAND under [`theme::FacetStyle::Chips`]/`Band` (the pill
+/// look). A single dial the gallery A/Bs.
+const FACET_CHIP_RADIUS: f32 = 6.0;
+
 /// The foot HINT row height (item 5), as a fraction of the overlay row height —
 /// a compact footer that hugs the card's bottom edge instead of floating a full
 /// row high. A single dial the gallery A/Bs; see [`TextPipeline::overlay_hint_h`].
@@ -87,6 +92,15 @@ pub(in crate::render) fn overlay_card_box_policy(
                 .max(floor)
                 .min(free)
         }
+        // RIGHT-ANCHOR MIRROR: PLACEMENT mirrors `Inset { x_frac: 1.0 }` — the
+        // card's right edge one full inset in from the canvas right, collapsing
+        // toward the floor as the window tightens (the mirror of `TopLeft`). The
+        // MIRROR half (bar-growth direction) is a separate concern read via
+        // `CardAnchor::mirrors_growth`, not a placement change.
+        theme::CardAnchor::TopRight => {
+            let span = (ww - cw - 2.0 * full).max(0.0);
+            (full + span).min(anchored_max).max(floor).min(free)
+        }
     };
     (left, cw)
 }
@@ -118,14 +132,33 @@ impl TextPipeline {
     /// reader shares — so shaping and geometry can never drift on the row size.
     pub(in crate::render) fn overlay_metrics(&self) -> GlyphMetrics {
         let m = self.metrics;
-        GlyphMetrics::new(m.font_size * OVERLAY_UI_SCALE, m.line_height * OVERLAY_UI_SCALE)
+        GlyphMetrics::new(
+            m.font_size * OVERLAY_UI_SCALE,
+            m.line_height * OVERLAY_UI_SCALE + self.overlay_row_gap(),
+        )
+    }
+
+    /// PER-ITEM LIST SURFACES round — the vertical GAP (device px) opened
+    /// between candidate rows under [`theme::ListStyle::Bars`]; `0.0` under
+    /// `Pane` (byte-identical). It is folded into the ONE overlay row-pitch
+    /// owner [`Self::overlay_lh`] (and thus into `overlay_metrics`), so the card
+    /// height, the shaped text spread, the selected band, and the pointer
+    /// hit-test all widen the row pitch TOGETHER — bars and text can never
+    /// disagree about a row's y (round A's y-agreement law holds by
+    /// construction). The bar surfaces then draw `lh - gap` tall, leaving the
+    /// gap as the space between them.
+    pub(in crate::render) fn overlay_row_gap(&self) -> f32 {
+        match crate::render::effective_list_style() {
+            theme::ListStyle::Bars { gap, .. } => gap.max(0.0),
+            theme::ListStyle::Pane => 0.0,
+        }
     }
 
     /// The overlay row LINE HEIGHT — the single-owner metric the card height, the
     /// row-Y ([`overlay_row_top`]), the hit-test ([`overlay_row_of`]), and the
     /// selected-row band all read, so a click always lands on the row it highlights.
     pub(in crate::render) fn overlay_lh(&self) -> f32 {
-        self.metrics.line_height * OVERLAY_UI_SCALE
+        self.metrics.line_height * OVERLAY_UI_SCALE + self.overlay_row_gap()
     }
 
     /// THE ONE OWNER of the summoned takeover card's horizontal BOX — its
@@ -274,6 +307,10 @@ impl TextPipeline {
         self.panel_shadow.prepare(device, queue, width, height, &[]);
         self.panel_border.prepare(device, queue, width, height, &[]);
         self.overlay_rows.prepare(device, queue, width, height, &[]);
+        // PER-ITEM LIST SURFACES: the bar + ghost-chip surfaces park empty too, so
+        // a closed picker carries no stale bar/chip quads into the next frame.
+        self.overlay_bars.prepare(device, queue, width, height, &[]);
+        self.overlay_chips.prepare(device, queue, width, height, &[]);
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &[]);
         // The stipple placard: parked (zero instances) — the frame after a
@@ -1102,36 +1139,135 @@ impl TextPipeline {
                     .min(geom.visible.saturating_sub(1)),
             )
         };
-        let sel_rects: Vec<[f32; 4]> = match sel_disp {
-            None => Vec::new(),
-            Some(disp) => {
-                let target =
-                    overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, disp, lh);
-                // MOTION-JUICE BAND SLIDE (live-only; returns `target` verbatim
-                // on every Snap world / capture / Reduce Motion — see
-                // `overlay_band_drawn`'s doc). Purely visual: the shaped rows
-                // and the hit-test read the settled geometry.
-                let row_top = self.overlay_band_drawn(target);
-                // WILD-MENU SLANT PROBE (env-gated, `None` on every normal
-                // run): the band's left edge follows the selected row's own
-                // stair offset so the highlight hugs its slanted row.
-                let dx = crate::render::overlay_slant()
-                    .map(|s| crate::render::slant_offset(&s, disp))
-                    .unwrap_or(0.0);
-                vec![[geom.card_x + dx, row_top, geom.card_w - dx, lh]]
+        // PER-ITEM LIST SURFACES round: `Pane` (default) draws the byte-identical
+        // full-width selected BAND; `Bars` gives each candidate row its own
+        // rounded surface (unselected → `overlay_bars`, quiet; selected →
+        // `overlay_rows`, brighter + `grow_px` wider) with the gap already folded
+        // into `lh`. The row-y owner `overlay_row_top` feeds BOTH so bars and text
+        // agree on every row; the hit-test rides the same `lh`, so a click in a
+        // gap maps to the nearest row (no dead zones).
+        let list_style = crate::render::effective_list_style();
+        let mirror = crate::render::effective_card_anchor().mirrors_growth();
+        // The selected row's drawn TOP, through the ONE row-y owner + the live-only
+        // band slide (verbatim `target` in capture / Snap worlds). Computed ONCE
+        // here so the animator runs once and both list styles read the same y.
+        let sel_top: Option<f32> = sel_disp.map(|disp| {
+            let target =
+                overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, disp, lh);
+            self.overlay_band_drawn(target)
+        });
+        let (sel_rects, bar_rects): (Vec<[f32; 4]>, Vec<[f32; 4]>) = match list_style {
+            theme::ListStyle::Pane => {
+                let rects = match (sel_disp, sel_top) {
+                    (Some(disp), Some(top)) => {
+                        // WILD-MENU SLANT PROBE (env-gated, `None` on every normal
+                        // run): the band's left edge follows the selected row's own
+                        // stair offset so the highlight hugs its slanted row.
+                        let dx = crate::render::overlay_slant()
+                            .map(|s| crate::render::slant_offset(&s, disp))
+                            .unwrap_or(0.0);
+                        vec![[geom.card_x + dx, top, geom.card_w - dx, lh]]
+                    }
+                    _ => Vec::new(),
+                };
+                (rects, Vec::new())
+            }
+            theme::ListStyle::Bars { radius, gap, grow_px } => {
+                let r = radius.max(0.0);
+                let bar_h = (lh - gap.max(0.0)).max(1.0);
+                // Both bar pipelines round to the world's radius (0 = sharp
+                // P4-Status bars, large = Velvet capsules).
+                self.overlay_rows.set_corner(r);
+                self.overlay_bars.set_corner(r);
+                // Unselected bars: a quieter value step than the selected band, so
+                // the selected bar reads brighter by VALUE (never a hue, DESIGN §3).
+                self.overlay_bars
+                    .set_color(theme::surface_selected().rgba_bytes());
+                // The DISPLAY rows that get a bar: every drawn ITEM row (the theme
+                // picker's section-HEADER lines get none — a header is a label).
+                let item_rows: Vec<usize> = if geom.theme {
+                    geom.plan
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(k, l)| matches!(l, ThemeLine::Item(_)).then_some(k))
+                        .collect()
+                } else {
+                    (0..geom.visible).collect()
+                };
+                let unsel: Vec<[f32; 4]> = item_rows
+                    .iter()
+                    .copied()
+                    .filter(|k| Some(*k) != sel_disp)
+                    .map(|k| {
+                        let top = overlay_row_top(
+                            geom.text_top,
+                            geom.header_rows,
+                            geom.header_gap,
+                            k,
+                            lh,
+                        );
+                        bar_rect_unselected(geom.card_x, geom.card_w, top, bar_h)
+                    })
+                    .collect();
+                // Grow toward the open margin — RIGHT by default, mirrored LEFT under
+                // a right-anchored (`TopRight`) card (the ONE pure owner).
+                let sel = match sel_top {
+                    None => Vec::new(),
+                    Some(top) => vec![bar_rect_selected(
+                        geom.card_x,
+                        geom.card_w,
+                        top,
+                        bar_h,
+                        grow_px,
+                        mirror,
+                    )],
+                };
+                (sel, unsel)
             }
         };
+        self.overlay_bars
+            .prepare(device, queue, width, height, &bar_rects);
         self.overlay_rows
             .prepare(device, queue, width, height, &sel_rects);
-        // THEME PICKER active-lens underline: the rect the shaper recorded; a non-theme
-        // card parks it empty (so a stale rect from a prior theme picker never lingers).
+        // FACETED STRIP active-lens mark: the rect the shaper recorded (its SHAPE
+        // set by `facet_style` — hairline underline / band / active chip); a
+        // non-theme card parks it empty (so a stale rect never lingers).
         let underline: Vec<[f32; 4]> = if geom.theme {
             self.overlay_theme_underline.iter().copied().collect()
         } else {
             Vec::new()
         };
+        // PER-ITEM LIST SURFACES round: `Text` (default) keeps the content-ink
+        // hairline byte-identically; `Band`/`Chips` recolor the active mark to the
+        // selected-row band VALUE (never amber) and round it, and `Chips` fills the
+        // inactive labels with quiet GHOST pills (`overlay_chips`). Ghosts empty on
+        // `Text`/`Band` and every non-faceted card, so those stay byte-identical.
+        let facet_style = crate::render::effective_facet_style();
+        let ghosts: Vec<[f32; 4]> = if geom.theme {
+            self.overlay_facet_ghosts.clone()
+        } else {
+            Vec::new()
+        };
+        match facet_style {
+            theme::FacetStyle::Text => {}
+            theme::FacetStyle::Band | theme::FacetStyle::Chips => {
+                let band = match theme::active()
+                    .highlight_treatment(crate::render::effective_overlay_selrow_band())
+                {
+                    theme::HighlightTreatment::ValueBand(c) => c,
+                    theme::HighlightTreatment::InverseFill { band, .. } => band,
+                };
+                self.overlay_lens_underline.set_color(band.rgba_bytes());
+                self.overlay_lens_underline.set_corner(FACET_CHIP_RADIUS);
+                self.overlay_chips
+                    .set_color(theme::surface_selected().rgba_bytes());
+                self.overlay_chips.set_corner(FACET_CHIP_RADIUS);
+            }
+        }
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &underline);
+        self.overlay_chips
+            .prepare(device, queue, width, height, &ghosts);
     }
 
     /// Place the one amber caret: a resting block at the end of the query line. Read

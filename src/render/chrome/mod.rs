@@ -356,6 +356,60 @@ pub(super) fn overlay_row_top(
     text_top + header_rows as f32 * line_height + header_gap + row as f32 * line_height
 }
 
+/// PER-ITEM LIST SURFACES round — the horizontal inset (device px) an
+/// UNSELECTED bar holds from the summoned card's left/right edges under
+/// [`theme::ListStyle::Bars`], so each bar reads as a surface WITHIN the card
+/// rather than edge-to-edge. The SELECTED bar extends past this inset by its
+/// `grow_px` (toward the open margin, mirrored under `TopRight`) so it reads
+/// WIDER as well as brighter. A single dial the gallery A/Bs.
+pub(super) const BAR_SIDE_INSET: f32 = 8.0;
+
+/// PURE geometry — the UNSELECTED bar rect `[x, y, w, h]` for a candidate row
+/// whose pitch-cell top is `top`, inside a card `[card_x, card_x+card_w]`, drawn
+/// `bar_h` tall (`overlay_lh - gap`). The ONE owner both the renderer
+/// ([`TextPipeline::overlay_draw_card`]) and the mirror/grow law read.
+pub(super) fn bar_rect_unselected(card_x: f32, card_w: f32, top: f32, bar_h: f32) -> [f32; 4] {
+    [
+        card_x + BAR_SIDE_INSET,
+        top,
+        (card_w - 2.0 * BAR_SIDE_INSET).max(1.0),
+        bar_h,
+    ]
+}
+
+/// PURE geometry — the SELECTED bar rect: inset like the others
+/// ([`bar_rect_unselected`]) but grown `grow_px` WIDER toward the open margin —
+/// RIGHT by default, mirrored LEFT under a right-anchored (`TopRight`) card —
+/// and clamped inside the card so a large `grow_px` never clips off-card. So on
+/// the default (left) anchor the selected bar shares the unselected LEFT edge
+/// and juts further right; mirrored it shares the RIGHT edge and juts further
+/// left. Text alignment is never touched (rowlayout owns it) — only the surface
+/// grows. ONE owner for the renderer + the law.
+pub(super) fn bar_rect_selected(
+    card_x: f32,
+    card_w: f32,
+    top: f32,
+    bar_h: f32,
+    grow_px: f32,
+    mirror: bool,
+) -> [f32; 4] {
+    let g = grow_px.max(0.0);
+    let base_x = card_x + BAR_SIDE_INSET;
+    let base_w = (card_w - 2.0 * BAR_SIDE_INSET).max(1.0);
+    let (mut x, mut w) = if mirror {
+        (base_x - g, base_w + g)
+    } else {
+        (base_x, base_w + g)
+    };
+    if x < card_x {
+        x = card_x;
+    }
+    if x + w > card_x + card_w {
+        w = card_x + card_w - x;
+    }
+    [x, top, w.max(1.0), bar_h]
+}
+
 /// The device-px TOP a uniform-line-height RIGHT-COLUMN buffer must be uploaded
 /// at so its chord/time labels — which lead with `header_rows` empty lines —
 /// land EXACTLY on the candidate band [`overlay_row_top`] draws. The secondary

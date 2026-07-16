@@ -299,15 +299,26 @@ impl TextPipeline {
             self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, &hint_line, scale);
         }
 
-        // Record the active-lens UNDERLINE from the shaped strip glyphs (line 1). Line-1
+        // Record the active-lens mark from the shaped strip glyphs (line 1). Line-1
         // glyphs are byte-indexed WITHIN the strip line's own text — the leading "\n" in
-        // `strip_s` split the lines — so the label's line-relative range is `active_range`
-        // shifted back by that one "\n" byte.
-        self.overlay_theme_underline = active_range.and_then(|ar| {
-            let (a, b) = (ar.start.saturating_sub(1), ar.end.saturating_sub(1));
+        // `strip_s` split the lines — so a label's line-relative range is its `strip_s`
+        // range shifted back by that one "\n" byte. The MARK'S SHAPE is the
+        // PER-ITEM LIST SURFACES round's `facet_style`:
+        //   - `Text`   (default, byte-identical) — a hairline UNDERLINE under the
+        //     active label, no ghosts.
+        //   - `Band`   — a full-height value BAND behind the active label.
+        //   - `Chips`  — a rounded PILL behind EVERY label (active filled via the
+        //     same `overlay_theme_underline` slot, inactive ghosts collected into
+        //     `overlay_facet_ghosts`).
+        // The x-spans come from the SAME shaped glyphs the strip hit-test reads, so
+        // the skin can never disagree with where a label is clicked.
+        let lh = self.overlay_lh();
+        // Scan line 1 for a strip-range's glyph x-span (min_x, max_x), `None` if empty.
+        let span_of = |buf: &GlyphBuffer, r: &std::ops::Range<usize>| -> Option<(f32, f32)> {
+            let (a, b) = (r.start.saturating_sub(1), r.end.saturating_sub(1));
             let mut min_x = f32::MAX;
             let mut max_x = f32::MIN;
-            for run in self.panel_buffer.layout_runs() {
+            for run in buf.layout_runs() {
                 if run.line_i != 1 {
                     continue;
                 }
@@ -318,13 +329,43 @@ impl TextPipeline {
                     }
                 }
             }
-            if max_x > min_x {
-                let y = geom.text_top + 2.0 * self.overlay_lh() - 3.0;
-                Some([geom.text_left + min_x, y, max_x - min_x, 1.5])
-            } else {
-                None
-            }
+            (max_x > min_x).then_some((min_x, max_x))
+        };
+        let facet_style = crate::render::effective_facet_style();
+        // A PILL rect around a label span (device px): horizontal pad + a band that
+        // fills most of the strip row (display line 1). The active band/chip and the
+        // ghost chips all use this — one owner, so they can't drift in height.
+        let pill = |min_x: f32, max_x: f32| -> [f32; 4] {
+            let hpad = 6.0;
+            let vpad = 3.0;
+            [
+                geom.text_left + min_x - hpad,
+                geom.text_top + lh + vpad,
+                (max_x - min_x) + 2.0 * hpad,
+                (lh - 2.0 * vpad).max(1.0),
+            ]
+        };
+        self.overlay_theme_underline = active_range.as_ref().and_then(|ar| {
+            let (min_x, max_x) = span_of(&self.panel_buffer, ar)?;
+            Some(match facet_style {
+                theme::FacetStyle::Text => {
+                    // BYTE-IDENTICAL underline: hairline under the active label.
+                    let y = geom.text_top + 2.0 * lh - 3.0;
+                    [geom.text_left + min_x, y, max_x - min_x, 1.5]
+                }
+                theme::FacetStyle::Band | theme::FacetStyle::Chips => pill(min_x, max_x),
+            })
         });
+        // Ghost chips: one pill per INACTIVE label, `Chips` only.
+        self.overlay_facet_ghosts = if matches!(facet_style, theme::FacetStyle::Chips) {
+            label_ranges
+                .iter()
+                .filter(|(_, active)| !active)
+                .filter_map(|(r, _)| span_of(&self.panel_buffer, r).map(|(a, b)| pill(a, b)))
+                .collect()
+        } else {
+            Vec::new()
+        };
         false
     }
 

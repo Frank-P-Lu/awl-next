@@ -108,7 +108,12 @@ fn parse_overlay_anchor_force_grammar() {
     for s in ["tc", "center", "centre", "TopCenter"] {
         assert_eq!(parse_overlay_anchor_force(s), Some(theme::CardAnchor::TopCenter), "{s:?}");
     }
-    for bad in ["", "middle", "bottom", "tr"] {
+    // PER-ITEM LIST SURFACES round: `tr`/`right`/`mirror` now name the
+    // first-class RIGHT-ANCHOR MIRROR value (was previously unrecognized).
+    for s in ["tr", "topright", "right", "mirror"] {
+        assert_eq!(parse_overlay_anchor_force(s), Some(theme::CardAnchor::TopRight), "{s:?}");
+    }
+    for bad in ["", "middle", "bottom"] {
         assert_eq!(parse_overlay_anchor_force(bad), None, "expected None for {bad:?}");
     }
 }

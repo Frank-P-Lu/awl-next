@@ -1835,6 +1835,9 @@ fn parse_overlay_anchor_force(s: &str) -> Option<theme::CardAnchor> {
     match s.to_ascii_lowercase().as_str() {
         "tl" | "topleft" | "left" => Some(theme::CardAnchor::TopLeft),
         "tc" | "topcenter" | "center" | "centre" => Some(theme::CardAnchor::TopCenter),
+        // RIGHT-ANCHOR MIRROR (PER-ITEM LIST SURFACES round) — the first-class
+        // anchor value: right-anchored card + mirrored selected-bar growth.
+        "tr" | "topright" | "right" | "mirror" => Some(theme::CardAnchor::TopRight),
         _ => None,
     }
 }
@@ -2155,6 +2158,143 @@ pub(crate) fn slant_offset(slant: &SlantProbe, row: usize) -> f32 {
 
 pub(crate) fn slant_max_offset(slant: &SlantProbe, n_rows: usize) -> f32 {
     slant.px_per_row * n_rows.saturating_sub(1) as f32
+}
+
+// --- THE PER-ITEM LIST SURFACES round's dev probes ---------------------------
+//
+// Three capabilities land INERT (every world byte-identical by default): the
+// LIST STYLE (Pane | Bars), the RIGHT-ANCHOR MIRROR (a first-class value on the
+// EXISTING `AWL_OVERLAY_ANCHOR_FORCE` axis — `tr`, above), and the FACET STYLE
+// (Text | Chips | Band). Each rides the established `AWL_*_FORCE` idiom: read
+// once, memoized, malformed → `None` (the world's own data), total no-op unset.
+
+/// The bar-treatment defaults the bare `"bars"` grammar expands to (device px):
+/// a gentle P4/Velvet midpoint the gallery then A/Bs via the parametric form.
+const BARS_DEFAULT_RADIUS: f32 = 6.0;
+const BARS_DEFAULT_GAP: f32 = 6.0;
+const BARS_DEFAULT_GROW: f32 = 6.0;
+
+/// `AWL_OVERLAY_LIST_FORCE` grammar: `"pane"` → [`theme::ListStyle::Pane`];
+/// `"bars"` → [`theme::ListStyle::Bars`] with the default treatment;
+/// `"bars:<radius>:<gap>:<grow>"` (three non-negative floats) → a parametric
+/// bars treatment (radius 0 = sharp P4-Status bars, large = Velvet capsules).
+/// Malformed → `None` (falls through to the world's own `render_caps.list_style`).
+fn parse_list_style_force(s: &str) -> Option<theme::ListStyle> {
+    let s = s.trim();
+    let low = s.to_ascii_lowercase();
+    if low == "pane" {
+        return Some(theme::ListStyle::Pane);
+    }
+    if low == "bars" {
+        return Some(theme::ListStyle::Bars {
+            radius: BARS_DEFAULT_RADIUS,
+            gap: BARS_DEFAULT_GAP,
+            grow_px: BARS_DEFAULT_GROW,
+        });
+    }
+    if let Some(rest) = low.strip_prefix("bars:") {
+        let parts: Vec<&str> = rest.split(':').collect();
+        if parts.len() == 3 {
+            let r: f32 = parts[0].trim().parse().ok()?;
+            let g: f32 = parts[1].trim().parse().ok()?;
+            let w: f32 = parts[2].trim().parse().ok()?;
+            if [r, g, w].iter().all(|v| v.is_finite() && *v >= 0.0) {
+                return Some(theme::ListStyle::Bars { radius: r, gap: g, grow_px: w });
+            }
+        }
+    }
+    None
+}
+
+/// The `AWL_OVERLAY_LIST_FORCE` dev knob, read ONCE and memoized.
+fn awl_list_style_force() -> &'static Option<theme::ListStyle> {
+    static ONCE: std::sync::OnceLock<Option<theme::ListStyle>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_OVERLAY_LIST_FORCE")
+            .ok()
+            .and_then(|s| parse_list_style_force(&s))
+    })
+}
+
+/// TEST-ONLY escape hatch for the list style (mirrors
+/// [`set_title_style_test_override`]; `serial()`-guarded at call sites).
+#[cfg(test)]
+static LIST_STYLE_TEST_OVERRIDE: std::sync::Mutex<Option<theme::ListStyle>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_list_style_test_override(s: Option<theme::ListStyle>) {
+    *LIST_STYLE_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = s;
+}
+
+/// The EFFECTIVE [`theme::ListStyle`] for this frame: a `cfg(test)` override if
+/// set, else the `AWL_OVERLAY_LIST_FORCE` dev probe if set, else the active
+/// world's own `render_caps.list_style` — `Pane` on every world today, so an
+/// unset-env, non-test run is BYTE-IDENTICAL to before this round. THE ONE
+/// owner every list-surface reader consults ([`TextPipeline::overlay_row_gap`],
+/// the bar draw, the card-height math).
+pub(crate) fn effective_list_style() -> theme::ListStyle {
+    #[cfg(test)]
+    {
+        if let Some(s) = *LIST_STYLE_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return s;
+        }
+    }
+    match awl_list_style_force() {
+        Some(s) => *s,
+        None => theme::active().render_caps.list_style,
+    }
+}
+
+/// `AWL_FACET_STYLE_FORCE` grammar: `"text"` / `"chips"` / `"band"`.
+/// Malformed → `None` (the world's own `render_caps.facet_style`).
+fn parse_facet_style_force(s: &str) -> Option<theme::FacetStyle> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "text" => Some(theme::FacetStyle::Text),
+        "chips" | "chip" => Some(theme::FacetStyle::Chips),
+        "band" => Some(theme::FacetStyle::Band),
+        _ => None,
+    }
+}
+
+/// The `AWL_FACET_STYLE_FORCE` dev knob, read ONCE and memoized.
+fn awl_facet_style_force() -> &'static Option<theme::FacetStyle> {
+    static ONCE: std::sync::OnceLock<Option<theme::FacetStyle>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_FACET_STYLE_FORCE")
+            .ok()
+            .and_then(|s| parse_facet_style_force(&s))
+    })
+}
+
+/// TEST-ONLY escape hatch for the facet style (mirrors
+/// [`set_title_style_test_override`]; `serial()`-guarded at call sites).
+#[cfg(test)]
+static FACET_STYLE_TEST_OVERRIDE: std::sync::Mutex<Option<theme::FacetStyle>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_facet_style_test_override(s: Option<theme::FacetStyle>) {
+    *FACET_STYLE_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = s;
+}
+
+/// The EFFECTIVE [`theme::FacetStyle`] for this frame: a `cfg(test)` override if
+/// set, else the `AWL_FACET_STYLE_FORCE` dev probe if set, else the active
+/// world's own `render_caps.facet_style` — `Text` on every world today, so an
+/// unset-env, non-test run is BYTE-IDENTICAL to before this round. Read only by
+/// the faceted strip renderer ([`TextPipeline::overlay_shape_theme`] + the
+/// facet-chip draw).
+pub(crate) fn effective_facet_style() -> theme::FacetStyle {
+    #[cfg(test)]
+    {
+        if let Some(s) = *FACET_STYLE_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return s;
+        }
+    }
+    match awl_facet_style_force() {
+        Some(s) => *s,
+        None => theme::active().render_caps.facet_style,
+    }
 }
 
 /// Remove [`BAD_FALLBACK_FAMILIES`] from the font system's database so cosmic-text
@@ -2791,6 +2931,20 @@ pub struct TextPipeline {
     /// row (retired), whose gamma-limited flip of the antialiased row text read
     /// as a faint grey — see [`theme::HighlightTreatment::InverseFill`].
     pub overlay_rows: SelectionPipeline,
+    /// PER-ITEM LIST SURFACES round: the UNSELECTED bar surfaces drawn behind
+    /// each candidate row under [`theme::ListStyle::Bars`] (the SELECTED bar
+    /// rides `overlay_rows`, one value step brighter + optionally wider). One
+    /// quieter value-step fill, one shared per-frame corner radius (the world's
+    /// `radius`). Parked empty (zero instances → byte-identical) on every
+    /// `Pane` world and whenever no overlay is up. Drawn BETWEEN `panel_card`
+    /// and `overlay_rows` so the card is behind the bars and the selected bar
+    /// is on top.
+    pub overlay_bars: SelectionPipeline,
+    /// PER-ITEM LIST SURFACES round: the INACTIVE facet-strip GHOST pills under
+    /// [`theme::FacetStyle::Chips`] (the ACTIVE chip / band rides
+    /// `overlay_lens_underline`). Parked empty on every `Text` strip and every
+    /// non-faceted / closed overlay.
+    pub overlay_chips: SelectionPipeline,
     /// THEME PICKER only: the thin UNDERLINE quad under the ACTIVE lens label in the
     /// faceted strip — content-INK, never amber (DESIGN §3): the active lens is marked
     /// by VALUE + this hairline. A reused `SelectionPipeline`; parked empty for every
@@ -2817,6 +2971,12 @@ pub struct TextPipeline {
     /// (from the shaped strip glyphs, so it lands exactly under the active label at any
     /// world face), consumed by `overlay_draw_card`. `None` when no theme picker is up.
     overlay_theme_underline: Option<[f32; 4]>,
+    /// PER-ITEM LIST SURFACES round: the INACTIVE facet-strip GHOST pill rects
+    /// (from the same shaped strip glyphs the active chip/underline reads),
+    /// non-empty ONLY under [`theme::FacetStyle::Chips`]; consumed by
+    /// `overlay_draw_card` into `overlay_chips`. Empty for `Text`/`Band` and
+    /// every non-faceted card, so those stay byte-identical.
+    overlay_facet_ghosts: Vec<[f32; 4]>,
     /// Whether the LAST overlay shaping granted the dim right column (chords /
     /// descriptions / times / diffs). Written by `overlay_shape_text` from the
     /// [`rowlayout`] verdict — `false` when the column YIELDED to keep the names
@@ -3404,6 +3564,17 @@ impl TextPipeline {
         // The overlay's selected-row highlight: same rounded quad as selection,
         // tinted with the muted selection token (amber stays the caret's alone).
         let overlay_rows = SelectionPipeline::new(device, format, theme::selection().rgba_bytes());
+        // PER-ITEM LIST SURFACES round: the UNSELECTED bar surfaces under
+        // `ListStyle::Bars` (the selected bar rides `overlay_rows`; the card is
+        // `panel_card`). One quieter value-step token; parked empty (zero
+        // instances → byte-identical) on every `Pane` world / closed overlay.
+        let overlay_bars =
+            SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
+        // PER-ITEM LIST SURFACES round: the INACTIVE facet chip GHOST pills under
+        // `FacetStyle::Chips` (the active chip / band rides `overlay_lens_underline`).
+        // A faint surface value; parked empty on every `Text` strip / non-faceted card.
+        let overlay_chips =
+            SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
         // The theme picker's active-lens underline: a hairline in CONTENT ink (value +
         // hairline mark the active lens; never amber, DESIGN §3). Parked empty otherwise.
         let overlay_lens_underline =
@@ -3608,9 +3779,12 @@ impl TextPipeline {
             search_replacement: String::new(),
             search_editing_replacement: false,
             overlay_rows,
+            overlay_bars,
+            overlay_chips,
             overlay_lens_underline,
             placard_stipple,
             overlay_theme_underline: None,
+            overlay_facet_ghosts: Vec::new(),
             overlay_right_shown: false,
             wordcount_renderer,
             wordcount_buffer,
@@ -3840,6 +4014,13 @@ impl TextPipeline {
             .set_color(theme::surface_selected().rgba_bytes());
         self.float_card.set_color(theme::base_300().rgba_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());
+        // PER-ITEM LIST SURFACES: the bar/chip surfaces re-tint to the new world's
+        // quiet value step (their real per-frame color is set at draw time from the
+        // effective bar tokens; this keeps a parked pipeline coherent on a switch).
+        self.overlay_bars
+            .set_color(theme::surface_selected().rgba_bytes());
+        self.overlay_chips
+            .set_color(theme::surface_selected().rgba_bytes());
         // The theme picker's active-lens underline re-tints to the new world's ink (it
         // is drawn while the picker is up AND the world previews live, so the hairline
         // tracks the previewed world's ink).
@@ -4922,6 +5103,12 @@ impl TextPipeline {
         self.panel_shadow.draw(pass);
         self.panel_border.draw(pass);
         self.panel_card.draw(pass);
+        // PER-ITEM LIST SURFACES: the unselected bar surfaces sit ON the card and
+        // UNDER the selected bar (`overlay_rows`); the ghost facet chips sit under
+        // the active chip/band (`overlay_lens_underline`). Both parked empty on
+        // every Pane/Text world, so this is byte-identical there.
+        self.overlay_bars.draw(pass);
+        self.overlay_chips.draw(pass);
         self.overlay_rows.draw(pass);
         // THEME PICKER: the active-lens hairline under the strip (content ink), UNDER
         // the overlay text so the glyphs sit on top. Parked empty for every other card.

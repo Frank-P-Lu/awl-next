@@ -323,6 +323,77 @@ pub enum CardAnchor {
     TopLeft,
     TopCenter,
     Inset { x_frac: f32 },
+    /// RIGHT-ANCHOR MIRROR (PER-ITEM LIST SURFACES round) — a FIRST-CLASS
+    /// value on the anchor axis, promoted from the `Inset { x_frac: 1.0 }`
+    /// probe to its own name because it carries MORE than placement. For
+    /// PLACEMENT it is `Inset { x_frac: 1.0 }` (the card's right edge one
+    /// inset from the canvas right); ADDITIONALLY it flags the MIRROR
+    /// ([`CardAnchor::mirrors_growth`]) so the selected-BAR growth direction
+    /// reverses toward the anchored (right) edge under [`ListStyle::Bars`].
+    /// The user's own P4 bookstore evidence DECIDED the rule: TEXT stays
+    /// LEFT-aligned with values right (rowlayout's existing model) on BOTH
+    /// sides — only card placement and bar-growth direction mirror, NEVER
+    /// text alignment. NO world ships `TopRight` yet (probe-reachable via
+    /// `AWL_OVERLAY_ANCHOR_FORCE=tr`).
+    TopRight,
+}
+
+impl CardAnchor {
+    /// Whether mirror-sensitive composition (the selected-bar growth
+    /// direction) reverses toward the anchored RIGHT edge. Only
+    /// [`CardAnchor::TopRight`] mirrors; every other anchor grows toward the
+    /// open RIGHT margin (the left-anchored default). Text alignment is
+    /// NEVER touched by this — see `TopRight`'s doc.
+    pub fn mirrors_growth(self) -> bool {
+        matches!(self, CardAnchor::TopRight)
+    }
+}
+
+/// PER-ITEM LIST SURFACES round — how a summoned picker draws the SURFACES
+/// behind its candidate rows (the "Persona list"). `Pane` (every world today,
+/// byte-identical to before this round) is the single takeover card with a
+/// value BAND behind the selected row. `Bars` gives each candidate row its
+/// OWN rounded surface:
+/// - `radius` — the bar's corner radius: `0.0` = sharp P4-Status bars,
+///   a large value = Velvet capsules.
+/// - `gap` — vertical space opened between bars. Folded into the ONE overlay
+///   row-pitch owner ([`crate::render::TextPipeline::overlay_lh`]), so the
+///   card GROWS with the gap and every row reader (shaped text, selected
+///   band, pointer hit-test) spreads together — bars and text can never
+///   disagree about a row's y (round A's y-agreement law still holds).
+/// - `grow_px` — how many device px WIDER (per side) the SELECTED bar draws
+///   than the unselected ones, composing with the InverseFill/ValueBand band
+///   COLOR so the selected bar reads brighter AND wider. The growth DIRECTION
+///   mirrors under [`CardAnchor::TopRight`] (toward the anchored edge).
+///
+/// `rowlayout` stays the untouched owner of row TEXT — bars are purely the
+/// surfaces drawn BEHIND it (washes / placard / elevation / scrim all still
+/// compose). Hit-testing has no dead zones: a click in a gap maps to the
+/// nearest row (the pitch cell owns its trailing gap). NO world ships `Bars`
+/// yet (probe-reachable via `AWL_OVERLAY_LIST_FORCE`).
+// NOTE: no `Eq` — `radius`/`gap`/`grow_px` are floats (same reasoning as `TitleStyle`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ListStyle {
+    Pane,
+    Bars { radius: f32, gap: f32, grow_px: f32 },
+}
+
+/// PER-ITEM LIST SURFACES round — how the faceted picker's LENS STRIP skins
+/// its labels. The strip stays keyboard/click IDENTICAL across all three (the
+/// hit-test reads the same shaped label spans); only the SKIN varies.
+/// - `Text` (every world today, byte-identical) — value-only labels, the
+///   active one in full ink with a hairline underline, inactive muted.
+/// - `Chips` — a rounded pill per label: the active one FILLED (the selected
+///   band value), inactive ones GHOST (a faint surface) — the 2026 standard.
+/// - `Band` — an active-only value band behind the active label (the
+///   selected-row language applied sideways), inactive plain.
+///
+/// NO world ships a non-`Text` value yet (probe: `AWL_FACET_STYLE_FORCE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FacetStyle {
+    Text,
+    Chips,
+    Band,
 }
 
 /// Whether a thin FRAME draws around the WRITING COLUMN — the page-frame
@@ -472,6 +543,16 @@ pub struct RenderCaps {
     /// [`MotionJuice`]'s own doc): live-only overlay entrance + selection-band
     /// response. [`MotionJuice::CALM`] everywhere until a world flips it.
     pub motion: MotionJuice,
+    /// THE PER-ITEM LIST SURFACES round's capability: how a summoned picker
+    /// draws the surfaces behind its candidate rows (see [`ListStyle`]'s own
+    /// doc). [`ListStyle::Pane`] everywhere (byte-identical) until a world
+    /// flips to `Bars`.
+    pub list_style: ListStyle,
+    /// THE PER-ITEM LIST SURFACES round's facet-strip capability (see
+    /// [`FacetStyle`]'s own doc): how the faceted picker's lens strip skins
+    /// its labels. [`FacetStyle::Text`] everywhere (byte-identical) until a
+    /// world flips to `Chips`/`Band`.
+    pub facet_style: FacetStyle,
 }
 
 impl RenderCaps {
@@ -494,6 +575,12 @@ impl RenderCaps {
         // body face chrome, zero motion — on every world (byte-identical).
         chrome_face: ChromeFace::Body,
         motion: MotionJuice::CALM,
+        // PER-ITEM LIST SURFACES round: both new dials land INERT — the single
+        // takeover Pane with its selected-row band, plain-text facet strip —
+        // on every world (byte-identical). A world flips to Bars / Chips / Band
+        // as one-line DATA in the later flip round after the user's gallery pick.
+        list_style: ListStyle::Pane,
+        facet_style: FacetStyle::Text,
     };
 
 }
