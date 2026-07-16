@@ -1088,19 +1088,29 @@ pub const FIRETAIL: Theme = Theme {
     // roster-growth curation widening now seats as a 4-world band).
     tags: ThemeTags { time: None, register: None, voice: None, temperature: Some("Warm") },
     role_overrides: RoleOverrides::NONE,
-    // PERSONALITY ASSIGNMENT (2026-07-15): bottom-left FAINT placard, FLAT —
-    // deliberately NOT dithered: smooth is Firetail's contrast with Mangrove
-    // (the smooth warm lamp vs the dithered cool one), and the wordmark
-    // speaks the same split. `Faint` rides the mode-aware dark-ground
-    // derivation (`theme::placard_ink`), so it clearly reads over the deep
-    // oxblood den. Plus BORDERED elevation: the summoned card must hold a
-    // crisp edge over the moving lava margins.
+    // CHROME-VOICES FLIP (2026-07-16, from the maximalist-showcase gallery — the
+    // user's picks): Firetail is awl's LOUD-END statement world, so its summoned
+    // overlay speaks loud too. Bottom-left BOLD placard at the combo-shot scale
+    // (`Bold` = the muted→base_content half-step, the showcase round's loudest
+    // smooth ladder rung; still under full ink so the rows always win) — bigger
+    // AND louder than the old `Faint`/3.0, deliberately NOT dithered (smooth is
+    // Firetail's contrast with Mangrove — the wordmark speaks that same split).
+    // Plus `chrome_face = Archivo Black`: the placard wordmark / inline title
+    // prefix / lens-strip labels shape in the LOUD chrome voice, while the LIST
+    // ROWS, query text and the writing column stay Monaspace Xenon (the closed
+    // chrome surface set — legibility surfaces never change face). Archivo Black
+    // registers at usWeightClass 400 (verified in-file), so `chrome_attrs`'s
+    // plain `Weight::NORMAL` request matches it — no `mono_safe_weight`
+    // exception. Retains BORDERED elevation: the card holds a crisp edge over
+    // the moving lava margins. Every OTHER world stays `Body`/`InlinePrefix`
+    // (byte-identical) — Firetail alone flips this round.
     render_caps: RenderCaps {
         title_style: TitleStyle::Placard {
             corner: PlacardCorner::BL,
-            scale: 3.0,
-            ink: PlacardInk::Faint,
+            scale: 4.5,
+            ink: PlacardInk::Bold,
         },
+        chrome_face: ChromeFace::Named("Archivo Black"),
         elevation: Elevation::Bordered,
         ..RenderCaps::DEFAULT
     },
