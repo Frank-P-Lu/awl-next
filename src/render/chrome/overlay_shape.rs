@@ -787,4 +787,49 @@ impl TextPipeline {
         }
         w
     }
+
+    /// V6 P5 [`theme::BarExtent::HugText`] — per DISPLAY-row PRIMARY text width
+    /// (px), read from the just-shaped `panel_buffer`, keyed by display-row index
+    /// (`line_i - header_rows`). A display row is a candidate line: for the flat
+    /// pickers that is candidate `N`, for the theme picker it is plan line `N`
+    /// (a section-header plan line is present too, but the bar draw only looks up
+    /// the ITEM rows). The hug-extent bars read this so each bar's right edge
+    /// hugs its own row's text — the SAME shaped glyphs the text draws from, so
+    /// bar and glyph can't disagree.
+    pub(in crate::render) fn overlay_row_primary_px(
+        &self,
+        geom: &OverlayGeom,
+    ) -> std::collections::BTreeMap<usize, f32> {
+        let mut m = std::collections::BTreeMap::new();
+        for run in self.panel_buffer.layout_runs() {
+            if run.line_i >= geom.header_rows {
+                m.insert(run.line_i - geom.header_rows, run.line_w);
+            }
+        }
+        m
+    }
+
+    /// V6 P5 [`theme::BarExtent::HugText`] — the set of DISPLAY rows that carry a
+    /// non-empty RIGHT-column SHORTCUT this frame, so their hug-bars extend to
+    /// include it (the P4-bookstore prices-in-panel precedent). Gated on
+    /// `overlay_right_shown` (the rowlayout verdict): when the right column
+    /// YIELDED or a picker has none, `panel_bind_buffer` is not the current
+    /// frame's truth, so NO row is treated as carrying a shortcut (every bar
+    /// hugs just its primary). Reads the same `panel_bind_buffer` lines the right
+    /// column shaped, keyed by display-row index.
+    pub(in crate::render) fn overlay_row_has_secondary(
+        &self,
+        geom: &OverlayGeom,
+    ) -> std::collections::BTreeSet<usize> {
+        let mut s = std::collections::BTreeSet::new();
+        if !self.overlay_right_shown {
+            return s;
+        }
+        for run in self.panel_bind_buffer.layout_runs() {
+            if run.line_i >= geom.header_rows && run.line_w > 0.5 {
+                s.insert(run.line_i - geom.header_rows);
+            }
+        }
+        s
+    }
 }

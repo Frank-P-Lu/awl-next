@@ -379,11 +379,31 @@ impl TextPipeline {
                     let y = mark_cy + strip_text_lh * 0.5 - 2.0;
                     [geom.text_left + min_x, y, max_x - min_x, 1.5]
                 }
-                // A single active BAND has no drawn neighbour to collide with, so
-                // it keeps the full pad.
-                theme::FacetStyle::Band => pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD),
+                // A single active BAND — or the ACTIVE chip under Chips — is a
+                // FILLED value pill hugging the label; no drawn neighbour to
+                // collide with, so it keeps the full pad.
+                theme::FacetStyle::Band | theme::FacetStyle::Chips => {
+                    pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD)
+                }
             })
         });
+        // V6 P5 [`theme::FacetStyle::Chips`] — the INACTIVE ghost pills: one
+        // hairline STROKE pill per NON-active facet label, from the SAME shaped
+        // glyphs the active pill reads. Populated only under `Chips`; cleared for
+        // `Text`/`Band` so a non-Chips frame leaves no stale ghost rects. Drawn
+        // via `overlay_facet_ghost` with the pipeline's `stroke` uniform.
+        self.overlay_theme_facet_ghosts.clear();
+        if matches!(facet_style, theme::FacetStyle::Chips) {
+            for (r, active) in &label_ranges {
+                if *active {
+                    continue;
+                }
+                if let Some((min_x, max_x)) = span_of(&self.panel_buffer, r) {
+                    self.overlay_theme_facet_ghosts
+                        .push(pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD));
+                }
+            }
+        }
         false
     }
 

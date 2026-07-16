@@ -357,6 +357,10 @@ impl TextPipeline {
         self.overlay_bars.prepare(device, queue, width, height, &[]);
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &[]);
+        // V6 P5: the Chips ghost pills park empty too, so a closed picker carries
+        // no stale ghost-pill quads into the next frame.
+        self.overlay_facet_ghost
+            .prepare(device, queue, width, height, &[]);
         // The stipple placard: parked (zero instances) — the frame after a
         // stipple-world overlay closes carries zero stale wordmark pixels.
         self.placard_stipple
@@ -1334,22 +1338,57 @@ impl TextPipeline {
                 };
                 (rects, Vec::new())
             }
-            theme::ListStyle::Bars { radius, gap, grow_px } => {
+            theme::ListStyle::Bars { radius, gap, grow_px, extent, coverage, fill } => {
                 let r = radius.max(0.0);
                 let g = gap.max(0.0);
                 let bar_h = (lh - g).max(1.0);
-                // Center each bar in its row pitch-cell: the gap splits half
-                // above / half below (`+ g*0.5`), not all below. Without this the
-                // bar top-aligns in the `lh` cell while the glyph centers in the
-                // full cell, so the label rode ~gap/2 LOW of the bar's middle and
-                // descenders escaped the short bar (the designer's "labels sit low
-                // in the bar" defect). The text is untouched (rowlayout owns it);
-                // only the surface slides down to meet the glyph's optical center.
+                // V6 P5 HugText — per-row primary widths + which rows carry a
+                // shortcut, measured from the just-shaped buffers (read before the
+                // &mut pipeline calls below). Only consulted under `HugText`.
+                let hug = matches!(extent, theme::BarExtent::HugText);
+                let primary_px = if hug {
+                    self.overlay_row_primary_px(geom)
+                } else {
+                    std::collections::BTreeMap::new()
+                };
+                let has_secondary = if hug {
+                    self.overlay_row_has_secondary(geom)
+                } else {
+                    std::collections::BTreeSet::new()
+                };
+                // V6 P5 [`theme::BarExtent::HugText`] — the natural `(x, w)` span
+                // for a display row: full-width, or hugging the row's primary
+                // text (extending to full width when the row carries a shortcut).
+                let span_of = |k: usize| -> (f32, f32) {
+                    if hug {
+                        super::bar_hug_span(
+                            geom.card_x,
+                            geom.card_w,
+                            geom.text_left,
+                            primary_px.get(&k).copied().unwrap_or(0.0),
+                            has_secondary.contains(&k),
+                        )
+                    } else {
+                        super::bar_full_span(geom.card_x, geom.card_w)
+                    }
+                };
                 let bar_off = g * 0.5;
                 // Both bar pipelines round to the world's radius (0 = sharp
                 // P4-Status bars, large = Velvet capsules).
                 self.overlay_rows.set_corner(r);
                 self.overlay_bars.set_corner(r);
+                // V6 P5 [`theme::BarFill::Outline`] — the SELECTED bar draws as a
+                // hairline RIM (stroke, no fill) via the selection pipeline's
+                // `stroke` uniform; unselected bars + the footer plate stay FILLED
+                // (they ride `overlay_bars`, which never strokes — the plate must
+                // stay opaque to guard the footer over the placard). `Filled`
+                // resets the stroke to 0 (byte-identical). Under `SelectedOnly`
+                // coverage this reads as the pure "no bars, just an outline" look.
+                self.overlay_rows.set_stroke(match fill {
+                    theme::BarFill::Outline => crate::render::BAR_OUTLINE_STROKE_PX,
+                    theme::BarFill::Filled => 0.0,
+                });
+                self.overlay_bars.set_stroke(0.0);
                 // Unselected bars: a QUIET rung one step above the card
                 // (`overlay_bar_unselected`, steps `1`) — deliberately well below
                 // the selected bar's band (`overlay_selected_band`, steps `3`), so
@@ -1370,21 +1409,30 @@ impl TextPipeline {
                 } else {
                     (0..geom.visible).collect()
                 };
-                let mut unsel: Vec<[f32; 4]> = item_rows
-                    .iter()
-                    .copied()
-                    .filter(|k| Some(*k) != sel_disp)
-                    .map(|k| {
-                        let top = overlay_row_top(
-                            geom.text_top,
-                            geom.header_rows,
-                            geom.header_gap,
-                            k,
-                            lh,
-                        );
-                        bar_rect_unselected(geom.card_x, geom.card_w, top + bar_off, bar_h)
-                    })
-                    .collect();
+                // V6 P5 [`theme::BarCoverage::SelectedOnly`] — unselected rows
+                // render as BARE floating text on the room (the P5 settings-screen
+                // look): no unselected bars at all. `All` (v5) gives every row a
+                // surface. The footer plate below is pushed regardless (it guards
+                // the hint over the placard, not a per-row affordance).
+                let mut unsel: Vec<[f32; 4]> = match coverage {
+                    theme::BarCoverage::SelectedOnly => Vec::new(),
+                    theme::BarCoverage::All => item_rows
+                        .iter()
+                        .copied()
+                        .filter(|k| Some(*k) != sel_disp)
+                        .map(|k| {
+                            let top = overlay_row_top(
+                                geom.text_top,
+                                geom.header_rows,
+                                geom.header_gap,
+                                k,
+                                lh,
+                            );
+                            let (x, w) = span_of(k);
+                            [x, top + bar_off, w, bar_h]
+                        })
+                        .collect(),
+                };
                 // THE FOOTER-OVER-POSTER GUARANTEE (taste-gate finding): under
                 // Bars the pane is dropped, so a giant corner PLACARD bleeds up
                 // behind the dim foot-hint / keybindings-tips footer and the muted
@@ -1410,18 +1458,17 @@ impl TextPipeline {
                         geom.card_y + geom.card_h,
                     ));
                 }
-                // Grow toward the open margin — RIGHT by default, mirrored LEFT under
-                // a right-anchored (`TopRight`) card (the ONE pure owner).
-                let sel = match sel_top {
-                    None => Vec::new(),
-                    Some(top) => vec![bar_rect_selected(
-                        geom.card_x,
-                        geom.card_w,
-                        top + bar_off,
-                        bar_h,
-                        grow_px,
-                        mirror,
-                    )],
+                // The SELECTED bar: its natural span (full or hugged), grown
+                // `grow_px` toward the open margin — RIGHT by default, mirrored
+                // LEFT under a right-anchored (`TopRight`) card. `grow_span` is the
+                // ONE pure owner shared with the full-width `bar_rect_selected`.
+                let sel = match (sel_disp, sel_top) {
+                    (Some(disp), Some(top)) => {
+                        let (bx, bw) = span_of(disp);
+                        let (x, w) = super::grow_span(bx, bw, grow_px, mirror);
+                        vec![[x, top + bar_off, w.max(1.0), bar_h]]
+                    }
+                    _ => Vec::new(),
                 };
                 (sel, unsel)
             }
@@ -1439,14 +1486,20 @@ impl TextPipeline {
             Vec::new()
         };
         // PER-ITEM LIST SURFACES round: `Text` (default) keeps the content-ink
-        // hairline byte-identically; `Band` recolors the active mark to the
-        // selected-row band VALUE (never amber) and rounds it into a pill. (The
-        // `Chips` skin — ghost pills on every inactive facet — was killed in the
-        // designer pixel-pass; `Band` won.)
+        // hairline byte-identically; `Band` recolors the ACTIVE mark to the
+        // selected-row band VALUE (never amber) and rounds it into a pill.
+        // V6 P5 [`theme::FacetStyle::Chips`] — REAL chips (third attempt): the
+        // ACTIVE label rides `overlay_lens_underline` as a FILLED value pill
+        // (same as `Band`), and EACH INACTIVE label draws a GHOST pill — a MUTED
+        // hairline STROKE — via `overlay_facet_ghost`. Both are recorded from the
+        // SAME shaped strip glyphs (in `overlay_shape_theme`), so the skin can't
+        // disagree with the hit-test.
         let facet_style = crate::render::effective_facet_style();
+        // The inactive ghost pills (empty unless Chips on a theme card).
+        let mut ghosts: Vec<[f32; 4]> = Vec::new();
         match facet_style {
             theme::FacetStyle::Text => {}
-            theme::FacetStyle::Band => {
+            theme::FacetStyle::Band | theme::FacetStyle::Chips => {
                 let band = match theme::active()
                     .highlight_treatment(crate::render::effective_overlay_selrow_band())
                 {
@@ -1455,10 +1508,19 @@ impl TextPipeline {
                 };
                 self.overlay_lens_underline.set_color(band.rgba_bytes());
                 self.overlay_lens_underline.set_corner(FACET_CHIP_RADIUS);
+                if matches!(facet_style, theme::FacetStyle::Chips) && geom.theme {
+                    ghosts = self.overlay_theme_facet_ghosts.clone();
+                }
             }
         }
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &underline);
+        // The Chips ghost pills: a muted hairline stroke pill per inactive facet.
+        self.overlay_facet_ghost.set_corner(FACET_CHIP_RADIUS);
+        self.overlay_facet_ghost
+            .set_stroke(crate::render::BAR_OUTLINE_STROKE_PX);
+        self.overlay_facet_ghost
+            .prepare(device, queue, width, height, &ghosts);
     }
 
     /// Place the one amber caret: a resting block at the end of the query line. Read

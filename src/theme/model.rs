@@ -371,11 +371,64 @@ impl CardAnchor {
 /// compose). Hit-testing has no dead zones: a click in a gap maps to the
 /// nearest row (the pitch cell owns its trailing gap). NO world ships `Bars`
 /// yet (probe-reachable via `AWL_OVERLAY_LIST_FORCE`).
+///
+/// V6 PERSONA-5 VARIANTS round (2026-07-16) — three ORTHOGONAL axes the user's
+/// P5 study asked for, each defaulting to the shipped v5 look so a bare
+/// `bars` is byte-identical to before this round:
+/// - `extent` ([`BarExtent`]) — `FullWidth` (v5, edge-to-edge inset bars) vs
+///   `HugText` (each bar's right edge hugs its own row's text + a symmetric
+///   pad → ragged right edges, the P5 main-menu look). A row that carries a
+///   right-column shortcut extends its bar to include it (the P4-bookstore
+///   prices-in-panel precedent); a row with no shortcut stays short.
+/// - `coverage` ([`BarCoverage`]) — `All` (v5, every row a bar) vs
+///   `SelectedOnly` (unselected rows render as BARE floating text on the room,
+///   only the selected row gets a surface — the P5 settings-screen look).
+/// - `fill` ([`BarFill`]) — `Filled` (v5, solid value bars) vs `Outline` (a
+///   hairline STROKE, no fill — the selected row indicated by a rim). Rides the
+///   selection pipeline's `stroke` uniform, so it composes with the other two.
 // NOTE: no `Eq` — `radius`/`gap`/`grow_px` are floats (same reasoning as `TitleStyle`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ListStyle {
     Pane,
-    Bars { radius: f32, gap: f32, grow_px: f32 },
+    Bars {
+        radius: f32,
+        gap: f32,
+        grow_px: f32,
+        extent: BarExtent,
+        coverage: BarCoverage,
+        fill: BarFill,
+    },
+}
+
+/// V6 P5 round — the BAR-EXTENT axis (see [`ListStyle::Bars`]). `FullWidth` is
+/// the shipped v5 bar (edge-to-edge, inset from the card). `HugText` sizes each
+/// bar to its own row's text width + a symmetric pad, so the right edges go
+/// RAGGED (the P5 main-menu look); a row that carries a right-column shortcut
+/// extends its bar to include the shortcut (full width), a bare row stays short.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarExtent {
+    FullWidth,
+    HugText,
+}
+
+/// V6 P5 round — the BAR-COVERAGE axis (see [`ListStyle::Bars`]). `All` gives
+/// every candidate row a surface (v5). `SelectedOnly` draws ONLY the selected
+/// row's bar; every unselected row is bare floating text on the room veil (the
+/// P5 settings-screen look).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarCoverage {
+    All,
+    SelectedOnly,
+}
+
+/// V6 P5 round — the BAR-FILL axis (see [`ListStyle::Bars`]). `Filled` is the
+/// solid value bar (v5). `Outline` draws each bar as a hairline STROKE (no
+/// fill) via the selection pipeline's `stroke` uniform, so the selected row is
+/// marked by a rim rather than a wash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BarFill {
+    Filled,
+    Outline,
 }
 
 /// PER-ITEM LIST SURFACES round — how the faceted picker's LENS STRIP skins
@@ -386,18 +439,25 @@ pub enum ListStyle {
 /// - `Band` — an active-only value band behind the active label (the
 ///   selected-row language applied sideways), inactive plain.
 ///
-/// DESIGNER PIXEL-PASS (2026-07-16): the `Chips` skin (a filled/ghost pill per
-/// label — the 2026 standard) was KILLED on the user's verdict — four outlined
-/// buttons weighed the header and the inactive ghost pills SHOUTED (worst on the
-/// Firetail maximalist, pink fills on every inactive facet). The `Band` skin
-/// (active-only value band, inactive plain and calm) won; the text-underline
-/// active mark reads as a hyperlink, so `Band` is the endorsed non-`Text` skin.
+/// DESIGNER PIXEL-PASS (2026-07-16): an EARLIER `Chips` attempt (a filled/ghost
+/// pill per label) was first shelved on the user's verdict, then the `Band` skin
+/// (active-only value band) shipped as the endorsed non-`Text` skin.
+///
+/// V6 P5 ROUND (2026-07-16) — `Chips` REBUILT FOR REAL, third attempt (the two
+/// prior never rendered: v1 was a blob, v2–v4's probe word was never wired so
+/// `AWL_FACET_STYLE_FORCE=chips` fell silently back to `Text`). This time the
+/// probe value is wired ([`crate::render::parse_facet_style_force`]), a rounded
+/// pill hugs EACH facet label (active = FILLED value pill, inactive = GHOST /
+/// hairline STROKE pill), aligned to the strip baseline with real gaps — and a
+/// capture test (`facet_chips_render_a_pill_per_label_and_differ_from_text`)
+/// PROVES it (pixel delta vs `Text` + one pill instance per label).
 ///
 /// NO world ships a non-`Text` value yet (probe: `AWL_FACET_STYLE_FORCE`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FacetStyle {
     Text,
     Band,
+    Chips,
 }
 
 /// Whether a thin FRAME draws around the WRITING COLUMN — the page-frame

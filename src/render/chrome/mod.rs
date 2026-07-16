@@ -375,17 +375,69 @@ pub(super) const BAR_SIDE_INSET: f32 = 8.0;
 /// [`TextPipeline::overlay_text_hpad`].
 pub(super) const BAR_TEXT_PAD: f32 = 13.0;
 
-/// PURE geometry — the UNSELECTED bar rect `[x, y, w, h]` for a candidate row
-/// whose pitch-cell top is `top`, inside a card `[card_x, card_x+card_w]`, drawn
-/// `bar_h` tall (`overlay_lh - gap`). The ONE owner both the renderer
-/// ([`TextPipeline::overlay_draw_card`]) and the mirror/grow law read.
-pub(super) fn bar_rect_unselected(card_x: f32, card_w: f32, top: f32, bar_h: f32) -> [f32; 4] {
-    [
+/// PURE geometry — the FULL-WIDTH bar span `(x, w)` inside a card
+/// `[card_x, card_x+card_w]`, inset [`BAR_SIDE_INSET`] each side. The shipped v5
+/// bar ([`theme::BarExtent::FullWidth`]); the ONE owner every full-width bar
+/// (selected + unselected) reads.
+pub(super) fn bar_full_span(card_x: f32, card_w: f32) -> (f32, f32) {
+    (
         card_x + BAR_SIDE_INSET,
-        top,
         (card_w - 2.0 * BAR_SIDE_INSET).max(1.0),
-        bar_h,
-    ]
+    )
+}
+
+/// PURE geometry (V6 P5 [`theme::BarExtent::HugText`]) — the TEXT-HUGGING bar
+/// span `(x, w)` for one row: the bar's left edge is the shared
+/// [`BAR_SIDE_INSET`], its right edge hugs the row's own primary text
+/// (`primary_px`, measured from the shaped glyphs) plus a symmetric
+/// [`BAR_TEXT_PAD`], so `text_left` sits `BAR_TEXT_PAD` inside BOTH edges — the
+/// P5 main-menu ragged-right look. A row that carries a right-column SHORTCUT
+/// (`has_secondary`, the P4-bookstore prices-in-panel precedent) extends to the
+/// full-width right edge so the shortcut sits INSIDE the bar at its end; a bare
+/// row stays short. The right edge is clamped to the full-width edge so a very
+/// long primary can never jut past the card.
+pub(super) fn bar_hug_span(
+    card_x: f32,
+    card_w: f32,
+    text_left: f32,
+    primary_px: f32,
+    has_secondary: bool,
+) -> (f32, f32) {
+    let (x, full_w) = bar_full_span(card_x, card_w);
+    let full_right = x + full_w;
+    if has_secondary {
+        return (x, full_w);
+    }
+    let right = (text_left + primary_px + BAR_TEXT_PAD).min(full_right);
+    (x, (right - x).max(1.0))
+}
+
+/// PURE geometry — grow a bar's `(x, w)` by `grow` px toward the OPEN margin
+/// (RIGHT by default, LEFT when `mirror`, floored at the canvas edge) — the
+/// SELECTED-bar lead. The ONE owner both the full-width and hug-extent selected
+/// bars read, so the grow direction can't drift between extents.
+pub(super) fn grow_span(x: f32, w: f32, grow: f32, mirror: bool) -> (f32, f32) {
+    let g = grow.max(0.0);
+    if mirror {
+        // Grow LEFT: the RIGHT edge stays put; the left edge slides `g` left,
+        // floored at the canvas edge.
+        let left = (x - g).max(0.0);
+        (left, x + w - left)
+    } else {
+        // Grow RIGHT: the LEFT edge stays put; the right edge juts `g` into the room.
+        (x, w + g)
+    }
+}
+
+/// PURE geometry — the FULL-WIDTH UNSELECTED bar rect `[x, y, w, h]` for a
+/// candidate row whose pitch-cell top is `top`. A thin `[x, top, w, h]` wrapper
+/// over [`bar_full_span`] (the shipping renderer composes `bar_full_span` +
+/// `grow_span` directly now that the extent axis exists); kept as the law
+/// suite's stable full-width fixture.
+#[cfg(test)]
+pub(super) fn bar_rect_unselected(card_x: f32, card_w: f32, top: f32, bar_h: f32) -> [f32; 4] {
+    let (x, w) = bar_full_span(card_x, card_w);
+    [x, top, w, bar_h]
 }
 
 /// PURE geometry — the SELECTED bar rect: inset like the others
@@ -403,6 +455,12 @@ pub(super) fn bar_rect_unselected(card_x: f32, card_w: f32, top: f32, bar_h: f32
 /// dropped there is no card box to stay within — the bar juts into the open
 /// margin/room and the framebuffer clips it at the canvas edge. Only the LEADING
 /// edge is floored at `0.0` so a mirrored jut never runs off the left side.
+///
+/// A `[x, top, w, h]` wrapper over [`bar_full_span`] + [`grow_span`] (the two
+/// pure owners the shipping renderer now composes directly, for both the
+/// full-width and hug extents); kept as the law suite's stable full-width
+/// selected-bar fixture.
+#[cfg(test)]
 pub(super) fn bar_rect_selected(
     card_x: f32,
     card_w: f32,
@@ -411,19 +469,8 @@ pub(super) fn bar_rect_selected(
     grow_px: f32,
     mirror: bool,
 ) -> [f32; 4] {
-    let g = grow_px.max(0.0);
-    let base_x = card_x + BAR_SIDE_INSET;
-    let base_w = (card_w - 2.0 * BAR_SIDE_INSET).max(1.0);
-    let (x, w) = if mirror {
-        // Grow LEFT: the RIGHT edge (`base_x + base_w`) stays put; the left edge
-        // slides `g` left, floored at the canvas edge.
-        let left = (base_x - g).max(0.0);
-        (left, base_x + base_w - left)
-    } else {
-        // Grow RIGHT: the LEFT edge stays put; the right edge juts `g` into the
-        // room (the framebuffer clips it at the canvas edge).
-        (base_x, base_w + g)
-    };
+    let (bx, bw) = bar_full_span(card_x, card_w);
+    let (x, w) = grow_span(bx, bw, grow_px, mirror);
     [x, top, w.max(1.0), bar_h]
 }
 

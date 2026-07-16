@@ -1,7 +1,8 @@
-//! PER-ITEM LIST SURFACES round — the law suite for the three INERT-by-default
-//! capabilities (the "Persona list"): `ListStyle` (Pane | Bars), the
+//! PER-ITEM LIST SURFACES round — the law suite for the INERT-by-default
+//! capabilities (the "Persona list"): `ListStyle` (Pane | Bars, plus the V6 P5
+//! bar axes — extent HugText, coverage SelectedOnly, fill Outline), the
 //! RIGHT-ANCHOR MIRROR (`CardAnchor::TopRight`, a first-class anchor value),
-//! and `FacetStyle` (Text | Band). Each capability's DEFAULT arm is inert: the
+//! and `FacetStyle` (Text | Band | Chips). Each capability's DEFAULT arm is inert: the
 //! divergent rendering is reachable only through the `AWL_*_FORCE` probes / the
 //! test overrides, and is proven to be a PERCEPTIBLE, findable change over real
 //! pixels (the Wagtail invisible-row lesson — assert the OUTCOME, not the
@@ -30,6 +31,21 @@
 use super::super::*;
 use super::{headless_dqp, pixeldiff, view};
 
+/// A `ListStyle::Bars` with the shipped-v5 DEFAULT axes (full-width, every row,
+/// solid fill) — the fixture every pre-v6 test uses, so those tests stay
+/// concerned only with radius/gap/grow. The V6 axis variants have their own
+/// dedicated tests below.
+fn bars(radius: f32, gap: f32, grow_px: f32) -> theme::ListStyle {
+    theme::ListStyle::Bars {
+        radius,
+        gap,
+        grow_px,
+        extent: theme::BarExtent::FullWidth,
+        coverage: theme::BarCoverage::All,
+        fill: theme::BarFill::Filled,
+    }
+}
+
 // --- grammar (pure) ----------------------------------------------------------
 
 #[test]
@@ -38,17 +54,49 @@ fn parse_list_style_force_grammar() {
     // Bare `bars` → the default treatment (a real Bars value).
     assert!(matches!(parse_list_style_force("bars"), Some(theme::ListStyle::Bars { .. })));
     // Parametric radius:gap:grow.
+    assert_eq!(parse_list_style_force("bars:0:6:10"), Some(bars(0.0, 6.0, 10.0)));
+    assert_eq!(parse_list_style_force("bars:14.5:8:12"), Some(bars(14.5, 8.0, 12.0)));
+    // V6 P5 axis keywords fold into the SAME grammar word (any order, mixable
+    // with the positional floats). A bare `bars` keeps the shipped-v5 defaults.
     assert_eq!(
-        parse_list_style_force("bars:0:6:10"),
-        Some(theme::ListStyle::Bars { radius: 0.0, gap: 6.0, grow_px: 10.0 })
+        parse_list_style_force("bars:hug"),
+        Some(theme::ListStyle::Bars {
+            radius: 6.0,
+            gap: 10.0,
+            grow_px: 24.0,
+            extent: theme::BarExtent::HugText,
+            coverage: theme::BarCoverage::All,
+            fill: theme::BarFill::Filled,
+        })
     );
     assert_eq!(
-        parse_list_style_force("bars:14.5:8:12"),
-        Some(theme::ListStyle::Bars { radius: 14.5, gap: 8.0, grow_px: 12.0 })
+        parse_list_style_force("bars:0:12:0:hug:selected:outline"),
+        Some(theme::ListStyle::Bars {
+            radius: 0.0,
+            gap: 12.0,
+            grow_px: 0.0,
+            extent: theme::BarExtent::HugText,
+            coverage: theme::BarCoverage::SelectedOnly,
+            fill: theme::BarFill::Outline,
+        })
     );
-    // Malformed / negative / wrong arity → None (the world's own data).
-    assert_eq!(parse_list_style_force("bars:1:2"), None);
+    // Keyword order is free; `all`/`full` here are the defaults, so only
+    // `outline` moves off the default fill.
+    assert_eq!(
+        parse_list_style_force("bars:outline:all:full"),
+        Some(theme::ListStyle::Bars {
+            radius: 6.0,
+            gap: 10.0,
+            grow_px: 24.0,
+            extent: theme::BarExtent::FullWidth,
+            coverage: theme::BarCoverage::All,
+            fill: theme::BarFill::Outline,
+        })
+    );
+    // Malformed / negative / wrong arity / unknown keyword → None (the world's own data).
+    assert_eq!(parse_list_style_force("bars:1:2:3:4"), None); // a fourth float
     assert_eq!(parse_list_style_force("bars:-1:2:3"), None);
+    assert_eq!(parse_list_style_force("bars:wobble"), None); // unknown keyword
     assert_eq!(parse_list_style_force("capsule"), None);
     assert_eq!(parse_list_style_force(""), None);
 }
@@ -57,17 +105,21 @@ fn parse_list_style_force_grammar() {
 fn parse_facet_style_force_grammar() {
     assert_eq!(parse_facet_style_force("text"), Some(theme::FacetStyle::Text));
     assert_eq!(parse_facet_style_force("BAND"), Some(theme::FacetStyle::Band));
-    // The `Chips` skin was killed in the designer pixel-pass — its grammar word
-    // now parses to None (falls back to the world's own facet style).
-    assert_eq!(parse_facet_style_force("chips"), None);
+    // V6 P5 round — `chips` is WIRED for real now (the two prior attempts left it
+    // unrecognized, so a `-chips` shot silently came out as `text`). It parses.
+    assert_eq!(parse_facet_style_force("chips"), Some(theme::FacetStyle::Chips));
+    assert_eq!(parse_facet_style_force("CHIPS"), Some(theme::FacetStyle::Chips));
+    // An unrelated typo still falls back to None (the world's own facet style).
     assert_eq!(parse_facet_style_force("pill"), None);
     assert_eq!(parse_facet_style_force(""), None);
 }
 
 /// The force-knob classifier must tell UNSET (silent world default) apart from
-/// SET-BUT-RETIRED (the killed `chips` word) — the reader turns the latter LOUD.
-/// This is the guard against the facet-chips GALLERY TRAP: a re-shoot forcing a
-/// retired variant silently produced a byte-identical duplicate of `text`.
+/// SET-AND-PARSED and SET-BUT-RETIRED (a typo'd word) — the reader turns the
+/// last LOUD. This is the guard against the facet-chips GALLERY TRAP: a re-shoot
+/// forcing an unrecognized variant silently produced a byte-identical duplicate
+/// of `text`. V6 P5 wired `chips` for REAL, so it now classifies as Parsed
+/// (rendering the pills), NOT Retired — the trap is closed by the value existing.
 #[test]
 fn forced_knob_classifies_unset_parsed_and_retired() {
     // Unset → the world's own default, no note.
@@ -80,12 +132,14 @@ fn forced_knob_classifies_unset_parsed_and_retired() {
         classify_forced_knob(Some("band"), parse_facet_style_force),
         ForcedKnob::Parsed(theme::FacetStyle::Band)
     ));
-    // The KILLED `chips` skin, or any typo, but SET → Retired (loud fallback):
-    // never a silent duplicate of the default masquerading under a `-chips` name.
+    // V6: `chips` is now a REAL value → Parsed (the pills render), never the
+    // silent `text` duplicate the two prior attempts shipped.
     assert!(matches!(
         classify_forced_knob(Some("chips"), parse_facet_style_force),
-        ForcedKnob::Retired
+        ForcedKnob::Parsed(theme::FacetStyle::Chips)
     ));
+    // A genuine typo, but SET → Retired (loud fallback): never a silent
+    // duplicate of the default masquerading under a bogus name.
     assert!(matches!(
         classify_forced_knob(Some("pill"), parse_facet_style_force),
         ForcedKnob::Retired
@@ -329,11 +383,7 @@ fn bars_drop_the_pane_pane_keeps_it() {
     // BARS: the boxed pane vanishes — shadow + border park empty (no elevation) —
     // and a bar draws per unselected row. `panel_card` now paints ONE full-canvas
     // room veil in place of the boxed fill (not a raised card).
-    set_list_style_test_override(Some(theme::ListStyle::Bars {
-        radius: 6.0,
-        gap: 10.0,
-        grow_px: 24.0,
-    }));
+    set_list_style_test_override(Some(bars(6.0, 10.0, 24.0)));
     p.set_view(&v);
     p.prepare(&device, &queue, 1200, 800).unwrap();
     assert_eq!(p.panel_card.instance_count(), 1, "Bars paint one full-canvas room veil");
@@ -400,11 +450,7 @@ fn bars_draw_a_findable_surface_per_row() {
     v.overlay_selected = 2;
 
     // Sharp bars (radius 0 → a clean left edge to sample), a real gap, a real grow.
-    set_list_style_test_override(Some(theme::ListStyle::Bars {
-        radius: 0.0,
-        gap: 8.0,
-        grow_px: 10.0,
-    }));
+    set_list_style_test_override(Some(bars(0.0, 8.0, 10.0)));
     set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
     p.set_view(&v);
     p.prepare(&device, &queue, w, h).unwrap();
@@ -503,11 +549,7 @@ fn bars_query_caret_overlaps_the_query_text() {
     // Kingfisher: an amber-accent, coloured-ground world where the bug was shot.
     theme::set_active_by_name("Kingfisher").unwrap();
     p.sync_theme();
-    crate::render::set_list_style_test_override(Some(theme::ListStyle::Bars {
-        radius: 6.0,
-        gap: 8.0,
-        grow_px: 24.0,
-    }));
+    crate::render::set_list_style_test_override(Some(bars(6.0, 8.0, 24.0)));
     let mut v = view("hello world\n", 0, 0);
     v.overlay_active = true;
     v.overlay_title = "themes";
@@ -588,11 +630,7 @@ fn bars_room_plane_covers_the_first_scanline() {
     let _g = crate::testlock::serial();
     theme::set_active_by_name("Kingfisher").unwrap();
     p.sync_theme();
-    crate::render::set_list_style_test_override(Some(theme::ListStyle::Bars {
-        radius: 6.0,
-        gap: 8.0,
-        grow_px: 24.0,
-    }));
+    crate::render::set_list_style_test_override(Some(bars(6.0, 8.0, 24.0)));
     let mut v = view("hello world\n", 0, 0);
     v.overlay_active = true;
     v.overlay_title = "themes";
@@ -716,11 +754,7 @@ fn bars_drop_the_pane_for_every_overlay_kind() {
     };
     let _g = crate::testlock::serial();
     set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
-    set_list_style_test_override(Some(theme::ListStyle::Bars {
-        radius: 6.0,
-        gap: 10.0,
-        grow_px: 24.0,
-    }));
+    set_list_style_test_override(Some(bars(6.0, 10.0, 24.0)));
 
     use crate::overlay::OverlayKind;
     for kind in OverlayKind::ALL {
@@ -833,11 +867,7 @@ fn bars_footer_stays_legible_over_a_giant_placard() {
     // toward `base_content` (light) over the dark ground, the worst-case contrast.
     theme::set_active_by_name("Firetail").unwrap();
     set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
-    set_list_style_test_override(Some(theme::ListStyle::Bars {
-        radius: 6.0,
-        gap: 10.0,
-        grow_px: 24.0,
-    }));
+    set_list_style_test_override(Some(bars(6.0, 10.0, 24.0)));
 
     let mut v = view("hello\n", 0, 0);
     v.overlay_active = true;
@@ -906,4 +936,335 @@ fn bars_footer_stays_legible_over_a_giant_placard() {
         footer_delta < 8.0,
         "the footer ground must be IMMUNE to the poster behind it (plate guarantee): with-vs-without the wordmark the footer band changed by redmean {footer_delta:.1} (poster swung {poster_swing:.1})"
     );
+}
+
+// ============================================================================
+// V6 PERSONA-5 VARIANTS — text-hugging bars, selected-only, outline, real chips
+// ============================================================================
+//
+// Four INERT-by-default axes the user's P5 study asked for. Each is reachable
+// only through the `AWL_*_FORCE` probes / test overrides; the DEFAULT arm is the
+// shipped v5 look (a bare `bars` is byte-identical to before this round — the
+// `parse_list_style_force_grammar` case above pins that). These prove the
+// OUTCOME over real pixels / pure geometry (the Wagtail invisible-row lesson),
+// never the mere mechanism.
+
+/// TEXT-HUGGING BARS (pure geometry) — `bar_hug_span` sizes a bar to its own
+/// row's text: a SHORT primary yields a bar much narrower than full width
+/// (ragged right, the P5 main-menu look), sharing the full-width LEFT edge; a
+/// row that carries a SHORTCUT extends to full width (the shortcut sits inside
+/// the bar at its end — the P4-bookstore precedent); a very long primary CLAMPS
+/// at the full-width right edge, never jutting past the card.
+#[test]
+fn bar_hug_span_hugs_short_text_and_extends_for_a_shortcut() {
+    let (cx, cw) = (100.0, 500.0);
+    // text_left = card_x + BAR_SIDE_INSET + BAR_TEXT_PAD (what the renderer feeds).
+    let text_left = cx + chrome::BAR_SIDE_INSET + chrome::BAR_TEXT_PAD;
+    let full = chrome::bar_full_span(cx, cw);
+
+    // A short primary → a bar much narrower than full width, same left edge.
+    let short = chrome::bar_hug_span(cx, cw, text_left, 60.0, false);
+    assert!(
+        short.1 < full.1 - 100.0,
+        "a short-text hug bar is much narrower than full width: {short:?} vs full {full:?}"
+    );
+    assert!((short.0 - full.0).abs() < 1e-3, "the hug bar shares the full-width LEFT edge");
+
+    // A LONGER primary → a wider bar (ragged: widths track text).
+    let longer = chrome::bar_hug_span(cx, cw, text_left, 200.0, false);
+    assert!(longer.1 > short.1 + 100.0, "a longer primary widens its hug bar (ragged edges)");
+
+    // A row with a SHORTCUT extends to the full-width right edge.
+    let shortcut = chrome::bar_hug_span(cx, cw, text_left, 60.0, true);
+    assert!(
+        (shortcut.1 - full.1).abs() < 1e-3,
+        "a shortcut row extends its bar to full width so the shortcut sits inside: {shortcut:?}"
+    );
+
+    // A very long primary clamps at the full-width right edge (never juts past).
+    let long = chrome::bar_hug_span(cx, cw, text_left, 9999.0, false);
+    assert!(
+        long.0 + long.1 <= full.0 + full.1 + 1e-3,
+        "a long primary clamps at the full-width right edge, never past the card: {long:?}"
+    );
+}
+
+/// TEXT-HUGGING BARS (real pixels) — with SHORT candidate names and no right
+/// column, `HugText` leaves the RIGHT side of each row as bare ROOM (ragged),
+/// where `FullWidth` fills it edge-to-edge with the bar. So a region on the
+/// right of the candidate area renders PERCEPTIBLY DIFFERENT between the two
+/// extents — the ragged look is real, not a silent duplicate of full width.
+#[test]
+fn hug_extent_leaves_room_to_the_right_where_full_width_fills_it() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping hug_extent_leaves_room_to_the_right: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+
+    // SHORT names, NO right column → hug bars go ragged and short.
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = (0..6).map(|i| format!("It{i}")).collect();
+    v.overlay_selected = 2;
+
+    let frame = |p: &mut TextPipeline, ext: theme::BarExtent| {
+        set_list_style_test_override(Some(theme::ListStyle::Bars {
+            radius: 6.0,
+            gap: 10.0,
+            grow_px: 0.0, // no selected jut — isolate the extent difference
+            extent: ext,
+            coverage: theme::BarCoverage::All,
+            fill: theme::BarFill::Filled,
+        }));
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        pixeldiff::render_frame(p, &device, &queue, w, h)
+    };
+
+    let full = frame(&mut p, theme::BarExtent::FullWidth);
+    let hug = frame(&mut p, theme::BarExtent::HugText);
+
+    let rect = p.overlay_card_rect().expect("overlay card rect");
+    let (card_x, card_y, cw, ch) = (rect[0], rect[1], rect[2], rect[3]);
+    // The RIGHT ~35% of the candidate area: full-width fills it, hug leaves room.
+    let region = pixeldiff::Region::new(card_x + cw * 0.6, card_y, cw * 0.35, ch);
+    pixeldiff::assert_perceptibly_different(
+        &full, &hug, w as i64, h as i64, region, pixeldiff::DistinguishFloor::DEFAULT,
+        "hug vs full-width bars (ragged right edge)",
+    );
+
+    set_list_style_test_override(None);
+    set_card_anchor_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// SELECTED-ONLY BAR — `SelectedOnly` coverage draws NO unselected bars (the
+/// rows are bare floating text on the room, the P5 settings-screen look) while
+/// the selected bar is still drawn. Proven two ways: the unselected-bar
+/// instance count COLLAPSES (fewer `overlay_bars` instances than `All`), the
+/// selected bar stays present (`overlay_rows == 1`), AND an unselected row's
+/// bar region renders as ROOM under `SelectedOnly` vs a bar under `All`.
+#[test]
+fn selected_only_coverage_drops_unselected_bars_but_keeps_the_selected() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping selected_only_coverage: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = (0..6).map(|i| format!("Item {i}")).collect();
+    v.overlay_selected = 3;
+
+    let frame = |p: &mut TextPipeline, cov: theme::BarCoverage| {
+        set_list_style_test_override(Some(theme::ListStyle::Bars {
+            radius: 6.0,
+            gap: 10.0,
+            grow_px: 0.0,
+            extent: theme::BarExtent::FullWidth,
+            coverage: cov,
+            fill: theme::BarFill::Filled,
+        }));
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        pixeldiff::render_frame(p, &device, &queue, w, h)
+    };
+
+    let all = frame(&mut p, theme::BarCoverage::All);
+    let all_bars = p.overlay_bars.instance_count();
+    let all_sel = p.overlay_rows.instance_count();
+    let probe = p.overlay_row_y_probe();
+    let sel = frame(&mut p, theme::BarCoverage::SelectedOnly);
+    let sel_bars = p.overlay_bars.instance_count();
+    let sel_sel = p.overlay_rows.instance_count();
+
+    // The unselected-bar surfaces collapse; the selected bar survives in both.
+    assert!(
+        all_bars > sel_bars,
+        "SelectedOnly must draw FEWER unselected bars than All (all={all_bars}, selected-only={sel_bars})"
+    );
+    assert_eq!(all_sel, 1, "All coverage draws the selected bar");
+    assert_eq!(sel_sel, 1, "SelectedOnly still draws the selected bar");
+
+    // Real pixels: an UNSELECTED row (the one ABOVE the selected) is a bar under
+    // All, bare room under SelectedOnly.
+    // Real pixels: an UNSELECTED row (the one ABOVE the selected) carries a
+    // WHISPER bar under All (a deliberately quiet value step off the ground —
+    // `overlay_bar_unselected`) and bare ROOM under SelectedOnly. The whisper is
+    // subtle by design (~a few levels), so this asserts the SHIFT with a redmean
+    // threshold rather than the strict distinguish-floor the bolder surfaces use.
+    let rect = p.overlay_card_rect().expect("overlay card rect");
+    let (card_x, cw) = (rect[0], rect[2]);
+    let lh = probe.lh;
+    let (wi, hi) = (w as i64, h as i64);
+    let unsel_top = probe.band_top - lh; // the row above the selected one
+    let x0 = (card_x + cw * 0.3) as i64;
+    let y0 = (unsel_top + lh * 0.4) as i64;
+    let (rw, rh) = ((cw * 0.3) as i64, (lh * 0.3) as i64);
+    let all_row = avg(&all, wi, hi, x0, y0, rw, rh);
+    let sel_row = avg(&sel, wi, hi, x0, y0, rw, rh);
+    let shift = redmean(all_row, sel_row);
+    assert!(
+        shift > 5.0,
+        "an unselected row must lose its whisper bar under SelectedOnly \
+         (redmean all={all_row:?} vs selected-only={sel_row:?} = {shift:.1}, want > 5)"
+    );
+
+    set_list_style_test_override(None);
+    set_card_anchor_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// OUTLINE VARIANT — `Outline` fill draws the selected bar as a hairline STROKE
+/// (no fill): the selection pipeline's `stroke` uniform goes non-zero, the
+/// selected bar is still uploaded (`overlay_rows == 1`), and the bar's INTERIOR
+/// renders differently from a solid `Filled` bar (the room shows through the
+/// hollow centre). The CONTRAST floor: the rim must be VISIBLE against the room
+/// — the outline frame differs from a room-only baseline at the selected row.
+#[test]
+fn outline_fill_strokes_the_selected_bar_hollow_and_visible() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping outline_fill_strokes_the_selected_bar: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = (0..6).map(|i| format!("Item {i}")).collect();
+    v.overlay_selected = 2;
+
+    // SelectedOnly so the ONLY bar surface is the selected one — isolates the
+    // fill axis (the "no bars, just an outline" look).
+    let frame = |p: &mut TextPipeline, fill: theme::BarFill| {
+        set_list_style_test_override(Some(theme::ListStyle::Bars {
+            radius: 6.0,
+            gap: 10.0,
+            grow_px: 24.0,
+            extent: theme::BarExtent::FullWidth,
+            coverage: theme::BarCoverage::SelectedOnly,
+            fill,
+        }));
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        pixeldiff::render_frame(p, &device, &queue, w, h)
+    };
+
+    let filled = frame(&mut p, theme::BarFill::Filled);
+    let filled_stroke = p.overlay_rows.stroke();
+    let probe = p.overlay_row_y_probe();
+    let outline = frame(&mut p, theme::BarFill::Outline);
+    let outline_stroke = p.overlay_rows.stroke();
+    let outline_sel = p.overlay_rows.instance_count();
+
+    // The stroke uniform: 0 under Filled, non-zero under Outline; bar still there.
+    assert_eq!(filled_stroke, 0.0, "Filled fill leaves the stroke uniform at 0 (solid)");
+    assert!(outline_stroke > 0.0, "Outline fill raises the stroke uniform (got {outline_stroke})");
+    assert_eq!(outline_sel, 1, "Outline still uploads the selected bar (as a rim)");
+
+    let rect = p.overlay_card_rect().expect("overlay card rect");
+    let (card_x, cw) = (rect[0], rect[2]);
+    let lh = probe.lh;
+    // The INTERIOR of the selected bar: solid under Filled, room under Outline.
+    let interior =
+        pixeldiff::Region::new(card_x + cw * 0.3, probe.band_top + lh * 0.35, cw * 0.4, lh * 0.3);
+    pixeldiff::assert_perceptibly_different(
+        &filled, &outline, w as i64, h as i64, interior, pixeldiff::DistinguishFloor::DEFAULT,
+        "the selected bar interior: solid fill vs hollow outline",
+    );
+
+    // CONTRAST / VISIBILITY floor: the rim itself must be VISIBLE against the
+    // room — not a hollowed-out nothing. Within the OUTLINE frame, the bar's TOP
+    // STROKE (a bright band-value hairline) must read clearly darker/brighter
+    // than the hollow room at the bar's centre. `bar_off = gap * 0.5` (=5) is the
+    // bar's top inside its pitch cell.
+    let (wi, hi) = (w as i64, h as i64);
+    let bar_off = 10.0 * 0.5;
+    let sx = (card_x + cw * 0.3) as i64;
+    let sw = (cw * 0.4) as i64;
+    let stroke_c = avg(&outline, wi, hi, sx, (probe.band_top + bar_off) as i64, sw, 3);
+    let room_c = avg(&outline, wi, hi, sx, (probe.band_top + lh * 0.5) as i64, sw, 3);
+    let rim_vs_room = redmean(stroke_c, room_c);
+    assert!(
+        rim_vs_room > 12.0,
+        "the outline stroke must be VISIBLE against the hollow interior room \
+         (redmean stroke={stroke_c:?} vs room={room_c:?} = {rim_vs_room:.1}, want > 12)"
+    );
+
+    set_list_style_test_override(None);
+    set_card_anchor_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// REAL CHIPS (third attempt, MUST render) — `FacetStyle::Chips` draws a rounded
+/// pill hugging EACH facet label: the ACTIVE label a FILLED value pill
+/// (`overlay_lens_underline`), every INACTIVE label a GHOST hairline-stroke pill
+/// (`overlay_facet_ghost`). Proven the way the two prior silent attempts were
+/// not: one pill INSTANCE per label (active pill ≥ 1, ghost pills == inactive
+/// count) AND a PIXEL DELTA vs the `Text` skin over the strip.
+#[test]
+fn facet_chips_render_a_pill_per_label_and_differ_from_text() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping facet_chips_render_a_pill_per_label: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    // A faceted picker: All (index 0, never drawn) + three lenses, one active.
+    // The drawn labels are File / Edit / View → 3 pills, 1 active + 2 ghost.
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
+    v.overlay_selected = 1;
+    v.overlay_lens = vec![
+        ("All".into(), false),
+        ("File".into(), true),
+        ("Edit".into(), false),
+        ("View".into(), false),
+    ];
+
+    let frame = |p: &mut TextPipeline, style: theme::FacetStyle| {
+        set_facet_style_test_override(Some(style));
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        pixeldiff::render_frame(p, &device, &queue, w, h)
+    };
+
+    let text = frame(&mut p, theme::FacetStyle::Text);
+    let chips = frame(&mut p, theme::FacetStyle::Chips);
+    let active_pills = p.overlay_lens_underline.instance_count();
+    let ghost_pills = p.overlay_facet_ghost.instance_count();
+    let ghost_stroke = p.overlay_facet_ghost.stroke();
+    set_facet_style_test_override(None);
+
+    // ONE pill per label: 1 active (filled) + 2 inactive (ghost stroke). This is
+    // the assertion the two prior attempts never made — they rendered nothing.
+    assert_eq!(active_pills, 1, "Chips draws exactly ONE filled active pill (got {active_pills})");
+    assert_eq!(
+        ghost_pills, 2,
+        "Chips draws ONE ghost pill per INACTIVE drawn facet (File active, Edit+View ghost) — got {ghost_pills}"
+    );
+    assert!(ghost_stroke > 0.0, "the ghost pills are a hairline STROKE, not a fill (got {ghost_stroke})");
+
+    // PIXEL DELTA: the strip row (display line 1) changes visibly vs Text.
+    let rect = p.overlay_card_rect().expect("overlay card rect");
+    let (card_x, card_y, cw) = (rect[0], rect[1], rect[2]);
+    let text_top = card_y + 12.0;
+    let lh = p.overlay_lh();
+    let strip = pixeldiff::Region::new(card_x, text_top + lh, cw, lh);
+    pixeldiff::assert_perceptibly_different(
+        &text, &chips, w as i64, h as i64, strip, pixeldiff::DistinguishFloor::DEFAULT,
+        "facet Chips vs Text strip (per-label pills)",
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
 }

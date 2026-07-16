@@ -2181,37 +2181,77 @@ pub(crate) fn slant_max_offset(slant: &SlantProbe, n_rows: usize) -> f32 {
 const BARS_DEFAULT_RADIUS: f32 = 6.0;
 const BARS_DEFAULT_GAP: f32 = 10.0;
 const BARS_DEFAULT_GROW: f32 = 24.0;
+/// V6 P5 round — the DEFAULT bar axes a bare `bars` expands to: the shipped v5
+/// look (full-width, every row, solid fill), so `AWL_OVERLAY_LIST_FORCE=bars`
+/// stays byte-identical to before this round. The three variants are opt-in
+/// keywords on the same grammar word.
+const BARS_DEFAULT_EXTENT: theme::BarExtent = theme::BarExtent::FullWidth;
+const BARS_DEFAULT_COVERAGE: theme::BarCoverage = theme::BarCoverage::All;
+const BARS_DEFAULT_FILL: theme::BarFill = theme::BarFill::Filled;
+/// V6 P5 round — the hairline STROKE width (px) an `Outline` bar / ghost chip
+/// draws, uploaded into the selection pipeline's `stroke` uniform.
+pub(crate) const BAR_OUTLINE_STROKE_PX: f32 = 1.5;
 
-/// `AWL_OVERLAY_LIST_FORCE` grammar: `"pane"` → [`theme::ListStyle::Pane`];
-/// `"bars"` → [`theme::ListStyle::Bars`] with the default treatment;
-/// `"bars:<radius>:<gap>:<grow>"` (three non-negative floats) → a parametric
-/// bars treatment (radius 0 = sharp P4-Status bars, large = Velvet capsules).
-/// Malformed → `None` (falls through to the world's own `render_caps.list_style`).
+/// `AWL_OVERLAY_LIST_FORCE` grammar (V6 P5 round — the three ORTHOGONAL bar axes
+/// fold into the SAME colon-delimited word so the gallery A/Bs them freely):
+/// - `"pane"` → [`theme::ListStyle::Pane`];
+/// - `"bars"` → [`theme::ListStyle::Bars`] with the default treatment
+///   (`FullWidth` / `All` / `Filled` — byte-identical to the shipped v5 bars);
+/// - any `:`-separated token after `bars` is either a NON-NEGATIVE FLOAT
+///   (positional: the first fills `radius`, the second `gap`, the third `grow`)
+///   or an AXIS KEYWORD flipping one of the three v6 axes:
+///     - extent:   `full` | `hug`      ([`theme::BarExtent`])
+///     - coverage: `all`  | `selected` ([`theme::BarCoverage`])
+///     - fill:     `filled` | `outline`([`theme::BarFill`])
+///   So `"bars:0:12:0:hug:selected:outline"`, `"bars:hug"`, `"bars:selected:outline"`
+///   all parse; floats and keywords may appear in any order. More than 3 floats,
+///   an unrecognized token, or a negative/non-finite float → `None` (falls
+///   through to the world's own `render_caps.list_style`).
 fn parse_list_style_force(s: &str) -> Option<theme::ListStyle> {
-    let s = s.trim();
-    let low = s.to_ascii_lowercase();
+    let low = s.trim().to_ascii_lowercase();
     if low == "pane" {
         return Some(theme::ListStyle::Pane);
     }
-    if low == "bars" {
-        return Some(theme::ListStyle::Bars {
-            radius: BARS_DEFAULT_RADIUS,
-            gap: BARS_DEFAULT_GAP,
-            grow_px: BARS_DEFAULT_GROW,
-        });
-    }
-    if let Some(rest) = low.strip_prefix("bars:") {
-        let parts: Vec<&str> = rest.split(':').collect();
-        if parts.len() == 3 {
-            let r: f32 = parts[0].trim().parse().ok()?;
-            let g: f32 = parts[1].trim().parse().ok()?;
-            let w: f32 = parts[2].trim().parse().ok()?;
-            if [r, g, w].iter().all(|v| v.is_finite() && *v >= 0.0) {
-                return Some(theme::ListStyle::Bars { radius: r, gap: g, grow_px: w });
+    let rest = if low == "bars" {
+        ""
+    } else {
+        low.strip_prefix("bars:")?
+    };
+    let mut radius = BARS_DEFAULT_RADIUS;
+    let mut gap = BARS_DEFAULT_GAP;
+    let mut grow_px = BARS_DEFAULT_GROW;
+    let mut extent = BARS_DEFAULT_EXTENT;
+    let mut coverage = BARS_DEFAULT_COVERAGE;
+    let mut fill = BARS_DEFAULT_FILL;
+    let mut floats_seen = 0usize;
+    if !rest.is_empty() {
+        for tok in rest.split(':') {
+            let tok = tok.trim();
+            match tok {
+                "full" => extent = theme::BarExtent::FullWidth,
+                "hug" => extent = theme::BarExtent::HugText,
+                "all" => coverage = theme::BarCoverage::All,
+                "selected" => coverage = theme::BarCoverage::SelectedOnly,
+                "filled" => fill = theme::BarFill::Filled,
+                "outline" => fill = theme::BarFill::Outline,
+                _ => {
+                    // Positional float: radius, then gap, then grow.
+                    let v: f32 = tok.parse().ok()?;
+                    if !v.is_finite() || v < 0.0 {
+                        return None;
+                    }
+                    match floats_seen {
+                        0 => radius = v,
+                        1 => gap = v,
+                        2 => grow_px = v,
+                        _ => return None, // a fourth float is malformed
+                    }
+                    floats_seen += 1;
+                }
             }
         }
     }
-    None
+    Some(theme::ListStyle::Bars { radius, gap, grow_px, extent, coverage, fill })
 }
 
 /// The three states an `AWL_*_FORCE` dev knob can be in. The `Retired` arm is
@@ -2268,7 +2308,7 @@ fn awl_list_style_force() -> &'static Option<theme::ListStyle> {
     ONCE.get_or_init(|| {
         read_forced_knob(
             "AWL_OVERLAY_LIST_FORCE",
-            "pane | bars | bars:<radius>:<gap>:<grow>",
+            "pane | bars | bars:<radius>:<gap>:<grow>[:hug|full][:selected|all][:outline|filled]",
             parse_list_style_force,
         )
     })
@@ -2304,15 +2344,16 @@ pub(crate) fn effective_list_style() -> theme::ListStyle {
     }
 }
 
-/// `AWL_FACET_STYLE_FORCE` grammar: `"text"` / `"band"`. (The `"chips"` skin was
-/// killed in the designer pixel-pass — `Band` won.) Malformed / retired →
-/// `None` (the world's own `render_caps.facet_style`); a SET-but-unrecognized
-/// value is reported to stderr by [`read_forced_knob`] before it falls back, so
-/// a re-shoot of the killed `chips` skin can't masquerade as a real variant.
+/// `AWL_FACET_STYLE_FORCE` grammar: `"text"` / `"band"` / `"chips"`. V6 P5 round
+/// WIRES `chips` for real (the two prior attempts left this word unrecognized,
+/// so a `-chips` shot silently came out as `text` — the gallery trap). Malformed
+/// → `None` (the world's own `render_caps.facet_style`); a SET-but-unrecognized
+/// value is reported to stderr by [`read_forced_knob`] before it falls back.
 fn parse_facet_style_force(s: &str) -> Option<theme::FacetStyle> {
     match s.trim().to_ascii_lowercase().as_str() {
         "text" => Some(theme::FacetStyle::Text),
         "band" => Some(theme::FacetStyle::Band),
+        "chips" => Some(theme::FacetStyle::Chips),
         _ => None,
     }
 }
@@ -2320,7 +2361,9 @@ fn parse_facet_style_force(s: &str) -> Option<theme::FacetStyle> {
 /// The `AWL_FACET_STYLE_FORCE` dev knob, read ONCE and memoized.
 fn awl_facet_style_force() -> &'static Option<theme::FacetStyle> {
     static ONCE: std::sync::OnceLock<Option<theme::FacetStyle>> = std::sync::OnceLock::new();
-    ONCE.get_or_init(|| read_forced_knob("AWL_FACET_STYLE_FORCE", "text | band", parse_facet_style_force))
+    ONCE.get_or_init(|| {
+        read_forced_knob("AWL_FACET_STYLE_FORCE", "text | band | chips", parse_facet_style_force)
+    })
 }
 
 /// TEST-ONLY escape hatch for the facet style (mirrors
@@ -3012,6 +3055,13 @@ pub struct TextPipeline {
     /// by VALUE + this hairline. A reused `SelectionPipeline`; parked empty for every
     /// other overlay, so a non-theme card draws byte-identically.
     pub overlay_lens_underline: SelectionPipeline,
+    /// V6 P5 round — the faceted strip's INACTIVE ghost pills under
+    /// [`theme::FacetStyle::Chips`]: one hairline STROKE pill per non-active
+    /// facet label (the active label rides `overlay_lens_underline` as a FILLED
+    /// pill). Drawn via the selection pipeline's `stroke` uniform in the same
+    /// under-the-text z-slot; parked empty for `Text`/`Band` and every non-theme
+    /// card, so those render byte-identically.
+    pub overlay_facet_ghost: SelectionPipeline,
     /// THE STIPPLE PLACARD (`theme::PlacardInk::Stipple`): the corner wordmark
     /// rendered as a Bayer-matrix stipple of individual full-ink pixels
     /// instead of ordinary antialiased glyphs. The SHAPING half is shared
@@ -3033,6 +3083,13 @@ pub struct TextPipeline {
     /// (from the shaped strip glyphs, so it lands exactly under the active label at any
     /// world face), consumed by `overlay_draw_card`. `None` when no theme picker is up.
     overlay_theme_underline: Option<[f32; 4]>,
+    /// V6 P5 round — the INACTIVE ghost-pill rects `[x, y, w, h]` recorded during
+    /// theme-strip shaping under [`theme::FacetStyle::Chips`] (one per non-active
+    /// facet label, from the SAME shaped glyphs the active pill reads, so the
+    /// skin can't disagree with the hit-test). Consumed by `overlay_draw_card`
+    /// into `overlay_facet_ghost`. EMPTY under `Text`/`Band` and off the theme
+    /// picker, so they render byte-identically.
+    overlay_theme_facet_ghosts: Vec<[f32; 4]>,
     /// Whether the LAST overlay shaping granted the dim right column (chords /
     /// descriptions / times / diffs). Written by `overlay_shape_text` from the
     /// [`rowlayout`] verdict — `false` when the column YIELDED to keep the names
@@ -3633,6 +3690,12 @@ impl TextPipeline {
         // hairline mark the active lens; never amber, DESIGN §3). Parked empty otherwise.
         let overlay_lens_underline =
             SelectionPipeline::new(device, format, theme::base_content().rgba_bytes());
+        // V6 P5 round — the faceted strip's inactive ghost pills (Chips skin): a
+        // MUTED hairline stroke, so an inactive facet reads as a quiet ghost pill
+        // (never amber). Its stroke width is set per-frame in the draw path;
+        // parked empty for every other skin / card.
+        let overlay_facet_ghost =
+            SelectionPipeline::new(device, format, theme::muted().rgba_bytes());
         // THE STIPPLE PLACARD: the corner wordmark's Bayer-stipple renderer
         // (see the field's own doc). Ink + density re-read per re-tint; starts
         // parked (zero instances) — only a stipple-placard world with an open
@@ -3836,8 +3899,10 @@ impl TextPipeline {
             overlay_rows,
             overlay_bars,
             overlay_lens_underline,
+            overlay_facet_ghost,
             placard_stipple,
             overlay_theme_underline: None,
+            overlay_theme_facet_ghosts: Vec::new(),
             overlay_right_shown: false,
             wordcount_renderer,
             wordcount_buffer,
@@ -5177,6 +5242,9 @@ impl TextPipeline {
         self.overlay_rows.draw(pass);
         // THEME PICKER: the active-lens hairline under the strip (content ink), UNDER
         // the overlay text so the glyphs sit on top. Parked empty for every other card.
+        // V6 P5: the Chips ghost pills draw first (inactive, muted stroke), then the
+        // active pill on top — both under the strip labels.
+        self.overlay_facet_ghost.draw(pass);
         self.overlay_lens_underline.draw(pass);
         self.panel_caret.draw(pass);
         // THE STIPPLE PLACARD (`Pane` only — under `Bars` it was drawn behind the

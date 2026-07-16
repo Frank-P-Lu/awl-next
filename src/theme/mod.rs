@@ -73,9 +73,10 @@ pub use model::{Lens, RoleOverrides, ThemeTags};
 // bundle type + one field's enum); every non-test in-crate caller today reaches
 // them through `Theme::render_caps.<field>` rather than this bare re-export.
 pub use model::{
-    Backdrop, BandResponse, CardAnchor, CaretBlockStyle, ChromeFace, DecorativeWash, Elevation,
-    FacetStyle, HighlightTexture, HighlightTreatment, ImageReveal, ListStyle, MotionJuice,
-    OverlayEntrance, PageFrame, PlacardCorner, PlacardInk, RenderCaps, SelectionStyle, TitleStyle,
+    Backdrop, BandResponse, BarCoverage, BarExtent, BarFill, CardAnchor, CaretBlockStyle,
+    ChromeFace, DecorativeWash, Elevation, FacetStyle, HighlightTexture, HighlightTreatment,
+    ImageReveal, ListStyle, MotionJuice, OverlayEntrance, PageFrame, PlacardCorner, PlacardInk,
+    RenderCaps, SelectionStyle, TitleStyle,
 };
 #[allow(unused_imports)] // the per-world ornament/bullet data: public API
 // surface, no NON-TEST in-crate caller today.

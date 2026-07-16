@@ -42,6 +42,16 @@ struct Globals {
     // 0.25 — see `render::dither::WAGTAIL_HIGHLIGHT_DITHER_DENSITY`, the
     // single Rust-side owner of the actual number). Unused by `fs_invert`.
     dither: f32,
+    // OUTLINE / STROKE MODE (V6 P5 round): 0.0 = the original SOLID fill
+    // (`fs_main`, byte-identical to before this field existed — every
+    // shipping consumer). > 0.0 = draw only a HOLLOW RING `stroke` px wide
+    // just inside the rounded-rect edge (the interior is left transparent),
+    // so the quad reads as an OUTLINE — the `BarFill::Outline` bars and the
+    // `FacetStyle::Chips` inactive ghost pills. Unused by `fs_invert` and the
+    // dither branch (both keep their hard on/off contract). Std140 pads the
+    // struct to a 32-byte multiple (`_pad` below) so the uniform stays aligned.
+    stroke: f32,
+    _pad: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -154,6 +164,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // The ORIGINAL soft fill: solid inside with a ~1px antialiased edge.
     let fill = 1.0 - smoothstep(-1.0, 1.0, d);
+    if (g.stroke > 0.0) {
+        // OUTLINE MODE: keep only the RING between the outer edge and a rect
+        // shrunk `stroke` px inward. `inner` is the fill coverage of that
+        // shrunk rect (SDF offset by +stroke); the ring is the outer fill MINUS
+        // the inner fill, each with its own ~1px AA edge — a clean hairline that
+        // leaves the interior transparent (the room / text shows through).
+        let inner = 1.0 - smoothstep(-1.0, 1.0, d + g.stroke);
+        let ring = clamp(fill - inner, 0.0, 1.0) * in.color.a;
+        return vec4<f32>(in.color.rgb, ring);
+    }
     let a = clamp(fill, 0.0, 1.0) * in.color.a;
     return vec4<f32>(in.color.rgb, a);
 }

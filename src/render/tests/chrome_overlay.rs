@@ -116,7 +116,17 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
     // half-leads the glyphs down — the full-bleed caret bug lived here).
     let styles = [
         ("pane", None),
-        ("bars", Some(theme::ListStyle::Bars { radius: 6.0, gap: 8.0, grow_px: 24.0 })),
+        (
+            "bars",
+            Some(theme::ListStyle::Bars {
+                radius: 6.0,
+                gap: 8.0,
+                grow_px: 24.0,
+                extent: theme::BarExtent::FullWidth,
+                coverage: theme::BarCoverage::All,
+                fill: theme::BarFill::Filled,
+            }),
+        ),
     ];
     for world in ["Currawong", "Saltpan", "Wagtail"] {
         theme::set_active_by_name(world).unwrap();
