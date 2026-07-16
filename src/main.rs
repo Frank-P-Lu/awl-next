@@ -105,6 +105,8 @@ mod script;
 mod search;
 mod selection;
 #[cfg(not(target_arch = "wasm32"))]
+mod soak_gpu;
+#[cfg(not(target_arch = "wasm32"))]
 mod session;
 mod settings;
 mod spell;

@@ -9,6 +9,71 @@
 use super::*;
 
 impl App {
+    fn handle_gpu_fault(&mut self, event_loop: &ActiveEventLoop, fault: gpu::GpuFault) {
+        eprintln!("gpu {:?}: {}", fault.kind, fault.message);
+        match gpu_fault_action(self.gpu_lifecycle, fault.kind) {
+            GpuFaultAction::RetryOneFrame => {
+                self.gpu_lifecycle = GpuLifecycle::Active { oom_skips: 1 };
+                self.set_sticky_notice("graphics memory pressure — skipped one frame");
+                if let Some(gpu) = self.gpu.as_ref() { gpu.window.request_redraw(); }
+            }
+            GpuFaultAction::NoticeOnly => self.set_sticky_notice("graphics rejected one frame — editing is safe"),
+            GpuFaultAction::Rebuild => {
+                let reason = match fault.kind {
+                    gpu::GpuFaultKind::OutOfMemory => "graphics memory stayed full",
+                    gpu::GpuFaultKind::DeviceLost => "graphics device was lost",
+                    gpu::GpuFaultKind::Internal => "graphics backend stopped responding",
+                    gpu::GpuFaultKind::SurfaceRecoveryFailed => "window surface could not recover",
+                    gpu::GpuFaultKind::Validation => "graphics rejected repeated work",
+                };
+                self.rebuild_gpu(event_loop, reason);
+            }
+        }
+    }
+
+    fn handle_gpu_frame_outcome(&mut self, event_loop: &ActiveEventLoop, outcome: gpu::GpuFrameOutcome) -> Result<(Option<(f32, Instant)>, bool), ()> {
+        match outcome {
+            gpu::GpuFrameOutcome::Presented(perf) => {
+                self.gpu_lifecycle = GpuLifecycle::Active { oom_skips: 0 };
+                self.gpu_retry_at = None;
+                self.gpu_timeout_streak = 0;
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(soak) = self.soak.as_mut() { soak.observe_frame(crate::soak_gpu::FrameOutcome::Presented, true); if let Some(kind) = self.soak_recovery_pending.take() { soak.observe_recovered(kind, Instant::now()); } }
+                Ok((perf, true))
+            }
+            gpu::GpuFrameOutcome::Skipped(skip) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(soak) = self.soak.as_mut() { soak.observe_frame(crate::soak_gpu::FrameOutcome::Skipped, false); }
+                let action = gpu_skip_action(skip, self.gpu_timeout_streak);
+                self.gpu_timeout_streak = if skip == gpu::GpuFrameSkip::Timeout {
+                    self.gpu_timeout_streak.saturating_add(1)
+                } else {
+                    0
+                };
+                match action {
+                    GpuSkipAction::WaitForWake => self.gpu_retry_at = None,
+                    GpuSkipAction::RetryAfter(delay) => {
+                        self.gpu_retry_at = Some(Instant::now() + delay);
+                    }
+                    GpuSkipAction::RetryWithNoticeAfter(delay, notice) => {
+                        self.set_toast_notice(notice);
+                        self.gpu_retry_at = Some(Instant::now() + delay);
+                    }
+                    GpuSkipAction::HoldWithNotice(notice) => {
+                        self.gpu_retry_at = None;
+                        self.set_sticky_notice(notice);
+                    }
+                }
+                Ok((None, false))
+            }
+            gpu::GpuFrameOutcome::Fault(fault) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(soak) = self.soak.as_mut() { soak.observe_frame(crate::soak_gpu::FrameOutcome::Skipped, false); }
+                self.handle_gpu_fault(event_loop, fault);
+                Err(())
+            }
+        }
+    }
     /// `WindowEvent::Focused(false)`: the window lost focus. ROBUST AUTOSAVE —
     /// flush a pending note write, the document autosave / scratch stash, and
     /// (native only) the session restore state on the same blur trigger. Also
@@ -23,11 +88,7 @@ impl App {
     pub(super) fn on_focus_gained(&mut self) {
         self.focused = true;
         self.lava_tick_at = None;
-        if crate::theme::background().is_lava() {
-            if let Some(gpu) = self.gpu.as_ref() {
-                gpu.window.request_redraw();
-            }
-        }
+        if let Some(gpu) = self.gpu.as_ref() { gpu.window.request_redraw(); }
     }
 
     pub(super) fn on_focus_lost(&mut self) {
@@ -94,26 +155,36 @@ impl App {
     /// the compositor briefly STRETCHING the last frame instead of showing a
     /// blank/stale one — see `Gpu::set_presents_with_transaction`'s doc for
     /// the companion half of this fix (`arm_live_resize_sync` below).
-    pub(super) fn on_resized(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+    pub(super) fn on_resized(&mut self, event_loop: &ActiveEventLoop, size: winit::dpi::PhysicalSize<u32>) {
         let mut changed = false;
+        let mut request_redraw = true;
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut reconfigured = false;
         if let Some(gpu) = self.gpu.as_mut() {
             changed = gpu.config.width != size.width || gpu.config.height != size.height;
             if changed {
                 gpu.pipeline
                     .hold_lava_field_viewport(gpu.config.width, gpu.config.height);
             }
-            gpu.resize(size.width, size.height);
+            #[cfg(not(target_arch = "wasm32"))]
+            { reconfigured = gpu.resize(size.width, size.height) == gpu::GpuResizeOutcome::Reconfigured; }
+            #[cfg(target_arch = "wasm32")]
+            { gpu.resize(size.width, size.height); }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if reconfigured { if let Some(soak) = self.soak.as_mut() { soak.observe_resize(); } }
         self.sync_view(true);
         if changed {
             self.arm_live_resize_sync();
-            if let Some(gpu) = self.gpu.as_mut() {
-                gpu.redraw();
+            let outcome = self.gpu.as_mut().map(Gpu::redraw);
+            if let Some(outcome) = outcome {
+                request_redraw = self.handle_gpu_frame_outcome(event_loop, outcome)
+                    .is_ok_and(|(_, presented)| presented);
             }
         }
-        if let Some(gpu) = self.gpu.as_ref() {
+        if request_redraw { if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
-        }
+        }}
     }
 
     /// Re-arm the cross-platform live-resize settle debounce and (through the
@@ -238,6 +309,14 @@ impl App {
     /// DEBUG-panel perf lines (all timing work gated on `debug_on()`) and drives
     /// its settle-stamp.
     pub(super) fn on_redraw_requested(&mut self, event_loop: &ActiveEventLoop) {
+        let fault = self.gpu.as_ref().and_then(|g| g.take_faults().into_iter().next());
+        if let Some(fault) = fault {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(soak) = self.soak.as_mut() { soak.observe_frame(crate::soak_gpu::FrameOutcome::Skipped, false); }
+            self.handle_gpu_fault(event_loop, fault);
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
         // Consume a wheel/key zoom burst at the present boundary: every input
         // already updated `self.zoom`; one sync now reflows directly to the
         // latest requested level. Put it before the frame clock to preserve the
@@ -338,7 +417,7 @@ impl App {
         // below, and OS key AUTO-REPEAT for a HELD arrow delivers a fresh
         // KeyboardInput per repeat, so a held arrow still repaints promptly.
         // The loop only stays HOT while the caret spring is still animating.
-        let (animating, presented) = if let Some(gpu) = self.gpu.as_mut() {
+        let (animating, outcome) = if let Some(gpu) = self.gpu.as_mut() {
             // Drive the virtual-clock seam (caret spring + any future live
             // animator) so the timeline capture and the live loop advance
             // animation through the SAME entry point.
@@ -349,7 +428,11 @@ impl App {
             // idles at 0% CPU until the next input requests a redraw.
             (still, presented)
         } else {
-            (false, None)
+            return;
+        };
+        let (presented, frame_presented) = match self.handle_gpu_frame_outcome(event_loop, outcome) {
+            Ok(result) => result,
+            Err(()) => { event_loop.set_control_flow(ControlFlow::Wait); return; }
         };
         // DEBUG bookkeeping for the frame that just PRESENTED (`presented`
         // is `Some` only with the panel on — see `Gpu::redraw`): close the
@@ -375,8 +458,11 @@ impl App {
         // (no session clock), so a held HUD is a single settled frame over
         // the cached frosted backdrop. `last_frame` still tracks ONLY the
         // spring, so the dt fed to `advance` stays correct.
-        let keep_hot = animating;
-        self.last_frame = if animating { Some(now) } else { None };
+        // A failed acquire never drives the animation Poll loop. The spring
+        // simply resumes from the next OS/input/timed wake; otherwise an
+        // occluded window can allocate and prepare thousands of unseen frames.
+        let keep_hot = keep_gpu_loop_hot(animating, frame_presented);
+        self.last_frame = if keep_hot { Some(now) } else { None };
         if keep_hot {
             event_loop.set_control_flow(ControlFlow::Poll);
             if let Some(gpu) = self.gpu.as_ref() {
