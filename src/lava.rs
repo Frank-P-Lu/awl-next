@@ -94,8 +94,71 @@ pub const BACKDROP_BLOBS: [[f32; 4]; 8] = [
     [0.88, 0.82, 0.16, 0.95],
 ];
 
+// --- FROST RAIL constants (the shipped headed-doc treatment) ------------------
+//
+// The user's design: on a lava world a HEADED doc keeps BOTH margins alive (the
+// lamp animates in the left margin too), and each drawn outline entry gets a
+// FROSTED PILL behind its text — the SMOOTH metaball field softened + a value dim
+// — so the dim outline ink keeps its contrast while the lamp stays fully alive
+// between and around the pills. This REPLACES the old whole-left-margin CARVE
+// (which flattened the entire rail to ground). All TASTE TUNABLE — flagged for
+// live review, named like `THEME_FONT_DEBOUNCE`.
+
+/// THE SHIPPED HEADED-DOC TREATMENT. `true` (the user's pick — "both margins
+/// alive on every doc") = per-entry FROST pills, the lamp animating in both
+/// margins. Flip this ONE const to `false` to revert to the OLD whole-left-margin
+/// CARVE (the `rail` global + [`rail_dist_outside`] + `lava_rail_carved` stay
+/// wired for exactly this one-line data revert): frost turns off and a headed
+/// doc's whole left margin flattens back to the flat page ground.
+pub const FROST_RAIL_DEFAULT: bool = true;
+
+/// The VALUE DIM inside a frost pill: how far the softened field is mixed back
+/// toward the flat page `ground` (0 = the raw softened lamp, 1 = pure flat
+/// ground). Sized so the dim outline ink clears its ink-ladder contrast floor
+/// against the pill at EVERY animation phase (law
+/// `outline_frost_pills_keep_ink_contrast_on_every_lava_world`), while a whisper
+/// of the softened lamp still reads behind the text.
+pub const FROST_DIM: f32 = 0.65;
+
+/// The frost BLUR kernel spacing (logical px, zoom-scaled by the caller): the
+/// per-tap offset of the 3×3 cross [`frost_field`] averages the SMOOTH field over.
+/// Averaging the raw undithered field (never the posterized color) is the
+/// Mangrove REQUIREMENT — blurring the Bayer grid makes cross moiré (the
+/// documented palette-blur lesson), so the frost samples the field, not the
+/// dither.
+pub const FROST_BLUR_PX: f32 = 5.0;
+
+/// The frost pill EDGE FEATHER (logical px, zoom-scaled): the band over which a
+/// pill's frost coverage ramps 1 → 0 at its boundary, so the pill blends into the
+/// live lamp instead of drawing a hard rectangle edge.
+pub const FROST_FEATHER_PX: f32 = 7.0;
+
+/// The horizontal padding (logical px, zoom-scaled) a frost pill extends past each
+/// end of its outline entry's shaped text extent — the "comfortable padding" that
+/// hugs the text without clipping its antialiased edge.
+pub const FROST_PILL_PAD_X: f32 = 6.0;
+
+/// The vertical inset of a frost pill from its outline row's full line box, as a
+/// fraction of the row height (top AND bottom) — so the pill hugs the text band
+/// and the lamp breathes in the leading BETWEEN consecutive pills (never a solid
+/// column of frost down the rail).
+pub const FROST_PILL_INSET_Y_FRAC: f32 = 0.1;
+
+/// The MAX frost pills the shader's uniform carries (`array<vec4<f32>,
+/// MAX_FROST_PILLS>`). The visible outline row count is capped here — far above
+/// any realistic followed-window row budget, so in practice every drawn entry
+/// gets its pill.
+pub const MAX_FROST_PILLS: usize = 48;
+
 #[allow(dead_code)] // shader-mirror constant (see the pure-math note below).
 const TAU: f32 = std::f32::consts::TAU;
+
+// Frost blend constants — MUST match `shaders/lava.wgsl`'s `THRESHOLD` /
+// `EDGE_WIDTH` / `CORE_WIDTH` (the metaball edge/core smoothstep bands the frost
+// pixel maps the softened field through).
+const FROST_THRESHOLD: f32 = 0.5;
+const FROST_EDGE_WIDTH: f32 = 0.12;
+const FROST_CORE_WIDTH: f32 = 0.35;
 
 // --- PURE math (the shader mirror, unit-tested) -------------------------------
 //
@@ -245,6 +308,87 @@ pub fn metaball_field(px: (f32, f32), viewport: (f32, f32), blobs: &[[f32; 4]], 
         total += b[3] * (-FIELD_K * dist_sq / (r_px * r_px)).exp();
     }
     total
+}
+
+// --- FROST pure math (the shader mirror, unit-tested) -------------------------
+//
+// The FROST treatment (behind each outline entry's pill): a SOFTENED sample of
+// the SMOOTH metaball field ([`frost_field`], a 3×3 tap average — never the
+// dithered color, the Mangrove palette-blur lesson) mapped through the same
+// edge/core blend the lamp uses, then value-dimmed toward the flat ground
+// ([`frost_pixel`]). Blended into the live lamp by a per-pill feathered coverage
+// ([`frost_pill_coverage`], which reuses [`gutter_corner_dist_outside`] as the
+// rounded-pill rect SDF). All three MUST stay in lockstep with `shaders/lava.wgsl`.
+
+/// The SOFTENED (blurred) metaball field at pixel `px`: [`metaball_field`]
+/// averaged over a 3×3 tap cross at `blur` px spacing. Averaging the RAW field
+/// (undithered) widens each blob's apparent edge without ever sampling the Bayer
+/// grid — the Mangrove REQUIREMENT (blurring the ordered-dither grid makes cross
+/// moiré). MUST match `shaders/lava.wgsl`'s `frost_field`. Pure.
+#[allow(dead_code)]
+pub fn frost_field(
+    px: (f32, f32),
+    viewport: (f32, f32),
+    blobs: &[[f32; 4]],
+    phase: f32,
+    blur: f32,
+) -> f32 {
+    let mut acc = 0.0;
+    for oy in [-blur, 0.0, blur] {
+        for ox in [-blur, 0.0, blur] {
+            acc += metaball_field((px.0 + ox, px.1 + oy), viewport, blobs, phase);
+        }
+    }
+    acc / 9.0
+}
+
+/// The FROST PILL PIXEL (sRGB): the softened `field` mapped through the lamp's
+/// own edge/core blend (`ground → blob_lo → blob_hi`), then VALUE-DIMMED toward
+/// the flat `ground` by `dim` so the dim outline ink keeps its contrast. The
+/// blend is computed in sRGB (the documented approximation the sibling lava
+/// figure/ground law uses — the shader mixes in linear, but the tones are dark +
+/// close so the perceptual gap is negligible; the law asserts the contrast floor
+/// over these values directly). MUST match `shaders/lava.wgsl`'s frost color path.
+#[allow(dead_code)]
+pub fn frost_pixel(field: f32, ground: Srgb, blob_lo: Srgb, blob_hi: Srgb, dim: f32) -> Srgb {
+    let edge_t = smoothstep(FROST_THRESHOLD - FROST_EDGE_WIDTH, FROST_THRESHOLD + FROST_EDGE_WIDTH, field);
+    let core_t = smoothstep(FROST_THRESHOLD, FROST_THRESHOLD + FROST_CORE_WIDTH, field);
+    let lerp = |a: u8, b: u8, t: f32| -> u8 { (a as f32 + (b as f32 - a as f32) * t).round().clamp(0.0, 255.0) as u8 };
+    let ch = |gc: u8, lo: u8, hi: u8| -> u8 {
+        let blob = lerp(lo, hi, core_t); // blob_lo → blob_hi by core_t
+        let smooth = lerp(gc, blob, edge_t); // ground → blob by edge_t
+        lerp(smooth, gc, dim) // value dim back toward the flat ground
+    };
+    Srgb {
+        r: ch(ground.r, blob_lo.r, blob_hi.r),
+        g: ch(ground.g, blob_lo.g, blob_hi.g),
+        b: ch(ground.b, blob_lo.b, blob_hi.b),
+        a: 0xFF,
+    }
+}
+
+/// The FROST PILL COVERAGE at pixel `(x, y)` for one pill `rect` (`[left, top,
+/// right, bottom]`, px): 1 well inside the pill, ramping to 0 over `feather` px at
+/// its boundary, so the frost blends into the live lamp instead of drawing a hard
+/// rectangle edge. Reuses [`gutter_corner_dist_outside`] as the rect SDF (a pill
+/// is a rounded-corner rect; the feathered edge IS the round). MUST match
+/// `shaders/lava.wgsl`'s per-pill coverage. Pure.
+#[allow(dead_code)]
+pub fn frost_pill_coverage(x: f32, y: f32, rect: [f32; 4], feather: f32) -> f32 {
+    let d = gutter_corner_dist_outside(x, y, rect);
+    1.0 - smoothstep(-feather.max(1.0), 0.0, d)
+}
+
+/// The FROST AMOUNT at pixel `(x, y)` — the max coverage over every visible pill
+/// (`pills`), so a pixel inside ANY entry's pill gets frosted while the lamp stays
+/// alive between and around them. MUST match `shaders/lava.wgsl`'s pill loop. Pure.
+#[allow(dead_code)]
+pub fn frost_amount(x: f32, y: f32, pills: &[[f32; 4]], feather: f32) -> f32 {
+    let mut amt = 0.0f32;
+    for p in pills {
+        amt = amt.max(frost_pill_coverage(x, y, *p, feather));
+    }
+    amt
 }
 
 // --- CADENCE / PHASE resolution (pure, unit-tested) ---------------------------
@@ -400,72 +544,37 @@ pub fn env_phase() -> Option<f32> {
     spec().as_ref().map(|(_, phase)| *phase)
 }
 
-// --- The dev-only BOTH-SIDES probe knob (AWL_LAVA_BOTH=...) --------------------
+// --- The dev-only FROST-OFF gallery knob (AWL_LAVA_FROST=off) ------------------
 //
 // Mirrors the `AWL_LAVA` / `AWL_CJK_FORCE` precedent: read ONCE at startup,
-// memoized, a TOTAL no-op unless set (`LavaBoth::Off`), so ship + headless
-// determinism is untouched when absent. Auditions three ways a HEADED (outline)
-// doc could go both-sides — treatments that ship NOTHING; the human eyeballs the
-// gallery captures before any of them is chosen (or none).
-//   AWL_LAVA_BOTH=plate   solid ground plate behind just the rail entries
-//   AWL_LAVA_BOTH=band    a local band carve around the rail + a local left-edge
-//                         glow-shed over the rail band (the far margin keeps its
-//                         ordinary edge-glow — the shed is scoped, not global)
-//   AWL_LAVA_BOTH=bleed   FULL-BLEED: lava everywhere incl. under the column,
-//                         heavily value-dimmed there (the two-layer-model tension
-//                         made visible; GPU cost is just the mask multiply)
+// memoized, a TOTAL no-op unless set, so ship + headless determinism is untouched
+// when absent. The ONLY knob kept — the vetoed plate/band/bleed both-sides
+// auditions were deleted (the user picked FROST). `AWL_LAVA_FROST=off` turns the
+// frost pills OFF so the A/B "before" (the outline sitting on the raw, unfrosted
+// lamp — why frost earns its place) stays producible for a gallery.
 
-/// The both-sides gallery probe treatment, chosen by `AWL_LAVA_BOTH`. `Off` in
-/// every ship + headless run (env absent), so the whole probe path is inert.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum LavaBoth {
-    Off,
-    Plate,
-    Band,
-    Bleed,
-}
-
-impl LavaBoth {
-    /// The uniform-carried `mode` float the shader dispatches on (0 ship / 1
-    /// plate / 2 band / 3 bleed). MUST match `shaders/lava.wgsl`'s `probe`
-    /// dispatch.
-    pub fn mode(self) -> f32 {
-        match self {
-            LavaBoth::Off => 0.0,
-            LavaBoth::Plate => 1.0,
-            LavaBoth::Band => 2.0,
-            LavaBoth::Bleed => 3.0,
-        }
-    }
-}
-
-fn parse_both(raw: &str) -> LavaBoth {
-    match raw.trim() {
-        "plate" => LavaBoth::Plate,
-        "band" => LavaBoth::Band,
-        "bleed" => LavaBoth::Bleed,
-        _ => LavaBoth::Off,
-    }
-}
-
-/// The both-sides probe treatment for this run — `LavaBoth::Off` (a total no-op)
-/// unless `AWL_LAVA_BOTH` was set to a recognized value at startup. Read once,
-/// memoized (the `AWL_LAVA` precedent).
-pub fn probe_both() -> LavaBoth {
-    static ONCE: OnceLock<LavaBoth> = OnceLock::new();
+/// Whether the dev-only `AWL_LAVA_FROST` env knob was set to `off` at startup —
+/// the A/B "before" (frost pills suppressed). Read once, memoized. A no-op
+/// (returns `false`) unless set, so every normal + headless run frosts by default.
+fn frost_env_off() -> bool {
+    static ONCE: OnceLock<bool> = OnceLock::new();
     *ONCE.get_or_init(|| {
-        std::env::var("AWL_LAVA_BOTH")
+        std::env::var("AWL_LAVA_FROST")
             .ok()
             .as_deref()
-            .map(parse_both)
-            .unwrap_or(LavaBoth::Off)
+            .map(|v| v.trim().eq_ignore_ascii_case("off"))
+            .unwrap_or(false)
     })
 }
 
-/// The full-bleed under-column alpha floor (probe `bleed` only): the faint,
-/// heavily value-dimmed coverage the lamp keeps UNDER the writing column so the
-/// document floats over one continuous field. Gallery-only.
-pub const PROBE_COLUMN_DIM: f32 = 0.14;
+/// Whether per-entry FROST is active this run: the shipped default
+/// ([`FROST_RAIL_DEFAULT`]) UNLESS the dev-only `AWL_LAVA_FROST=off` gallery knob
+/// suppressed it. When off, a headed lava doc's outline sits on the raw lamp (the
+/// A/B "before"); when the const is flipped to `false`, frost is off AND the old
+/// whole-margin carve returns (see [`FROST_RAIL_DEFAULT`]).
+pub fn frost_on() -> bool {
+    FROST_RAIL_DEFAULT && !frost_env_off()
+}
 
 // --- The wgpu pipeline --------------------------------------------------------
 
@@ -501,16 +610,16 @@ struct Globals {
     /// the bounded bottom-left region the field vanishes from when `gutter == 1`.
     /// All-zero when there is no gutter carve. See [`gutter_corner_dist_outside`].
     gutter_rect: [f32; 4],
-    /// PROBE-ONLY (env `AWL_LAVA_BOTH`, gallery-only, all-zero in every ship
-    /// frame): the OUTLINE rail's own band rect `[left, top, right, bottom]`
-    /// (px), consumed by the `plate` / `band` gallery treatments so a HEADED doc
-    /// can be auditioned both-sides. Inert unless the probe knob is set.
-    outline_rect: [f32; 4],
-    /// PROBE-ONLY (env `AWL_LAVA_BOTH`): `[mode, column_dim, 0, 0]` — `mode` is
-    /// [`LavaBoth`] as a float (0 ship / 1 plate / 2 band / 3 bleed); `column_dim`
-    /// is the full-bleed under-column alpha floor. `mode == 0.0` in every ship
-    /// frame, so the whole probe block is inert unless the env knob is set.
-    probe: [f32; 4],
+    /// FROST params `[dim, blur_px, feather_px, pill_count]`: the per-entry frost
+    /// pill treatment (the shipped headed-doc default). `pill_count` (the trailing
+    /// float) is how many of [`Globals::pills`] are live — `0` in every non-frost
+    /// frame (non-lava world, no outline, or `AWL_LAVA_FROST=off`), so the whole
+    /// frost path is inert. See [`frost_pixel`] / [`frost_pill_coverage`].
+    frost: [f32; 4],
+    /// The FROST PILL rects `[left, top, right, bottom]` (px), one per drawn
+    /// outline entry — the regions the lava renders FROSTED behind. Only the first
+    /// `frost.w` are live (all-zero otherwise). See [`MAX_FROST_PILLS`].
+    pills: [[f32; 4]; MAX_FROST_PILLS],
 }
 
 /// The LAVA-LAMP metaball ground pipeline: one fullscreen triangle, drawn right
@@ -629,8 +738,11 @@ impl LavaPipeline {
     /// the full carve can never disagree with what the frame draws), the GUTTER's
     /// bounded LOCAL corner carve rect (`gutter_rect`, `Some` iff the gutter
     /// draws — from `TextPipeline::lava_gutter_carve_rect`), the effective
-    /// `phase`, and the gallery-only `probe` treatment (`LavaBoth::Off` in every
-    /// ship frame; its `outline_rect` band feeds the `plate`/`band` auditions).
+    /// `phase`, the per-entry FROST `pills` (the drawn outline entries' pill rects
+    /// — empty in every non-frost frame, so the frost path is inert) plus their
+    /// `[dim, blur_px, feather_px]` params, and (for the one-line carve revert)
+    /// whether the whole LEFT margin is carved (`rail_carved`, `false` under the
+    /// frost default).
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
@@ -642,8 +754,8 @@ impl LavaPipeline {
         col_w: f32,
         rail_carved: bool,
         gutter_rect: Option<[f32; 4]>,
-        probe: LavaBoth,
-        outline_rect: Option<[f32; 4]>,
+        frost_pills: &[[f32; 4]],
+        frost_params: [f32; 3],
         params: Option<(Srgb, Srgb, Srgb, LavaEdge, bool)>,
         phase: f32,
     ) {
@@ -676,8 +788,17 @@ impl LavaPipeline {
             blob_hi: srgb_u8_to_linear(blob_hi),
             blobs,
             gutter_rect: gutter_rect.unwrap_or([0.0; 4]),
-            outline_rect: outline_rect.unwrap_or([0.0; 4]),
-            probe: [probe.mode(), PROBE_COLUMN_DIM, 0.0, 0.0],
+            frost: {
+                let n = frost_pills.len().min(MAX_FROST_PILLS);
+                [frost_params[0], frost_params[1], frost_params[2], n as f32]
+            },
+            pills: {
+                let mut ps = [[0.0f32; 4]; MAX_FROST_PILLS];
+                for (dst, src) in ps.iter_mut().zip(frost_pills.iter()) {
+                    *dst = *src;
+                }
+                ps
+            },
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
     }
@@ -1230,5 +1351,98 @@ mod tests {
         assert!(parse_spec("nope:0.0").is_none());
         assert!(parse_spec("warm:notanumber").is_none());
         assert!(parse_spec("warm:0.0:bogus").is_none());
+    }
+
+    // --- FROST pill mirror (the shader-mirror laws, `shaders/lava.wgsl`) --------
+
+    /// FROST is the shipped headed-doc default, active unless the dev knob is off.
+    #[test]
+    fn frost_is_the_shipped_default() {
+        assert!(FROST_RAIL_DEFAULT, "the user's pick — frost ships");
+        // No `AWL_LAVA_FROST` set in the test env → frost is on.
+        assert!(frost_on(), "frost is on by default (no gallery knob)");
+    }
+
+    /// THE FROST BLUR: [`frost_field`] averages the SMOOTH field over a 3×3 tap
+    /// cross, so a blob center softens (peak drops below the raw peak) while a
+    /// point on bare ground stays ~0 — a genuine blur of the field, never the
+    /// dither.
+    #[test]
+    fn frost_field_softens_the_smooth_field() {
+        let blobs = [[0.5f32, 0.5, 0.1, 1.0]];
+        let vp = (1000.0, 800.0);
+        let center = animated_center(0, 0.5, 0.5, 0.1, vp, 0.0);
+        let cpx = (center.0 * vp.0, center.1 * vp.1);
+        let raw = metaball_field(cpx, vp, &blobs, 0.0);
+        let soft = frost_field(cpx, vp, &blobs, 0.0, FROST_BLUR_PX);
+        assert!(soft > 0.0 && soft < raw, "blurred peak sits below the raw peak: {soft} < {raw}");
+        // Far from any blob: the blurred field is still negligible (no invented light).
+        let far = frost_field((cpx.0 + 400.0, cpx.1), vp, &blobs, 0.0, FROST_BLUR_PX);
+        assert!(far < 0.01, "bare ground stays dark under the blur: {far}");
+    }
+
+    /// THE PILL SDF + COVERAGE: [`frost_pill_coverage`] is 1 well inside a pill,
+    /// 0 outside, and ramps monotonically over the feather at the edge — the
+    /// rounded pill's soft boundary (reusing the rect SDF).
+    #[test]
+    fn frost_pill_coverage_is_one_inside_zero_outside_and_feathers() {
+        let rect = [100.0f32, 200.0, 300.0, 260.0];
+        let feather = FROST_FEATHER_PX;
+        // Deep interior → full coverage.
+        assert!((frost_pill_coverage(200.0, 230.0, rect, feather) - 1.0).abs() < 1e-4);
+        // A feather past the right face → zero coverage.
+        assert_eq!(frost_pill_coverage(300.0 + feather + 1.0, 230.0, rect, feather), 0.0);
+        // AT the edge → 0 (the ramp bottom); a feather inside → ~1.
+        assert!(frost_pill_coverage(300.0, 230.0, rect, feather) < 1e-4, "0 at the edge");
+        assert!(frost_pill_coverage(300.0 - feather, 230.0, rect, feather) > 0.999, "full a feather inside");
+        // Monotone ramp stepping out across the right feather.
+        let mut prev = 1.0;
+        for k in 0..=(feather as i32 + 2) {
+            let x = 300.0 - feather + k as f32;
+            let c = frost_pill_coverage(x, 230.0, rect, feather);
+            assert!(c <= prev + 1e-6, "coverage ramps down monotonically at x={x}: {c} <= {prev}");
+            prev = c;
+        }
+    }
+
+    /// FROST GATING: [`frost_amount`] is the MAX over every pill (a pixel in ANY
+    /// entry's pill frosts), and an EMPTY pill list is a total no-op (0 everywhere)
+    /// — the inert path a non-frost frame uploads.
+    #[test]
+    fn frost_amount_is_the_max_over_pills_and_empty_is_inert() {
+        let a = [0.0f32, 0.0, 50.0, 40.0];
+        let b = [200.0f32, 200.0, 260.0, 240.0];
+        let f = FROST_FEATHER_PX;
+        assert!(frost_amount(25.0, 20.0, &[a, b], f) > 0.999, "inside pill A → frosted");
+        assert!(frost_amount(230.0, 220.0, &[a, b], f) > 0.999, "inside pill B → frosted");
+        assert_eq!(frost_amount(1000.0, 1000.0, &[a, b], f), 0.0, "between/around pills the lamp is live");
+        // No pills → inert everywhere (the non-frost frame).
+        assert_eq!(frost_amount(25.0, 20.0, &[], f), 0.0, "an empty pill list frosts nothing");
+    }
+
+    /// THE FROST PIXEL: below the field threshold it is EXACTLY the flat ground
+    /// (the pill is pure ground where no blob reaches); with a blob present it
+    /// dims toward the ground and never brightens past the phase-free worst bound
+    /// `mix(blob_hi, ground, dim)` — the value the contrast law leans on.
+    #[test]
+    fn frost_pixel_dims_toward_ground_and_stays_bounded() {
+        let ground = Srgb { r: 0x17, g: 0x09, b: 0x0c, a: 0xff };
+        let lo = Srgb { r: 0x24, g: 0x0c, b: 0x14, a: 0xff };
+        let hi = Srgb { r: 0x52, g: 0x18, b: 0x2c, a: 0xff };
+        // Field below the edge band → pure ground.
+        let dark = frost_pixel(0.0, ground, lo, hi, FROST_DIM);
+        assert_eq!((dark.r, dark.g, dark.b), (ground.r, ground.g, ground.b), "no blob → flat ground");
+        // A saturated field → the brightest the pill reaches, dimmed toward ground.
+        let bright = frost_pixel(1.0, ground, lo, hi, FROST_DIM);
+        let lerp = |a: u8, b: u8, t: f32| (a as f32 + (b as f32 - a as f32) * t).round() as i32;
+        // The worst bound: mix(blob_hi, ground, dim), per channel.
+        let bound = (
+            lerp(hi.r, ground.r, FROST_DIM),
+            lerp(hi.g, ground.g, FROST_DIM),
+            lerp(hi.b, ground.b, FROST_DIM),
+        );
+        assert_eq!((bright.r as i32, bright.g as i32, bright.b as i32), bound, "saturated frost == the worst bound");
+        // And the worst bound is genuinely dimmer than the raw blob_hi (the dim works).
+        assert!((bright.r as i32) < hi.r as i32, "the value dim pulls the pill back toward ground");
     }
 }

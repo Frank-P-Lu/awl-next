@@ -155,16 +155,23 @@ impl TextPipeline {
         };
         let rail_carved = self.lava_rail_carved(height);
         let gutter_rect = self.lava_gutter_carve_rect(height);
-        let probe = crate::lava::probe_both();
-        // PROBE-ONLY (env `AWL_LAVA_BOTH`): the outline band the plate/band
-        // auditions carve/plate. `None` in every ship frame (probe Off), so the
-        // uploaded rect stays all-zero and the shader's probe path is inert.
-        let outline_rect = match probe {
-            crate::lava::LavaBoth::Plate | crate::lava::LavaBoth::Band => {
-                self.lava_outline_probe_rect(height)
-            }
-            _ => None,
+        // FROST PILLS (the shipped headed-doc default): one pill per drawn outline
+        // entry, hugging its text extents. Empty in every non-frost frame (no lava
+        // ground, no outline, or `AWL_LAVA_FROST=off`), so the shader's frost path
+        // is inert (`pill_count == 0`) and a heading-less doc stays byte-identical.
+        let frost_pills = if crate::lava::frost_on()
+            && self.effective_background().lava_params().is_some()
+        {
+            self.lava_frost_pill_rects(height)
+        } else {
+            Vec::new()
         };
+        let zoom = self.metrics.zoom;
+        let frost_params = [
+            crate::lava::FROST_DIM,
+            crate::lava::FROST_BLUR_PX * zoom,
+            crate::lava::FROST_FEATHER_PX * zoom,
+        ];
         let params = self.effective_background().lava_params().map(
             |(ground, lo, hi, edge, dithered)| {
                 // A Bayer-posterized source and the downsampled separable blur
@@ -192,20 +199,11 @@ impl TextPipeline {
                 bg_w,
                 rail_carved,
                 gutter_rect,
-                probe,
-                outline_rect,
+                &frost_pills,
+                frost_params,
                 params,
                 phase,
             );
-    }
-
-    /// PROBE-ONLY (env `AWL_LAVA_BOTH=plate|band`, gallery-only): the OUTLINE
-    /// rail's own band rect `[left, top, right, bottom]` (px) the `plate`/`band`
-    /// auditions carve or plate, derived from the SAME `outline_layout` owner the
-    /// outline's own pixels ride. `None` off a headed lava doc. Nothing ships:
-    /// this is only ever consulted when the env knob forces a probe treatment.
-    pub(super) fn lava_outline_probe_rect(&self, height: u32) -> Option<[f32; 4]> {
-        self.outline_band_rect(height)
     }
 
     /// THE PAGE FRAME (`theme::PageFrame`, the personality-assignment round's
@@ -254,25 +252,21 @@ impl TextPipeline {
             .prepare(device, queue, width, height, &rects);
     }
 
-    /// THE FULL LEFT-MARGIN RAIL CARVE decision for this frame: a lava ground is
-    /// active (the CAPABILITY — [`crate::theme::Background::lava_params`], never a
-    /// world name, per `theme_caps_law`) AND the margin OUTLINE is actually DRAWN
-    /// ([`Self::outline_visible`], the same `outline_layout` gate the outline's
-    /// own pixels ride). While true, the lava field mask treats the WHOLE left
-    /// margin as the outline's rail — a no-lava zone, so the dim `faint`/`muted`
-    /// entries sit on the flat ground instead of inside the dithered blob (the
-    /// user-reported drown). This is the CONSERVATIVE default for a HEADED doc.
-    ///
-    /// The bottom-left GUTTER no longer gates this full carve (it used to, and it
-    /// drowned both margins on nearly every page-mode buffer). It now drives a
-    /// bounded LOCAL corner carve instead ([`Self::lava_gutter_carve_rect`]), so
-    /// an ordinary (gutter-only) doc gets BOTH margins their lamp back. The
-    /// outline hiding (scratch buffer / narrowest regime / edge-to-edge) reclaims
-    /// the full margin the same frame. The ONE owner [`Self::prepare_lava_layer`]
-    /// uploads and the law tests assert, so the carve can never disagree with
-    /// what the frame draws.
+    /// THE FULL LEFT-MARGIN RAIL CARVE decision for this frame — the OLD headed-doc
+    /// treatment, now DEMOTED behind the FROST default. Under the shipped default
+    /// ([`crate::lava::FROST_RAIL_DEFAULT`] `true`) this is ALWAYS `false`: a headed
+    /// doc keeps BOTH margins alive and the per-entry frost pills
+    /// ([`Self::lava_frost_pill_rects`]) carry the outline's legibility instead of
+    /// flattening the whole rail. Flipping that ONE const to `false` re-arms this
+    /// carve — a lava ground active (the CAPABILITY, never a world name, per
+    /// `theme_caps_law`) AND the margin OUTLINE actually DRAWN
+    /// ([`Self::outline_visible`], the same `outline_layout` gate) — feeding the
+    /// shader's still-wired `rail` global, for a clean one-line data revert to the
+    /// pre-frost behaviour. The ONE owner [`Self::prepare_lava_layer`] uploads it.
     pub(super) fn lava_rail_carved(&self, height: u32) -> bool {
-        self.effective_background().lava_params().is_some() && self.outline_visible(height)
+        !crate::lava::FROST_RAIL_DEFAULT
+            && self.effective_background().lava_params().is_some()
+            && self.outline_visible(height)
     }
 
     /// THE GUTTER'S LOCAL CORNER CARVE rect for this frame: `Some([left, top,

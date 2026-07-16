@@ -273,33 +273,33 @@ fn lava_blob_hues_stay_clear_of_the_amber_caret() {
     }
 }
 
-/// THE OUTLINE-RAIL CARVE LAW (lava follow-ups round — the user-reported
-/// "outline drowns in the dithered blob" fix), in two halves:
+/// THE FROST PILL CONTRAST LAW (the FROST RAIL round — RE-SCOPED from the retired
+/// whole-margin carve law, which asserted the old flat rail this round replaced).
+/// The shipped headed-doc treatment is now per-entry FROST pills: behind each
+/// outline entry the lava renders a softened (blurred SMOOTH-field) sample
+/// value-DIMMED toward the flat ground (`crate::lava::frost_pixel` /
+/// `crate::lava::FROST_DIM`), while the lamp stays fully alive between and around
+/// the pills. This law proves the DIM outline ink stays legible over that frosted
+/// pill ground at EVERY animation phase, in two halves:
 ///
-/// (1) STRUCTURAL, PHASE-INDEPENDENT: while the margin outline is VISIBLE on a
-///     lava world (`TextPipeline::lava_rail_carved` — asserted at its own render
-///     seam by `render::tests::outline::lava_rail_carve_follows_outline_visibility`),
-///     the rail band (the whole left margin the outline owns) contains NO lava
-///     pixel: at EVERY animation phase, the composited rail pixel is bit-exactly
-///     the world's flat ground. Proven over COMPOSITED PIXELS via the pure-Rust
-///     shader mirror (`crate::lava::lava_mask` + straight-alpha compositing over
-///     the ground), never sidecar state — the Wagtail-invisible-picker-row
-///     lesson. The sweep also WITNESSES the work: without the carve the same
-///     samples genuinely carry blob pixels (the mask is high AND the field is
-///     past the blob threshold), so the law can never pass vacuously.
+/// (1) PHASE SWEEP (64 phases × a pill-region grid in the left margin): the ACTUAL
+///     frosted pixel — the pure-Rust shader mirror `frost_field` → `frost_pixel` —
+///     clears the ink-ladder floors against the outline's inks: the `faint` (every
+///     non-current) entry at redmean >= 100, the `base_content` current row at >=
+///     150. Proven over COMPOSITED PIXELS, never sidecar state (the Wagtail
+///     invisible-picker-row lesson). WITNESSED non-vacuous: some sampled frost
+///     pixel genuinely differs from the flat ground (the lamp reads THROUGH the
+///     frost — it is a softened lamp, not the old flat carve).
 ///
-/// (2) LEGIBILITY FLOOR: the outline's DIM entries (`faint` — every non-current
-///     row, `render/chrome/outline.rs::OutlineRung`) clear the repo's
-///     perceptible-difference floor (the ink-ladder law (c) redmean >= 100)
-///     against that LOCAL rail ground, and the lit current row (`base_content`)
-///     clears a stronger one — with `ground == base_100` asserted, the rail is
-///     the page's own ground, so the ink-ladder laws govern it directly and no
-///     lava world can drown its own margin outline again.
+/// (2) PHASE-FREE WORST BOUND: the brightest a frost pill can ever reach is
+///     `mix(blob_hi, ground, FROST_DIM)` (the softened field bounded by blob_hi,
+///     then dimmed) — proving the ink clears THAT covers every phase by
+///     construction, a belt-and-braces guard the sweep can't miss.
 ///
-/// The `Background` match is NO-WILDCARD: a future ground variant must decide
-/// its rail story here or fail to compile.
+/// The `Background` match is NO-WILDCARD: a future ground variant must decide its
+/// frost story here or fail to compile.
 #[test]
-fn outline_rail_band_is_flat_ground_and_outline_ink_clears_it_on_every_lava_world() {
+fn outline_frost_pills_keep_ink_contrast_on_every_lava_world() {
     fn redmean(a: Srgb, b: Srgb) -> f32 {
         let rbar = (a.r as f32 + b.r as f32) * 0.5;
         let dr = a.r as f32 - b.r as f32;
@@ -308,95 +308,77 @@ fn outline_rail_band_is_flat_ground_and_outline_ink_clears_it_on_every_lava_worl
         ((2.0 + rbar / 256.0) * dr * dr + 4.0 * dg * dg + (2.0 + (255.0 - rbar) / 256.0) * db * db)
             .sqrt()
     }
-    // Representative page geometry (the 1600x1000 gallery canvas at the default
-    // 70-char prose measure); the carve is independent of the exact numbers —
-    // every rail x sits a full column width from the right edge.
+    // Representative page geometry (the 1600x1000 gallery canvas). Frost pills sit
+    // in the LEFT margin (x well below col_left), hugging the outline entries.
     let vp = (1600.0f32, 1000.0f32);
-    let (col_left, col_right) = (296.0f32, 1304.0f32);
-    let gap = crate::lava::MARGIN_GAP_PX;
+    let blur = crate::lava::FROST_BLUR_PX;
+    let dim = crate::lava::FROST_DIM;
     for t in THEMES.iter() {
-        // NO-WILDCARD: the composite below uses blob_hi — the BRIGHTEST tone the
-        // shader can reach (rgb = mix(ground, mix(blob_lo, blob_hi, core), edge),
-        // bounded by its endpoints) — so proving the worst case covers blob_lo too.
-        let (ground, blob_hi) = match t.background {
-            // The five static grounds carry no lava to carve.
+        // NO-WILDCARD: a future ground variant must decide its frost story here.
+        let (ground, blob_lo, blob_hi) = match t.background {
+            // The five static grounds carry no lava — no frost.
             Background::Gradient { .. }
             | Background::Dots { .. }
             | Background::Starfield { .. }
             | Background::Pinstripe { .. }
             | Background::Stripes { .. } => continue,
-            Background::Lava { ground, blob_hi, .. } => (ground, blob_hi),
+            Background::Lava { ground, blob_lo, blob_hi, .. } => (ground, blob_lo, blob_hi),
         };
-        // The rail IS the page's own ground — the ink-ladder laws govern it.
-        assert_eq!(ground, t.base_100, "{}: rail ground must be base_100", t.name);
+        assert_eq!(ground, t.base_100, "{}: frost ground must be base_100", t.name);
 
-        // (1) Phase sweep x rail-band grid: the carved mask is exactly zero, so
-        //     the straight-alpha composite over the flat ground is bit-exactly
-        //     the ground — even against the BRIGHTEST reachable lava tone.
-        let mut witnessed = false;
+        // (1) Phase sweep × a pill-region grid: the ACTUAL frost pixel clears the
+        //     ink-ladder floors, and the lamp genuinely reads through the frost.
+        let mut witnessed_alive = false;
         for step in 0..64 {
             let phase = step as f32 * crate::lava::LAVA_LOOP_CYCLES / 64.0;
-            for xi in 0..30 {
-                let x = col_left * (xi as f32 + 0.5) / 30.0;
-                for y in [40.0, 200.0, 420.0, 640.0, 940.0] {
-                    let a = crate::lava::lava_mask(x, col_left, col_right, gap, true);
-                    assert_eq!(
-                        a, 0.0,
-                        "{}: lava coverage in the rail band at x={x} y={y} phase={phase}",
+            // Left-margin pill band: x below the column, y across the outline rows.
+            for xi in 0..24 {
+                let x = 80.0 + (270.0 - 80.0) * (xi as f32 + 0.5) / 24.0;
+                for y in [150.0, 320.0, 500.0, 680.0, 850.0] {
+                    let field = crate::lava::frost_field((x, y), vp, &crate::lava::BACKDROP_BLOBS, phase, blur);
+                    let px = crate::lava::frost_pixel(field, ground, blob_lo, blob_hi, dim);
+                    let dimd = redmean(t.faint, px);
+                    assert!(
+                        dimd >= 100.0,
+                        "{}: faint outline ink only {dimd:.1} redmean from the frost pill \
+                         at x={x} y={y} phase={phase} (under the ink-ladder floor)",
                         t.name
                     );
-                    // Composite the worst case (blob_hi at coverage `a`) over the
-                    // ground: with a == 0 the result is the ground, bit-exactly.
-                    let over = |gc: u8, bc: u8| -> u8 {
-                        (bc as f32 * a + gc as f32 * (1.0 - a)).round() as u8
-                    };
-                    let px = Srgb {
-                        r: over(ground.r, blob_hi.r),
-                        g: over(ground.g, blob_hi.g),
-                        b: over(ground.b, blob_hi.b),
-                        a: 0xFF,
-                    };
-                    assert_eq!(
-                        (px.r, px.g, px.b),
-                        (ground.r, ground.g, ground.b),
-                        "{}: rail pixel is not the flat ground at x={x} y={y} phase={phase}",
+                    let lit = redmean(t.base_content, px);
+                    assert!(
+                        lit >= 150.0,
+                        "{}: the current outline row only {lit:.1} redmean from the frost \
+                         pill at x={x} y={y} phase={phase}",
                         t.name
                     );
-                    // WITNESS: the uncarved mask would have painted a real blob
-                    // pixel at at least one of these samples (never vacuous).
-                    if crate::lava::lava_mask(x, col_left, col_right, gap, false) >= 1.0
-                        && crate::lava::metaball_field(
-                            (x, y),
-                            vp,
-                            &crate::lava::BACKDROP_BLOBS,
-                            phase,
-                        ) >= 0.5
-                    {
-                        witnessed = true;
+                    if (px.r, px.g, px.b) != (ground.r, ground.g, ground.b) {
+                        witnessed_alive = true;
                     }
                 }
             }
         }
         assert!(
-            witnessed,
-            "{}: no sampled rail pixel would have carried lava without the carve — \
-             the law is asserting over a band the lamp never touched (vacuous)",
+            witnessed_alive,
+            "{}: no sampled frost pixel differs from the flat ground — the frost is a \
+             vacuous flat carve, not a softened LIVING lamp",
             t.name
         );
-        // (2) The outline's inks clear the rail's LOCAL ground (== base_100):
-        //     dim entries at the ink-ladder law (c) floor, the current row higher.
-        let dim = redmean(t.faint, ground);
+
+        // (2) PHASE-FREE WORST BOUND: mix(blob_hi, ground, dim) is the brightest a
+        //     frost pill can reach; the ink clears the floors against it, so every
+        //     phase is covered by construction.
+        let worst = crate::lava::frost_pixel(1.0, ground, blob_lo, blob_hi, dim);
         assert!(
-            dim >= 100.0,
-            "{}: faint outline entries only {dim:.1} redmean from the rail ground \
-             (under the ink-ladder perceptibility floor)",
-            t.name
+            redmean(t.faint, worst) >= 100.0,
+            "{}: faint ink only {:.1} redmean from the WORST frost pill (phase-free bound)",
+            t.name,
+            redmean(t.faint, worst)
         );
-        let lit = redmean(t.base_content, ground);
         assert!(
-            lit >= 150.0,
-            "{}: the current outline row only {lit:.1} redmean from the rail ground",
-            t.name
+            redmean(t.base_content, worst) >= 150.0,
+            "{}: current row only {:.1} redmean from the worst frost pill",
+            t.name,
+            redmean(t.base_content, worst)
         );
     }
 }
