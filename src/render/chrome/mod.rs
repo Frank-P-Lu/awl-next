@@ -211,6 +211,13 @@ pub(super) struct OverlayGeom {
 // owner, the sidecar report structs — plus the hit-test unit sweep.
 mod panel;
 mod overlay;
+// Re-export the card horizontal-box policy + its tokens so the width-sweep law
+// can reach them without naming the private `overlay` submodule (test-only).
+#[cfg(test)]
+pub(in crate::render) use overlay::{
+    overlay_card_box_policy, CARD_EDGE_INSET, CARD_EDGE_INSET_FLOOR, CARD_MAX_W,
+    CARD_MAX_W_FACETED,
+};
 mod overlay_shape;
 mod theme_picker;
 mod gutter;
@@ -347,6 +354,36 @@ pub(super) fn overlay_row_top(
     // is realized in the SHAPED buffer by inflating the last header line's
     // height by the same `header_gap`, so this formula and the pixels agree.
     text_top + header_rows as f32 * line_height + header_gap + row as f32 * line_height
+}
+
+/// The device-px TOP a uniform-line-height RIGHT-COLUMN buffer must be uploaded
+/// at so its chord/time labels — which lead with `header_rows` empty lines —
+/// land EXACTLY on the candidate band [`overlay_row_top`] draws. The secondary
+/// column and the band therefore share ONE y-origin, by the invariant
+/// `overlay_secondary_top(..) + header_rows*lh + r*lh == overlay_row_top(.., r,
+/// ..)` (the leading empties supply `header_rows*lh`, this supplies the gap).
+///
+/// THE COMPOSITION-ROUND BUG this closes: the header GAP is folded into the
+/// primary column (its inflated header line) AND the band/hit-test (through
+/// [`overlay_row_top`]), but the right column was still uploaded flush at
+/// `text_top` — so every shortcut rode `header_gap` HIGH of its row. No element
+/// may compute its own row y; the right column now reads the same gap the band
+/// does. Pure; the y-agreement law pins the invariant.
+pub(super) fn overlay_secondary_top(text_top: f32, header_gap: f32) -> f32 {
+    text_top + header_gap
+}
+
+/// The device-px vertical CENTER of the overlay QUERY (input) line — the row the
+/// amber caret and the query glyphs share. The query sits at the card's inner
+/// text origin (`text_top`), ABOVE the header gap, so it never takes the
+/// candidate-row shift; centering the caret here keeps it on the query line in
+/// both the flat pickers (whose one header line is height-inflated to carry the
+/// gap, its glyphs top-aligned) and the faceted pickers (whose gap rides the
+/// lens strip, the query line left plain). ONE owner, read by
+/// [`TextPipeline::overlay_place_caret`] — the caret can never drift from the
+/// query line's own y again.
+pub(super) fn overlay_query_center(text_top: f32, line_height: f32) -> f32 {
+    text_top + line_height * 0.5
 }
 
 /// The ONE bounded scroll-WINDOW owner shared by EVERY summoned picker — the flat

@@ -125,12 +125,16 @@ impl TextPipeline {
             scroll_window(n_items, self.overlay_selected, self.overlay_scroll, item_cap);
         let plan = window_plan(&full_plan, item_top, item_top + item_visible);
         let total_rows = header_rows + plan.len() + empty_rows + hint_rows;
-        // Wider than the flat pickers so the whole lens strip (Time … All) fits on one
-        // line even on a WIDE mono world face without the far-right All clipping.
-        let card_w = (width as f32 * 0.58).max(560.0).min(width as f32 - 2.0 * margin);
+        // Wider than the flat pickers so the whole lens strip (Time … All) fits on
+        // one line even on a WIDE mono world face without the far-right All clipping
+        // — via the SAME horizontal-box owner (edge inset + narrow-window fallback),
+        // just a slightly wider cap ([`CARD_MAX_W_FACETED`]).
+        let (card_x, card_w) = self.overlay_card_box(width, super::overlay::CARD_MAX_W_FACETED);
         let text_w = card_w - 2.0 * pad;
-        let card_h = total_rows as f32 * lh + header_gap + 2.0 * pad;
-        let card_x = self.overlay_card_x(width, card_w, margin);
+        // Foot hint (item 5) rides a SHORTER line — reclaim `lh - hint_h` per hint
+        // row so the card hugs the tighter footer (matching the flat owner).
+        let card_h = total_rows as f32 * lh + header_gap + 2.0 * pad
+            - hint_rows as f32 * (lh - self.overlay_hint_h());
         // MOTION-JUICE ENTRANCE: folded in AFTER the `avail_px`/row-fit math
         // above (which reads the SETTLED `card_y` — the transient drop must
         // never change how many rows fit), mirroring `overlay_geometry`'s own

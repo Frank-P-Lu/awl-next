@@ -1714,7 +1714,8 @@ fn stipple_placard_density_clears_the_legibility_floor_over_its_own_ground() {
 /// Firetail the loud-end statement — a big/Bold smooth placard plus the
 /// Archivo Black chrome voice, the CHROME-VOICES flip), the three functional-
 /// elevation borders (Currawong's OLED rim, the two lava worlds' edge over
-/// motion), the Wagtail page frame (2px, its ladder white), Wagtail's
+/// motion, the six LIGHT worlds' pale-ground rim — composition round item 6),
+/// the Wagtail page frame (2px, its ladder white), Wagtail's
 /// user-confirmed NO-placard silence — and, just as deliberately, DEFAULT
 /// for every world not named (byte-identity for the quiet roster). A NEW
 /// world fails the `expected()` match until it decides its personality here
@@ -1731,8 +1732,18 @@ fn personality_assignments_are_exactly_the_decided_table() {
             ink,
         };
         match name {
-            "Galah" => RenderCaps { title_style: bl(PlacardInk::Ghost), ..RenderCaps::DEFAULT },
-            "Magpie" => RenderCaps { title_style: bl(PlacardInk::Ghost), ..RenderCaps::DEFAULT },
+            // Galah / Magpie: the light-world placard PLUS the composition
+            // round's light-world border (item 6).
+            "Galah" => RenderCaps {
+                title_style: bl(PlacardInk::Ghost),
+                elevation: Elevation::Bordered,
+                ..RenderCaps::DEFAULT
+            },
+            "Magpie" => RenderCaps {
+                title_style: bl(PlacardInk::Ghost),
+                elevation: Elevation::Bordered,
+                ..RenderCaps::DEFAULT
+            },
             "Mangrove" => RenderCaps {
                 title_style: bl(PlacardInk::Stipple),
                 elevation: Elevation::Bordered,
@@ -1778,8 +1789,14 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 chrome_face: model::ChromeFace::Body,
                 motion: model::MotionJuice::CALM,
             },
-            "Tawny" | "Mopoke" | "Potoroo" | "Gumtree" | "Bilby" | "Saltpan" | "Quokka"
-            | "Undertow" | "Kingfisher" | "Outback" => RenderCaps::DEFAULT,
+            // LIGHT-WORLD BORDER (composition round item 6): the four remaining
+            // pale-ground worlds gain the summoned-card border, DATA-only.
+            "Gumtree" | "Bilby" | "Saltpan" | "Quokka" => {
+                RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT }
+            }
+            "Tawny" | "Mopoke" | "Potoroo" | "Undertow" | "Kingfisher" | "Outback" => {
+                RenderCaps::DEFAULT
+            }
             other => panic!(
                 "{other}: a NEW world must decide its personality here (placard? border? \
                  frame? or deliberately DEFAULT) — the assignment table is conscious data, \
