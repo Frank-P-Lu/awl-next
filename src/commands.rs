@@ -403,10 +403,24 @@ static COMMAND_SEED: &[Command] = &[
 /// unlike the retired `&'static [Command]` slice, which was `Copy`).
 pub static COMMANDS: std::sync::LazyLock<Vec<Command>> = std::sync::LazyLock::new(|| {
     let defaults = crate::keymap_defaults::command_defaults();
+    assert_eq!(
+        defaults.len(),
+        COMMAND_SEED.len(),
+        "assets/keymap-defaults.toml must contain exactly one entry for every catalog command"
+    );
+    for key in defaults.keys() {
+        assert!(
+            COMMAND_SEED.iter().any(|seed| slug(seed.name) == *key),
+            "assets/keymap-defaults.toml names unknown command slug {key:?}"
+        );
+    }
     COMMAND_SEED
         .iter()
         .map(|seed| {
-            let (native, emacs) = defaults.get(slug(seed.name).as_str()).cloned().unwrap_or_default();
+            let seed_slug = slug(seed.name);
+            let (native, emacs) = defaults.get(seed_slug.as_str()).cloned().unwrap_or_else(|| {
+                panic!("assets/keymap-defaults.toml is missing catalog command {seed_slug:?}")
+            });
             Command {
                 name: seed.name,
                 action: seed.action.clone(),
@@ -1823,8 +1837,9 @@ mod tests {
     fn catalog_and_keymap_agree_on_every_default_chord() {
         // THE AGREEMENT SWEEP: the catalog's binding labels are DATA (the palette
         // teaches them; the rebind menu edits them) while the keymap's dispatch
-        // arms are hand-written — this loop pins the two together for EVERY
-        // command, so a chord shown in Cmd-P always fires exactly that command
+        // dispatch is seeded from the same source — this loop pins the two
+        // together for EVERY command, so a chord shown in Cmd-P always fires
+        // exactly that command
         // and a `[keys]` entry always finds its action.
         //
         // CONVENTION-PROOF (per-convention, not just whichever is ambient):

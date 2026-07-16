@@ -1,7 +1,7 @@
-//! Keymap: translate winit keyboard events into editor `Action`s. The mapping is
-//! a small table-driven function rather than a HashMap so it stays allocation
-//! free and easy to read. A simple prefix state implements the `C-x` prefix
-//! (C-x C-s = save, C-x C-c = quit).
+//! Keymap: translate winit keyboard events into editor `Action`s. Catalogued
+//! defaults are seeded into maps from `assets/keymap-defaults.toml`; raw input,
+//! prefix arming, and platform aliases remain small hand-written policy. User
+//! config maps sit above defaults, so rebinding stays additive and wins conflicts.
 //!
 //! This module is winit-aware but editor-buffer-agnostic: it produces `Action`s,
 //! which the app layer applies to the `Buffer`. That keeps the dispatch table
@@ -541,10 +541,10 @@ pub enum Chord {
     Cc(Key, ModifiersState),
 }
 
-/// Tracks multi-key prefix sequences (the `C-x` prefix) AND the runtime keybinding
-/// OVERRIDES loaded from the config `[keys]` table. The override maps are consulted
-/// BEFORE the static default arms, so a configured chord wins; both are empty by
-/// default, so an absent config keeps the allocation-free default dispatch exactly.
+/// Tracks multi-key prefix sequences and the two data-backed binding layers. The
+/// embedded catalog defaults are parsed into `default_*` once per construction (and
+/// reseeded when Linux keep policy changes); user `[keys]` bindings live in the
+/// `override_*` maps and are consulted first, preserving additive override precedence.
 pub struct KeymapState {
     /// Which chord layer slot 1 speaks — [`Convention::Mac`] (⌘) or
     /// [`Convention::Linux`] (Ctrl). Defaults to [`Convention::current`]; a test or
@@ -557,14 +557,12 @@ pub struct KeymapState {
     /// True after C-c, until the next key resolves or cancels the prefix (the
     /// second, org-mode-style prefix — mirrors `in_c_x`).
     in_c_c: bool,
-    /// One-chord rebinds: `(key, mods)` -> Action, consulted at the top of `resolve`.
-    single: HashMap<(Key, ModifiersState), Action>,
-    /// `C-x <key>` rebinds: the SECOND key's `(key, mods)` -> Action, consulted while
-    /// mid-prefix before the static `resolve_c_x` arms.
-    c_x: HashMap<(Key, ModifiersState), Action>,
-    /// `C-c <key>` rebinds: the SECOND key's `(key, mods)` -> Action, consulted while
-    /// mid-C-c-prefix before the static `resolve_c_c` arms (mirrors `c_x`).
-    c_c: HashMap<(Key, ModifiersState), Action>,
+    default_single: HashMap<(Key, ModifiersState), Action>,
+    default_c_x: HashMap<(Key, ModifiersState), Action>,
+    default_c_c: HashMap<(Key, ModifiersState), Action>,
+    override_single: HashMap<(Key, ModifiersState), Action>,
+    override_c_x: HashMap<(Key, ModifiersState), Action>,
+    override_c_c: HashMap<(Key, ModifiersState), Action>,
     /// THE EMACS-HANDS-ON-LINUX ROUND — the config `linux_keep_emacs` list, parsed
     /// into concrete `(key, mods)` chords: on [`Convention::Linux`], a chord in
     /// this set does NOT participate in the native-wins collision (see
@@ -587,9 +585,12 @@ impl Default for KeymapState {
             convention: Convention::current(),
             in_c_x: false,
             in_c_c: false,
-            single: HashMap::new(),
-            c_x: HashMap::new(),
-            c_c: HashMap::new(),
+            default_single: HashMap::new(),
+            default_c_x: HashMap::new(),
+            default_c_c: HashMap::new(),
+            override_single: HashMap::new(),
+            override_c_x: HashMap::new(),
+            override_c_c: HashMap::new(),
             linux_keep: std::collections::HashSet::new(),
         };
         // Seed the unconditional built-in keep floor (see `apply_linux_keep`'s
@@ -615,7 +616,9 @@ impl KeymapState {
     /// Test-only, mirroring `commands::names()`'s `#[cfg(test)]` precedent.
     #[cfg(test)]
     pub fn new_with_convention(convention: Convention) -> Self {
-        Self { convention, ..Self::default() }
+        let mut km = Self { convention, ..Self::default() };
+        km.seed_defaults();
+        km
     }
 
     /// Build a keymap with the config `[keys]` rebinds applied over the defaults.
@@ -652,14 +655,9 @@ impl KeymapState {
     /// with the OTHER convention's own physical modifier, so the two never
     /// double-fire): [`Convention::Mac`] wants Super without Control;
     /// [`Convention::Linux`] wants Control without Super. THE ONE GATE every
-    /// native-chord dispatch arm below reads — replacing the old bare `sup && !ctrl`
-    /// test, so a Linux build's native chords are Ctrl-chords by construction,
-    /// with NO change to the ORDER those arms are checked in (still before the
-    /// static emacs `resolve_char`/`resolve_named` arms) — which is exactly what
-    /// makes "native wins on collision" true for free: a colliding chord is
-    /// resolved by the native arm before the emacs fallback is ever reached. See
-    /// this module's collision-table doc + `commands::resolved_native`'s doc for
-    /// the label-side half of this same design.
+    /// native policy arm below reads. Catalog default collision precedence is
+    /// applied while seeding the maps; this helper remains for uncatalogued
+    /// native aliases such as Cmd-P and Cmd-G.
     fn native_down(&self, state: ModifiersState) -> bool {
         match self.convention {
             Convention::Mac => {
@@ -667,6 +665,140 @@ impl KeymapState {
             }
             Convention::Linux => {
                 state.contains(ModifiersState::CONTROL) && !state.contains(ModifiersState::SUPER)
+            }
+        }
+    }
+
+    /// Rebuild the catalog-default dispatch layer from the same resolved command
+    /// slots every label surface reads. Platform collision policy stays here: on
+    /// Linux a kept emacs chord suppresses its native claimant, while a displaced
+    /// emacs chord is omitted. Duplicate effective defaults are an embedded-data
+    /// bug and panic unless both rows intentionally resolve to the same action.
+    fn seed_defaults(&mut self) {
+        self.default_single.clear();
+        self.default_c_x.clear();
+        self.default_c_c.clear();
+
+        for command in crate::commands::COMMANDS.iter() {
+            let native = crate::commands::resolved_native(command, self.convention);
+            let native_suppressed = self.convention == Convention::Linux
+                && linux_keeps_chord_raw(&self.linux_keep, &native);
+            let emacs_displaced = self.convention == Convention::Linux
+                && linux_displaces_emacs_default_raw(command.emacs, &self.linux_keep);
+
+            if !emacs_displaced {
+                self.insert_default(command.emacs, command.action.clone(), command.name);
+            }
+            if !native_suppressed {
+                self.insert_default(&native, command.action.clone(), command.name);
+            }
+        }
+
+        // The old case-folded static arms ignored Shift unless a shifted chord
+        // had its own meaning. Preserve that selection/uppercase behavior by
+        // filling only otherwise-unclaimed shifted variants after exact defaults.
+        let shifted: Vec<_> = self
+            .default_single
+            .iter()
+            .filter(|((_, mods), _)| !mods.contains(ModifiersState::SHIFT))
+            .map(|((key, mods), action)| {
+                ((key.clone(), *mods | ModifiersState::SHIFT), action.clone())
+            })
+            .collect();
+        for (chord, action) in shifted {
+            self.default_single.entry(chord).or_insert(action);
+        }
+
+        // The old bare-Control arms also ignored a simultaneously-held Super
+        // modifier. Keep that input-edge compatibility without retaining a
+        // second Action table: derive the otherwise-unclaimed variants from the
+        // catalog's emacs slots. `C-Tab` is the one native slot whose literal
+        // modifier is Control rather than Cmd, and had the same behavior.
+        for command in crate::commands::COMMANDS.iter() {
+            // Native dispatch requires exactly one convention modifier, so a
+            // simultaneously-held Super always bypassed Linux displacement and
+            // reached the bare-Control emacs arm.
+            self.insert_control_super_variants(
+                command.emacs,
+                command.action.clone(),
+                command.name,
+            );
+            if command.native.starts_with("C-") {
+                self.insert_control_super_variants(
+                    command.native,
+                    command.action.clone(),
+                    command.name,
+                );
+            }
+        }
+    }
+
+    fn insert_default(&mut self, spec: &str, action: Action, name: &str) {
+        if spec.trim().is_empty() {
+            return;
+        }
+        let chord = parse_binding(spec).unwrap_or_else(|e| {
+            panic!("assets/keymap-defaults.toml: {name:?} has invalid chord {spec:?}: {e}")
+        });
+        match chord {
+            Chord::Single(k, m) => {
+                insert_default_entry(
+                    &mut self.default_single,
+                    (k.clone(), m),
+                    action.clone(),
+                    name,
+                    spec,
+                );
+            }
+            Chord::Cx(k, m) => {
+                insert_default_entry(&mut self.default_c_x, (k, m), action, name, spec);
+            }
+            Chord::Cc(k, m) => {
+                insert_default_entry(&mut self.default_c_c, (k, m), action, name, spec);
+            }
+        }
+    }
+
+    fn insert_control_super_variants(&mut self, spec: &str, action: Action, name: &str) {
+        if spec.trim().is_empty() {
+            return;
+        }
+        let chord = parse_binding(spec).unwrap_or_else(|e| {
+            panic!("assets/keymap-defaults.toml: {name:?} has invalid chord {spec:?}: {e}")
+        });
+        let add_super = |mods: ModifiersState| {
+            mods.contains(ModifiersState::CONTROL).then_some(mods | ModifiersState::SUPER)
+        };
+        match chord {
+            Chord::Single(k, m) => {
+                if let Some(m) = add_super(m) {
+                    self.default_single
+                        .entry((k.clone(), m))
+                        .or_insert(action.clone());
+                    self.default_single
+                        .entry((k, m | ModifiersState::SHIFT))
+                        .or_insert(action);
+                }
+            }
+            Chord::Cx(k, m) => {
+                if let Some(m) = add_super(m) {
+                    self.default_c_x
+                        .entry((k.clone(), m))
+                        .or_insert(action.clone());
+                    self.default_c_x
+                        .entry((k, m | ModifiersState::SHIFT))
+                        .or_insert(action);
+                }
+            }
+            Chord::Cc(k, m) => {
+                if let Some(m) = add_super(m) {
+                    self.default_c_c
+                        .entry((k.clone(), m))
+                        .or_insert(action.clone());
+                    self.default_c_c
+                        .entry((k, m | ModifiersState::SHIFT))
+                        .or_insert(action);
+                }
             }
         }
     }
@@ -680,9 +812,9 @@ impl KeymapState {
     /// list are honoured (the model is capped at 2). Clears any prior overrides first
     /// so a reload reflects exactly the current file.
     pub fn apply_overrides(&mut self, keys: &[(String, Vec<String>)]) {
-        self.single.clear();
-        self.c_x.clear();
-        self.c_c.clear();
+        self.override_single.clear();
+        self.override_c_x.clear();
+        self.override_c_c.clear();
         for (name, chords) in keys {
             let Some(action) = crate::commands::action_for_name(name) else {
                 eprintln!("config [keys]: unknown action {name:?}; ignored");
@@ -691,13 +823,13 @@ impl KeymapState {
             for chord in chords.iter().take(2) {
                 match parse_binding(chord) {
                     Ok(Chord::Single(k, m)) => {
-                        self.single.insert((k, m), action.clone());
+                        self.override_single.insert((k, m), action.clone());
                     }
                     Ok(Chord::Cx(k, m)) => {
-                        self.c_x.insert((k, m), action.clone());
+                        self.override_c_x.insert((k, m), action.clone());
                     }
                     Ok(Chord::Cc(k, m)) => {
-                        self.c_c.insert((k, m), action.clone());
+                        self.override_c_c.insert((k, m), action.clone());
                     }
                     Err(e) => {
                         eprintln!("config [keys]: {name} = {chord:?}: {e}; keeping default");
@@ -747,12 +879,13 @@ impl KeymapState {
                 }
             }
         }
+        self.seed_defaults();
     }
 
     /// True when `key`+`state` is a chord this Linux keymap has been told to
     /// KEEP emacs' meaning for (see [`Self::apply_linux_keep`]) — the predicate
-    /// [`Self::resolve`]'s `native` gate consults so a kept chord falls through
-    /// to the static emacs arm instead of the native one. Always `false` on
+    /// [`Self::seed_defaults`] consults so a kept chord seeds the emacs meaning
+    /// instead of the native one. Always `false` on
     /// [`Convention::Mac`] ("Mac convention ignores the key entirely" — the
     /// law), independent of whether the keep-set happens to be populated.
     fn linux_keeps(&self, key: &Key, state: ModifiersState) -> bool {
@@ -782,7 +915,7 @@ impl KeymapState {
     /// ALT, so this predicate is only consulted live.
     pub fn is_meta_chord(&self, key: &Key) -> bool {
         let k = canon_key(key);
-        self.single
+        self.override_single
             .keys()
             .any(|(mk, ms)| *mk == k && ms.contains(ModifiersState::ALT))
     }
@@ -791,12 +924,15 @@ impl KeymapState {
     /// current modifier state; `logical` is the winit logical key.
     pub fn resolve(&mut self, logical: &Key, mods: &Modifiers) -> Action {
         let state = mods.state();
-        // CONFIG REBIND (single chord): a configured one-chord binding wins over the
-        // default dispatch. Guarded by `is_empty` so the no-config path stays
-        // allocation-free (canonicalising the key allocates a SmolStr). Only when NOT
-        // mid-prefix — a C-x sequence resolves through the `c_x` map below instead.
-        if !self.in_c_x && !self.in_c_c && !self.single.is_empty() {
-            if let Some(a) = self.single.get(&(canon_key(logical), state)) {
+        // A configured one-chord binding wins over the seeded catalog default.
+        // `SmolStr` keeps ordinary single-key canonicalization inline; no map or
+        // binding allocation occurs after construction. Only when NOT mid-prefix.
+        if !self.in_c_x && !self.in_c_c {
+            let chord = (canon_key(logical), state);
+            if let Some(a) = self.override_single.get(&chord) {
+                return a.clone();
+            }
+            if let Some(a) = self.default_single.get(&chord) {
                 return a.clone();
             }
         }
@@ -811,15 +947,13 @@ impl KeymapState {
         // resolved gate every "native slot 1" arm below now reads (was a bare
         // `sup && !ctrl`). Nothing about WHERE these arms sit in `resolve` changed,
         // which is what makes "native wins on collision" true for free: a Linux
-        // Ctrl-chord that also happens to be a static emacs default (e.g. Ctrl-S vs
-        // C-s search-forward) is resolved HERE, before `resolve_char`'s emacs `ctrl`
-        // match is ever reached — see the collision-table doc below `resolve_char`.
+        // This gate now serves only uncatalogued native aliases; catalog default
+        // collision precedence was already resolved when `seed_defaults` ran.
         //
         // THE EMACS-HANDS-ON-LINUX PER-CHORD DOOR: `&& !self.linux_keeps(..)`
         // (a no-op on Mac and on an empty/absent `linux_keep_emacs` config — see
         // `linux_keeps`'s doc) exempts THIS EXACT chord from the native-wins
-        // collision, so it falls straight through to the static emacs arm below
-        // instead — no policy flip, just this one THIS-chord opt-out.
+        // collision for uncatalogued aliases too, matching the seeded catalog map.
         let native = self.native_down(state) && !self.linux_keeps(logical, state);
 
         // MID-PREFIX (C-x ...): interpret this key as the SECOND key BEFORE the
@@ -836,69 +970,38 @@ impl KeymapState {
         // config binding a C-x sequence just cancels quietly.
         if self.in_c_x {
             self.in_c_x = false;
-            if !self.c_x.is_empty() {
-                if let Some(a) = self.c_x.get(&(canon_key(logical), state)) {
-                    return a.clone();
-                }
+            let chord = (canon_key(logical), state);
+            if let Some(a) = self.override_c_x.get(&chord) {
+                return a.clone();
+            }
+            if let Some(a) = self.default_c_x.get(&chord) {
+                return a.clone();
             }
             return Action::Cancel;
         }
 
         // MID-PREFIX (C-c ...): the org-mode-style second prefix, mirroring the
         // C-x block above exactly. A configured `C-c <key>` rebind wins over the
-        // static `resolve_c_c` arms; an unbound `C-c <combo>` cancels + clears.
+        // data-backed default map; an unbound `C-c <combo>` cancels + clears.
         if self.in_c_c {
             self.in_c_c = false;
-            if !self.c_c.is_empty() {
-                if let Some(a) = self.c_c.get(&(canon_key(logical), state)) {
-                    return a.clone();
-                }
+            let chord = (canon_key(logical), state);
+            if let Some(a) = self.override_c_c.get(&chord) {
+                return a.clone();
             }
-            return resolve_c_c(logical, ctrl);
+            if let Some(a) = self.default_c_c.get(&chord) {
+                return a.clone();
+            }
+            return Action::Cancel;
         }
 
-        // Cmd (Super) undo / redo: Cmd+Z = undo, Cmd+Shift+Z = redo. The logical
-        // key arrives as 'z' or (with shift) 'Z', so match case-insensitively and
-        // branch on the SHIFT modifier. Checked before zoom/char dispatch.
+        // Some layouts report the shifted glyph rather than the catalogued base
+        // key. These are input-normalization aliases, not second default values.
         if native {
-            if let Key::Character(s) = logical {
-                if matches!(s.chars().next(), Some('z') | Some('Z')) {
-                    return if shift { Action::Redo } else { Action::Undo };
-                }
-            }
-        }
-
-        // Cmd-S: SAVE — the mac-native save chord, ADDITIVE to the emacs `C-x C-s`
-        // (which still works through the prefix path below). 's' is free under Super
-        // (z=undo, =/+/-/0=zoom, p, o, c/x/v, f), so no collision. Matched
-        // case-insensitively (Shift may produce 'S'); placed before the char dispatch.
-        if native {
-            if let Key::Character(s) = logical {
-                if matches!(s.chars().next(), Some('s') | Some('S')) {
-                    return Action::Save;
-                }
-            }
-        }
-
-        // Cmd (Super) zoom shortcuts: Cmd+'=' / Cmd+'+' zoom in, Cmd+'-' zoom
-        // out, Cmd+'0' reset. Checked before prefix/char dispatch so they work
-        // regardless of state. These are the mac-native bindings.
-        if native {
-            if let Some(z) = zoom_for_super(logical) {
-                return z;
-            }
-        }
-
-        // Cmd-Shift-P (Super+Shift+P): SWITCH PROJECT — the native switch-project
-        // door (the emacs `C-x p` default is retired this round). SHIFT distinguishes
-        // it from the plain Cmd-P palette below; the shifted char arrives as 'P' (or
-        // 'p' on layouts that don't case-fold). Checked FIRST so a plain Cmd-P still
-        // falls through to the palette.
-        if native && shift {
-            if let Key::Character(s) = logical {
-                if matches!(s.chars().next(), Some('p') | Some('P')) {
-                    return Action::OpenProject;
-                }
+            match logical {
+                Key::Character(s) if s.as_str() == "+" => return Action::ZoomIn,
+                Key::Character(s) if s.as_str() == "_" => return Action::ZoomOut,
+                _ => {}
             }
         }
 
@@ -914,75 +1017,6 @@ impl KeymapState {
             }
         }
 
-        // Cmd-Shift-O (Super+Shift+O): TOGGLE the persistent MARGIN OUTLINE. SHIFT is
-        // required so plain Cmd-O (Go to file) stays free; the logical char arrives as
-        // 'O' (or 'o') when shifted. Its own dedicated key, like Cmd-P — collision-free
-        // (the Super combos in use are z, =/+/-/0, p, o, c/x/v). Jump-to-heading is now
-        // a Go-to lens ("Go to heading…", `OpenOutline`), not a standalone picker.
-        if native && shift {
-            if let Key::Character(s) = logical {
-                if matches!(s.chars().next(), Some('o') | Some('O')) {
-                    return Action::ToggleOutline;
-                }
-            }
-        }
-
-        // THE NATIVE DOORS — the macOS-native slot-1 chords the identity round
-        // advertises (their emacs `C-x` defaults are retired): Cmd-O = GO TO FILE
-        // (the go-somewhere door; Cmd-Shift-O above stays the margin outline toggle,
-        // so this is the plain unshifted 'o'), Cmd-N = NEW NOTE, Cmd-T = SWITCH THEME,
-        // Cmd-Q = QUIT (the clean-shutdown path, same as the menu's routed Quit),
-        // Cmd-W = FINISH FILE (the keybinding-idiom audit's P5: awl's closest
-        // analogue to "close the document" — save, notify any daemon `--wait`
-        // client, switch to the previous file; non-destructive under stray
-        // muscle memory), Cmd-, = SETTINGS (the preferences chord since Mac OS X
-        // 10.1; P1), Cmd-K = INSERT LINK (LINKS V2 — the chord the keybinding-idiom
-        // audit reserved for this exact command; see `Action::InsertLink`'s own doc).
-        // 'o'/'n'/'t'/'q'/'w'/','/'k' are all free under Super. Placed AFTER the
-        // Cmd-Shift-O arm so a shifted 'O' resolves to the outline, not go-to.
-        // Case-folded; `!alt` so an Option-composed char still self-inserts.
-        if native && !alt {
-            if let Key::Character(s) = logical {
-                match s.chars().next() {
-                    Some('o') | Some('O') => return Action::OpenGoto,
-                    Some('n') | Some('N') => return Action::NewNote,
-                    Some('t') | Some('T') => return Action::OpenThemeMenu,
-                    Some('q') | Some('Q') => return Action::Quit,
-                    Some('w') | Some('W') => return Action::FinishBuffer,
-                    Some(',') => return Action::OpenSettingsMenu,
-                    Some('k') | Some('K') => return Action::InsertLink,
-                    _ => {}
-                }
-            }
-        }
-
-        // Cmd-Shift-H (Super+Shift+H): summon the HISTORY TIMELINE picker. SHIFT keeps
-        // a plain Cmd-H free; the logical char arrives as 'H' (or 'h') when shifted.
-        // Its own dedicated key, like Cmd-Shift-O — collision-free (the Super combos in
-        // use are z, =/+/-/0, p, o, c/x/v, f, ';', i, a). Rebindable via `[keys]`.
-        if native && shift {
-            if let Key::Character(s) = logical {
-                if matches!(s.chars().next(), Some('h') | Some('H')) {
-                    return Action::OpenHistory;
-                }
-            }
-        }
-
-        // Cmd-Shift-. : REVEAL / hide dot-prefixed entries in the active file picker
-        // (the Finder "show hidden files" chord). SHIFT+'.' arrives as '>' on a US
-        // layout (Shift composes the glyph), or stays '.' on layouts/paths that don't
-        // compose (and the headless `s-S-.` replay sends a bare '.'), so accept
-        // EITHER. Collision-free: the Super combos in use are z, =/+/-/0, p, o, h, c/x/v,
-        // f, ';', i, a — none is '.'/'>'. Handled by the overlay intercept; a no-op
-        // when no picker is open.
-        if native && shift {
-            if let Key::Character(s) = logical {
-                if matches!(s.chars().next(), Some('.') | Some('>')) {
-                    return Action::ToggleHiddenFiles;
-                }
-            }
-        }
-
         // Cmd-. (Super+'.', no Shift): CANCEL — the HIG's ancient cancel synonym
         // (predates Esc on the Mac; every dialog still honors it). Quiet: no
         // menu label, no palette entry, no advertisement — just the chord a Mac
@@ -992,32 +1026,6 @@ impl KeymapState {
             if let Key::Character(s) = logical {
                 if s.chars().next() == Some('.') {
                     return Action::Cancel;
-                }
-            }
-        }
-
-        // Cmd-Shift-L (Super+Shift+'l'): TASK LIST toggle — Apple Notes' checklist
-        // idiom, the one genuinely Apple-native anchor for the (otherwise
-        // palette-only) block-toggle family; awl's audience overlaps Notes'
-        // closely (W3). SHIFT is required so a plain Cmd-L (the BBEdit/Xcode
-        // go-to-line idiom awl deliberately declines, §6-A3 of the keybinding
-        // audit) stays free/unbound. 'l' is free under Super+Shift.
-        if native && shift {
-            if let Key::Character(s) = logical {
-                if matches!(s.chars().next(), Some('l') | Some('L')) {
-                    return Action::ToggleTaskList;
-                }
-            }
-        }
-
-        // Cmd-`;` (Super+';'): summon the SPELL-SUGGESTION picker for the word at
-        // the cursor. Its own dedicated key, like Cmd-P / Cmd-Shift-O. ';' is free
-        // under Super (z, =/+/-/0, p, o, c/x/v, f), so no collision. No SHIFT so the
-        // native-feeling chord is a single press; rebindable via `[keys]`.
-        if native {
-            if let Key::Character(s) = logical {
-                if s.chars().next() == Some(';') {
-                    return Action::OpenSpellSuggest;
                 }
             }
         }
@@ -1041,45 +1049,18 @@ impl KeymapState {
             }
         }
 
-        // GUI clipboard aliases on SUPER (Cmd on mac, Win/Super key on Linux).
-        // ONE binding set covers both platforms and is collision-free with the
-        // Ctrl-based mg keymap (C-x is a prefix, C-v is page-down). Reuses the
-        // existing kill-ring Actions; the clipboard bridge lives in app.rs.
-        // Placed AFTER the Cmd+Z and zoom blocks above so those already returned
-        // before we reach c/x/v — zero collision with z / = / + / - / 0.
-        // WAYLAND NOTE: on a Wayland compositor (e.g. Hyprland/Omarchy) Super+V
-        // only reaches awl if the compositor has not itself bound that chord;
-        // that is the user's compositor config, not awl's concern.
-        if native {
-            if let Key::Character(s) = logical {
-                match s.chars().next() {
-                    Some('c') | Some('C') => return Action::CopyRegion,
-                    Some('x') | Some('X') => return Action::KillRegion,
-                    Some('v') | Some('V') => return Action::Yank,
-                    _ => {}
-                }
-            }
+        // Some layouts report the shifted glyph for the catalogued Cmd-Shift-.
+        // chord. Normalize that alternate logical-key spelling at the input edge.
+        if native && shift && matches!(logical, Key::Character(s) if s.as_str() == ">") {
+            return Action::ToggleHiddenFiles;
         }
 
-        // Cmd-F: incremental search forward (mirrors C-s); Cmd-Shift-F: backward
-        // (mirrors C-r); Cmd-Option-F: open the search panel with the REPLACE field
-        // revealed. The native-default Find direction, ADDITIVE to the C-s/C-r
-        // isearch chords (which keep working). 'f' is free under Super (z, =/+/-/0,
-        // p, o, c/x/v), so no collision. Placed after the clipboard block so
-        // c/x/v already returned. Checked case-insensitively (Shift gives 'F').
-        // NOTE: the mid-prefix (C-x ...) check now lives EARLIER (before the Super
-        // shortcuts), so a Cmd combo pressed mid-prefix cancels+clears the prefix
-        // rather than firing here — see the `in_c_x` block above.
-        if native {
+        // Cmd-Option-F is a legacy uncatalogued alias for the catalogued Cmd-R
+        // Find-and-replace door.
+        if native && alt {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('f') | Some('F')) {
-                    return if alt {
-                        Action::OpenReplace
-                    } else if shift {
-                        Action::SearchBackward
-                    } else {
-                        Action::SearchForward
-                    };
+                    return Action::OpenReplace;
                 }
             }
         }
@@ -1100,55 +1081,6 @@ impl KeymapState {
             if let Key::Character(s) = logical {
                 if matches!(s.chars().next(), Some('g') | Some('G')) {
                     return if shift { Action::SearchBackward } else { Action::SearchForward };
-                }
-            }
-        }
-
-        // Cmd-R: the HEADLINE find-and-replace door — open (or, while the panel is
-        // already up, focus) the replace field. Additive to the legacy Cmd-Option-F
-        // above; 'r' is free under Super (z, =/+/-/0, p, o, c/x/v, f), no collision.
-        // Placed after the clipboard + Cmd-F blocks so those already returned.
-        if native && !alt {
-            if let Key::Character(s) = logical {
-                if matches!(s.chars().next(), Some('r') | Some('R')) {
-                    return Action::OpenReplace;
-                }
-            }
-        }
-
-        // Cmd-A (Super+'a'): SELECT ALL the whole buffer — the mac-native default.
-        // The Emacs slot is untouched: bare C-a (Ctrl, no Super) is still LineStart
-        // in `resolve_char`. 'a' is free under Super (z, =/+/-/0, p, o, c/x/v, f, r,
-        // i, ';'), so no collision. Placed after the clipboard + Cmd-F/R blocks so
-        // those already returned; case-folded ('a'/'A').
-        if native {
-            if let Key::Character(s) = logical {
-                if matches!(s.chars().next(), Some('a') | Some('A')) {
-                    return Action::SelectAll;
-                }
-            }
-        }
-
-        // Cmd-B / Cmd-I / Cmd-E: the THREE markdown INLINE toggles with a universal
-        // native convention — Cmd-B = Bold, Cmd-I = Italic, Cmd-E = Inline code (a
-        // markdown-only edit; a calm no-op on a non-markdown buffer, gated in
-        // `apply_core`). 'b'/'i'/'e' are all free under plain Super (the used set
-        // is z, =/+/-/0, c/x/v, f, r, a, g, ';', w, ,), so no collision. Cmd-I
-        // is the keybinding-idiom audit's Option B: the held stats HUD moved to
-        // Option-Cmd-I (above, `alt` required) specifically so PLAIN Cmd-I could
-        // join Bold/Inline-code as the third universal formatting chord — awl
-        // advertising ⌘B/⌘E but not ⌘I used to read as a gap to every writer who
-        // tried it. All three rebindable via `[keys]`. Case-folded; `!alt` so an
-        // Option-composed char still self-inserts (and so this arm never shadows
-        // the `alt`-gated HUD chord above). Placed after the clipboard +
-        // Cmd-F/R/A/G blocks so those already returned.
-        if native && !alt {
-            if let Key::Character(s) = logical {
-                match s.chars().next() {
-                    Some('b') | Some('B') => return Action::Bold,
-                    Some('i') | Some('I') => return Action::Italic,
-                    Some('e') | Some('E') => return Action::InlineCode,
-                    _ => {}
                 }
             }
         }
@@ -1174,32 +1106,25 @@ impl KeymapState {
                 return Action::SetMark;
             }
         }
-        // Cmd (Super) + arrow are the mac-native line/buffer motions: Cmd-Left /
-        // Cmd-Right = line start / end (alongside C-a / C-e), Cmd-Up / Cmd-Down =
-        // buffer start / end (alongside M-< / M->). Shift still extends the selection
-        // (handled in `app`), so Cmd-Shift-Left selects to line start, etc.
+        // Plain arrows and convention-independent Ctrl-arrow word aliases are input
+        // policy. Catalogued Option/Cmd arrow defaults have already resolved through
+        // the data-backed map above.
         let sup = state.contains(ModifiersState::SUPER);
         match named {
             NamedKey::ArrowLeft => {
-                if sup {
-                    Action::LineStart
-                } else if alt || state.contains(ModifiersState::CONTROL) {
+                if state.contains(ModifiersState::CONTROL) {
                     Action::BackwardWord
                 } else {
                     Action::BackwardChar
                 }
             }
             NamedKey::ArrowRight => {
-                if sup {
-                    Action::LineEnd
-                } else if alt || state.contains(ModifiersState::CONTROL) {
+                if state.contains(ModifiersState::CONTROL) {
                     Action::ForwardWord
                 } else {
                     Action::ForwardChar
                 }
             }
-            NamedKey::ArrowUp if sup => Action::BufferStart,
-            NamedKey::ArrowDown if sup => Action::BufferEnd,
             NamedKey::ArrowUp => Action::PreviousLine,
             NamedKey::ArrowDown => Action::NextLine,
             // THE LINUX-NATIVE override for "Document start"/"Document end"
@@ -1228,7 +1153,6 @@ impl KeymapState {
             // slot-1 door (the emacs `C-x b` default is retired). Checked before the
             // indent arms so it never inserts a tab. Native-only in practice: a
             // browser grabs Ctrl-Tab on the web build, where the palette is the door.
-            NamedKey::Tab if ctrl => Action::LastBuffer,
             // Shift-Tab OUTDENTS a list level (Tab indents); on a plain line it strips
             // up to two leading spaces (a no-op with none).
             NamedKey::Tab if state.contains(ModifiersState::SHIFT) => Action::Outdent,
@@ -1266,20 +1190,9 @@ impl KeymapState {
 
         if ctrl && !alt {
             return match lower {
-                'f' => Action::ForwardChar,
-                'b' => Action::BackwardChar,
-                'n' => Action::NextLine,
-                'p' => Action::PreviousLine,
-                'a' => Action::LineStart,
-                'e' => Action::LineEnd,
                 'd' => Action::DeleteForward,
                 'k' => Action::KillLine,
-                'y' => Action::Yank,
-                's' => Action::SearchForward,  // C-s: isearch forward
-                'r' => Action::SearchBackward, // C-r: isearch backward
-                'w' => Action::KillRegion, // C-w: cut region
-                'v' => Action::PageScrollDown, // C-v: scroll/move down a page
-                '/' => Action::Undo,       // C-/: undo (Emacs-ish alias)
+                'v' => Action::PageScrollDown,
                 'g' => Action::Cancel,
                 'x' => {
                     self.in_c_x = true;
@@ -1341,16 +1254,62 @@ impl KeymapState {
     }
 }
 
+fn insert_default_entry(
+    map: &mut HashMap<(Key, ModifiersState), Action>,
+    chord: (Key, ModifiersState),
+    action: Action,
+    name: &str,
+    spec: &str,
+) {
+    if let Some(existing) = map.get(&chord) {
+        assert_eq!(
+            existing, &action,
+            "assets/keymap-defaults.toml: conflicting effective default {spec:?} for {name:?}: {existing:?} versus {action:?}"
+        );
+        return;
+    }
+    map.insert(chord, action);
+}
+
+fn linux_keeps_chord_raw(
+    keep: &std::collections::HashSet<(Key, ModifiersState)>,
+    chord_spec: &str,
+) -> bool {
+    match parse_binding(chord_spec) {
+        Ok(Chord::Single(k, m)) => keep.contains(&(k, m)),
+        _ => false,
+    }
+}
+
+fn linux_displaces_emacs_default_raw(
+    emacs: &str,
+    keep: &std::collections::HashSet<(Key, ModifiersState)>,
+) -> bool {
+    let Some(first) = emacs.split_whitespace().next() else {
+        return false;
+    };
+    let Ok((key, mods)) = crate::keyspec::parse_chord(first) else {
+        return false;
+    };
+    if mods.state() != ModifiersState::CONTROL {
+        return false;
+    }
+    let Key::Character(s) = &key else {
+        return false;
+    };
+    s.chars().next().is_some_and(|c| {
+        LINUX_DISPLACED_LETTERS.contains(&c.to_ascii_lowercase())
+            && !keep.contains(&(canon_key(&key), mods.state()))
+    })
+}
+
 // ── THE LINUX-NATIVE COLLISION TABLE (user-approved policy: NATIVE WINS) ───────
 //
-// Under `Convention::Linux`, `native_down` reads Ctrl-without-Super where it used
-// to read Super-without-Control — so every "native slot 1" chord above now claims
-// the SAME LETTER on Ctrl that a handful of static bare-Ctrl emacs arms in
-// `resolve_char` already used. Those arms are only ever reached AFTER every native
-// block above has had a chance to `return` (the arm ordering — unchanged by this
-// round), so the native meaning wins STRUCTURALLY, no extra logic needed: the
-// emacs default for that exact chord goes quietly inert on Linux (still restorable
-// via a `[keys]` line, since the OVERRIDE maps are consulted before ANY of this).
+// Under `Convention::Linux`, slot 1 translates to Ctrl, where it collides with a
+// handful of bare-Control emacs slots. `seed_defaults` applies this table before
+// inserting either claimant: native wins unless the exact emacs chord is kept.
+// A `[keys]` binding remains able to reclaim either meaning because overrides are
+// consulted before the seeded default map.
 //
 // The FULL, exhaustively-computed displaced list (verified by
 // `tests::linux_collision_table_matches_the_documented_displaced_list`, which
@@ -1413,7 +1372,7 @@ impl KeymapState {
 /// meaning wins on [`Convention::Linux`]) — the ONE data owner both
 /// `tests::linux_collision_table_matches_the_documented_displaced_list` (which
 /// still separately pins EACH letter's resolved `Action`) and
-/// [`linux_displaces_emacs_default`] (the LABEL-TRUTH half — is a static emacs
+/// [`linux_displaces_emacs_default`] (the LABEL-TRUTH half — is an emacs
 /// default worth SHOWING under this convention) read, so the dispatch table and
 /// the label truth can never silently drift apart. `k` is deliberately NOT
 /// here — see `linux_builtin_keep()`'s doc for why Insert link's Ctrl-K is a
@@ -1558,39 +1517,6 @@ impl KeymapFlavor {
 /// unions both in regardless of which flavor is active.
 pub fn linux_emacs_preset_keep() -> Vec<String> {
     LINUX_DISPLACED_LETTERS.iter().map(|c| format!("C-{c}")).collect()
-}
-
-/// Map a Cmd (Super) + key combo to a zoom action. `Cmd+=`/`Cmd++` zoom in,
-/// `Cmd+-` zoom out, `Cmd+0` reset. Returns `None` for any other key so the
-/// caller falls through to normal dispatch.
-fn zoom_for_super(logical: &Key) -> Option<Action> {
-    match logical {
-        Key::Character(s) => match s.chars().next()? {
-            '=' | '+' => Some(Action::ZoomIn),
-            '-' | '_' => Some(Action::ZoomOut),
-            '0' => Some(Action::ZoomReset),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Second key of a `C-c` sequence — the org-mode-style prefix. Its only default
-/// binding is `C-c C-o` = FOLLOW LINK (open the markdown link under the caret in
-/// the browser). Any other second key cancels quietly, exactly like `resolve_c_x`.
-fn resolve_c_c(logical: &Key, ctrl: bool) -> Action {
-    match logical {
-        Key::Character(s) => {
-            let lower = s.chars().next().map(|c| c.to_ascii_lowercase());
-            match (ctrl, lower) {
-                // C-c C-o: follow the link at point (org-mode's open-link chord).
-                (true, Some('o')) => Action::FollowLink,
-                // C-c followed by a key we don't bind: cancel quietly.
-                _ => Action::Cancel,
-            }
-        }
-        _ => Action::Cancel,
-    }
 }
 
 /// Canonicalise a key for the override maps: a single-character key is folded to
@@ -1744,6 +1670,18 @@ mod tests {
         let mut km = KeymapState::new();
         assert_eq!(km.resolve(&ch("s"), &ctrl()), Action::SearchForward);
         assert_eq!(km.resolve(&ch("r"), &ctrl()), Action::SearchBackward);
+    }
+
+    #[test]
+    fn both_convention_modifiers_keep_the_data_backed_emacs_fallback() {
+        let both = mods(ModifiersState::CONTROL | ModifiersState::SUPER);
+        for convention in [Convention::Mac, Convention::Linux] {
+            let mut km = KeymapState::new_with_convention(convention);
+            assert_eq!(km.resolve(&ch("f"), &both), Action::ForwardChar);
+            assert_eq!(km.resolve(&ch("s"), &both), Action::SearchForward);
+            assert_eq!(km.resolve(&ch("c"), &both), Action::BeginPrefix);
+            assert_eq!(km.resolve(&ch("o"), &both), Action::FollowLink);
+        }
     }
 
     #[test]
@@ -2278,6 +2216,7 @@ mod tests {
         assert_eq!(km.resolve(&ch("="), &sup()), Action::ZoomIn);
         assert_eq!(km.resolve(&ch("+"), &sup()), Action::ZoomIn);
         assert_eq!(km.resolve(&ch("-"), &sup()), Action::ZoomOut);
+        assert_eq!(km.resolve(&ch("_"), &sup_shift()), Action::ZoomOut);
         assert_eq!(km.resolve(&ch("0"), &sup()), Action::ZoomReset);
         // Without Cmd, '=' is a normal self-insert.
         assert_eq!(km.resolve(&ch("="), &none()), Action::InsertChar('='));
@@ -2562,7 +2501,7 @@ mod tests {
     }
 
     /// THE DISPLACED-LIST LAW: drives a REAL `Convention::Linux` `KeymapState`
-    /// over every documented collision chord (the table above `zoom_for_super`)
+    /// over every documented collision chord (the table above the keep helpers)
     /// and asserts it resolves to the NATIVE meaning — then sweeps every OTHER
     /// bare Ctrl+letter the static emacs table binds and asserts THOSE resolve
     /// IDENTICALLY to the Mac-convention table (nothing outside the documented
@@ -2659,7 +2598,7 @@ mod tests {
         // ...a bare Ctrl letter NOT in the displaced set — Ctrl-D (never claimed)
         // and Ctrl-K (Links v2 spent Cmd-K, but `linux_builtin_keep()` keeps kill-
         // line unconditionally, so it's not on `LINUX_DISPLACED_LETTERS` at all;
-        // see the collision-table doc above `zoom_for_super`)...
+        // see the collision-table doc above the keep helpers)...
         assert!(!linux_displaces_emacs_default("C-d", &[]));
         assert!(!linux_displaces_emacs_default("C-k", &[]));
         // ...and an empty/unparsable slot.
@@ -2892,8 +2831,8 @@ mod tests {
 
     /// HARD LAW (c): an explicit `[keys] insert_link = "C-k"` override on Linux
     /// STILL dispatches Insert link — the override-before-static/keep seam
-    /// (`self.single`, consulted at the very top of `resolve`, before any
-    /// native/static/keep arm) wins over `linux_builtin_keep()`'s floor exactly
+    /// (`self.override_single`, consulted at the very top of `resolve`, before any
+    /// default/policy arm) wins over `linux_builtin_keep()`'s floor exactly
     /// like it already wins over any other static or kept chord. The control
     /// (no override, same keep list) confirms kill-line still wins otherwise —
     /// so the override is genuinely doing the work, not some other accident.
@@ -2974,5 +2913,125 @@ mod tests {
         // bare unbound Ctrl+letter is a calm `Ignore` (the ordinary emacs-branch
         // default), never a self-insert or the overridden action.
         assert_eq!(linux.resolve(&ch("j"), &ctrl()), Action::Ignore);
+    }
+
+    fn resolve_spec(km: &mut KeymapState, spec: &str) -> Vec<Action> {
+        spec.split_whitespace()
+            .map(|token| {
+                let (key, mods) = crate::keyspec::parse_chord(token).unwrap_or_else(|e| {
+                    panic!("catalog default {spec:?} contains invalid token {token:?}: {e}")
+                });
+                km.resolve(&key, &mods)
+            })
+            .collect()
+    }
+
+    /// The central data-backed dispatch law: every non-empty catalog slot is
+    /// exercised through the same constructor + `resolve` stream as live input.
+    /// Mac has no collision exceptions. Linux's native flavor names its two
+    /// intentional policy exceptions (native-wins displacement and C-k's keep
+    /// floor); the emacs flavor restores every displaced emacs slot.
+    #[test]
+    fn every_catalog_default_slot_dispatches_through_real_keymap_under_both_conventions_and_flavors() {
+        for command in crate::commands::COMMANDS.iter() {
+            for spec in [command.native, command.emacs] {
+                if spec.is_empty() {
+                    continue;
+                }
+                let mut mac = KeymapState::new_with_convention(Convention::Mac);
+                let trace = resolve_spec(&mut mac, spec);
+                assert_eq!(trace.last(), Some(&command.action), "Mac: {} {spec:?}", command.name);
+                if spec.split_whitespace().count() == 2 {
+                    assert_eq!(trace.first(), Some(&Action::BeginPrefix), "Mac prefix trace: {}", command.name);
+                }
+            }
+        }
+
+        let native_keep: Vec<String> = linux_builtin_keep().iter().map(|s| (*s).to_string()).collect();
+        let mut emacs_keep = linux_emacs_preset_keep();
+        emacs_keep.extend(linux_builtin_keep().iter().map(|s| (*s).to_string()));
+        for command in crate::commands::COMMANDS.iter() {
+            let native = crate::commands::resolved_native(command, Convention::Linux);
+            if !native.is_empty() {
+                let mut km = KeymapState::new_with_convention(Convention::Linux);
+                km.apply_linux_keep(&native_keep);
+                let actual = resolve_spec(&mut km, &native);
+                if linux_keeps_chord(&native_keep, &native) {
+                    assert_ne!(actual.last(), Some(&command.action), "Linux native keep must suppress {} {native:?}", command.name);
+                } else {
+                    assert_eq!(actual.last(), Some(&command.action), "Linux native: {} {native:?}", command.name);
+                }
+
+                let mut emacs_flavor = KeymapState::new_with_convention(Convention::Linux);
+                emacs_flavor.apply_linux_keep(&emacs_keep);
+                let actual = resolve_spec(&mut emacs_flavor, &native);
+                if !linux_keeps_chord(&emacs_keep, &native) {
+                    assert_eq!(actual.last(), Some(&command.action), "Linux emacs flavor non-collision: {} {native:?}", command.name);
+                }
+            }
+
+            if !command.emacs.is_empty() {
+                let mut native_flavor = KeymapState::new_with_convention(Convention::Linux);
+                native_flavor.apply_linux_keep(&native_keep);
+                let actual = resolve_spec(&mut native_flavor, command.emacs);
+                if linux_displaces_emacs_default(command.emacs, &native_keep) {
+                    assert_ne!(actual.last(), Some(&command.action), "Linux native flavor must displace {} {:?}", command.name, command.emacs);
+                } else {
+                    assert_eq!(actual.last(), Some(&command.action), "Linux native flavor: {} {:?}", command.name, command.emacs);
+                }
+
+                let mut emacs_flavor = KeymapState::new_with_convention(Convention::Linux);
+                emacs_flavor.apply_linux_keep(&emacs_keep);
+                let trace = resolve_spec(&mut emacs_flavor, command.emacs);
+                assert_eq!(trace.last(), Some(&command.action), "Linux emacs flavor: {} {:?}", command.name, command.emacs);
+                if command.emacs.split_whitespace().count() == 2 {
+                    assert_eq!(trace.first(), Some(&Action::BeginPrefix), "Linux emacs prefix trace: {}", command.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "conflicting effective default")]
+    fn conflicting_embedded_defaults_fail_loudly_at_the_map_seam() {
+        let mut map = HashMap::new();
+        insert_default_entry(
+            &mut map,
+            (ch("q"), ModifiersState::SUPER),
+            Action::Quit,
+            "Quit",
+            "Cmd-Q",
+        );
+        insert_default_entry(
+            &mut map,
+            (ch("q"), ModifiersState::SUPER),
+            Action::Save,
+            "Save",
+            "Cmd-Q",
+        );
+    }
+
+    /// A slot mutation has one owner: the same chord text labels the command and
+    /// seeds dispatch. This test uses a local catalog-shaped row so the embedded
+    /// asset itself remains immutable during the test.
+    #[test]
+    fn changing_one_valid_default_slot_changes_both_label_and_dispatch() {
+        let mutated = crate::commands::Command {
+            name: "Save",
+            action: Action::Save,
+            native: "Cmd-J",
+            emacs: "",
+            native_only: false,
+            web_only: false,
+        };
+        assert_eq!(crate::commands::join_slots(mutated.native, mutated.emacs), "⌘J");
+
+        let mut km = KeymapState::new_with_convention(Convention::Mac);
+        km.default_single.clear();
+        km.default_c_x.clear();
+        km.default_c_c.clear();
+        km.insert_default(mutated.native, mutated.action, mutated.name);
+        assert_eq!(resolve_spec(&mut km, "Cmd-J").last(), Some(&Action::Save));
+        assert_eq!(resolve_spec(&mut km, "Cmd-S").last(), Some(&Action::Ignore));
     }
 }
