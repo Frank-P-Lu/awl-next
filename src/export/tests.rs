@@ -10,7 +10,7 @@
 
 use super::model::{self, Align, Block, ExportImage, ImageMime, ImageSource, Inline};
 use super::zip::crc32;
-use super::{to_bytes, to_docx, to_html, Format};
+use super::{Format, to_bytes, to_docx, to_html, to_pdf};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -94,7 +94,12 @@ impl ImageSource for FixtureImages {
     fn resolve(&self, src: &str) -> Option<ExportImage> {
         if src == "assets/pic.png" {
             let (width, height, mime) = model::sniff_image(&self.0)?;
-            Some(ExportImage { bytes: self.0.clone(), width, height, mime })
+            Some(ExportImage {
+                bytes: self.0.clone(),
+                width,
+                height,
+                mime,
+            })
         } else {
             None
         }
@@ -145,20 +150,27 @@ fn frontmatter_is_excluded_and_title_is_the_first_heading() {
     assert_eq!(doc.title.as_deref(), Some("Export Fixture"));
     // The frontmatter `title: ignored` never becomes a block.
     let flat = format!("{:?}", doc.blocks);
-    assert!(!flat.contains("ignored"), "frontmatter leaked into the body");
+    assert!(
+        !flat.contains("ignored"),
+        "frontmatter leaked into the body"
+    );
 }
 
 #[test]
 fn highlight_splits_into_its_own_inline() {
     let doc = model::parse("plain ==hi== plain\n");
-    let Block::Paragraph(inlines) = &doc.blocks[0] else { panic!("expected paragraph") };
+    let Block::Paragraph(inlines) = &doc.blocks[0] else {
+        panic!("expected paragraph")
+    };
     assert!(
         inlines.iter().any(|i| matches!(i, Inline::Highlight(_))),
         "no Highlight inline: {inlines:?}"
     );
     // A lone/odd `=` stays literal.
     let doc2 = model::parse("a = b and == unclosed\n");
-    let Block::Paragraph(inl2) = &doc2.blocks[0] else { panic!() };
+    let Block::Paragraph(inl2) = &doc2.blocks[0] else {
+        panic!()
+    };
     assert!(!inl2.iter().any(|i| matches!(i, Inline::Highlight(_))));
 }
 
@@ -259,7 +271,10 @@ fn tight_list_item_text_survives_into_both_emitters() {
     let doc_xml = String::from_utf8(unzip_stored(&docx)["word/document.xml"].clone()).unwrap();
     for w in words {
         assert!(html.contains(w), "HTML export dropped list item text {w:?}");
-        assert!(doc_xml.contains(w), "DOCX export dropped list item text {w:?}");
+        assert!(
+            doc_xml.contains(w),
+            "DOCX export dropped list item text {w:?}"
+        );
     }
 }
 
@@ -372,7 +387,9 @@ fn docx_run_text(doc_xml: &str) -> String {
         }
     }
     // Un-escape in the order that avoids double-decoding `&amp;lt;` → `<`.
-    out.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    out.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 // --- HTML emitter -----------------------------------------------------------
@@ -413,7 +430,11 @@ fn html_has_the_expected_structure() {
 fn unzip_stored(archive: &[u8]) -> BTreeMap<String, Vec<u8>> {
     // Locate EOCD (fixed 22 bytes here — no archive comment).
     let eocd = archive.len() - 22;
-    assert_eq!(&archive[eocd..eocd + 4], &0x0605_4b50u32.to_le_bytes(), "no EOCD sig");
+    assert_eq!(
+        &archive[eocd..eocd + 4],
+        &0x0605_4b50u32.to_le_bytes(),
+        "no EOCD sig"
+    );
     let count = u16::from_le_bytes([archive[eocd + 10], archive[eocd + 11]]) as usize;
     let cd_offset = u32::from_le_bytes([
         archive[eocd + 16],
@@ -425,19 +446,42 @@ fn unzip_stored(archive: &[u8]) -> BTreeMap<String, Vec<u8>> {
     let mut out = BTreeMap::new();
     let mut p = cd_offset;
     for _ in 0..count {
-        assert_eq!(&archive[p..p + 4], &0x0201_4b50u32.to_le_bytes(), "bad central dir sig");
+        assert_eq!(
+            &archive[p..p + 4],
+            &0x0201_4b50u32.to_le_bytes(),
+            "bad central dir sig"
+        );
         let method = u16::from_le_bytes([archive[p + 10], archive[p + 11]]);
         assert_eq!(method, 0, "entry is not STORED");
-        let crc = u32::from_le_bytes([archive[p + 16], archive[p + 17], archive[p + 18], archive[p + 19]]);
-        let size = u32::from_le_bytes([archive[p + 20], archive[p + 21], archive[p + 22], archive[p + 23]]) as usize;
+        let crc = u32::from_le_bytes([
+            archive[p + 16],
+            archive[p + 17],
+            archive[p + 18],
+            archive[p + 19],
+        ]);
+        let size = u32::from_le_bytes([
+            archive[p + 20],
+            archive[p + 21],
+            archive[p + 22],
+            archive[p + 23],
+        ]) as usize;
         let name_len = u16::from_le_bytes([archive[p + 28], archive[p + 29]]) as usize;
         let extra_len = u16::from_le_bytes([archive[p + 30], archive[p + 31]]) as usize;
         let comment_len = u16::from_le_bytes([archive[p + 32], archive[p + 33]]) as usize;
-        let lho = u32::from_le_bytes([archive[p + 42], archive[p + 43], archive[p + 44], archive[p + 45]]) as usize;
+        let lho = u32::from_le_bytes([
+            archive[p + 42],
+            archive[p + 43],
+            archive[p + 44],
+            archive[p + 45],
+        ]) as usize;
         let name = String::from_utf8(archive[p + 46..p + 46 + name_len].to_vec()).unwrap();
 
         // Follow the local header offset to the data.
-        assert_eq!(&archive[lho..lho + 4], &0x0403_4b50u32.to_le_bytes(), "bad local header sig");
+        assert_eq!(
+            &archive[lho..lho + 4],
+            &0x0403_4b50u32.to_le_bytes(),
+            "bad local header sig"
+        );
         let l_name_len = u16::from_le_bytes([archive[lho + 26], archive[lho + 27]]) as usize;
         let l_extra_len = u16::from_le_bytes([archive[lho + 28], archive[lho + 29]]) as usize;
         let data_start = lho + 30 + l_name_len + l_extra_len;
@@ -466,7 +510,9 @@ fn docx_unzips_and_every_crc_validates() {
         assert!(parts.contains_key(required), "missing part {required}");
     }
     // The embedded image landed as a media part with the exact PNG bytes.
-    let media = parts.get("word/media/image1.png").expect("media/image1.png");
+    let media = parts
+        .get("word/media/image1.png")
+        .expect("media/image1.png");
     assert_eq!(media, &fixture_png());
 }
 
@@ -522,11 +568,19 @@ fn exports_are_byte_deterministic() {
     assert_eq!(h1, h2, "html export is not deterministic");
     // to_bytes agrees with the direct emitters.
     assert_eq!(to_bytes(FIXTURE, Format::Docx, &fixture_images()), a);
-    assert_eq!(to_bytes(FIXTURE, Format::Html, &fixture_images()), h1.into_bytes());
+    assert_eq!(
+        to_bytes(FIXTURE, Format::Html, &fixture_images()),
+        h1.into_bytes()
+    );
+    let p = to_pdf(FIXTURE, &fixture_images());
+    assert_eq!(to_bytes(FIXTURE, Format::Pdf, &fixture_images()), p);
+    assert_eq!(Format::Pdf.ext(), "pdf");
 }
 
 fn testdata_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/export/testdata").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/export/testdata")
+        .join(name)
 }
 
 /// Compare `got` against a committed golden file, or (re)write it under
@@ -661,14 +715,18 @@ fn check_attrs(mut attrs: &str) -> Result<(), String> {
         if attrs.is_empty() {
             break;
         }
-        let eq = attrs.find('=').ok_or_else(|| format!("attribute without '=': {attrs:?}"))?;
+        let eq = attrs
+            .find('=')
+            .ok_or_else(|| format!("attribute without '=': {attrs:?}"))?;
         let _name = &attrs[..eq];
         let rest = attrs[eq + 1..].trim_start();
         let quote = rest.chars().next().ok_or("attribute value missing")?;
         if quote != '"' && quote != '\'' {
             return Err(format!("unquoted attribute value: {rest:?}"));
         }
-        let close = rest[1..].find(quote).ok_or("unterminated attribute value")?;
+        let close = rest[1..]
+            .find(quote)
+            .ok_or("unterminated attribute value")?;
         attrs = &rest[1 + close + 1..];
     }
     Ok(())

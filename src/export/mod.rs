@@ -1,24 +1,27 @@
-//! DOCUMENT EXPORT — `.docx` (Word) + standalone `.html` (the print/PDF path),
-//! from awl's plain-text markdown. ONE exporter core ([`model::parse`], a single
+//! DOCUMENT EXPORT — `.docx` (Word), standalone `.html`, and native `.pdf`, from
+//! awl's plain-text markdown. ONE exporter core ([`model::parse`], a single
 //! walk of `pulldown-cmark`'s events into a neutral [`model::Document`] tree),
-//! TWO emitters ([`docx::emit`], [`html::emit`]). The file on disk stays plain
-//! text; export just projects it into a rich, portable document.
+//! with shared DOCX/HTML emitters and a native-only PDF emitter. The file on disk
+//! stays plain text; export just projects it into a rich, portable document.
 //!
 //! Coverage: headings, bold/italic/strikethrough, `==highlight==`, inline +
 //! fenced code, links (real hyperlinks), bullet/numbered/task lists,
 //! blockquotes, thematic rules, GFM tables, and embedded images. Frontmatter is
 //! excluded (it never renders); footnotes are out of scope.
 //!
-//! Both paths are PURE + DETERMINISTIC: a function of the markdown text plus a
+//! Every emitter is PURE + DETERMINISTIC: a function of the markdown text plus a
 //! caller-supplied [`model::ImageSource`] (the live App reads the doc's `assets/`
 //! off disk; tests hand in a fixed map), so the same document always exports the
 //! same bytes — the golden-file gate depends on it. The DOCX container is built
 //! by the hand-rolled STORED-ZIP writer ([`zip`], no new runtime deps, byte-
-//! stable), so this whole module compiles + runs identically on native and wasm.
+//! stable); the model, DOCX, and HTML paths compile identically on native and
+//! wasm, while the PDF shaping/emitter stack is native-only.
 
 mod docx;
 mod html;
 mod model;
+#[cfg(not(target_arch = "wasm32"))]
+mod pdf;
 mod zip;
 
 // Native-only: the export tests read on-disk golden files at runtime
@@ -37,8 +40,11 @@ pub use model::{ExportImage, ImageSource};
 pub enum Format {
     /// Microsoft Word `.docx` (OOXML).
     Docx,
-    /// Standalone print-tuned `.html` (the documented PDF path).
+    /// Standalone print-tuned `.html`.
     Html,
+    /// Self-contained A4 `.pdf` (native only).
+    #[cfg(not(target_arch = "wasm32"))]
+    Pdf,
 }
 
 impl Format {
@@ -47,6 +53,8 @@ impl Format {
         match self {
             Format::Docx => "docx",
             Format::Html => "html",
+            #[cfg(not(target_arch = "wasm32"))]
+            Format::Pdf => "pdf",
         }
     }
 
@@ -60,6 +68,8 @@ impl Format {
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             }
             Format::Html => "text/html",
+            #[cfg(not(target_arch = "wasm32"))]
+            Format::Pdf => "application/pdf",
         }
     }
 }
@@ -77,11 +87,21 @@ pub fn to_html(markdown: &str, images: &dyn ImageSource) -> String {
     html::emit(&doc, images)
 }
 
+/// Export `markdown` to a native, self-contained A4 PDF. The browser build does
+/// not compile the shaping/emitter stack and deliberately has no PDF API.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn to_pdf(markdown: &str, images: &dyn ImageSource) -> Vec<u8> {
+    let doc = model::parse(markdown);
+    pdf::emit(&doc, images)
+}
+
 /// Export `markdown` in `format`, returning the raw bytes to write/download.
 pub fn to_bytes(markdown: &str, format: Format, images: &dyn ImageSource) -> Vec<u8> {
     match format {
         Format::Docx => to_docx(markdown, images),
         Format::Html => to_html(markdown, images).into_bytes(),
+        #[cfg(not(target_arch = "wasm32"))]
+        Format::Pdf => to_pdf(markdown, images),
     }
 }
 
@@ -117,6 +137,11 @@ impl ImageSource for FsImages {
         };
         let bytes = crate::fs::active().read(&resolved).ok()?;
         let (width, height, mime) = model::sniff_image(&bytes)?;
-        Some(ExportImage { bytes, width, height, mime })
+        Some(ExportImage {
+            bytes,
+            width,
+            height,
+            mime,
+        })
     }
 }

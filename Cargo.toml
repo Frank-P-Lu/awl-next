@@ -60,6 +60,10 @@ winit = "0.30"
 # internal kill-ring mirror. macOS/Windows are unaffected (the feature only
 # adds a Linux-only code path inside arboard).
 arboard = { version = "3", features = ["wayland-data-control"] }
+# Native PDF export reads the four bundled TrueType faces' cmap/metrics and
+# embedding-permission bits. This exact parser version is already locked through
+# cosmic-text/fontdb; making it direct adds no second parser to the graph.
+ttf-parser = "0.25.1"
 
 # --- macOS-only dep ---------------------------------------------------------
 # The DEBUG panel's live `gpu N MB` line reads Metal's

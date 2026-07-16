@@ -183,6 +183,9 @@ hermetic setup for automated input-state testing.
   Hidden entirely on the native build (a desktop user already has a real file
   on real disk); palette-only, no default chord, independently rebindable via
   `[keys]`.
+- **PDF export is native-only.** The browser palette does not offer “Export as
+  PDF…”, and the wasm build does not include the PDF shaping or emitter code.
+  DOCX and HTML export remain available as browser downloads.
 - **No CLI / cwd.** The sandbox has no argv, so the web entry hard-codes the
   virtual root `/` and opens `/welcome.md`. The `--screenshot` capture harness is
   native-only (it stays behind `cfg(not(wasm32))`) and never runs in the browser.

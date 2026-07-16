@@ -272,13 +272,14 @@ pub enum Effect {
     /// build. LIVE-APP-ONLY: headless `--keys` replay no-ops it (never touches the
     /// DOM), so a settled capture stays byte-identical. See `web_export.rs`.
     DownloadFile,
-    /// EXPORT (`Action::ExportWord` / `Action::ExportHtml`): render the ACTIVE
-    /// markdown buffer to a `.docx` / standalone `.html` document. The pure core
-    /// can't reach the filesystem (sibling-file write) or the DOM (web download),
+    /// EXPORT (`Action::ExportWord` / `Action::ExportHtml` / `Action::ExportPdf`):
+    /// render the ACTIVE markdown buffer to a `.docx`, standalone `.html`, or
+    /// native `.pdf` document. The pure core can't reach the filesystem
+    /// (sibling-file write) or the DOM (web download),
     /// and image embedding reads the doc's `assets/` off disk — all caller-level
     /// concerns — so it signals the requested [`crate::export::Format`] for the
     /// live App to perform (`App::export_document`, `export/`). Only produced for
-    /// a markdown buffer (the `Action::ExportWord`/`ExportHtml` arms gate on
+    /// a markdown buffer (the export action arms gate on
     /// `Buffer::is_markdown`; a `.rs`/`.txt` buffer is a calm no-op, mirroring the
     /// format toggles). LIVE-APP-ONLY: headless `--keys` replay never writes a
     /// file or touches the DOM, so a settled capture stays byte-identical.
@@ -799,6 +800,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::ExportHtml => {
             if ctx.buffer.is_markdown() {
                 effect = Effect::Export(crate::export::Format::Html);
+            }
+        }
+        Action::ExportPdf => {
+            #[cfg(not(target_arch = "wasm32"))]
+            if ctx.buffer.is_markdown() {
+                effect = Effect::Export(crate::export::Format::Pdf);
             }
         }
         // LINKS V2 — Cmd-K: summon the URL minibuffer (`link::open_insert_link`

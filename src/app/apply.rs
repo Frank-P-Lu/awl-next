@@ -759,9 +759,9 @@ impl App {
             // browser download. Gated off on native by `commands::action_available`
             // (`web_only: true`), so this arm is a documented no-op there.
             actions::Effect::DownloadFile => self.download_file(),
-            // EXPORT: render the active markdown buffer to `.docx` / `.html` and
-            // write a sibling file (native) or trigger a browser download (web),
-            // with a calm notice naming the target.
+            // EXPORT: render the active markdown buffer to `.docx` / `.html` (both
+            // platforms) or native `.pdf`, then write a sibling file (native) or
+            // trigger a browser download (DOCX/HTML only), with a calm notice.
             actions::Effect::Export(format) => self.export_document(format),
             // "Check for Updates": record the local "last checked" marker (the
             // app never fetches anything itself) and open the site's own
@@ -946,15 +946,16 @@ impl App {
         }
     }
 
-    /// EXPORT (`Effect::Export`): render the active markdown buffer to `.docx` /
-    /// standalone `.html` and land it where the user can find it — a SIBLING file
-    /// beside a saved document (`doc.md` → `doc.docx`), or a file under
+    /// EXPORT (`Effect::Export`): render the active markdown buffer to `.docx`,
+    /// standalone `.html`, or native `.pdf` and land it where the user can find it
+    /// — a SIBLING file beside a saved document (`doc.md` → `doc.pdf`), or under
     /// `notes_root` for a path-less scratch/untitled buffer. Images embedded in
     /// the export are read off the doc's own `assets/` directory through the
     /// filesystem seam (`export::FsImages`). A calm toast names the target on
     /// success; a write failure raises a sticky notice (export never crashes).
-    /// On the WEB build there is no real filesystem, so the bytes are handed to
-    /// the browser download shim (`web_export::trigger_download_bytes`) instead.
+    /// On the WEB build there is no real filesystem, so DOCX/HTML bytes are handed
+    /// to the browser download shim (`web_export::trigger_download_bytes`) instead;
+    /// PDF has no web command or format variant.
     pub(super) fn export_document(&mut self, format: crate::export::Format) {
         let markdown = self.buffer.text();
         let doc_dir = self.buffer.path().and_then(|p| p.parent()).map(|p| p.to_path_buf());
@@ -1253,3 +1254,7 @@ impl App {
         // successful one flinches), so no precedence gate is needed here.
     }
 }
+
+#[cfg(test)]
+#[path = "apply_tests.rs"]
+mod tests;

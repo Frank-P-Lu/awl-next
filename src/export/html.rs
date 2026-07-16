@@ -203,7 +203,11 @@ fn emit_inline(out: &mut String, inline: &Inline, images: &dyn ImageSource) {
             emit_inlines(out, children, images);
             out.push_str("</a>");
         }
-        Inline::Image { src, alt, width_hint } => emit_image(out, src, alt, *width_hint, images),
+        Inline::Image {
+            src,
+            alt,
+            width_hint,
+        } => emit_image(out, src, alt, *width_hint, images),
         Inline::SoftBreak => out.push('\n'),
         Inline::HardBreak => out.push_str("<br>\n"),
     }
@@ -223,7 +227,9 @@ fn emit_image(
     images: &dyn ImageSource,
 ) {
     match images.resolve(src) {
-        Some(ExportImage { bytes, width, mime, .. }) => {
+        Some(ExportImage {
+            bytes, width, mime, ..
+        }) => {
             let data = base64(&bytes);
             let w = width_hint.unwrap_or(width);
             out.push_str(&format!(
@@ -276,8 +282,7 @@ fn escape_attr(s: &str) -> String {
 /// Standard base64 (RFC 4648) — for the image `data:` URIs. Hand-rolled (no
 /// dependency), padded, deterministic.
 fn base64(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -286,8 +291,16 @@ fn base64(data: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(ALPHABET[((n >> 18) & 63) as usize] as char);
         out.push(ALPHABET[((n >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { ALPHABET[((n >> 6) & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { ALPHABET[(n & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            ALPHABET[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
