@@ -301,15 +301,19 @@ impl TextPipeline {
         // true 1-bit world (`HighlightTreatment::InverseFill`) — black on the
         // white band — so they land crisp instead of the gamma-grey a
         // framebuffer invert of the antialiased row text produced (see that
-        // variant's doc). `None` on every ordinary (`ValueBand`) world, where
-        // the selected row keeps its content ink on the value band — the
-        // shaper then stays byte-identical. Read from the SAME owner
-        // (`highlight_treatment`) `overlay_draw_card` fills the band from.
-        let selected_ink = match theme::active()
-            .highlight_treatment(crate::render::effective_overlay_selrow_band())
-        {
+        // variant's doc). On an ordinary (`ValueBand`) world the row normally
+        // keeps its content ink (`None`, byte-identical), but when the value band
+        // washes that ink out (`theme::selected_row_ink` — the InverseFill lesson
+        // for fill worlds; Undertow-under-Bars was the 2.53:1 exhibit) the ONE
+        // derive owner flips it to the reading pole and the shaper recolors the
+        // selected row to match. Read from the SAME band `overlay_draw_card` fills.
+        let sel_band = crate::render::effective_overlay_selrow_band();
+        let selected_ink = match theme::active().highlight_treatment(sel_band) {
             theme::HighlightTreatment::InverseFill { ink, .. } => Some(ink.to_glyphon()),
-            theme::HighlightTreatment::ValueBand(_) => None,
+            theme::HighlightTreatment::ValueBand(band) => {
+                let flipped = theme::selected_row_ink(band);
+                (flipped != theme::base_content()).then(|| flipped.to_glyphon())
+            }
         };
         let has_right = self.overlay_shape_text(&geom, ink, muted, selected_ink);
         self.overlay_upload_text(

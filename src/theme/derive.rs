@@ -293,6 +293,49 @@ pub fn overlay_selected_band() -> Srgb {
     surface_step_band(OVERLAY_SELROW_EXTRA_STEPS)
 }
 
+/// WCAG relative-contrast ratio `(L_hi + 0.05) / (L_lo + 0.05)` between two
+/// opaque colors, on the same gamma-correct [`rel_lum`] the law tests use.
+/// Needed at RUNTIME to pick the selected-row ink that actually reads on its
+/// own value band.
+fn contrast_ratio(a: Srgb, b: Srgb) -> f32 {
+    let (la, lb) = (rel_lum(a), rel_lum(b));
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// The minimum contrast the selected picker row's INK must clear against its
+/// own value band ([`overlay_selected_band`]) — the taste floor enforced for
+/// EVERY world by `render::tests::distinguishability::
+/// selected_row_text_clears_contrast_floor_on_every_world`. 3:1 is the WCAG
+/// large-text / UI-component floor; below it the glyphs wash into the fill (the
+/// Undertow-under-Bars exhibit: light ink on a mid sage band = 2.53:1).
+pub(super) const SELECTED_ROW_INK_CONTRAST_FLOOR: f32 = 3.0;
+
+/// THE ONE owner of the selected picker row's INK on a `ValueBand` world — the
+/// [`super::HighlightTreatment::InverseFill`] lesson (a selected row that erases
+/// its own text is the bug) applied to the ORDINARY-fill worlds. The row keeps
+/// the world's `base_content` ink UNLESS the selected-row value `band` washes it
+/// out (contrast below [`SELECTED_ROW_INK_CONTRAST_FLOOR`]), in which case the
+/// ink FLIPS to whichever ladder POLE (`base_100` ground vs `base_content` ink)
+/// reads harder against the fill. Derived purely from the fill's own luminance,
+/// never a per-world hand value: on a DARK world the light `base_content` fails
+/// against a mid band and the dark ground wins; on a LIGHT world the reverse.
+/// Undertow under Bars was the exhibit — light ink (236,232,242) on a mid sage
+/// band (132,152,144) = 2.53:1. Wagtail's 1-bit worlds resolve their pair
+/// through `InverseFill` instead and never reach here.
+pub fn selected_row_ink(band: Srgb) -> Srgb {
+    let content = base_content();
+    if contrast_ratio(band, content) >= SELECTED_ROW_INK_CONTRAST_FLOOR {
+        return content;
+    }
+    let ground = base_100();
+    if contrast_ratio(band, ground) > contrast_ratio(band, content) {
+        ground
+    } else {
+        content
+    }
+}
+
 /// PER-ITEM LIST SURFACES round — the UNSELECTED bar's fill under
 /// [`super::ListStyle::Bars`]. A WHISPER: the `base_200` code-fence-wash
 /// register — one gentle value step off the GROUND (`base_100`), near-invisible
