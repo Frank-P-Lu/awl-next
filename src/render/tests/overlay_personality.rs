@@ -761,6 +761,191 @@ fn mangrove_stipple_placard_paints_only_ladder_ink_pixels_at_real_density() {
     p.sync_theme();
 }
 
+/// THE SHIPPING-PLACARD REAL-PIXEL SWEEP — the Mangrove stipple pixel law
+/// (above) generalized to a NO-WILDCARD roster over EVERY world that actually
+/// SHIPS a `TitleStyle::Placard` (no hardcoded name list — a future placard
+/// assignment is swept automatically, and a world that STOPS shipping one
+/// drops out for free), each running its OWN `render_caps` (no forced
+/// override on the measured frame). This closes the Wagtail-invisible-row
+/// exposure the architecture pass flagged: 3 of the 4 shipping placard worlds
+/// (Galah / Magpie / Ghost glyph, Firetail / Bold glyph) were proven only by
+/// geometry + derived-color MATH — a parked/transparent wordmark, or one that
+/// paints the wrong ink, would pass every existing test green. Here the proof
+/// is over the RENDERED BYTES.
+///
+/// One law spans all three shipped ink treatments (Ghost, Bold — anti-aliased
+/// GLYPH text; Stipple — individual Bayer-dithered full-ink pixels) because
+/// each composites the SAME way: `result = ink·α + background·(1-α)`, a
+/// per-channel blend that can never leave the `[background, ink]` segment
+/// (α = glyph coverage for glyph inks; α ∈ {0,1} per pixel for stipple). So,
+/// diffing the world's own placard frame against the same frame with the
+/// placard silenced (`InlinePrefix` forced) and scanning the wordmark's own
+/// box, PER WORLD:
+///  1. VISIBILITY — many pixels actually change (a parked/transparent wordmark,
+///     the invisible-row bug shape, fails this count floor, not just a
+///     mechanism assert).
+///  2. GROUND MATH — every changed pixel lands on THIS world's own
+///     `placard_ink`-to-local-background segment (±LSB slack). A wrong-hue
+///     wordmark — amber above all (`placard_ink` is a grey/ink ladder rung,
+///     never `primary`; pinned below) — leaves the segment and fails.
+///  3. REAL LETTERFORMS — a floor of HIGH-COVERAGE pixels (α ≥ 0.6 along the
+///     ink's dominant channel) proves stroke BODIES painted, not a 1%-alpha
+///     smear that would still count as "changed".
+/// Determinism rides for free: coverage is pure shaping, the Bayer cut is pure
+/// position, and the whole thing is a byte diff of two headless frames.
+#[test]
+fn every_shipping_placard_world_paints_visible_wordmark_ink_pixels() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping every_shipping_placard_world_paints_visible_wordmark_ink_pixels: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    // Per-channel slack for the ink-blend segment. A monotonic ink-over-bg
+    // composite never overshoots `[bg, ink]` in either sRGB or linear space, so
+    // this is pure rounding/atlas-sampling slack — kept small so a saturated
+    // amber pixel (primary) still lands well outside a near-grey ink's segment.
+    const SEG_TOL: i16 = 6;
+    // A pixel counts as a real letterform BODY when it reached ≥60% of the way
+    // from local background to the ink along the ink's most-moved channel.
+    const CORE_ALPHA: f32 = 0.6;
+    // Only trust the α estimate where the ink stands clear of the local
+    // background on that channel (else the ratio is noise).
+    const CORE_CHANNEL_GAP: i16 = 4;
+
+    let (cw, ch) = (1200i64, 800i64);
+    let mut failures: Vec<String> = Vec::new();
+
+    for t in theme::THEMES.iter() {
+        // NO-WILDCARD roster: exactly the worlds shipping a placard, by DATA.
+        let theme::TitleStyle::Placard { ink: world_ink, .. } = t.render_caps.title_style else {
+            continue;
+        };
+        theme::set_active_by_name(t.name).unwrap();
+        p.sync_theme();
+
+        // GROUND MATH pin: the world's own placard ink is a ladder/ink rung,
+        // never the caret's `primary` accent (the DESIGN §3 amber guard, held
+        // here by identity so the segment check below cannot legalize amber).
+        let ink = theme::placard_ink(world_ink).rgba_bytes();
+        if ink == theme::primary().rgba_bytes() {
+            failures.push(format!(
+                "{}: placard_ink({world_ink:?}) == primary — the amber guard is violated at the source",
+                t.name
+            ));
+        }
+
+        let mut v = view("hello world\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_title = "commands";
+        v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
+        p.set_view(&v);
+
+        // Frame A: the placard silenced (InlinePrefix forced) — the local
+        // BACKGROUND under the wordmark, everything else identical.
+        set_title_style_test_override(Some(theme::TitleStyle::InlinePrefix));
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        let a = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+        // Frame B: the world's OWN caps (its shipped placard).
+        set_title_style_test_override(None);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+        let geom = p.overlay_geometry(1200);
+        let Some((bx, by, bw, bh)) = p.overlay_shape_placard(&geom) else {
+            failures.push(format!(
+                "{}: ships a Placard in render_caps but overlay_shape_placard returned None \
+                 (nothing to paint — the invisible-wordmark bug shape)",
+                t.name
+            ));
+            continue;
+        };
+        let b = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+        let (x0, y0) = (bx.floor() as i64, by.floor() as i64);
+        let (x1, y1) = ((bx + bw).ceil() as i64, (by + bh).ceil() as i64);
+        let mut changed = 0usize;
+        let mut off_seg = 0usize;
+        let mut core = 0usize;
+        let mut worst: Option<[u8; 4]> = None;
+        for y in y0.max(0)..y1.min(ch) {
+            for x in x0.max(0)..x1.min(cw) {
+                let i = (y * cw + x) as usize;
+                let (pa, pb) = (a[i], b[i]);
+                if pa == pb {
+                    continue;
+                }
+                changed += 1;
+                // (2) GROUND MATH: on THIS world's ink-blend segment?
+                let mut on_seg = true;
+                for c in 0..3 {
+                    let lo = (pa[c].min(ink[c]) as i16) - SEG_TOL;
+                    let hi = (pa[c].max(ink[c]) as i16) + SEG_TOL;
+                    let got = pb[c] as i16;
+                    if got < lo || got > hi {
+                        on_seg = false;
+                    }
+                }
+                if !on_seg {
+                    off_seg += 1;
+                    worst = Some(pb);
+                }
+                // (3) REAL LETTERFORMS: coverage α along the ink's dominant
+                // channel (the one where ink stands clearest of local bg).
+                let mut cmax = 0usize;
+                let mut gap = 0i16;
+                for c in 0..3 {
+                    let g = (ink[c] as i16 - pa[c] as i16).abs();
+                    if g > gap {
+                        gap = g;
+                        cmax = c;
+                    }
+                }
+                if gap >= CORE_CHANNEL_GAP {
+                    let denom = ink[cmax] as f32 - pa[cmax] as f32;
+                    let alpha = (pb[cmax] as f32 - pa[cmax] as f32) / denom;
+                    if alpha >= CORE_ALPHA {
+                        core += 1;
+                    }
+                }
+            }
+        }
+
+        if changed < 200 {
+            failures.push(format!(
+                "{}: the wordmark changed only {changed} pixels in its own box \
+                 ({bw:.0}x{bh:.0}) — near-invisible (the parked/transparent bug shape)",
+                t.name
+            ));
+        }
+        if off_seg > 0 {
+            failures.push(format!(
+                "{}: {off_seg}/{changed} changed pixels leave the ink-blend segment toward \
+                 ink {ink:?} (worst offender {worst:?}) — a wrong-hue/amber wordmark",
+                t.name
+            ));
+        }
+        if core < 20 {
+            failures.push(format!(
+                "{}: only {core} high-coverage (α≥{CORE_ALPHA}) pixels — no real letterform \
+                 bodies, just a faint smear",
+                t.name
+            ));
+        }
+    }
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+    set_title_style_test_override(None);
+
+    assert!(
+        failures.is_empty(),
+        "shipping placard world(s) failed the real-pixel wordmark law:\n{}",
+        failures.join("\n")
+    );
+}
+
 /// The distinguishability sweep's placard case, extended to the STIPPLE
 /// treatment (the round's own law list: "selected row findable ... over
 /// dither"): with a stipple placard forced at the loudest shipped scale, the
