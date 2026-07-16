@@ -845,31 +845,29 @@ fn outline_hit_test_agrees_with_the_shifted_geometry_when_bar_shown() {
     crate::page::set_measure(80);
 }
 
-/// THE FULL LEFT-MARGIN RAIL CARVE wiring, OUTLINE gate ([`TextPipeline::
-/// lava_rail_carved`], the one owner `prepare_lava_layer` uploads into the lava
-/// shader's `rail` global): the field mask carves the WHOLE left margin EXACTLY
-/// when a lava ground is active (the CAPABILITY — picked from `THEMES` by
-/// `Background::is_lava`, never a world name) AND the margin OUTLINE is actually
-/// drawn (the SAME `outline_layout` gate the outline's own pixels ride, via
-/// [`TextPipeline::outline_visible`]) — the conservative default for a HEADED
-/// doc. The bottom-left GUTTER no longer feeds this full carve (it drives a
-/// bounded LOCAL corner carve, pinned by
-/// [`lava_gutter_carve_follows_gutter_visibility`] below); every fixture in THIS
-/// test keeps the gutter hidden (`gutter_name` empty — asserted as a control) so
-/// each arm isolates the outline gate. Outline hidden — heading-free doc,
-/// toggled off, or the narrowest regime — or a static-ground world => no full
-/// carve, and the lamp reclaims the full margin the same frame. The mask math
-/// itself is law-tested at its pure seam (`lava::tests`, plus
-/// `theme::tests::outline_rail_band_is_flat_ground_and_outline_ink_clears_it_
-/// on_every_lava_world`); THIS test pins the render-side decision those laws
-/// assume.
+/// THE FROST PILL wiring, OUTLINE gate ([`TextPipeline::lava_frost_pill_rects`],
+/// the one owner `prepare_lava_layer` uploads into the lava shader's `pills`
+/// array — the SHIPPED headed-doc treatment that REPLACED the old whole-margin
+/// carve): a lava world with the outline DRAWN emits ONE frost pill per drawn
+/// entry, each hugging its own row's y-band; the outline hidden (heading-free
+/// doc, toggled off, or the narrowest regime) emits ZERO (no rail ink → no frost,
+/// so a heading-less doc stays byte-identical to the both-margins behaviour). The
+/// LAMP itself is NOT carved under the frost default — [`TextPipeline::
+/// lava_rail_carved`] is `false` on every fixture here (both margins stay alive;
+/// the demoted full carve only returns if `lava::FROST_RAIL_DEFAULT` is flipped).
+/// Every fixture keeps the gutter hidden (`gutter_name` empty — a control) so each
+/// arm isolates the outline gate. The per-pill contrast + frost math are law-
+/// tested at their pure seams (`lava::tests`, plus `theme::tests::
+/// outline_frost_pills_keep_ink_contrast_on_every_lava_world`); THIS test pins the
+/// render-side decision those laws assume.
 #[test]
-fn lava_rail_carve_follows_outline_visibility() {
+fn lava_frost_pills_follow_outline_visibility() {
     let Some(mut p) = headless_pipeline() else {
-        eprintln!("skipping lava_rail_carve_follows_outline_visibility: no wgpu adapter");
+        eprintln!("skipping lava_frost_pills_follow_outline_visibility: no wgpu adapter");
         return;
     };
     let _g = crate::testlock::serial();
+    assert!(crate::lava::frost_on(), "control: frost is the shipped default");
     let lava_idx = crate::theme::THEMES
         .iter()
         .position(|t| t.background.is_lava())
@@ -892,38 +890,73 @@ fn lava_rail_carve_follows_outline_visibility() {
         "control: every fixture here keeps the gutter hidden (empty name), so \
          each arm isolates the OUTLINE gate"
     );
+    // Under the FROST default the lamp is NOT carved — both margins stay alive.
     assert!(
-        p.lava_rail_carved(height),
-        "lava world + drawn outline => the rail is carved"
+        !p.lava_rail_carved(height),
+        "frost default: the whole-margin carve is demoted (both margins live)"
+    );
+    // ONE frost pill per drawn outline row, each aligned to its own row's y-band.
+    let rows = p.outline_draw_report(height).expect("the outline draws");
+    let pills = p.lava_frost_pill_rects(height);
+    assert_eq!(
+        pills.len(),
+        rows.len(),
+        "one frost pill per drawn outline entry: {} pills vs {} rows",
+        pills.len(),
+        rows.len()
+    );
+    let outline_top = p.outline_top_px(height).unwrap();
+    let mut prev_bottom = f32::NEG_INFINITY;
+    for (i, pill) in pills.iter().enumerate() {
+        assert!(pill[2] > pill[0], "pill {i} has positive width: {pill:?}");
+        assert!(pill[3] > pill[1], "pill {i} has positive height: {pill:?}");
+        // Pills are STACKED top-to-bottom (each below the previous, riding the
+        // same row geometry) and inside the outline's own band.
+        assert!(pill[1] >= outline_top - 1.0, "pill {i} top {} is at/below the outline top {outline_top}", pill[1]);
+        assert!(pill[1] >= prev_bottom, "pill {i} does not overlap the one above it: {pill:?}");
+        prev_bottom = pill[3];
+    }
+    // The first pill hugs the first drawn row's own band (top inset a fraction of
+    // a row into the line box, so the lamp breathes above it).
+    let row_h = p.metrics.line_height * crate::markdown::type_scale::LABEL;
+    assert!(
+        pills[0][1] >= outline_top && pills[0][1] < outline_top + row_h,
+        "the first pill hugs the first row's band: pill_top={} outline_top={outline_top} row_h={row_h}",
+        pills[0][1]
     );
 
-    // A heading-free markdown doc hides the outline => the lamp reclaims.
+    // A heading-free markdown doc hides the outline => no frost pills.
     p.set_view(&view_md("no headings here\n", 0, 0));
     assert!(!p.outline_visible(height));
-    assert!(!p.lava_rail_carved(height), "no outline, no carve");
+    assert!(p.lava_frost_pill_rects(height).is_empty(), "no outline, no frost");
     p.set_view(&view_md(text, 0, 0));
 
-    // Outline toggled off => reclaim.
+    // Outline toggled off => no frost pills.
     crate::outline::set_outline_on(false);
-    assert!(!p.lava_rail_carved(height), "outline off, no carve");
+    assert!(p.lava_frost_pill_rects(height).is_empty(), "outline off, no frost");
     crate::outline::set_outline_on(true);
 
     // The NARROWEST regime: no horizontal room for even the stub rail => the
-    // outline hides itself => the carve lifts with it (the same-frame degrade).
+    // outline hides itself => the pills lift with it (the same-frame degrade).
     p.set_size(300.0, height as f32);
     assert!(!p.outline_visible(height), "narrowest: the outline yields");
     assert!(
-        !p.lava_rail_carved(height),
-        "narrowest: the lamp reclaims the full margin"
+        p.lava_frost_pill_rects(height).is_empty(),
+        "narrowest: no outline, no frost"
     );
     p.set_size(1900.0, height as f32);
 
-    // A static-ground world NEVER carves, outline drawn or not (capability-keyed).
+    // A static-ground world never carves, and (in `prepare_lava_layer`) never
+    // uploads frost — the lava pipeline is inactive there. `lava_rail_carved`
+    // stays false; the pill geometry is pure outline math, so it is unchanged,
+    // but the gate in `prepare_lava_layer` (`lava_params().is_some()`) suppresses
+    // it — asserted here via that same capability read.
     crate::theme::set_active(static_idx);
     assert!(p.outline_visible(height), "control: the outline still draws");
+    assert!(!p.lava_rail_carved(height), "a non-lava world has nothing to carve");
     assert!(
-        !p.lava_rail_carved(height),
-        "a non-lava world has nothing to carve"
+        crate::theme::active().background.lava_params().is_none(),
+        "a non-lava world has no lava params => `prepare_lava_layer` uploads no frost"
     );
 
     crate::theme::set_active(crate::theme::DEFAULT_THEME);
@@ -948,7 +981,7 @@ fn lava_rail_carve_follows_outline_visibility() {
 /// the pure seam (`theme::tests::gutter_corner_carve_is_local_flat_ground_and_
 /// keeps_both_margins_on_every_lava_world`); THIS test pins the render-side
 /// decision that law assumes. The OUTLINE full carve is
-/// [`lava_rail_carve_follows_outline_visibility`] above.
+/// [`lava_frost_pills_follow_outline_visibility`] above.
 #[test]
 fn lava_gutter_carve_follows_gutter_visibility() {
     let Some(mut p) = headless_pipeline() else {
