@@ -1239,6 +1239,37 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// THE ONE owner of the selected candidate's DISPLAY-line index (0-based
+    /// among the shown candidate lines, past the header). The selected-row band
+    /// ([`overlay_draw_card`]) and the secondary right-column recolor
+    /// ([`shape_overlay_right`]) both read it, so they can never disagree on which
+    /// row is highlighted. Two layout families: a faceted/theme plan's selected
+    /// world sits at its POSITION in the plan (section headers push it down); a
+    /// flat picker's selection is its offset in the visible window (saturated +
+    /// clamped defensively so a transient list-shrink can never over/underflow).
+    /// `None` iff there are no items.
+    pub(in crate::render) fn overlay_selected_display_line(
+        &self,
+        geom: &OverlayGeom,
+    ) -> Option<usize> {
+        if geom.n_items == 0 {
+            None
+        } else if geom.theme {
+            Some(
+                geom.plan
+                    .iter()
+                    .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
+                    .unwrap_or(0),
+            )
+        } else {
+            Some(
+                self.overlay_selected
+                    .saturating_sub(geom.top_idx)
+                    .min(geom.visible.saturating_sub(1)),
+            )
+        }
+    }
+
     /// Upload the card behind everything + the muted selected-row highlight quad
     /// positioned over the chosen candidate.
     ///
@@ -1361,27 +1392,10 @@ impl TextPipeline {
         };
         self.overlay_rows.set_color(band_color.rgba_bytes());
         // The selected row's DISPLAY index + settled row-top, per layout family.
-        let sel_disp: Option<usize> = if geom.n_items == 0 {
-            None
-        } else if geom.theme {
-            // THEME PICKER: the selected world's DISPLAY row = its position in the plan
-            // (headers push it down), offset past the query + strip lines (`header_rows`).
-            Some(
-                geom.plan
-                    .iter()
-                    .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
-                    .unwrap_or(0),
-            )
-        } else {
-            // 0-based row among the visible window. `OverlayState` keeps the selection
-            // inside `[top_idx, top_idx+visible)`; saturate + clamp defensively so a
-            // transient mismatch (e.g. the list just shrank) can never underflow/overflow.
-            Some(
-                self.overlay_selected
-                    .saturating_sub(geom.top_idx)
-                    .min(geom.visible.saturating_sub(1)),
-            )
-        };
+        // The ONE owner (`overlay_selected_display_line`) also feeds the secondary
+        // (right-column) shaper's selected-row recolor, so band and hint can never
+        // disagree on WHICH row is selected.
+        let sel_disp: Option<usize> = self.overlay_selected_display_line(geom);
         // PER-ITEM LIST SURFACES round: `Pane` (default) draws the byte-identical
         // full-width selected BAND; `Bars` gives each candidate row its own
         // rounded surface (unselected → `overlay_bars`, quiet; selected →

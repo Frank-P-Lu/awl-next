@@ -327,6 +327,47 @@ fn selected_row_text_clears_contrast_floor_on_every_world() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
+/// LAW (born from the Potoroo taste-gate defect — the Wagtail invisible-row
+/// class, SECONDARY edition): the selected picker row's DIM right-column hint
+/// (key chord / last-edited time / git tag) must ALSO clear a 3:1 contrast
+/// against its own selected-row value band on EVERY world. The primary-ink flip
+/// ([`selected_row_text_clears_contrast_floor_on_every_world`]) landed but the
+/// secondary column kept riding `muted` unconditionally — on Potoroo's saturated
+/// gold band the muted hints washed to an 8.8 luminance delta (invisible), while
+/// the unselected rows read at 89.9. The fix is [`theme::selected_row_secondary_ink`],
+/// the ONE derive owner that flips the hint to the reading pole when `muted`
+/// fails. NO-WILDCARD over `HighlightTreatment` — a new treatment variant fails
+/// to compile here until it declares which ink the hint draws — AND over every
+/// world in `THEMES`.
+#[test]
+fn selected_row_secondary_clears_contrast_floor_on_every_world() {
+    const FLOOR: f32 = 3.0;
+    let _g = crate::testlock::serial();
+
+    for th in theme::THEMES.iter() {
+        theme::set_active_by_name(th.name).unwrap();
+        let band = crate::render::effective_overlay_selrow_band();
+        // The (band fill, SECONDARY hint ink) pair the renderer actually draws for
+        // the selected row, resolved through the SAME owners `shape_overlay_right`
+        // uses: `muted` unless the band washes it out, then the reading pole.
+        let (fill, ink) = match th.highlight_treatment(band) {
+            theme::HighlightTreatment::ValueBand(color) => {
+                (color, theme::selected_row_secondary_ink(color))
+            }
+            theme::HighlightTreatment::InverseFill { band, ink } => (band, ink),
+        };
+        let c = wcag_contrast(fill, ink);
+        assert!(
+            c >= FLOOR,
+            "{}: selected-row SECONDARY hint ink {:?} on band {:?} = {c:.2}:1 (floor \
+             {FLOOR}:1) — the dim right-column chord washes into its own selection fill",
+            th.name, ink, fill
+        );
+    }
+
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 /// TIER (b): REAL PIXELS, capability-driven sampling — every world carrying
 /// any non-default `RenderCaps` (today exactly Wagtail) plus one
 /// default-caps control world (Tawny, or whichever sorts first). This is the
