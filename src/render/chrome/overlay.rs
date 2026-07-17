@@ -307,6 +307,61 @@ impl TextPipeline {
         hint_rows as f32 * (self.overlay_lh() - self.overlay_hint_h() - OVERLAY_FOOTER_PAD).max(0.0)
     }
 
+    /// THE ONE CARD-HEIGHT OWNER — every takeover/popup card's `card_h`. The card
+    /// hugs its content exactly: `total_rows` display lines at [`Self::overlay_lh`],
+    /// PLUS the query-beat `header_gap` ([`Self::overlay_header_gap`], `0.0` on the
+    /// contextual spell popup) and `2 * pad` top/bottom padding, LESS the compact
+    /// foot-hint reclaim ([`Self::overlay_footer_reclaim`], `0.0` when `hint_rows ==
+    /// 0`). All three card-height sites — the flat picker ([`Self::overlay_geometry`]),
+    /// the faceted theme picker ([`TextPipeline::theme_overlay_geometry`]), and the
+    /// spell popup ([`Self::spell_overlay_geometry`]) — route through here, so a
+    /// footer/gap tweak can never drift the bottom edge per `OverlayKind` again (the
+    /// C2 divergence class the `overlay_card_geometry_agrees_per_kind` law now pins).
+    /// `pad` stays a parameter: the flat/theme cards breathe at `12.0`, the small
+    /// contextual spell popup at `10.0`.
+    pub(in crate::render) fn overlay_card_h(
+        &self,
+        total_rows: usize,
+        header_gap: f32,
+        hint_rows: usize,
+        pad: f32,
+    ) -> f32 {
+        total_rows as f32 * self.overlay_lh() + header_gap + 2.0 * pad
+            - self.overlay_footer_reclaim(hint_rows)
+    }
+
+    /// THE ONE STRIP-BAND OWNER — the faceted theme picker's lens STRIP sits on
+    /// display line 1, whose height is inflated to `lh + header_gap` by the query
+    /// BEAT (cosmic-text half-leads the labels into that taller box, so they center
+    /// below a plain `lh` band). Returns `(strip_top, strip_lh)`: the strip's top
+    /// edge (`text_top + lh`) and its inflated line height. The lens hit-test
+    /// ([`TextPipeline::overlay_lens_at`]), the active-facet pill center, and the
+    /// strip-label glyph metrics all read THIS — so the clickable band, the pill,
+    /// and the shaped glyphs can never disagree about where the strip sits (the
+    /// misaligned-chip / half-row band-vs-text drift class). Flat pickers have no
+    /// strip; this is meaningful only when `geom.theme`.
+    pub(in crate::render) fn overlay_strip_band(&self, geom: &OverlayGeom) -> (f32, f32) {
+        let lh = self.overlay_lh();
+        (geom.text_top + lh, lh + geom.header_gap)
+    }
+
+    /// THE ONE RIGHT-COLUMN LABEL OWNER — which dim right-aligned column a picker
+    /// draws. Exactly one of the three slices is ever populated, so the precedence
+    /// (key `bindings` → relative `times` → repo `git` tag) is arbitrary but must be
+    /// IDENTICAL between the flat ([`TextPipeline::overlay_shape_text`]) and faceted
+    /// ([`TextPipeline::shape_faceted`]) shapers, which both read it. `&[]` when no
+    /// column applies. One owner so a fourth column kind (or a reordering) lands in
+    /// one place, never diverging the two shapers.
+    pub(in crate::render) fn overlay_right_labels(&self) -> &[String] {
+        if !self.overlay_bindings.is_empty() {
+            &self.overlay_bindings
+        } else if !self.overlay_times.is_empty() {
+            &self.overlay_times
+        } else {
+            &self.overlay_git
+        }
+    }
+
     /// Shape + upload the SUMMONED navigation overlay for this frame: a tall
     /// BASE_300 card, a query line (with the one amber caret at its end), the
     /// candidate list (selected row highlighted with a surface VALUE band), all
@@ -701,8 +756,7 @@ impl TextPipeline {
         // so the card still FITS its content exactly (bottom padding == `pad`). The
         // foot hint (item 5) rides a SHORTER line, so reclaim `lh - hint_h` per
         // hint row — the card hugs the tighter footer instead of the old lip.
-        let card_h = total_rows as f32 * self.overlay_lh() + header_gap + 2.0 * pad
-            - self.overlay_footer_reclaim(hint_rows);
+        let card_h = self.overlay_card_h(total_rows, header_gap, hint_rows, pad);
         // vertical anchor near the top third (summoned, transient).
         // `self.menubar_reserve()` (`0.0` unless the WEB/LINUX MENU BAR is shown) —
         // the SAME accessor `doc_top`/the margin Outline/the search panel/the debug
@@ -726,9 +780,6 @@ impl TextPipeline {
             hint_rows,
             footer,
             footer_rows,
-            theme: false,
-            strip: Vec::new(),
-            plan: Vec::new(),
             header_rows,
             header_gap,
             empty,
@@ -740,6 +791,8 @@ impl TextPipeline {
             text_top,
             text_w,
             card_narrow,
+            // theme / strip / plan are the faceted-only trio — inert on a flat card.
+            ..OverlayGeom::base()
         }
     }
 
@@ -850,7 +903,11 @@ impl TextPipeline {
         // At least one row tall so a (rare) flagged word with no suggestions still
         // reads as a small present card rather than a zero-height sliver.
         let rows = header_rows + visible.max(1) + hint_rows;
-        let card_h = rows as f32 * self.overlay_lh() + 2.0 * pad;
+        // Through the ONE card-height owner: the popup has no query beat
+        // (`header_gap == 0.0`) and no foot hint (`hint_rows == 0`), so this reduces
+        // to `rows * lh + 2 * pad` byte-for-byte — but it can never drift from the
+        // takeover cards' bottom geometry.
+        let card_h = self.overlay_card_h(rows, 0.0, 0, pad);
 
         // Anchor the LEFT edge to the word start, clamped so the card stays on-canvas.
         let mut card_x = word_x;
@@ -873,14 +930,7 @@ impl TextPipeline {
             n_items,
             hint,
             hint_rows,
-            footer: Vec::new(),
-            footer_rows: 0,
-            theme: false,
-            strip: Vec::new(),
-            plan: Vec::new(),
             header_rows,
-            // The contextual popup has no header rows to divide from.
-            header_gap: 0.0,
             empty,
             card_x,
             card_y,
@@ -889,9 +939,10 @@ impl TextPipeline {
             text_left,
             text_top,
             text_w,
-            // The contextual spell popup carries no title and never a placard, so
-            // the fold flag is inert here.
-            card_narrow: false,
+            // The contextual popup is inert on every faceted/footer field:
+            // no footer, no lens strip/plan, no query beat (`header_gap == 0`), no
+            // title/placard (`card_narrow`) — all from `base()`.
+            ..OverlayGeom::base()
         }
     }
 

@@ -440,13 +440,7 @@ impl TextPipeline {
         // so prefer bindings, then times, then git. It is drawn FLUSH at the card's
         // right text edge by a SEPARATE buffer laid out with cosmic-text `Align::Right`,
         // so the column is a clean right edge regardless of the proportional name width.
-        let right_labels: &[String] = if !self.overlay_bindings.is_empty() {
-            &self.overlay_bindings
-        } else if !self.overlay_times.is_empty() {
-            &self.overlay_times
-        } else {
-            &self.overlay_git
-        };
+        let right_labels = self.overlay_right_labels();
         let has_right = !right_labels.is_empty();
         // One line per name row, aligned to the candidate rows through the shared
         // `right_bind_lines` owner: the flat card's ONE header line (the `› query`
@@ -581,16 +575,10 @@ impl TextPipeline {
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
     ) -> bool {
-        // The dim RIGHT column: the SAME precedence the flat path uses (bindings →
-        // times → git; only one is ever populated). Empty on the literal Theme
-        // picker → no right column, byte-identical.
-        let right_labels: &[String] = if !self.overlay_bindings.is_empty() {
-            &self.overlay_bindings
-        } else if !self.overlay_times.is_empty() {
-            &self.overlay_times
-        } else {
-            &self.overlay_git
-        };
+        // The dim RIGHT column through the SAME one-owner precedence the flat path
+        // reads (bindings → times → git; only one is ever populated). Empty on the
+        // literal Theme picker → no right column, byte-identical.
+        let right_labels = self.overlay_right_labels();
         let has_right = !right_labels.is_empty();
         // V7 TASTE-GATE — under `HugText` bars a right column rides INLINE on each
         // ITEM row (trailing the label, `INLINE_SHORTCUT_GAP` between) so the bar
@@ -705,18 +693,9 @@ impl TextPipeline {
         };
         // Break the last content line at its OWN (normal) height first.
         spans.push(("\n", base.clone().color(muted)));
-        let mut last = 0usize;
-        for run in symbol_runs(hint) {
-            if run.start > last {
-                spans.push((&hint[last..run.start], hk_hint(muted)));
-            }
-            let end = run.end;
-            spans.push((&hint[run], sym_hint(muted)));
-            last = end;
-        }
-        if last < hint.len() {
-            spans.push((&hint[last..], hk_hint(muted)));
-        }
+        // The compact foot hint through the ONE symbol-split owner (⌘ ⇧ ⌥ ⌃ ↵ ⇥
+        // ride SYMBOL_FAMILY, the rest the chrome face) at the LABEL rung.
+        push_symbol_split(spans, hint, || hk_hint(muted), || sym_hint(muted));
     }
 
     /// Shape the overlay's LEFT column into `panel_buffer`: the `› query` line (when
@@ -851,18 +830,7 @@ impl TextPipeline {
             // Symbol-split so ⌘ ⇧ ⌥ ⌃ shape from the bundled face (real advances),
             // exactly like the right-aligned column + the foot hint.
             if let Some(t) = trailing.get(row).filter(|t| !t.is_empty()) {
-                let mut last = 0usize;
-                for sr in symbol_runs(t) {
-                    if sr.start > last {
-                        spans.push((&t[last..sr.start], mk(muted)));
-                    }
-                    let end = sr.end;
-                    spans.push((&t[sr], sym_name(muted)));
-                    last = end;
-                }
-                if last < t.len() {
-                    spans.push((&t[last..], mk(muted)));
-                }
+                push_symbol_split(&mut spans, t, || mk(muted), || sym_name(muted));
             }
         }
         // EMPTY STATE: with no candidate rows, one dim, non-selectable message row
@@ -901,18 +869,7 @@ impl TextPipeline {
             let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
             spans.push(("\n", mk(faint))); // the blank separator line
             for line in &footer_lines {
-                let mut last = 0usize;
-                for run in symbol_runs(line) {
-                    if run.start > last {
-                        spans.push((&line[last..run.start], mk(faint)));
-                    }
-                    let end = run.end;
-                    spans.push((&line[run], sym(faint)));
-                    last = end;
-                }
-                if last < line.len() {
-                    spans.push((&line[last..], mk(faint)));
-                }
+                push_symbol_split(&mut spans, line, || mk(faint), || sym(faint));
             }
         }
 
@@ -988,18 +945,7 @@ impl TextPipeline {
                 (Some(sl), Some(flip)) if sl == li => flip,
                 _ => muted,
             };
-            let mut last = 0usize;
-            for run in symbol_runs(s) {
-                if run.start > last {
-                    bind_spans.push((&s[last..run.start], mono(c)));
-                }
-                let end = run.end;
-                bind_spans.push((&s[run], sym(c)));
-                last = end;
-            }
-            if last < s.len() {
-                bind_spans.push((&s[last..], mono(c)));
-            }
+            push_symbol_split(&mut bind_spans, s, || mono(c), || sym(c));
         }
         let default_attrs = base.clone().color(ink);
         self.panel_bind_buffer
