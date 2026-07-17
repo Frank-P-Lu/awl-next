@@ -38,7 +38,18 @@ impl App {
     /// Landing back on the SAME world (arrowing away and back) cancels the pending
     /// deferral outright (nothing left to restyle). Live-only: the shared headless
     /// replay never routes through here.
-    pub(super) fn retint_theme_preview(&mut self) {
+    ///
+    /// PRESENT-RACE BRACKET (the vanishing-page fix, 2026-07-17): the ambient
+    /// ~10 fps lava tick presents frames only while a lava world is active, so a
+    /// preview step that crosses the lava boundary (`prev_bg` was lava and the
+    /// now-active world is not, or vice versa) starts or stops that cadence
+    /// underfoot. `lava::preview_crossing` decides purely; on a crossing we stamp
+    /// `crossing_settle_at` and arm the present-transaction sync (`sync_present_txn`,
+    /// the one owner shared with resize/move) BEFORE the caller's post-apply
+    /// redraw runs — so the crossing frame joins the compositor's transaction
+    /// instead of racing it, and the `CROSSING_SYNC_SETTLE` debounce fires one
+    /// guaranteed follow-up present at rest. A same-side hop leaves it untouched.
+    pub(super) fn retint_theme_preview(&mut self, prev_bg: crate::theme::Background) {
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.pipeline.sync_theme_colors();
             self.theme_font_at = if gpu.pipeline.needs_theme_reshape() {
@@ -46,6 +57,12 @@ impl App {
             } else {
                 None
             };
+        }
+        if crate::lava::preview_crossing(prev_bg, crate::theme::background())
+            == crate::lava::CrossingAction::SyncAcrossCrossing
+        {
+            self.crossing_settle_at = Some(Instant::now());
+            self.sync_present_txn();
         }
         self.update_title();
     }
@@ -319,6 +336,12 @@ impl App {
             .as_ref()
             .map(|o| o.kind == crate::overlay::OverlayKind::Theme)
             .unwrap_or(false);
+        // The OUTGOING world's background, snapshotted BEFORE `apply_core` runs a
+        // theme-picker live preview (which mutates the process-global active
+        // theme). `retint_theme_preview` compares it against the now-active world
+        // to detect a lava-boundary crossing — the present-race bracket. A Copy
+        // enum; only read on the preview branch below.
+        let theme_bg_before = crate::theme::background();
         // Whether the HISTORY timeline is open BEFORE the core runs: its live
         // preview state (the derived document preview + the saved scroll) must be
         // put down the moment the overlay closes, accept or not.
@@ -805,7 +828,7 @@ impl App {
         if history_overlay_before && self.overlay.is_none() {
             self.history_overlay_closed(history_accepted);
         }
-        self.post_apply_effects(&action, theme_overlay_before, theme_committed);
+        self.post_apply_effects(&action, theme_overlay_before, theme_committed, theme_bg_before);
 
         if quit {
             event_loop.exit();
@@ -1032,6 +1055,7 @@ impl App {
         action: &Action,
         theme_overlay_before: bool,
         theme_committed: bool,
+        theme_bg_before: crate::theme::Background,
     ) {
         // RENDER-ONLY TOGGLES — post-`apply_core` side effects. The core already
         // flipped the process-global (caret look / page mode) on the
@@ -1213,7 +1237,7 @@ impl App {
         if theme_committed || (theme_overlay_before && self.overlay.is_none()) {
             self.retint_theme_now();
         } else if theme_overlay_before {
-            self.retint_theme_preview();
+            self.retint_theme_preview(theme_bg_before);
         }
         // STICKY THEME write-on-change: persist ONLY on the picker's COMMIT/revert
         // (`theme_committed`), never on a live PREVIEW (`theme_overlay_before` while

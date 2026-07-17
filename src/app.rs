@@ -170,6 +170,20 @@ const RESIZE_SYNC_SETTLE: Duration = Duration::from_millis(150);
 /// TASTE TUNABLE — flagged for live review.
 const MOVE_SETTLE: Duration = Duration::from_millis(1000);
 
+/// Quiet period a THEME-PREVIEW lava-boundary crossing keeps the present-
+/// transaction sync armed (debounce; macOS-only effect). When a preview step
+/// swaps a ticking lava world for a static non-lava one (or back), the ~10 fps
+/// ambient present cadence starts/stops underfoot; arming the transaction sync
+/// makes the crossing frame (and one settle follow-up) JOIN the compositor's
+/// transaction instead of racing it, so the swapchain can't strand a stale
+/// drawable — the "writing surface vanishes" report. Each further crossing
+/// re-stamps the deadline (`retint_theme_preview`), so a rapid arrow burst
+/// through the boundary keeps it armed and settles once you rest — the same
+/// single-`WaitUntil` shape as `RESIZE_SYNC_SETTLE` / the theme-font debounce.
+/// Sized like `RESIZE_SYNC_SETTLE`: long enough to bracket the crossing frame +
+/// its follow-up, short enough that the sync cost is paid only around a crossing.
+const CROSSING_SYNC_SETTLE: Duration = Duration::from_millis(150);
+
 use glyphon::Cache;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -808,10 +822,21 @@ pub struct App {
     /// world takes the whole move machinery as a structural no-op (zero
     /// redraws scheduled by a move).
     move_settle_at: Option<Instant>,
+    /// A THEME-PREVIEW step just crossed the lava boundary (a ticking lava world
+    /// ⇄ a static non-lava one), so the ambient ~10 fps present cadence starts or
+    /// stops underfoot. Held for `CROSSING_SYNC_SETTLE` (re-stamped on each
+    /// further crossing) so the crossing frame + one settle follow-up present
+    /// join the compositor's transaction rather than racing it — the third source
+    /// feeding `present_sync_armed`, the vanishing-page fix (2026-07-17). Only
+    /// ever stamped when `lava::preview_crossing` returns `SyncAcrossCrossing`
+    /// (`App::retint_theme_preview`); `None` otherwise, and structurally
+    /// unreachable in a headless capture (the shared replay never previews).
+    crossing_settle_at: Option<Instant>,
     /// Shadow of the CAMetalLayer's `presentsWithTransaction` flag — the ONE
     /// owner of its composition is `App::sync_present_txn`, which arms it while
-    /// EITHER live stream (resize OR move) is active and disarms it only once
-    /// BOTH have settled (`present_sync_armed`). The MOVE half is the
+    /// ANY live source (resize OR move stream, OR a theme-preview lava-boundary
+    /// crossing) is active and disarms it only once ALL have settled
+    /// (`present_sync_armed`). The MOVE half is the
     /// move-flash fix's structural core: any present that happens around a
     /// window move (the settle redraw, a sibling debounce firing mid-stream, a
     /// cross-display `ScaleFactorChanged` redraw) now JOINS the window-server's
@@ -1155,6 +1180,7 @@ impl App {
             focused: true,
             resize_settle_at: None,
             move_settle_at: None,
+            crossing_settle_at: None,
             present_sync_on: false,
             config,
             cli_notes_root,
@@ -1640,6 +1666,7 @@ impl ApplicationHandler<AwlEvent> for App {
         self.input_stamp = None;
         self.resize_settle_at = None;
         self.move_settle_at = None;
+        self.crossing_settle_at = None;
         self.present_sync_on = false;
     }
 
@@ -1874,6 +1901,18 @@ impl ApplicationHandler<AwlEvent> for App {
                 false => {}
             }
         }
+        // THEME-PREVIEW CROSSING settle (mirrors the resize/move debounces above;
+        // see `CROSSING_SYNC_SETTLE`'s doc). Disarms the present-transaction sync
+        // and fires the ONE follow-up present once a boundary crossing has rested.
+        if let Some(dirty) = self.crossing_settle_at {
+            match debounce_due(dirty, CROSSING_SYNC_SETTLE, Instant::now()) {
+                true => self.finish_crossing_settle(),
+                false if self.last_frame.is_none() => {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + CROSSING_SYNC_SETTLE));
+                }
+                false => {}
+            }
+        }
         // AMBIENT LAVA TICK — the lava-lamp ground's slow ~10 fps drift, awl's
         // FIRST time-varying background. A single `WaitUntil` cadence (NEVER the
         // caret spring's hot per-frame `Poll` loop): when it elapses, advance the
@@ -1988,13 +2027,14 @@ fn debounce_due(dirty: Instant, window: Duration, now: Instant) -> bool {
 }
 
 /// Should the CAMetalLayer's `presentsWithTransaction` be armed? ONE owner of
-/// the composition: armed while EITHER live window-server stream — a RESIZE
-/// drag or a MOVE drag — is active, disarmed only once BOTH have settled (a
-/// corner drag streams both; the settle of one must not strip the other's
-/// protection). Pure, so the composition is unit-testable without a window;
-/// `App::sync_present_txn` is the sole applier.
-fn present_sync_armed(resize_active: bool, move_active: bool) -> bool {
-    resize_active || move_active
+/// the composition: armed while ANY source needs it — a RESIZE drag, a MOVE
+/// drag, or a THEME-PREVIEW lava-boundary crossing — disarmed only once ALL have
+/// settled (a corner drag streams both resize+move; a crossing can overlap a
+/// drag; the settle of one source must never strip another's protection). Pure,
+/// so the composition is unit-testable without a window; `App::sync_present_txn`
+/// is the sole applier.
+fn present_sync_armed(resize_active: bool, move_active: bool, crossing_active: bool) -> bool {
+    resize_active || move_active || crossing_active
 }
 
 /// Compose one idle deadline with the event loop's current intent. A hot `Poll`
@@ -2278,13 +2318,18 @@ mod tests {
     }
 
     #[test]
-    fn present_transaction_sync_composes_over_both_live_streams() {
-        // The ONE-owner composition `App::sync_present_txn` applies: armed
-        // while either window-server stream is live, off only when both idle.
-        assert!(!present_sync_armed(false, false), "idle: async presents");
-        assert!(present_sync_armed(true, false), "live resize arms it");
-        assert!(present_sync_armed(false, true), "live move arms it");
-        assert!(present_sync_armed(true, true), "corner drag: both live");
+    fn present_transaction_sync_composes_over_every_source() {
+        // The ONE-owner composition `App::sync_present_txn` applies: armed while
+        // ANY source needs it (resize stream, move stream, or a theme-preview
+        // lava-boundary crossing), off only when ALL three are idle.
+        assert!(!present_sync_armed(false, false, false), "idle: async presents");
+        assert!(present_sync_armed(true, false, false), "live resize arms it");
+        assert!(present_sync_armed(false, true, false), "live move arms it");
+        assert!(present_sync_armed(false, false, true), "a preview crossing arms it");
+        assert!(present_sync_armed(true, true, false), "corner drag: both streams live");
+        assert!(present_sync_armed(true, false, true), "resize + crossing overlap");
+        assert!(present_sync_armed(false, true, true), "move + crossing overlap");
+        assert!(present_sync_armed(true, true, true), "all three at once");
     }
 
     /// THE MOVE-FLASH REGRESSION PIN (user report 2026-07-15, "kinda back"):
@@ -2395,6 +2440,99 @@ mod tests {
             "no hold: the settle arm can never fire, zero redraws scheduled"
         );
         assert!(!app.present_sync_on, "no stream, no transaction sync");
+        crate::theme::set_active(prev);
+    }
+
+    /// THE VANISHING-PAGE REGRESSION PIN (user report 2026-07-17, "arrowing
+    /// Mangrove→Magpie makes the writing surface vanish"): a theme-preview step
+    /// that CROSSES the lava boundary arms the present-transaction sync (so the
+    /// crossing frame joins the compositor's transaction rather than racing it as
+    /// the ambient cadence stops), holds it through the `CROSSING_SYNC_SETTLE`
+    /// window, and settles exactly once. A same-side hop takes it as a no-op.
+    /// Drives the REAL `App` state machine through the real `retint_theme_preview`
+    /// / `finish_crossing_settle` bodies (the `about_to_wait` arm is just
+    /// `debounce_due`, pinned separately above).
+    #[test]
+    fn preview_crossing_the_lava_boundary_brackets_the_present_and_settles_once() {
+        let _g = crate::testlock::serial();
+        let prev = crate::theme::active_index();
+        let bg = |name: &str| {
+            crate::theme::THEMES.iter().find(|t| t.name == name).unwrap().background
+        };
+        let (mangrove_bg, magpie_bg) = (bg("Mangrove"), bg("Magpie"));
+
+        // Open the picker on the dark LAVA world, exactly as the report starts.
+        crate::theme::set_active_by_name("Mangrove").unwrap();
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+        assert!(!app.present_sync_on, "idle: presents run async");
+
+        // ARROW to the static non-lava world: apply_core would have switched the
+        // active world first, so mirror that, then run the real preview retint
+        // with the OUTGOING (lava) background it snapshotted.
+        crate::theme::set_active_by_name("Magpie").unwrap();
+        app.retint_theme_preview(mangrove_bg);
+        assert!(app.crossing_settle_at.is_some(), "the crossing stamps the hold");
+        assert!(
+            app.present_sync_on,
+            "the crossing frame joins the compositor transaction"
+        );
+
+        // ARROW BACK across the boundary (Magpie→Mangrove): re-stamps the hold.
+        crate::theme::set_active_by_name("Mangrove").unwrap();
+        app.retint_theme_preview(magpie_bg);
+        assert!(app.crossing_settle_at.is_some(), "the return crossing re-stamps");
+        assert!(app.present_sync_on, "still armed across the return crossing");
+
+        // Settle once: hold cleared, sync disarmed (no other source is live).
+        app.finish_crossing_settle();
+        assert!(app.crossing_settle_at.is_none(), "settle clears the hold once");
+        assert!(!app.present_sync_on, "presents return to async once settled");
+
+        // A SAME-SIDE hop (lava → lava, Mangrove → Firetail) is a total no-op:
+        // the cadence never changes, so nothing is armed.
+        crate::theme::set_active_by_name("Firetail").unwrap();
+        app.retint_theme_preview(mangrove_bg);
+        assert!(
+            app.crossing_settle_at.is_none(),
+            "a lava→lava hop leaves the cadence alone: no bracket"
+        );
+        assert!(!app.present_sync_on, "same-side hop arms nothing");
+        crate::theme::set_active(prev);
+    }
+
+    /// A crossing can OVERLAP a live drag: the settle of one source must not
+    /// strip the other's present-transaction protection (the disarm belongs to
+    /// the composition's one owner). Mirrors the corner-drag law for the third
+    /// source.
+    #[test]
+    fn a_crossing_settle_never_strips_a_live_resize_streams_present_sync() {
+        let _g = crate::testlock::serial();
+        let prev = crate::theme::active_index();
+        let mangrove_bg = crate::theme::THEMES
+            .iter()
+            .find(|t| t.name == "Mangrove")
+            .unwrap()
+            .background;
+
+        crate::theme::set_active_by_name("Mangrove").unwrap();
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+
+        // A live resize stream, then a preview crossing to a non-lava world.
+        app.arm_live_resize_sync();
+        assert!(app.present_sync_on, "resize stream arms the sync");
+        crate::theme::set_active_by_name("Magpie").unwrap();
+        app.retint_theme_preview(mangrove_bg);
+        assert!(app.present_sync_on, "still armed with both sources live");
+
+        // The crossing settles first: the resize stream still owns a claim.
+        app.finish_crossing_settle();
+        assert!(app.crossing_settle_at.is_none());
+        assert!(
+            app.present_sync_on,
+            "the resize stream still owns a claim on the sync"
+        );
+        app.finish_resize_settle();
+        assert!(!app.present_sync_on, "both settled: async presents again");
         crate::theme::set_active(prev);
     }
 
