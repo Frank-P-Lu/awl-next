@@ -285,7 +285,7 @@ mod tests {
                 &crate::keymap::Action::WritingStreaks,
                 false,
                 false,
-                crate::theme::background(),
+                crate::theme::active(),
             );
             assert_eq!(
                 app.streaks.view(&today).today_words,
