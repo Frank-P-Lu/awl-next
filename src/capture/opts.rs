@@ -214,4 +214,10 @@ pub struct CaptureOpts {
     /// False by default; ordinary/headless captures never inspect ambient crash
     /// files and remain deterministic.
     pub pending_crash: bool,
+    /// FORCE the format popover over the current `selection` (the deterministic
+    /// in-test equivalent of the CLI's `AWL_POPOVER` env probe — the live summon is
+    /// a mouse gesture the headless path has no pointer for). Default false, so an
+    /// ordinary capture is byte-identical; the `popover.rs` card-fits law sets it
+    /// to render the toolbar without racing a process-global env var.
+    pub force_popover: bool,
 }

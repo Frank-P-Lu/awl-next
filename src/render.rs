@@ -61,6 +61,8 @@ mod rowgeom;
 /// cluster, carved out verbatim. The corner readouts share one body, `prepare_corner_label`.
 mod chrome;
 pub use chrome::PanelHit;
+#[cfg(test)]
+pub(crate) use chrome::POPOVER_VPAD;
 
 /// ROW LAYOUT — the ONE owner of picker-row column budgets: how a summoned
 /// overlay row splits its width between the PRIMARY cell (name/path — never

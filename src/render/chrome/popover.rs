@@ -29,15 +29,25 @@ pub(in crate::render) struct PopoverButtonGeom {
 #[derive(Clone, Debug)]
 pub(in crate::render) struct PopoverGeom {
     pub card: [f32; 4],
-    pub row_top: f32,
-    pub row_h: f32,
+    /// The label buffer's upload origin (TextArea `top`), chosen so the button
+    /// glyphs' ink band lands exactly `VPAD` below the card top.
+    pub text_top: f32,
+    /// Top of the button glyphs' actual ink band, absolute px (`card_y + VPAD`) —
+    /// the reference the lit-button washes hug.
+    pub band_top: f32,
+    /// Height of that ink band (tallest glyph's ink top → lowest glyph's ink
+    /// bottom). The card is `band_h + 2·VPAD`, so it hugs the row with uniform pad.
+    pub band_h: f32,
     pub buttons: Vec<PopoverButtonGeom>,
 }
 
 /// Inner horizontal pad from the card edge to the first/last button glyph.
 const HPAD: f32 = 12.0;
-/// Inner vertical pad above/below the button row.
-const VPAD: f32 = 7.0;
+/// Inner vertical pad above/below the button GLYPH INK BAND — the ONE pad token
+/// the card hugs the row with (uniform top and bottom). Exposed `pub(crate)` (re-
+/// exported as `render::POPOVER_VPAD`) so the card-fits law asserts against the
+/// SAME token the layout uses, never a hand-copied literal.
+pub(crate) const VPAD: f32 = 7.0;
 /// The two-space separator shaped BETWEEN buttons — its width becomes the visible
 /// inter-button gap (the hit-test splits it at the midpoint, so no dead zone).
 const SEP: &str = "   ";
@@ -72,18 +82,21 @@ impl TextPipeline {
                     Some(geom.card),
                     true,
                 );
-                // A value-step wash behind each LIT button (never amber).
+                // A value-step wash behind each LIT button (never amber) — a pill
+                // hugging the glyph ink band with a small halo (the card hugs the same
+                // band, so the wash never floats in dead space).
                 let washes: Vec<[f32; 4]> = geom
                     .buttons
                     .iter()
                     .filter(|b| b.active)
                     .map(|b| {
-                        let pad = 4.0;
+                        let hpad = 4.0;
+                        let vpad = 3.0;
                         [
-                            b.x0 - pad,
-                            geom.row_top - 1.0,
-                            (b.x1 - b.x0) + 2.0 * pad,
-                            geom.row_h + 2.0,
+                            b.x0 - hpad,
+                            geom.band_top - vpad,
+                            (b.x1 - b.x0) + 2.0 * hpad,
+                            geom.band_h + 2.0 * vpad,
                         ]
                     })
                     .collect();
@@ -165,12 +178,21 @@ impl TextPipeline {
         self.popover_buffer
             .shape_until_scroll(&mut self.font_system, false);
 
-        // Measure each button's glyph span (relative to the buffer origin x=0).
+        // Measure each button's glyph span (relative to the buffer origin x=0), and
+        // collect (glyph, baseline) for the VERTICAL ink-band measurement below. The
+        // "fat chin" was `card_h = line_height + 2·VPAD` with the glyphs top-anchored:
+        // the line's descent + leading sat as a band of dead card BELOW the row. The
+        // card must hug the buttons' ACTUAL ink, not the leading-inflated line box.
         let mut spans_px: Vec<(f32, f32)> = vec![(f32::MAX, f32::MIN); model.buttons.len()];
         let mut total_w = 0.0f32;
+        let mut ink_glyphs: Vec<(CacheKey, f32)> = Vec::new();
         for run in self.popover_buffer.layout_runs() {
             for g in run.glyphs.iter() {
                 total_w = total_w.max(g.x + g.w);
+                // Baseline (`run.line_y`, relative to the buffer origin) travels with
+                // each glyph so the ink pass below can place it — the SAME convention
+                // the morph caret + placard-stipple masks read.
+                ink_glyphs.push((g.physical((0.0, 0.0), 1.0).cache_key, run.line_y));
                 for (bi, &(bs, be)) in ranges.iter().enumerate() {
                     if g.start >= bs && g.start < be {
                         let e = &mut spans_px[bi];
@@ -181,8 +203,39 @@ impl TextPipeline {
             }
         }
 
+        // The buttons' ACTUAL ink band, relative to the buffer origin (y=0):
+        // `baseline − placement.top` is a glyph's ink top, `+ placement.height` its
+        // ink bottom (deterministic in captures — pure shaping + rasterization, the
+        // same swash placement the placard stipple reads). The card hugs THIS.
+        let (mut band_top_rel, mut band_bot_rel) = (f32::MAX, f32::MIN);
+        {
+            let Self {
+                swash_cache,
+                font_system,
+                ..
+            } = self;
+            for (key, baseline_rel) in ink_glyphs {
+                let Some(img) = swash_cache.get_image(font_system, key).as_ref() else {
+                    continue;
+                };
+                if img.placement.height == 0 || img.content != SwashContent::Mask {
+                    continue;
+                }
+                let top = baseline_rel - img.placement.top as f32;
+                band_top_rel = band_top_rel.min(top);
+                band_bot_rel = band_bot_rel.max(top + img.placement.height as f32);
+            }
+        }
+        // Degenerate fallback (no measurable ink — never for the real roster): hug the
+        // full line box, byte-identical to the pre-fix behavior.
+        if band_bot_rel <= band_top_rel {
+            band_top_rel = 0.0;
+            band_bot_rel = m.line_height;
+        }
+        let band_h = band_bot_rel - band_top_rel;
+
         let card_w = total_w + 2.0 * HPAD;
-        let card_h = m.line_height + 2.0 * VPAD;
+        let card_h = band_h + 2.0 * VPAD;
 
         // Anchor: the selection's first endpoint, in screen space.
         let sel_x = self.text_left() + self.col_x_and_advance(line0, col0).0;
@@ -204,7 +257,10 @@ impl TextPipeline {
             .max(pad);
 
         let text_left = card_x + HPAD;
-        let row_top = card_y + VPAD;
+        // The glyph ink band sits a uniform `VPAD` below the card top; the label
+        // buffer uploads at an origin chosen so `band_top_rel` lands exactly there.
+        let band_top = card_y + VPAD;
+        let text_top = band_top - band_top_rel;
 
         let buttons = model
             .buttons
@@ -227,8 +283,9 @@ impl TextPipeline {
 
         Some(PopoverGeom {
             card: [card_x, card_y, card_w, card_h],
-            row_top,
-            row_h: m.line_height,
+            text_top,
+            band_top,
+            band_h,
             buttons,
         })
     }
@@ -252,7 +309,7 @@ impl TextPipeline {
         let area = TextArea {
             buffer: &self.popover_buffer,
             left: geom.card[0] + HPAD,
-            top: geom.row_top,
+            top: geom.text_top,
             scale: 1.0,
             bounds,
             default_color: ink,

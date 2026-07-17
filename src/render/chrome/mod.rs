@@ -278,6 +278,10 @@ mod preview;
 mod popover;
 #[allow(unused_imports)] // PopoverButtonGeom named only inside the popover module
 pub(in crate::render) use popover::{PopoverButtonGeom, PopoverGeom};
+/// The popover's inner vertical pad token — re-exported to the crate so the
+/// card-fits law asserts `card_bottom − glyph_bottom == POPOVER_VPAD`.
+#[cfg(test)]
+pub(crate) use popover::VPAD as POPOVER_VPAD;
 
 impl TextPipeline {
     // ===== FLOATING PANEL PRIMITIVE + CARET-STYLE PREVIEW PANEL ============
