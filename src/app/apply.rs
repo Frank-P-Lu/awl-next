@@ -1255,6 +1255,8 @@ impl App {
     }
 }
 
-#[cfg(test)]
+// PDF export is native-only (`Format::Pdf` is `cfg(not(wasm32))`), so its apply
+// tests compile on native targets only.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "apply_tests.rs"]
 mod tests;

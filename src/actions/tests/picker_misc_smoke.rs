@@ -482,7 +482,12 @@ fn every_catalog_command_dispatches_without_panicking() {
                     // its format for the live App to render + write.
                     Action::ExportWord => eff == Effect::Export(crate::export::Format::Docx),
                     Action::ExportHtml => eff == Effect::Export(crate::export::Format::Html),
+                    // PDF export is native-only; on wasm `Format::Pdf` does not exist
+                    // and the apply arm yields no effect.
+                    #[cfg(not(target_arch = "wasm32"))]
                     Action::ExportPdf => eff == Effect::Export(crate::export::Format::Pdf),
+                    #[cfg(target_arch = "wasm32")]
+                    Action::ExportPdf => eff == Effect::None,
                     other => panic!("{other:?} classified Deferred but has no effect check"),
                 };
                 assert!(ok, "{}: unexpected deferred effect {:?}", c.name, eff);
