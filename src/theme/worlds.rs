@@ -546,7 +546,13 @@ pub const CURRAWONG: Theme = Theme {
     // the ordinary ramp-step `surface_selected` derivation (the ramp is not
     // collapsed here — only Wagtail's is). No placard: Currawong's stark den
     // stays quiet chrome.
-    render_caps: RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT },
+    // COMPOSITION-C2: the iconic dark-technical statement world anchors its card
+    // TOP-LEFT (a deliberate object, not a centred dialog).
+    render_caps: RenderCaps {
+        elevation: Elevation::Bordered,
+        card_anchor: CardAnchor::TopLeft,
+        ..RenderCaps::DEFAULT
+    },
 };
 
 /// Mangrove — dark tidal-teal coding den (one warm low-tide ember at the caret).
@@ -625,10 +631,13 @@ pub const MANGROVE: Theme = Theme {
     // the moving lava margins (a value step alone swims against motion).
     render_caps: RenderCaps {
         title_style: TitleStyle::Placard {
-            corner: PlacardCorner::BL,
+            // COMPOSITION-C2: derive the poster corner from the card anchor
+            // (TopLeft → bottom-RIGHT) — a balanced diagonal, poster off the card.
+            corner: PlacardCorner::Auto,
             scale: 3.0,
             ink: PlacardInk::Stipple,
         },
+        card_anchor: CardAnchor::TopLeft,
         elevation: Elevation::Bordered,
         ..RenderCaps::DEFAULT
     },
@@ -680,10 +689,13 @@ pub const GALAH: Theme = Theme {
     // corners clip long picker titles against the canvas edge).
     render_caps: RenderCaps {
         title_style: TitleStyle::Placard {
-            corner: PlacardCorner::BL,
+            // COMPOSITION-C2: poster corner derives from the card anchor
+            // (TopLeft → bottom-RIGHT).
+            corner: PlacardCorner::Auto,
             scale: 3.0,
             ink: PlacardInk::Ghost,
         },
+        card_anchor: CardAnchor::TopLeft,
         // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries
         // the card edge off the pale ground.
         elevation: Elevation::Bordered,
@@ -740,10 +752,13 @@ pub const MAGPIE: Theme = Theme {
     // want it dialed after the user's gallery pass.
     render_caps: RenderCaps {
         title_style: TitleStyle::Placard {
-            corner: PlacardCorner::BL,
+            // COMPOSITION-C2: poster corner derives from the card anchor
+            // (TopLeft → bottom-RIGHT).
+            corner: PlacardCorner::Auto,
             scale: 3.0,
             ink: PlacardInk::Ghost,
         },
+        card_anchor: CardAnchor::TopLeft,
         // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries
         // the card edge off the pale ground.
         elevation: Elevation::Bordered,
@@ -1121,10 +1136,16 @@ pub const FIRETAIL: Theme = Theme {
     // (byte-identical) — Firetail alone flips this round.
     render_caps: RenderCaps {
         title_style: TitleStyle::Placard {
+            // COMPOSITION-C2: Firetail KEEPS its user-picked BOTTOM-LEFT placard
+            // (an explicit corner overrides the Auto derivation) — the dramatic
+            // combo the user locked from the flip-round gallery. Card TopLeft +
+            // poster BL sit on the same left rail but separate vertical bands
+            // (card near the top, poster at the very foot), no overlap.
             corner: PlacardCorner::BL,
             scale: 4.5,
             ink: PlacardInk::Bold,
         },
+        card_anchor: CardAnchor::TopLeft,
         chrome_face: ChromeFace::Named("Archivo Black"),
         elevation: Elevation::Bordered,
         ..RenderCaps::DEFAULT

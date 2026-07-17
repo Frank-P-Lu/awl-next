@@ -75,10 +75,11 @@ fn spell_panel_floats_at_the_word_not_center_screen() {
 
     // CONTRAST: a takeover overlay (no spell target) is a WIDE card on the flat
     // panel card — NOT the float primitive, and NOT the small word-anchored popup.
-    // The PALETTE-COMPOSITION round flipped the global card anchor to TOP-LEFT, so
-    // the takeover card's left edge now sits one margin (12) in from the canvas
-    // edge (the ONE owner `overlay_card_x`), distinct from the spell popup's
-    // word-anchored `text_left`.
+    // COMPOSITION-C2 made the DEFAULT anchor TOP-CENTER, so the takeover card
+    // re-centres under the top third (via the ONE owner `overlay_card_x`) — force
+    // it here so the assertion is deterministic regardless of the active world —
+    // still plainly distinct from the spell popup's word-anchored `text_left`.
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopCenter));
     let mut c = view("teh quick brown fox\n", 0, 0);
     c.overlay_active = true;
     c.overlay_items = vec!["the".into(), "tea".into(), "ten".into()];
@@ -86,10 +87,12 @@ fn spell_panel_floats_at_the_word_not_center_screen() {
     p.prepare(&device, &queue, 1200, 800).unwrap();
     let [cx, _cy, cw, _ch] = p.overlay_card_rect().expect("the takeover overlay has a card");
     assert!(cw >= 360.0, "a takeover overlay is a wide card: w={cw}");
+    let centered = (1200.0 - cw) * 0.5;
     assert!(
-        (cx - chrome::CARD_EDGE_INSET).abs() < 2.0,
-        "the takeover card anchors top-left, one edge inset in: x={cx}"
+        (cx - centered).abs() < 2.0,
+        "the takeover card centres under the top third: x={cx} want {centered}"
     );
+    set_card_anchor_test_override(None);
     assert_eq!(p.float_card.instance_count(), 0, "a takeover overlay parks the float card");
     assert_eq!(p.panel_card.instance_count(), 1, "a takeover overlay uses the flat card");
 }
@@ -634,9 +637,12 @@ fn overlay_lens_at_resolves_facet_labels_by_their_own_strip_index() {
     // The ACTIVE facet's own recorded underline rect pinpoints its shaped x-span —
     // a click in its middle resolves to ITS OWN strip index (1, Time).
     let [ux, uy, uw, _uh] = p.overlay_theme_underline.expect("Time is active, so it is underlined");
+    // C2: the underline y is the strip run's shaped BASELINE + a small drop, so
+    // it sits within the (header-gap-inflated) strip row box, below the labels.
+    let gap = p.overlay_header_gap();
     assert!(
-        uy >= text_top + lh - 5.0 && uy <= text_top + 2.0 * lh + 5.0,
-        "underline sits on the strip row (line 1)"
+        uy >= text_top + lh - 2.0 && uy <= text_top + 2.0 * lh + gap + 3.0,
+        "underline sits within the strip row (line 1): uy={uy}"
     );
     let time_mid_x = ux + uw * 0.5;
     assert_eq!(p.overlay_lens_at(time_mid_x, strip_y), Some(1), "a click on Time resolves to strip index 1");
@@ -881,6 +887,10 @@ fn overlay_card_spans_nearly_the_full_narrow_window() {
         return;
     };
     let floor = chrome::CARD_EDGE_INSET_FLOOR;
+    // Pin the anchor TOP-LEFT so this width-response test reads the edge inset
+    // deterministically (C2 made the world-DEFAULT anchor TopCenter; this test is
+    // about width regimes, not the per-world anchor).
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
     let mut v = view("hello\n", 0, 0);
     v.overlay_active = true;
     v.overlay_items = vec!["Alpha".into(), "Beta".into()];
@@ -897,6 +907,7 @@ fn overlay_card_spans_nearly_the_full_narrow_window() {
     let [x, _y, w, _h] = p.overlay_card_rect().expect("overlay card");
     assert!((w - chrome::CARD_MAX_W).abs() < 0.5, "wide card holds the tightened cap: w={w}");
     assert!((x - chrome::CARD_EDGE_INSET).abs() < 0.5, "one full edge inset in: x={x}");
+    set_card_anchor_test_override(None);
 }
 
 /// KEY-HINT KEYCAPS: ↵ (Return) and ⇥ (Tab) are classified as SYMBOLS (so the hint
@@ -1266,57 +1277,146 @@ fn overlay_card_fits_its_content_no_fat_bottom_lip() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
-/// HINT-LIP LAW (item 5) — the foot hint reads as the card's bottom EDGE, not a
-/// floating orphan: it rides a SHORTER line ([`TextPipeline::overlay_hint_h`],
-/// below a full row) that hugs tight under the last result, and the card's
-/// bottom padding is the `pad` token below THAT compact strip — never the fat
-/// empty band the user reported ("i do see a lip, and its really ugly"). The
-/// card-fits-content geometry is recomputed independently (the Wagtail lesson).
+/// Which footer the summoned overlay draws, per [`crate::overlay::OverlayKind`]
+/// — the NO-WILDCARD classification the C2 footer law sweeps. `TakeoverCard` is
+/// every centered picker (its foot hint is the compact strip through the ONE
+/// shared owner); `ContextualPopup` is the Spell suggestion popup anchored at
+/// the misspelled word (no takeover foot hint). A NEW `OverlayKind` fails to
+/// compile here until it declares which footer it carries, so a future picker
+/// can't quietly re-introduce the per-kind bottom drift.
+#[derive(PartialEq, Debug)]
+enum FooterContract {
+    TakeoverCard,
+    ContextualPopup,
+}
+
+fn footer_contract(kind: crate::overlay::OverlayKind) -> FooterContract {
+    use crate::overlay::OverlayKind as K;
+    match kind {
+        K::Spell => FooterContract::ContextualPopup,
+        K::Goto
+        | K::Project
+        | K::Browse
+        | K::Theme
+        | K::Caret
+        | K::MoveDest
+        | K::Dictionary
+        | K::CjkLang
+        | K::Command
+        | K::Keybindings
+        | K::History
+        | K::Settings
+        | K::Assets
+        | K::Rename
+        | K::InsertLink => FooterContract::TakeoverCard,
+    }
+}
+
+/// C2 FOOTER-DRIFT LAW (supersedes the old flat-only hint-lip check) — the foot
+/// hint reads as the card's bottom EDGE, not a floating orphan: it rides a
+/// SHORTER line ([`TextPipeline::overlay_hint_h`]) that hugs tight under the last
+/// result, and the card's bottom gap below THAT compact strip is ONE comfortable
+/// breathing pad — IDENTICAL across every picker kind. Before C2 the theme /
+/// faceted shaper drew the hint at FULL row height (a fat lip) while the flat
+/// shaper drew it compact (too tight): the fix routes BOTH card-height owners
+/// through [`TextPipeline::overlay_footer_reclaim`] and BOTH shapers through the
+/// one hint-spans owner. Here the FLAT and the FACETED/THEME geometry owners are
+/// driven with the same hint and their below-hint gaps must be EQUAL (the
+/// anti-drift assertion), and the classification is swept NO-WILDCARD over
+/// [`crate::overlay::OverlayKind`]. Geometry recomputed independently of the
+/// private `card_h` formula (the Wagtail lesson).
 #[test]
-fn overlay_hint_footer_is_compact_and_hugs_the_card_bottom() {
+fn overlay_hint_footer_is_compact_and_identical_across_kinds() {
     let Some(mut p) = headless_pipeline() else {
-        eprintln!("skipping overlay_hint_footer_is_compact_and_hugs_the_card_bottom: no wgpu adapter");
+        eprintln!("skipping overlay_hint_footer_is_compact_and_identical_across_kinds: no wgpu adapter");
         return;
     };
     let _g = crate::testlock::serial();
     let pad = 12.0_f32;
+
+    // The NO-WILDCARD sweep: exactly one contextual popup (Spell), the rest
+    // takeover cards. A new kind must classify itself above or this won't compile.
+    use crate::overlay::OverlayKind as K;
+    const ALL_KINDS: &[K] = &[
+        K::Goto, K::Project, K::Browse, K::Theme, K::Caret, K::MoveDest,
+        K::Dictionary, K::CjkLang, K::Command, K::Spell, K::Keybindings,
+        K::History, K::Settings, K::Assets, K::Rename, K::InsertLink,
+    ];
+    let popups = ALL_KINDS
+        .iter()
+        .filter(|k| footer_contract(**k) == FooterContract::ContextualPopup)
+        .count();
+    assert_eq!(popups, 1, "exactly the Spell popup is a non-takeover footer");
+
     for world in ["Kingfisher", "Saltpan", "Wagtail"] {
         theme::set_active_by_name(world).unwrap();
         p.sync_theme();
-        let mut v = view("hello\n", 0, 0);
-        v.overlay_active = true;
-        v.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
-        v.overlay_selected = 0;
-        v.overlay_hint = "↵ open   ⎋ close".into();
-        p.set_view(&v);
-
-        let [_x, card_y, _w, card_h] = p.overlay_card_rect().expect("an open card");
-        let (_t, lines, _s, _rh, _c) = p.overlay_window_report().expect("a window report");
         let lh = p.overlay_lh();
         let gap = p.overlay_header_gap();
         let hint_h = p.overlay_hint_h();
+        // The comfortable breath below the compact hint, derived from the ONE
+        // footer-pad owner (formula-independent): (lh - hint_h) is the full
+        // reclaim; the owner keeps back exactly the breath.
+        let breath = (lh - hint_h) - p.overlay_footer_reclaim(1);
+        assert!(breath > 0.5, "{world}: the footer keeps a positive breathing pad");
 
         // The hint row is SHORTER than a full result row — the lip is gone.
         assert!(
             hint_h < lh - 1.0,
             "{world}: hint row {hint_h:.1} must be shorter than a full row {lh:.1}"
         );
-        // The hint hugs the bottom: below its compact strip sits exactly `pad`.
-        // header (1, flat) + `lines` candidates at `lh` + the gap, then the hint
-        // at `hint_h`, then the bottom `pad` == card bottom.
-        let text_top = card_y + pad;
-        let hint_bottom = text_top + (1 + lines) as f32 * lh + gap + hint_h;
-        let below = (card_y + card_h) - hint_bottom;
+
+        // FLAT picker (empty lens): header_rows == 1.
+        let mut vf = view("hello\n", 0, 0);
+        vf.overlay_active = true;
+        vf.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+        vf.overlay_selected = 0;
+        vf.overlay_hint = "↵ open   ⎋ close".into();
+        p.set_view(&vf);
+        let [_xf, cy_f, _wf, ch_f] = p.overlay_card_rect().expect("an open flat card");
+        let (_tf, lines_f, _sf, _rhf, _cf) = p.overlay_window_report().expect("a flat report");
+        let hint_bottom_f = (cy_f + pad) + (1 + lines_f) as f32 * lh + gap + hint_h;
+        let below_flat = (cy_f + ch_f) - hint_bottom_f;
+
+        // FACETED / THEME picker (non-empty lens): header_rows == 2.
+        let mut vt = view("hello\n", 0, 0);
+        vt.overlay_active = true;
+        vt.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+        vt.overlay_selected = 0;
+        vt.overlay_hint = "↵ open   ⎋ close".into();
+        vt.overlay_lens = ["All", "Time"]
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (l.to_string(), i == 0))
+            .collect();
+        p.set_view(&vt);
+        let [_xt, cy_t, _wt, ch_t] = p.overlay_card_rect().expect("an open faceted card");
+        let (_tt, lines_t, _st, _rht, _ct) = p.overlay_window_report().expect("a faceted report");
+        let hint_bottom_t = (cy_t + pad) + (2 + lines_t) as f32 * lh + gap + hint_h;
+        let below_faceted = (cy_t + ch_t) - hint_bottom_t;
+
+        // Each hugs with the ONE breathing pad below the compact strip …
         assert!(
-            (below - pad).abs() < 0.6,
-            "{world}: hint hugs the card bottom (below={below:.1}, want ~{pad}) — no fat lip"
+            (below_flat - (pad + breath)).abs() < 0.6,
+            "{world} flat: below-hint gap {below_flat:.1} must be pad+breath {:.1}",
+            pad + breath
+        );
+        assert!(
+            (below_faceted - (pad + breath)).abs() < 0.6,
+            "{world} faceted: below-hint gap {below_faceted:.1} must be pad+breath {:.1}",
+            pad + breath
+        );
+        // … and the two shapers AGREE exactly (the anti-drift invariant).
+        assert!(
+            (below_flat - below_faceted).abs() < 0.6,
+            "{world}: flat ({below_flat:.1}) and faceted ({below_faceted:.1}) footers must be IDENTICAL"
         );
     }
     theme::set_active(theme::DEFAULT_THEME);
 }
 
 #[test]
-fn overlay_card_anchor_is_data_top_left_default_center_reachable() {
+fn overlay_card_anchor_is_data_center_default_top_left_for_statement_worlds() {
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping overlay_card_anchor_is_data_top_left_default_center_reachable: no wgpu adapter");
         return;
@@ -1331,24 +1431,37 @@ fn overlay_card_anchor_is_data_top_left_default_center_reachable() {
     v.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
     v.overlay_selected = 0;
 
-    // DEFAULT (this round's flip): every world anchors TOP-LEFT — the card's
-    // left edge sits one EDGE INSET in from the canvas edge (item 2's page rhythm).
-    set_card_anchor_test_override(None);
+    // TOP-LEFT is reachable as per-world DATA (the statement/asymmetric worlds):
+    // the card's left edge sits one EDGE INSET in from the canvas edge.
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
     p.set_view(&v);
     let [x_tl, _y, _w, _h] = p.overlay_card_rect().expect("an open card");
-    assert!((x_tl - edge_inset).abs() < 0.01, "default anchor is top-left: x={x_tl}");
+    assert!((x_tl - edge_inset).abs() < 0.01, "top-left anchor hugs the edge inset: x={x_tl}");
 
-    // TOP-CENTER stays reachable as a data value (the one-line revert / the
-    // gallery A/B): the card re-centers under the top third.
-    set_card_anchor_test_override(Some(theme::CardAnchor::TopCenter));
+    // COMPOSITION-C2 DEFAULT: TOP-CENTER — the calm/symmetric temperament most
+    // worlds carry now re-centers the card under the top third.
+    set_card_anchor_test_override(None);
+    theme::set_active_by_name("Tawny").unwrap(); // a Center world
+    p.sync_theme();
     p.set_view(&v);
     let [x_tc, _y2, w_tc, _h2] = p.overlay_card_rect().expect("an open card");
     let centered = (width as f32 - w_tc) * 0.5;
     assert!(
         (x_tc - centered).abs() < 0.01,
-        "top-center anchor re-centers the card: x={x_tc} want {centered}"
+        "the default (Center) anchor re-centers the card: x={x_tc} want {centered}"
     );
     assert!(x_tc > x_tl, "top-center sits right of top-left");
+
+    // TOP-LEFT is still the statement worlds' data value: Currawong anchors left.
+    set_card_anchor_test_override(None);
+    theme::set_active_by_name("Currawong").unwrap();
+    p.sync_theme();
+    p.set_view(&v);
+    let [x_cl, _y3, _w3, _h3] = p.overlay_card_rect().expect("an open card");
+    assert!(
+        (x_cl - edge_inset).abs() < 0.01,
+        "a statement world (Currawong) anchors its card top-left: x={x_cl}"
+    );
 
     set_card_anchor_test_override(None);
     theme::set_active(theme::DEFAULT_THEME);

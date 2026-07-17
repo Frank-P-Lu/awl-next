@@ -1437,30 +1437,25 @@ fn lerp_interpolates_and_clamps() {
     assert_eq!(a.lerp(b, 2.0), b, "t>1 clamps to other");
 }
 
-/// EVERY shipped `TitleStyle::Placard` world anchors its wordmark BOTTOM-LEFT
-/// (`PlacardCorner::BL`) — the settled composition, not an accident. The card
-/// now defaults to the top-LEFT anchor (`CardAnchor::TopLeft`), so a placard at
-/// a TOP corner (`TL`/`TR`) shares the card's own screen band and the large,
-/// canvas-anchored wordmark BLEEDS into the card's top edge — its ink lands
-/// over the card's own fill and title row, not clear over the scrim
-/// (gallery-confirmed with pixels: `AWL_OVERLAY_STYLE_FORCE="placard:TR:5.0:bold"`
-/// and `"placard:TL:2.5:stipple"` on Firetail both drove the wordmark's strokes
-/// into the card's top-right / title-row region). `BLEED IS THE CONTRACT`
-/// (the wordmark anchors to the canvas, rows composite OVER it — see
-/// `model::TitleStyle`'s own doc), so this is not a render bug at those forced
-/// corners; it is exactly WHY the shipped data uses BL — card top-left +
-/// wordmark bottom-left = balanced asymmetry with no overlap. This guard makes
-/// that decision STRUCTURAL: a future data flip to a top corner (or `BR`, which
-/// clips long words against the right canvas edge — the other gallery finding)
-/// must FIRST solve the card-overlap / edge-clip, and will trip here until it
-/// consciously does. The `AWL_OVERLAY_STYLE_FORCE` dev probe still reaches
-/// every corner for auditions — this pins the WORLDS DATA, never the probe.
+/// COMPOSITION-C2 DATA SANITY for shipped placards (the old "every placard is
+/// BL" pin is GONE — the poster corner now DERIVES from the card anchor via
+/// [`crate::render::derived_placard_corner`], complementary so the wordmark
+/// never sits under the command surface, and the no-clip OUTCOME is asserted
+/// end-to-end by `render::tests::overlay_personality`'s no-clip law). Here the
+/// DATA stays honest: a placard corner is either `Auto` (derive) or a concrete
+/// override (Firetail's user-picked `BL`), and every scale sits in a sane band.
+/// A placard world MUST NOT centre its card (`TopCenter`) — a centred card with
+/// an `Auto` bottom-corner poster would still read fine, but the shipped
+/// placard worlds are the statement/asymmetric temperaments that anchor their
+/// card away from centre, so this guards the intended composition.
 #[test]
-fn every_shipped_placard_world_anchors_bottom_left() {
-    let placards: Vec<(&str, model::PlacardCorner, f32)> = THEMES
+fn every_shipped_placard_world_has_sane_corner_and_scale() {
+    let placards: Vec<(&str, model::PlacardCorner, f32, model::CardAnchor)> = THEMES
         .iter()
         .filter_map(|t| match t.render_caps.title_style {
-            model::TitleStyle::Placard { corner, scale, .. } => Some((t.name, corner, scale)),
+            model::TitleStyle::Placard { corner, scale, .. } => {
+                Some((t.name, corner, scale, t.render_caps.card_anchor))
+            }
             model::TitleStyle::InlinePrefix => None,
         })
         .collect();
@@ -1469,13 +1464,26 @@ fn every_shipped_placard_world_anchors_bottom_left() {
         "at least one world ships a Placard (the round that introduced them) — a \
          zero here means the data table lost every placard, not that the guard passed"
     );
-    for (name, corner, scale) in placards {
-        assert_eq!(
-            corner,
-            model::PlacardCorner::BL,
-            "{name}: a shipped placard must anchor BOTTOM-LEFT — a top/right corner \
-             overlaps the top-left card (or clips long words at the right edge). Flip \
-             to another corner only after solving that; see this test's own doc."
+    for (name, corner, scale, anchor) in placards {
+        // A legal corner: derive (`Auto`) or a concrete override — never junk.
+        assert!(
+            matches!(
+                corner,
+                model::PlacardCorner::Auto
+                    | model::PlacardCorner::BL
+                    | model::PlacardCorner::BR
+                    | model::PlacardCorner::TL
+                    | model::PlacardCorner::TR
+            ),
+            "{name}: placard corner {corner:?} must be a legal value"
+        );
+        // The shipped placard worlds anchor their card away from centre (the
+        // statement temperament), so the complementary poster derivation lands
+        // it cleanly opposite the card.
+        assert_ne!(
+            anchor,
+            model::CardAnchor::TopCenter,
+            "{name}: a shipped placard world anchors its card off-centre (see this test's doc)"
         );
         // The wordmark scale is a loudness dial, not a fit guarantee
         // (`overlay_shape_placard` shrinks a wider-than-canvas mark), but a
@@ -1708,47 +1716,57 @@ fn personality_assignments_are_exactly_the_decided_table() {
         Elevation, PageFrame, PlacardCorner, PlacardInk, RenderCaps, TitleStyle,
     };
     fn expected(name: &str) -> RenderCaps {
-        let bl = |ink: PlacardInk| TitleStyle::Placard {
-            corner: PlacardCorner::BL,
+        // COMPOSITION-C2: the placard worlds anchor their card TOP-LEFT and let
+        // the poster corner DERIVE from that anchor (`Auto` → bottom-RIGHT),
+        // opening the opposite corner. Firetail alone keeps an explicit BL.
+        let auto = |ink: PlacardInk| TitleStyle::Placard {
+            corner: PlacardCorner::Auto,
             scale: 3.0,
             ink,
         };
         match name {
             // Galah / Magpie: the light-world placard PLUS the composition
-            // round's light-world border (item 6).
+            // round's light-world border (item 6); C2 TopLeft anchor + Auto corner.
             "Galah" => RenderCaps {
-                title_style: bl(PlacardInk::Ghost),
+                title_style: auto(PlacardInk::Ghost),
+                card_anchor: model::CardAnchor::TopLeft,
                 elevation: Elevation::Bordered,
                 ..RenderCaps::DEFAULT
             },
             "Magpie" => RenderCaps {
-                title_style: bl(PlacardInk::Ghost),
+                title_style: auto(PlacardInk::Ghost),
+                card_anchor: model::CardAnchor::TopLeft,
                 elevation: Elevation::Bordered,
                 ..RenderCaps::DEFAULT
             },
             "Mangrove" => RenderCaps {
-                title_style: bl(PlacardInk::Stipple),
+                title_style: auto(PlacardInk::Stipple),
+                card_anchor: model::CardAnchor::TopLeft,
                 elevation: Elevation::Bordered,
                 ..RenderCaps::DEFAULT
             },
             // CHROME-VOICES FLIP (2026-07-16): the loud-end world's own loud
             // overlay — BL placard dialed to the combo-shot scale + Bold ink,
             // and the Archivo Black chrome voice on the placard/title/strip.
-            // (The other placard worlds still ship the calm 3.0/Faint-Ghost-
-            // Stipple grammar via `bl`; Firetail alone spells its louder values.)
+            // C2: KEEPS its user-picked explicit BL corner (overrides the Auto
+            // derivation) and anchors its card TopLeft.
             "Firetail" => RenderCaps {
                 title_style: TitleStyle::Placard {
                     corner: PlacardCorner::BL,
                     scale: 4.5,
                     ink: PlacardInk::Bold,
                 },
+                card_anchor: model::CardAnchor::TopLeft,
                 chrome_face: model::ChromeFace::Named("Archivo Black"),
                 elevation: Elevation::Bordered,
                 ..RenderCaps::DEFAULT
             },
-            "Currawong" => {
-                RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT }
-            }
+            // C2: the iconic dark-technical statement world anchors TopLeft.
+            "Currawong" => RenderCaps {
+                elevation: Elevation::Bordered,
+                card_anchor: model::CardAnchor::TopLeft,
+                ..RenderCaps::DEFAULT
+            },
             // Wagtail: the 1-bit escape hatch (every field away from default)
             // + the page frame's first assignment + NO placard (the silent
             // pole announces nothing — user-confirmed).
@@ -1794,18 +1812,11 @@ fn personality_assignments_are_exactly_the_decided_table() {
             t.name
         );
     }
-    // Corner discipline (a gallery finding, pinned): every shipped placard is
-    // BOTTOM-LEFT — TR/BR clip long picker titles against the canvas edge.
-    for t in THEMES.iter() {
-        if let TitleStyle::Placard { corner, .. } = t.render_caps.title_style {
-            assert_eq!(
-                corner,
-                PlacardCorner::BL,
-                "{}: shipped placards are bottom-left (the TR/BR clipping finding)",
-                t.name
-            );
-        }
-    }
+    // Corner discipline is now the COMPOSITION-C2 no-clip OUTCOME law
+    // (`render::tests::overlay_personality::every_shipped_placard_world_wordmark_stays_on_canvas`)
+    // + the data-sanity guard (`every_shipped_placard_world_has_sane_corner_and_scale`),
+    // not a BL pin: the shrink-to-fit made every corner clip-safe, so the poster
+    // corner DERIVES from the card anchor (complementary) with per-world overrides.
 }
 
 /// THE PAGE-FRAME THEME LAW: the frame can never invent a color — its ink is

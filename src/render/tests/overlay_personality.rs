@@ -210,6 +210,114 @@ fn placard_corners_place_the_wordmark_in_four_screen_quadrants() {
     set_title_style_test_override(None);
 }
 
+/// COMPOSITION-C2 pure derivation: an `Auto` corner resolves COMPLEMENTARY to
+/// the card anchor (never under the card); an explicit corner passes through.
+#[test]
+fn derived_placard_corner_is_complementary_to_the_card_anchor() {
+    use theme::{CardAnchor, PlacardCorner};
+    // Card top-left → poster bottom-right (the balanced diagonal).
+    assert_eq!(
+        crate::render::derived_placard_corner(PlacardCorner::Auto, CardAnchor::TopLeft),
+        PlacardCorner::BR
+    );
+    // A centred card defaults the poster to bottom-right.
+    assert_eq!(
+        crate::render::derived_placard_corner(PlacardCorner::Auto, CardAnchor::TopCenter),
+        PlacardCorner::BR
+    );
+    // A right-shifted statement card → the poster drops to bottom-left.
+    assert_eq!(
+        crate::render::derived_placard_corner(
+            PlacardCorner::Auto,
+            CardAnchor::Inset { x_frac: 0.9 }
+        ),
+        PlacardCorner::BL
+    );
+    // A left-of-centre inset keeps the diagonal to bottom-right.
+    assert_eq!(
+        crate::render::derived_placard_corner(
+            PlacardCorner::Auto,
+            CardAnchor::Inset { x_frac: 0.2 }
+        ),
+        PlacardCorner::BR
+    );
+    // An EXPLICIT corner (Firetail's BL) is never overridden by the derivation.
+    for anchor in [CardAnchor::TopLeft, CardAnchor::TopCenter, CardAnchor::Inset { x_frac: 1.0 }] {
+        assert_eq!(
+            crate::render::derived_placard_corner(PlacardCorner::BL, anchor),
+            PlacardCorner::BL
+        );
+    }
+}
+
+/// COMPOSITION-C2 NO-CLIP LAW (replaces the old "every placard is BL" pin in
+/// `theme::tests`): for EVERY shipped placard world, at its OWN card anchor and
+/// its OWN (possibly `Auto`-derived) corner, the wordmark box stays fully on
+/// canvas — no stroke clips at any edge. The shrink-to-fit in
+/// `overlay_shape_placard` (added after the TR/BR-clip finding that once
+/// justified pinning BL) makes every corner safe; this asserts the OUTCOME with
+/// a deliberately LONG title (the worst-case width). Data-driven off the theme
+/// table so a NEW placard world is swept automatically, and it cross-checks the
+/// derived corner against the ONE pure owner.
+#[test]
+fn every_shipped_placard_world_wordmark_stays_on_canvas() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping every_shipped_placard_world_wordmark_stays_on_canvas: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_title_style_test_override(None); // each world's OWN placard data
+    set_card_anchor_test_override(None); // each world's OWN card anchor
+
+    let placard_worlds: Vec<(&str, theme::PlacardCorner)> = theme::THEMES
+        .iter()
+        .filter_map(|t| match t.render_caps.title_style {
+            theme::TitleStyle::Placard { corner, .. } => Some((t.name, corner)),
+            theme::TitleStyle::InlinePrefix => None,
+        })
+        .collect();
+    assert!(
+        !placard_worlds.is_empty(),
+        "the theme table must ship at least one placard world"
+    );
+    let (ww, wh) = (1200.0_f32, 800.0_f32);
+    for (world, data_corner) in placard_worlds {
+        theme::set_active_by_name(world).unwrap();
+        p.sync_theme();
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_title = "version history"; // a long worst-case wordmark
+        v.overlay_items = (0..10).map(|i| format!("Command {i}")).collect();
+        p.set_view(&v);
+        let geom = p.overlay_geometry(ww as u32);
+        let (x, y, w, h) = p
+            .overlay_shape_placard(&geom)
+            .expect("a placard world must shape a wordmark");
+        // Fully within the canvas — never a clipped word at ANY assigned corner.
+        assert!(
+            x >= -0.5 && x + w <= ww + 0.5,
+            "{world}: wordmark x-span [{x:.1}..{:.1}] must stay inside canvas width {ww}",
+            x + w
+        );
+        assert!(
+            y >= -0.5 && y + h <= wh + 0.5,
+            "{world}: wordmark y-span [{y:.1}..{:.1}] must stay inside canvas height {wh}",
+            y + h
+        );
+        // The corner it drew is the ONE pure owner's resolution of the data.
+        let resolved = crate::render::derived_placard_corner(
+            data_corner,
+            crate::render::effective_card_anchor(),
+        );
+        assert_ne!(
+            resolved,
+            theme::PlacardCorner::Auto,
+            "{world}: the derivation must resolve Auto to a concrete corner"
+        );
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 // --- byte identity: every world's overlay renders exactly as before --
 
 /// The HARD GATE: with NO override active (the shipped default on every

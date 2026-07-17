@@ -6,6 +6,11 @@
 
 use super::*;
 
+/// Pixels the active-lens UNDERLINE sits BELOW the strip run's shaped baseline
+/// (`overlay_shape_theme`). Small so the rule hugs the label — enough to clear
+/// the baseline for every chrome/mono/display face without striking the glyphs.
+const UNDERLINE_BASELINE_DROP: f32 = 2.0;
+
 /// Slice a full display plan (headers + item rows, from [`TextPipeline::theme_plan`]) to
 /// the ITEM window `[lo, hi)`: keep every `Item(i)` with `lo ≤ i < hi`, and re-hang the
 /// SECTION HEADER above the first surviving item of each section (a header whose whole
@@ -134,7 +139,7 @@ impl TextPipeline {
         // Foot hint (item 5) rides a SHORTER line — reclaim `lh - hint_h` per hint
         // row so the card hugs the tighter footer (matching the flat owner).
         let card_h = total_rows as f32 * lh + header_gap + 2.0 * pad
-            - hint_rows as f32 * (lh - self.overlay_hint_h());
+            - self.overlay_footer_reclaim(hint_rows);
         // MOTION-JUICE ENTRANCE: folded in AFTER the `avail_px`/row-fit math
         // above (which reads the SETTLED `card_y` — the transient drop must
         // never change how many rows fit), mirroring `overlay_geometry`'s own
@@ -278,13 +283,6 @@ impl TextPipeline {
             label_ranges.push((r, *active));
         }
 
-        // Foot hint (dim), symbol glyphs from the bundled face.
-        let hint_line = if geom.hint.is_empty() {
-            String::new()
-        } else {
-            format!("\n{}", geom.hint)
-        };
-
         // FIRST PASS at full BODY size. Then the strip's RESPONSIVE FOLD: at a
         // narrow window the full-size lens strip (Time Register …) can overflow the
         // card's text column — measured from the SHAPED line (real advances, not
@@ -292,11 +290,11 @@ impl TextPipeline {
         // fit, so every lens stays present + hit-testable instead of the far
         // right clipping away. At any comfortable width the measured strip fits
         // and the single full-size pass stands (byte-identical wide captures).
-        self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, &hint_line, 1.0);
+        self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, 1.0);
         let strip_w = self.theme_strip_px();
         if strip_w > geom.text_w {
             let scale = (geom.text_w / strip_w).max(0.5);
-            self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, &hint_line, scale);
+            self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, scale);
         }
 
         // Record the active-lens UNDERLINE from the shaped strip glyphs (line 1). Line-1
@@ -307,10 +305,22 @@ impl TextPipeline {
             let (a, b) = (ar.start.saturating_sub(1), ar.end.saturating_sub(1));
             let mut min_x = f32::MAX;
             let mut max_x = f32::MIN;
+            // Y-OWNER FIX (COMPOSITION-C2): the underline y must be read from the
+            // strip run's SHAPED BASELINE, never a fixed `2*lh` formula. The strip
+            // row is inflated by `header_gap` (a taller line box), and the label
+            // may shape at a display/mono CHROME face whose baseline sits high in
+            // that box — so `text_top + 2*lh - 3` landed MID-GLYPH (the underline
+            // struck through "File" on Tawny/Firetail). `run.line_y` is the real
+            // baseline in buffer space (same `geom.text_top + run.line_*` mapping
+            // the primary/secondary columns use); the underline sits a hair BELOW
+            // it for every face. The strip's responsive fold reshapes into the
+            // same `panel_buffer`, so this reads the FINAL (possibly scaled) run.
+            let mut baseline = f32::MIN;
             for run in self.panel_buffer.layout_runs() {
                 if run.line_i != 1 {
                     continue;
                 }
+                baseline = baseline.max(run.line_y);
                 for g in run.glyphs.iter() {
                     if g.start >= a && g.start < b {
                         min_x = min_x.min(g.x);
@@ -318,8 +328,8 @@ impl TextPipeline {
                     }
                 }
             }
-            if max_x > min_x {
-                let y = geom.text_top + 2.0 * self.overlay_lh() - 3.0;
+            if max_x > min_x && baseline > f32::MIN {
+                let y = geom.text_top + baseline + UNDERLINE_BASELINE_DROP;
                 Some([geom.text_left + min_x, y, max_x - min_x, 1.5])
             } else {
                 None
@@ -345,7 +355,6 @@ impl TextPipeline {
         strip_s: &str,
         label_ranges: &[(std::ops::Range<usize>, bool)],
         sep_ranges: &[std::ops::Range<usize>],
-        hint_line: &str,
         strip_scale: f32,
     ) {
         let m = self.metrics;
@@ -360,7 +369,6 @@ impl TextPipeline {
         let header_metrics = GlyphMetrics::new(m.font_size * ui * label, lh);
         let base = panel_attrs();
         let mk = |c| base.clone().color(c);
-        let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
         let sigil = "› ";
 
         // The world rows share the lone-column budget every no-right-column picker
@@ -505,18 +513,10 @@ impl TextPipeline {
             spans.push((msg.as_str(), mk(muted)));
         }
         if geom.hint_rows > 0 {
-            let mut lastb = 0usize;
-            for run in symbol_runs(hint_line) {
-                if run.start > lastb {
-                    spans.push((&hint_line[lastb..run.start], mk(muted)));
-                }
-                let end = run.end;
-                spans.push((&hint_line[run], sym(muted)));
-                lastb = end;
-            }
-            if lastb < hint_line.len() {
-                spans.push((&hint_line[lastb..], mk(muted)));
-            }
+            // The compact foot-hint through the ONE shared owner — IDENTICAL bottom
+            // geometry to the flat pickers (C2 footer-drift fix; the theme/faceted
+            // path used to draw this at FULL row height, a fat lip under the hint).
+            self.push_overlay_hint_spans(&mut spans, geom.hint.as_str(), muted);
         }
 
         self.panel_buffer

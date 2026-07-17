@@ -48,6 +48,14 @@ const OVERLAY_QUERY_BEAT: f32 = 0.72;
 /// row high. A single dial the gallery A/Bs; see [`TextPipeline::overlay_hint_h`].
 const OVERLAY_HINT_ROW: f32 = 0.62;
 
+/// The comfortable BREATH kept below the compact foot-hint before the card's
+/// bottom pad (C2 footer-tuning). The card counts each hint row as a full `lh`
+/// but renders it at [`OVERLAY_HINT_ROW`]; the height owner reclaims that
+/// difference LESS this breath, so the footer reads calm, never cramped against
+/// the edge. ONE token, applied identically to every `OverlayKind` through
+/// [`TextPipeline::overlay_footer_reclaim`].
+const OVERLAY_FOOTER_PAD: f32 = 5.0;
+
 /// PURE horizontal-placement policy for the summoned card: given the window
 /// width `ww`, the card's WIDE desired width, return its `(left, width)`.
 ///
@@ -109,6 +117,16 @@ pub(in crate::render) struct OverlayYProbe {
     pub primary: std::collections::BTreeMap<usize, f32>,
     /// Candidate-row index → the SECONDARY label's absolute glyph TOP.
     pub secondary: std::collections::BTreeMap<usize, f32>,
+    /// The faceting-lens STRIP run's shaped BASELINE (absolute canvas y), if a
+    /// strip is present (faceted/theme cards). `None` on a flat picker.
+    pub strip_baseline: Option<f32>,
+    /// The strip line box's BOTTOM (absolute canvas y) — the underline must stay
+    /// inside `[baseline, strip_line_bottom]`, never drift into the rows below.
+    pub strip_line_bottom: Option<f32>,
+    /// The active-lens UNDERLINE's y (`overlay_theme_underline`), if recorded.
+    /// The C2 y-owner law asserts this sits BELOW the strip baseline (never
+    /// mid-glyph — the Tawny/Firetail strike-through bug) yet within the row.
+    pub strip_underline_y: Option<f32>,
 }
 
 impl TextPipeline {
@@ -180,6 +198,18 @@ impl TextPipeline {
     /// card-fits-content law follows). Spell popup has no hint (`hint_rows == 0`).
     pub(in crate::render) fn overlay_hint_h(&self) -> f32 {
         (self.overlay_lh() * OVERLAY_HINT_ROW).round()
+    }
+
+    /// THE ONE FOOTER-PAD OWNER (C2) — the card-height reclaim for `hint_rows`
+    /// compact foot-hint rows. Each hint row is budgeted as a full `lh` in a
+    /// card's `total_rows`, but RENDERS at the shorter [`Self::overlay_hint_h`];
+    /// the card reclaims that difference LESS one comfortable breath
+    /// ([`OVERLAY_FOOTER_PAD`]) so the footer never crams against the bottom edge.
+    /// BOTH card-height owners ([`Self::overlay_geometry`] and the theme
+    /// [`Self::theme_geometry`]) call this, so every `OverlayKind` carries the
+    /// IDENTICAL bottom geometry the card-fits-content law now asserts no-wildcard.
+    pub(in crate::render) fn overlay_footer_reclaim(&self, hint_rows: usize) -> f32 {
+        hint_rows as f32 * (self.overlay_lh() - self.overlay_hint_h() - OVERLAY_FOOTER_PAD).max(0.0)
     }
 
     /// Shape + upload the SUMMONED navigation overlay for this frame: a tall
@@ -387,6 +417,18 @@ impl TextPipeline {
             self.overlay_selected.saturating_sub(geom.top_idx)
         };
         let band_top = overlay_row_top(geom.text_top, header_rows, geom.header_gap, sel_disp, lh);
+        // The strip line (line_i == 1) baseline + box bottom, so the C2 law can
+        // assert the active-lens underline sits below the label glyphs, in-row.
+        let mut strip_baseline = None;
+        let mut strip_line_bottom = None;
+        for run in self.panel_buffer.layout_runs() {
+            if run.line_i == 1 {
+                strip_baseline = Some(geom.text_top + run.line_y);
+                strip_line_bottom = Some(geom.text_top + run.line_top + run.line_height);
+                break;
+            }
+        }
+        let strip_underline_y = self.overlay_theme_underline.map(|q| q[1]);
         OverlayYProbe {
             lh,
             band_top,
@@ -400,6 +442,9 @@ impl TextPipeline {
                 .unwrap_or(geom.text_top),
             primary,
             secondary,
+            strip_baseline,
+            strip_line_bottom,
+            strip_underline_y,
         }
     }
 
@@ -514,7 +559,7 @@ impl TextPipeline {
         // foot hint (item 5) rides a SHORTER line, so reclaim `lh - hint_h` per
         // hint row — the card hugs the tighter footer instead of the old lip.
         let card_h = total_rows as f32 * self.overlay_lh() + header_gap + 2.0 * pad
-            - hint_rows as f32 * (self.overlay_lh() - self.overlay_hint_h());
+            - self.overlay_footer_reclaim(hint_rows);
         // vertical anchor near the top third (summoned, transient).
         // `self.menubar_reserve()` (`0.0` unless the WEB/LINUX MENU BAR is shown) —
         // the SAME accessor `doc_top`/the margin Outline/the search panel/the debug

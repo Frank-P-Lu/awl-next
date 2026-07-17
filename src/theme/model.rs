@@ -189,16 +189,27 @@ pub enum ImageReveal {
     Opaque,
 }
 
-/// Which CORNER of the summoned overlay card a [`TitleStyle::Placard`]
-/// wordmark anchors to — see [`TitleStyle`]'s own module doc for the
-/// mechanism. `TL`/`TR` sit level with the query line; `BL`/`BR` sit level
-/// with the card's foot.
+/// Which CANVAS CORNER a [`TitleStyle::Placard`] wordmark anchors to — see
+/// [`TitleStyle`]'s own module doc for the mechanism. `TL`/`TR` sit level with
+/// the query line; `BL`/`BR` sit level with the card's foot.
+///
+/// `Auto` (COMPOSITION-C2 default) DERIVES the corner from the world's own
+/// [`CardAnchor`] through the ONE pure owner
+/// [`crate::render::derived_placard_corner`] — COMPLEMENTARY placement so the
+/// wordmark never sits under the command surface (card top-left → poster
+/// bottom-right; a right-shifted card → bottom-left). A world overrides with an
+/// explicit corner only when its own composition wants one (Firetail's
+/// user-picked `BL`). The old "every placard is BL" pin is gone: the shrink-to-
+/// fit in `overlay_shape_placard` (added after that finding) means no corner
+/// clips a wordmark anymore, so the law now asserts NO-CLIP at the assigned
+/// corner rather than pinning BL.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlacardCorner {
     TL,
     TR,
     BL,
     BR,
+    Auto,
 }
 
 /// The ink a [`TitleStyle::Placard`] wordmark draws in — always DERIVED from
@@ -485,11 +496,14 @@ impl RenderCaps {
         highlight_texture: HighlightTexture::Wash,
         title_style: TitleStyle::InlinePrefix,
         page_frame: PageFrame::None,
-        // The PALETTE-COMPOSITION round's flip: every world's summoned card
-        // now anchors TOP-LEFT by default (reads more anchored + opens the
-        // right side for the ghost placard). Revert to the historical centered
-        // placement in ONE line here (`CardAnchor::TopCenter`).
-        card_anchor: CardAnchor::TopLeft,
+        // COMPOSITION-C2 flip (user: "for most themes the panel should NOT be on
+        // the left… probably half center… some left"): the DEFAULT anchor is now
+        // TOP-CENTER — the calm/symmetric temperament most worlds carry. The
+        // MINORITY of statement/asymmetric worlds (Currawong, the four placard
+        // worlds, Wagtail) opt into `TopLeft` as their own one-line DATA, opening
+        // the opposite corner for their wordmark. Per-world data through the ONE
+        // owner `render::effective_card_anchor` → `overlay_card_x`.
+        card_anchor: CardAnchor::TopCenter,
         // FIRETAIL-MAXIMALIST-SHOWCASE round: both new dials land INERT —
         // body face chrome, zero motion — on every world (byte-identical).
         chrome_face: ChromeFace::Body,
