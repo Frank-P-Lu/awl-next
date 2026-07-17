@@ -487,13 +487,22 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
         id: id.to_string(),
         timestamp: id.parse().unwrap_or(0),
         pinned,
+        name: None,
     };
     let row = |id: &str| mkrow(id, false);
     // THE CONSCIOUS MARK: the newest version is PINNED, so its faint secondary
     // column wears the "pinned" tag — assertable straight from the sidecar's
-    // `overlay.bindings`, the history block the picker draws from.
+    // `overlay.bindings`, the history block the picker draws from. NAMED SAVE
+    // POINTS: the middle version is NAMED — its NAME is the primary `items`
+    // text and its timestamp demotes into the `bindings` column, sidecar-
+    // assertable through the same existing fields (no new plumbing).
+    let named = crate::history::TimelineRow {
+        name: Some("draft A".into()),
+        pinned: true,
+        ..mkrow("200", true)
+    };
     let mut hist =
-        OverlayState::new_history(vec![mkrow("300", true), row("200"), row("100")], None, None);
+        OverlayState::new_history(vec![mkrow("300", true), named, row("100")], None, None);
     assert_eq!(hist.active_facet_id(), Some("all"));
     let hpng = dir.join("hist_all.png");
     capture_with(&hpng, &buf, &fold(&hist)).expect("history all capture renders");
@@ -505,10 +514,23 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
         "the pinned version's binding carries the mark: {:?}",
         hbinds[0]
     );
-    assert!(
-        !hbinds[1].as_str().unwrap().contains(crate::overlay::PIN_TAG),
-        "an un-pinned version stays bare: {:?}",
+    let hitems = hj["overlay"]["items"].as_array().unwrap();
+    assert_eq!(
+        hitems[1].as_str().unwrap(),
+        "draft A",
+        "the named point's NAME is its primary sidecar item: {:?}",
+        hitems[1]
+    );
+    assert_eq!(
+        hbinds[1].as_str().unwrap(),
+        "x · +0 −0",
+        "the named point's timestamp demotes into the secondary column: {:?}",
         hbinds[1]
+    );
+    assert!(
+        !hbinds[2].as_str().unwrap().contains(crate::overlay::PIN_TAG),
+        "an un-pinned version stays bare: {:?}",
+        hbinds[2]
     );
     assert_eq!(hj["overlay"]["lens"], serde_json::json!("all"));
     assert_eq!(

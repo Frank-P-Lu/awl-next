@@ -285,7 +285,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // the STATE of the read-only prose-diff view (`crate::prosediff`) the capture
 // harness rendered (`AWL_DIFF_OLD`/`AWL_DIFF_NEW`). A state oracle only — the
 // struck/washed APPEARANCE is asserted over the PNG's pixels.
-pub const SCHEMA_VERSION: u32 = 172;
+// `/173` — NAMED SAVE POINTS: "Keep version…" now opens a naming MINIBUFFER
+// (`OverlayKind::KeepName`, `overlay.mode == "keep_version"`, the Rename shape:
+// single editable row, prompt via `overlay.hint`). No new sidecar field — the
+// existing `overlay` block carries it; the version bumps because a new overlay
+// mode string is now reachable (the `/148`/`/157` precedent). A History picker's
+// NAMED row also re-shapes its existing cells (name as the primary `items` text,
+// "when · +N −M" in `bindings`); unnamed rows and a default capture are
+// byte-identical.
+pub const SCHEMA_VERSION: u32 = 173;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

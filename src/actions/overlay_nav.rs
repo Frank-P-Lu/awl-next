@@ -100,6 +100,41 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             _ => return Effect::None,
         }
     }
+    // NAMED SAVE POINTS — "Keep version…" MINIBUFFER: while the KeepName overlay's
+    // typed-name sub-state is active (armed the instant the overlay is BUILT — see
+    // `OverlayState::new_keep_name`), it OWNS every key modally: ANY printable char
+    // extends the typed name (no filter — a name is free display text), Backspace
+    // deletes, Enter COMMITS (closes the overlay itself and signals
+    // `Effect::KeepVersion { name }` — `Some(trimmed)` for real text, `None` for a
+    // blank Enter, the plain zero-friction keep), Esc CANCELS (closes, nothing
+    // recorded). Checked alongside the Rename/InsertLink blocks above — never open
+    // together with either.
+    if ctx.overlay.as_ref().unwrap().keep_edit.is_some() {
+        match action {
+            Action::InsertChar(c) => {
+                ctx.overlay.as_mut().unwrap().keep_edit_push(*c);
+                return Effect::None;
+            }
+            Action::DeleteBackward | Action::DeleteWordBackward => {
+                ctx.overlay.as_mut().unwrap().keep_edit_pop();
+                return Effect::None;
+            }
+            Action::Newline => {
+                let target = ctx.overlay.as_ref().unwrap().keep_edit_target();
+                *ctx.overlay = None;
+                return match target {
+                    Some(name) => Effect::KeepVersion { name },
+                    None => Effect::None,
+                };
+            }
+            Action::Cancel => {
+                *ctx.overlay = None;
+                return Effect::None;
+            }
+            // Every other key is swallowed (the edit is modal to the one row).
+            _ => return Effect::None,
+        }
+    }
     // SETTINGS VALUE EDIT: while an inline numeric edit is active (Enter landed on a
     // page-width / zoom row), the Settings menu OWNS every key modally — digits (plus
     // `.`/`%` for zoom) build the value in the row's own cell, Backspace deletes, Enter

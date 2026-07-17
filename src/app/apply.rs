@@ -745,6 +745,11 @@ impl App {
                 // filesystem, no deferred Effect needed) and closes the overlay
                 // itself. This arm is for match exhaustiveness only.
                 crate::overlay::OverlayKind::InsertLink => {}
+                // NAMED SAVE POINTS: the Keep-version minibuffer never emits an
+                // OverlayAccept — Enter signals `Effect::KeepVersion { name }`
+                // (handled below) and closes the overlay at the core seam. This
+                // arm is for match exhaustiveness only.
+                crate::overlay::OverlayKind::KeepName => {}
             },
             // Go-to's HEADINGS lens accepted (the retired Outline picker): move the
             // cursor to the chosen heading's document line.
@@ -795,9 +800,10 @@ impl App {
             // waiting on this buffer (native-only — no daemon on wasm) and switch
             // to the previously-open buffer (the LastBuffer swap).
             actions::Effect::FinishBuffer => self.finish_buffer(),
-            // "Keep version": THE CONSCIOUS MARK — pin the current buffer as a
-            // prune-exempt local-history snapshot (the store owns the git/off gates).
-            actions::Effect::KeepVersion => self.keep_version(),
+            // "Keep version…": THE CONSCIOUS MARK — pin the current buffer as a
+            // prune-exempt local-history snapshot, optionally NAMED (the naming
+            // minibuffer's commit; the store owns the git/off gates).
+            actions::Effect::KeepVersion { name } => self.keep_version(name.as_deref()),
             // THE WRITER'S DIFF from the HISTORY picker: open the read-only prose-diff
             // view against the highlighted version (its restore id). The overlay was
             // already closed by the core's `dispose_after_accept`.

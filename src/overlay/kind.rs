@@ -133,6 +133,16 @@ pub enum OverlayKind {
     /// empty / from the clipboard-if-URL / from an existing link's current URL,
     /// per `Action::InsertLink`'s own doc. No list to browse.
     InsertLink,
+    /// NAMED SAVE POINTS: the "Keep version…" minibuffer — a single-row prompt
+    /// for the kept version's OPTIONAL name, mirroring [`OverlayKind::Rename`]'s
+    /// exact shape (the modal `keep_edit` sub-state owns every key; the
+    /// live-typed name IS the row's primary cell). Enter COMMITS
+    /// (`Effect::KeepVersion { name }` — `Some(name)` for a typed name, `None`
+    /// for a blank Enter, which is exactly the pre-name plain keep: zero
+    /// friction preserved), Esc cancels (nothing recorded). Opens empty (there
+    /// is no old name to seed — a fresh point is being marked). No list to
+    /// browse.
+    KeepName,
 }
 
 /// How a picker's ACCEPT (Enter on a committed item) disposes of the breadcrumb
@@ -174,7 +184,7 @@ impl OverlayKind {
     /// `rowlayout` — are the real compile-time guards; this is iteration
     /// convenience, kept in lockstep by hand like `CaretMode::ALL`).
     #[allow(dead_code)] // consumed only by the `facets`/law tests today.
-    pub const ALL: [OverlayKind; 16] = [
+    pub const ALL: [OverlayKind; 17] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -191,7 +201,18 @@ impl OverlayKind {
         OverlayKind::Assets,
         OverlayKind::Rename,
         OverlayKind::InsertLink,
+        OverlayKind::KeepName,
     ];
+
+    /// Resolve a capture-sidecar MODE string ([`Self::as_str`]) back to its kind —
+    /// derived from [`Self::ALL`] + `as_str` (no third match to maintain), so it
+    /// can never disagree with the forward mapping. `None` for an unknown string.
+    /// Lets the headless capture path consult the REAL per-kind owners
+    /// ([`Self::draws_title_prefix`]) instead of re-listing mode strings by hand —
+    /// the aligned-copy drift the KeepName round caught in `capture/modes.rs`.
+    pub fn from_mode(mode: &str) -> Option<OverlayKind> {
+        Self::ALL.iter().copied().find(|k| k.as_str() == mode)
+    }
 
     /// The short mode string used in the capture sidecar.
     pub fn as_str(self) -> &'static str {
@@ -212,6 +233,7 @@ impl OverlayKind {
             OverlayKind::Assets => "assets",
             OverlayKind::Rename => "rename",
             OverlayKind::InsertLink => "insert_link",
+            OverlayKind::KeepName => "keep_version",
         }
     }
 
@@ -259,6 +281,12 @@ impl OverlayKind {
             // declared here anyway so the law test's no-wildcard sweep can't
             // silently forget this kind.)
             OverlayKind::InsertLink => Navigate,
+            // NAMED SAVE POINTS: a commit LANDS a result (the version is kept),
+            // so it closes the whole stack — same class as Rename/InsertLink.
+            // (In practice the `keep_edit` modal intercept closes the overlay
+            // itself at Enter, before this is consulted — declared anyway for
+            // the no-wildcard sweep.)
+            OverlayKind::KeepName => Navigate,
         }
     }
 
@@ -418,6 +446,10 @@ impl OverlayKind {
             // `link_edit` prompt (via `foot_hint`) teaches Enter/Esc, mirroring
             // Rename exactly.
             OverlayKind::InsertLink => vec![enter("insert link"), key("esc", "cancel")],
+            // NAMED SAVE POINTS: no list nav either (a single editable row) —
+            // its own `keep_edit` prompt (via `foot_hint`) teaches Enter/Esc,
+            // mirroring Rename/InsertLink exactly.
+            OverlayKind::KeepName => vec![enter("keep"), key("esc", "cancel")],
         }
     }
 
@@ -459,6 +491,9 @@ impl OverlayKind {
             // LINKS V2 always summons with exactly one row (the editable URL) —
             // this arm is structurally unreachable, mirroring Rename.
             OverlayKind::InsertLink => "no matches",
+            // NAMED SAVE POINTS always summons with exactly one row (the
+            // editable name) — structurally unreachable, mirroring Rename.
+            OverlayKind::KeepName => "no matches",
         }
     }
 
@@ -490,19 +525,24 @@ impl OverlayKind {
             OverlayKind::Assets => "unused assets",
             OverlayKind::Rename => "rename",
             OverlayKind::InsertLink => "insert link",
+            OverlayKind::KeepName => "keep version",
         }
     }
 
     /// THE OVERLAY-TITLES ROUND: does this kind's RENDER draw the `title() › `
-    /// prefix on its input line? `false` for Rename/InsertLink — their own modal
-    /// prompt (`foot_hint`, "rename to:"/"link to:") already orients, so a second
-    /// self-announcement would be redundant chrome; the SIDECAR still reports
-    /// [`Self::title`] unconditionally for every kind (the law is "every kind names
-    /// itself", not "every kind draws it" — see [`Self::title`]'s own doc). Spell
-    /// (no input line at all, `header_rows == 0`) needs no exclusion here — the
+    /// prefix on its input line? `false` for Rename/InsertLink/KeepName — their
+    /// own modal prompt (`foot_hint`, "rename to:"/"link to:"/"name this
+    /// version:") already orients, so a second self-announcement would be
+    /// redundant chrome; the SIDECAR still reports [`Self::title`]
+    /// unconditionally for every kind (the law is "every kind names itself",
+    /// not "every kind draws it" — see [`Self::title`]'s own doc). Spell (no
+    /// input line at all, `header_rows == 0`) needs no exclusion here — the
     /// render path simply never reaches a query line to prefix for it.
     pub fn draws_title_prefix(self) -> bool {
-        !matches!(self, OverlayKind::Rename | OverlayKind::InsertLink)
+        !matches!(
+            self,
+            OverlayKind::Rename | OverlayKind::InsertLink | OverlayKind::KeepName
+        )
     }
 
     /// THE SETTINGS-MARKER GLYPH (the union round): a settings row reached via the

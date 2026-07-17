@@ -238,14 +238,18 @@ pub enum Effect {
     /// Headless replay treats this exactly like `LastBuffer` — a no-op (no daemon,
     /// no 2-deep history in a one-shot replay).
     FinishBuffer,
-    /// THE CONSCIOUS MARK ("Keep version"): record the current buffer as a
-    /// PINNED, prune-EXEMPT local-history snapshot. The pure core can't reach the
-    /// store (no fs / config / buffer path), so it signals this for the live App to
-    /// perform ([`crate::app::App::keep_version`] → [`crate::history::record_pinned`]).
-    /// LIVE-APP-ONLY: the headless `--keys` replay no-ops it (the history determinism
-    /// gate — a capture never touches the store), so a settled frame stays
-    /// byte-identical.
-    KeepVersion,
+    /// THE CONSCIOUS MARK ("Keep version…"): the naming minibuffer COMMITTED —
+    /// record the current buffer as a PINNED, prune-EXEMPT local-history snapshot,
+    /// optionally NAMED (`Some("draft A")` when the user typed a name, `None` for
+    /// a blank Enter — the plain, zero-friction keep). The pure core can't reach
+    /// the store (no fs / config / buffer path), so it signals this for the live
+    /// App to perform ([`crate::app::App::keep_version`] →
+    /// [`crate::history::record_pinned`]). LIVE-APP-ONLY: the headless `--keys`
+    /// replay no-ops it (the history determinism gate — a capture never touches
+    /// the store), so a settled frame stays byte-identical; the naming
+    /// minibuffer's open/type/cancel flow itself IS core-driven and fully
+    /// `--keys`-drivable (see `overlay_nav`'s `keep_edit` block).
+    KeepVersion { name: Option<String> },
     /// THE WRITER'S DIFF, from the HISTORY picker: open the read-only prose-diff view
     /// comparing the current buffer against the version whose restore `id` is carried
     /// here (the highlighted row's — the same opaque id [`crate::history::load`]
@@ -962,12 +966,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenAssetClean => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Assets);
         }
-        // "Keep version": THE CONSCIOUS MARK — record the current buffer as a
-        // PINNED, prune-exempt snapshot. The core can't reach the store (fs/config/
-        // path), so it signals the caller; the live App writes it, the headless
-        // replay no-ops it (history determinism gate). See `Effect::KeepVersion`.
+        // "Keep version…": THE CONSCIOUS MARK — summon the NAMED-SAVE-POINT
+        // minibuffer (an optional name for the kept version, the Rename/InsertLink
+        // precedent: a single editable row whose modal `keep_edit` sub-state owns
+        // every key). Enter commits `Effect::KeepVersion { name }` — a blank Enter
+        // is the plain keep, so today's zero-friction path is one extra Enter; Esc
+        // cancels with nothing recorded. Opened unconditionally, mirroring the old
+        // always-fire arm: the store's own gates (git-managed / history-off / no
+        // history key yet) still decide at commit, exactly as they always did.
         Action::KeepVersion => {
-            effect = Effect::KeepVersion;
+            *ctx.overlay = Some(OverlayState::new_keep_name());
         }
         // THE WRITER'S DIFF ("Compare with version…" from the BUFFER): open the
         // read-only prose-diff view against the most-recent version. Markdown buffers

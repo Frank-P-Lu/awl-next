@@ -38,8 +38,10 @@ ladder: everything from the last ~15 minutes, then one per writing
 session, then one per day, then one per week — never a flat FIFO
 cutoff. {{key:version_history}} opens the timeline for the current
 file; Enter on any entry restores it as one ordinary undoable edit.
-"Keep version" ({{key:command_palette}}) pins a snapshot the retention
-ladder will never prune. A file under git skips awl's own history
+"Keep version…" ({{key:command_palette}}) pins a snapshot the retention
+ladder will never prune, and prompts for an optional name — Enter with
+text keeps a named point (the timeline shows the name), a blank Enter
+keeps it unnamed. A file under git skips awl's own history
 entirely — `git log` is that file's timeline.
 
 **A corrupted store never eats your data.** Session state, usage
@@ -124,7 +126,7 @@ markers below, byte for byte).
 | Version history… | ⌘⇧H | Ctrl+Shift+H |
 | Compare with version… |  |  |
 | Clean unused assets… |  |  |
-| Keep version |  |  |
+| Keep version… |  |  |
 | Last file | ⌃Tab | Ctrl+Tab |
 | New note | ⌘N | Ctrl+N |
 | Move note… |  |  |
@@ -258,7 +260,7 @@ running in a `<canvas>` with no native filesystem underneath it.
 | Getting a file out | Already on disk | "Download file" ({{key:command_palette}}) — saves the active buffer as a plain-text download |
 
 **Hidden on web:** Recent projects…, Version history…, Compare with
-version…, Clean unused assets…, Keep version, Finish file, Lifetime stats,
+version…, Clean unused assets…, Keep version…, Finish file, Lifetime stats,
 Writing streaks, Quit, Check for Updates — daemon, session-restore, and
 local-version-history machinery with nothing to attach to in a browser tab.
 

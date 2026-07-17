@@ -710,11 +710,14 @@ impl<'a> ReplaySession<'a> {
             | actions::Effect::SettingValueCommit { .. }
             | actions::Effect::SettingPathPick { .. }
             | actions::Effect::FinishBuffer
-            // KEEP THIS VERSION: pinning a snapshot writes the local-history store,
-            // a live-App-only concern (`App::keep_version`) — the history determinism
-            // gate keeps every store write off the capture path, so this is a no-op
-            // here (the pin/exemption logic is unit-tested in `history/` instead).
-            | actions::Effect::KeepVersion
+            // KEEP THIS VERSION: pinning a (possibly NAMED) snapshot writes the
+            // local-history store, a live-App-only concern (`App::keep_version`) —
+            // the history determinism gate keeps every store write off the capture
+            // path, so this is a no-op here (the pin/name/exemption logic is
+            // unit-tested in `history/` instead; the naming MINIBUFFER's
+            // open/type/cancel flow IS core-driven and stays fully
+            // `--keys`-drivable, mirroring Rename — only the commit is inert).
+            | actions::Effect::KeepVersion { .. }
             // THE WRITER'S DIFF (Compare with version…): entering the read-only diff
             // view resolves a history version + renders the transcript, a live-App-only
             // concern (`App::enter_diff_view_for` / `compare_with_latest`). The capture
@@ -1884,6 +1887,54 @@ mod tests {
         let root = PathBuf::from("/proj");
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         assert!(res.overlay.is_none(), "nothing to rename on a pathless buffer");
+    }
+
+    // ── NAMED SAVE POINTS: the Keep-version minibuffer stays --keys-drivable ──
+
+    #[test]
+    fn replay_keys_drives_the_keep_version_minibuffer_prompt_and_sidecar_reflects_typing() {
+        // Cmd-P → "keep" → Enter opens the naming minibuffer (empty — a fresh
+        // point has no old name); typing builds the optional name live — all
+        // through the shared core, so both the overlay STATE and its
+        // sidecar-facing `foot_hint()` (the same seam Rename/InsertLink ride)
+        // reflect the in-progress edit with zero live App involved.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e e p RET d r a f t").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("Keep version… opens the naming minibuffer");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::KeepName);
+        assert_eq!(ov.corpus, vec!["draft".to_string()], "typing builds the name from empty");
+        assert_eq!(
+            ov.foot_hint(),
+            "name this version: draft   Enter keep   Esc cancel",
+            "the live prompt is sidecar-visible via the same foot_hint seam Rename uses"
+        );
+    }
+
+    #[test]
+    fn replay_keys_keep_version_minibuffer_esc_cancels_with_no_overlay_left() {
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e e p RET x Esc").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "Esc closes the minibuffer outright, nothing kept");
+    }
+
+    #[test]
+    fn replay_keys_keep_version_commit_closes_and_defers_the_store_write() {
+        // Enter commits through the REAL keymap: the overlay closes and the
+        // deferred Effect::KeepVersion { name } is the documented headless no-op
+        // (the history determinism gate — a capture never touches the store), so
+        // the buffer and fs stay untouched.
+        use crate::fs::InMemoryFs;
+        let _g = crate::fs::FsGuard::install(std::sync::Arc::new(InMemoryFs::new()));
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("h i s-p k e e p RET d r a f t RET").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "commit closes the minibuffer");
+        assert_eq!(buffer.text(), "hi", "the keep never edits the buffer");
     }
 
     // ── LINKS V2: Cmd-K stays --keys-drivable through the shared core ──

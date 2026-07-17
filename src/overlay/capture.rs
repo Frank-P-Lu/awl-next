@@ -172,6 +172,31 @@ impl LinkEdit {
     }
 }
 
+/// NAMED SAVE POINTS: the live "Keep version…" minibuffer sub-state (`Some` only
+/// for [`OverlayKind::KeepName`], armed the instant the overlay is BUILT by
+/// [`OverlayState::new_keep_name`] — mirrors [`LinkEdit`]'s "nothing to browse
+/// before typing starts" shape exactly, with NO character filter (a name is free
+/// display text, never a path or URL). The typed name is OPTIONAL by design:
+/// Enter on an empty input commits the plain (nameless) keep — today's zero-
+/// friction behavior — while Enter with text commits a NAMED point.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeepEdit {
+    /// The text typed so far. Seeded EMPTY (a fresh point is being marked —
+    /// there is no old name to edit).
+    pub input: String,
+}
+
+impl KeepEdit {
+    /// The dim PROMPT line the card shows while typing, surfaced to the sidecar's
+    /// `overlay.hint` via [`OverlayState::foot_hint`] — the exact seam
+    /// [`RenameEdit::prompt`]/[`LinkEdit::prompt`] ride, so the naming flow is
+    /// `--keys`-verifiable with ZERO new sidecar plumbing. "Enter keep" holds for
+    /// an empty input too (a blank Enter IS the plain keep).
+    pub fn prompt(&self) -> String {
+        format!("name this version: {}   Enter keep   Esc cancel", self.input)
+    }
+}
+
 impl OverlayState {
     /// REBIND MENU: begin a capture for the highlighted command (catalog index). A
     /// no-op when no row matches the filter. Opens in `ChooseMode` with KEY preselected.
@@ -430,5 +455,61 @@ impl OverlayState {
     /// consumed when Enter commits. `None` when no link edit is active.
     pub fn link_edit_target(&self) -> Option<(String, LinkEditMode)> {
         self.link_edit.as_ref().map(|le| (le.input.clone(), le.mode.clone()))
+    }
+
+    /// NAMED SAVE POINTS: summon the "Keep version…" minibuffer — build the
+    /// fresh overlay with its single editable row EMPTY (no old name to seed,
+    /// unlike [`Self::new_rename`]'s pre-fill; the lockstep corpus[0] ↔
+    /// `keep_edit.input` convention is otherwise identical).
+    pub fn new_keep_name() -> Self {
+        let mut s = Self::new_marked(
+            OverlayKind::KeepName,
+            vec![String::new()],
+            vec![false],
+            vec![false],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.keep_edit = Some(KeepEdit { input: String::new() });
+        s
+    }
+
+    /// KEEP-VERSION MINIBUFFER: append `c` to the typed name — NO character
+    /// filter (a name is free display text; even `/` is fine — it never becomes
+    /// a path, unlike [`Self::rename_edit_push`]'s rejection). Mirrors the
+    /// change into `corpus[0]`. A no-op when no keep edit is active.
+    pub fn keep_edit_push(&mut self, c: char) {
+        let Some(ke) = self.keep_edit.as_mut() else {
+            return;
+        };
+        ke.input.push(c);
+        let text = ke.input.clone();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
+    /// KEEP-VERSION MINIBUFFER: delete the last typed char, mirroring the change
+    /// into `corpus[0]`. A no-op when no keep edit is active.
+    pub fn keep_edit_pop(&mut self) {
+        let Some(ke) = self.keep_edit.as_mut() else {
+            return;
+        };
+        ke.input.pop();
+        let text = ke.input.clone();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
+    /// KEEP-VERSION MINIBUFFER commit target: the OPTIONAL typed name, consumed
+    /// when Enter commits — `Some(trimmed)` for real text, `None` for an
+    /// empty/whitespace-only input (the plain, nameless keep). Outer `None`
+    /// when no keep edit is active at all.
+    pub fn keep_edit_target(&self) -> Option<Option<String>> {
+        let ke = self.keep_edit.as_ref()?;
+        let trimmed = ke.input.trim();
+        Some((!trimmed.is_empty()).then(|| trimmed.to_string()))
     }
 }
