@@ -715,6 +715,14 @@ impl<'a> ReplaySession<'a> {
             // gate keeps every store write off the capture path, so this is a no-op
             // here (the pin/exemption logic is unit-tested in `history/` instead).
             | actions::Effect::KeepVersion
+            // THE WRITER'S DIFF (Compare with version…): entering the read-only diff
+            // view resolves a history version + renders the transcript, a live-App-only
+            // concern (`App::enter_diff_view_for` / `compare_with_latest`). The capture
+            // renders the diff VIEW through its own env harness (`AWL_DIFF_OLD`/`_NEW`)
+            // instead, so both compare effects are no-ops here; the transcript's pure
+            // serializer + the view's read-only enforcement are unit-tested.
+            | actions::Effect::CompareVersion(_)
+            | actions::Effect::CompareLatest
             // FollowLink (C-c C-o): opening the OS browser is a live-App-only
             // handoff (`App::follow_link`) — a capture must never spawn a browser,
             // so it is a no-op here (the URL extraction itself is unit-tested pure).
@@ -883,6 +891,32 @@ fn capture_screenshot(
             });
 
             let mut buffer = load_buffer(&file);
+            // PROSE-DIFF VIEW (capture harness, env-gated — a no-op unless
+            // AWL_DIFF_OLD/NEW are set): render the marked-up-manuscript transcript
+            // (the pure `prosediff` core → awl's own strike / highlight / blockquote-
+            // dim vocabulary) as a markdown scratch buffer, so `--screenshot` renders
+            // the READ-ONLY diff view (a live `App` feature) pixel-for-pixel and the
+            // sidecar `diff` block reports its state. See `src/prosediff.rs`.
+            if let Some((md, counts, label)) = crate::prosediff::env_capture_render() {
+                buffer = crate::buffer::Buffer::from_str(&md);
+                // Park the caret on the blank line 1 (between the title and the first
+                // diff block) so NO line's WYSIWYG conceal reveals — the reveal is
+                // caret-line-scoped and line 1 carries no markup, so the title's `#`
+                // and every `==`/`>`/strike marker below stay concealed: the clean
+                // marked-up manuscript, never a revealed-raw line. Mirrors
+                // `App::diff_view` (the live read-only view parks the caret the same
+                // way — the ONE reveal-suppression rule, shared, so live == capture).
+                buffer.set_cursor(buffer.line_col_to_char(1, 0));
+                opts.diff = Some(capture::DiffInfo {
+                    active: true,
+                    label,
+                    struck: counts.struck,
+                    washed: counts.washed,
+                    modified: counts.modified,
+                    moved: counts.moved,
+                    folds: counts.folds,
+                });
+            }
             // Replay `--keys` FIRST so the cursor/selection/search the spec
             // produces are what the capture reflects. Fold the App-level state
             // (zoom / selection / search) the replay produced into the capture

@@ -122,6 +122,7 @@ markers below, byte for byte).
 | Go to heading… |  |  |
 | Spell suggestions… | ⌘; | Ctrl+; |
 | Version history… | ⌘⇧H | Ctrl+Shift+H |
+| Compare with version… |  |  |
 | Clean unused assets… |  |  |
 | Keep version |  |  |
 | Last file | ⌃Tab | Ctrl+Tab |
@@ -256,10 +257,10 @@ running in a `<canvas>` with no native filesystem underneath it.
 | Paste | From the OS clipboard | From awl's own kill ring only — an external copy doesn't appear until you've copied something from awl at least once |
 | Getting a file out | Already on disk | "Download file" ({{key:command_palette}}) — saves the active buffer as a plain-text download |
 
-**Hidden on web:** Recent projects…, Version history…, Clean unused
-assets…, Keep version, Finish file, Lifetime stats, Writing streaks, Quit,
-Check for Updates — daemon, session-restore, and local-version-history
-machinery with nothing to attach to in a browser tab.
+**Hidden on web:** Recent projects…, Version history…, Compare with
+version…, Clean unused assets…, Keep version, Finish file, Lifetime stats,
+Writing streaks, Quit, Check for Updates — daemon, session-restore, and
+local-version-history machinery with nothing to attach to in a browser tab.
 
 **A couple of native chords belong to the browser itself** (new tab,
 new window, and similar). {{key:new_note}} and {{key:switch_theme}}

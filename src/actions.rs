@@ -246,6 +246,24 @@ pub enum Effect {
     /// gate — a capture never touches the store), so a settled frame stays
     /// byte-identical.
     KeepVersion,
+    /// THE WRITER'S DIFF, from the HISTORY picker: open the read-only prose-diff view
+    /// comparing the current buffer against the version whose restore `id` is carried
+    /// here (the highlighted row's — the same opaque id [`crate::history::load`]
+    /// resolves). The pure core can't reach the store or render the transcript
+    /// (no fs / no prosediff render seam in `ActionCtx`), so it signals this for the
+    /// live App to perform ([`crate::app::App::enter_diff_view_for`]). LIVE-APP-ONLY:
+    /// the headless `--keys` replay no-ops it (a capture renders the diff via the
+    /// `AWL_DIFF_*` harness instead), so a settled frame stays byte-identical.
+    CompareVersion(String),
+    /// THE WRITER'S DIFF, from the BUFFER (palette "Compare with version…", no
+    /// overlay): open the read-only prose-diff view comparing the current buffer
+    /// against its MOST-RECENT version — a loose file's newest history snapshot, or a
+    /// git-managed file's HEAD (`git show`). The core can't list the store, so it
+    /// signals this bare request for the live App to resolve the latest id + enter the
+    /// view ([`crate::app::App::compare_with_latest`]); a buffer with no history is a
+    /// calm no-op there. Only produced for a markdown buffer (a `.rs`/`.txt`/scratch
+    /// buffer is a calm no-op in the core). LIVE-APP-ONLY: headless replay no-ops it.
+    CompareLatest,
     /// C-c C-o (follow-link-at-point): the caret sat inside a markdown link, whose
     /// destination URL is carried here for the caller to open in the OS default
     /// browser (a user-initiated handoff — the app never fetches it, so the
@@ -950,6 +968,18 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // replay no-ops it (history determinism gate). See `Effect::KeepVersion`.
         Action::KeepVersion => {
             effect = Effect::KeepVersion;
+        }
+        // THE WRITER'S DIFF ("Compare with version…" from the BUFFER): open the
+        // read-only prose-diff view against the most-recent version. Markdown buffers
+        // only (a `.rs`/`.txt`/scratch buffer is a calm no-op, mirroring the format
+        // toggles); the core can't list the store, so it signals the caller to resolve
+        // the latest id + render the transcript. From the open HISTORY picker this
+        // action is intercepted earlier (`overlay_nav`, comparing the highlighted row)
+        // and never reaches here. See `Effect::CompareLatest`.
+        Action::CompareVersion => {
+            if ctx.buffer.is_markdown() {
+                effect = Effect::CompareLatest;
+            }
         }
         // Summon the one-level browse navigator at the ROOT level (browse_dir =
         // None). Descend/ascend then rebuild it via `browse_to`.

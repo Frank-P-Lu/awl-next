@@ -499,6 +499,96 @@ fn markdown_highlight_tag_present_in_sidecar() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// THE WRITER'S DIFF — the read-only prose-diff view renders end-to-end: the
+/// capture harness (`AWL_DIFF_*`, here driven directly) turns the marked-up
+/// transcript into a real GPU frame + sidecar. Asserts (1) the sidecar `diff` block
+/// reports the view's STATE (active, a struck deletion, a washed insertion), and
+/// (2) — the APPEARANCE, over the PNG's actual PIXELS, per the sidecar-vs-appearance
+/// tripwire — that the washed insertion draws a FILLED wash band: a row with a
+/// large run of non-background pixels, which sparse text alone can never produce
+/// (the wash tints the whole line, behind glyphs and gaps alike). The struck
+/// deletion's presence is state-checked (`struck >= 1`) + confirmed in the drawn
+/// text; the wash BAND is the pixel-level proof.
+#[test]
+fn prose_diff_view_renders_wash_band_pixels_and_reports_state() {
+    if !adapter_available() {
+        eprintln!("skipping prose_diff_view_renders_wash_band_pixels_and_reports_state: no wgpu adapter");
+        return;
+    }
+    let _g = crate::testlock::serial();
+    let dir = std::env::temp_dir().join(format!("awl_diffview_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // A deletion + a LONG inserted paragraph (wraps to the full prose column, so its
+    // highlight wash fills a wide band of pixels) — exactly the serializer's output.
+    let old = "Keep this opening paragraph exactly as it stood before.\n\nDrop this whole paragraph entirely now, it no longer earns its place.";
+    let new = "Keep this opening paragraph exactly as it stood before.\n\nAn entirely new paragraph arrives in its place, long enough to wrap across the full width of the prose column so its highlight wash paints a wide continuous band the pixel scan can find.";
+    let (transcript, counts) = crate::prosediff::diff_and_render(
+        old,
+        new,
+        crate::prosediff::Params::shipping(),
+        "Comparing with earlier",
+    );
+    assert!(counts.struck >= 1 && counts.washed >= 1, "the fixture has both a deletion and an insertion");
+
+    let mut buf = Buffer::from_str(&transcript);
+    buf.set_path(dir.join("diff.md"));
+    // Park the caret on the blank line 1 so no WYSIWYG line reveals raw (the view's rule).
+    buf.set_cursor(buf.line_col_to_char(1, 0));
+    let opts = CaptureOpts {
+        diff: Some(crate::capture::DiffInfo {
+            active: true,
+            label: "earlier".to_string(),
+            struck: counts.struck,
+            washed: counts.washed,
+            modified: counts.modified,
+            moved: counts.moved,
+            folds: counts.folds,
+        }),
+        ..CaptureOpts::default()
+    };
+    let png = dir.join("diff.png");
+    capture_with(&png, &buf, &opts).expect("diff view capture");
+
+    // (1) STATE: the sidecar `diff` block reports an active view with the right shape.
+    let json = std::fs::read_to_string(png.with_extension("json")).unwrap();
+    let diff = &json[json.find("\"diff\":").unwrap()..];
+    assert!(diff.contains("\"active\": true"), "diff view active: {diff:.160}");
+    assert!(diff.contains("\"struck\": 1"), "one struck deletion in state: {diff:.160}");
+    assert!(diff.contains("\"washed\": 1"), "one washed insertion in state: {diff:.160}");
+    // The washed insertion is in the render model (its `==` dims to markup).
+    let md_spans = &json[json.find("\"md_spans\":").unwrap()..json.find("\"syn_lang\":").unwrap()];
+    assert!(md_spans.contains("\"highlight\""), "washed insertion is a highlight span: {md_spans:.200}");
+
+    // (2) APPEARANCE (real pixels): the washed insertion draws a FILLED wash band —
+    // some row carries a large run of non-background pixels. The page background is
+    // the top-left corner pixel; the wash tints the whole insertion line (behind
+    // glyphs AND gaps), so its row's non-bg count dwarfs any sparse-text row.
+    let img = image::open(&png).expect("decode diff PNG").to_rgba8();
+    let (w, h) = img.dimensions();
+    let bg = *img.get_pixel(3, 3);
+    let differs = |p: &image::Rgba<u8>| -> bool {
+        let d = |a: u8, b: u8| (a as i32 - b as i32).abs();
+        d(p[0], bg[0]) + d(p[1], bg[1]) + d(p[2], bg[2]) > 30
+    };
+    let mut max_row_nonbg = 0u32;
+    for y in 0..h {
+        let mut n = 0u32;
+        for x in 0..w {
+            if differs(img.get_pixel(x, y)) {
+                n += 1;
+            }
+        }
+        max_row_nonbg = max_row_nonbg.max(n);
+    }
+    assert!(
+        max_row_nonbg >= 300,
+        "a filled highlight-wash band should paint a wide row of non-bg pixels; max row non-bg = {max_row_nonbg} (canvas {w}x{h})"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// GFM TABLE: a `.md` buffer with a table yields the three structural tags in the
 /// sidecar `md_spans` block — `table_pipe` (the cell `|`), `table_sep` (the
 /// `|---|` header-separator row), and `table_header` (a header cell's content) —

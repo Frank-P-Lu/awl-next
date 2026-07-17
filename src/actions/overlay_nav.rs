@@ -542,6 +542,28 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             ctx.overlay.as_mut().unwrap().toggle_hidden();
             return Effect::None;
         }
+        Action::CompareVersion | Action::InsertTab => {
+            // THE WRITER'S DIFF from the HISTORY picker: open the read-only prose-diff
+            // view comparing the current buffer against the HIGHLIGHTED version. Reached
+            // by TAB (the picker's own "compare" affordance, taught in the foot hint —
+            // spending no global chord) or by a `[keys]`-rebound Compare chord. Emit the
+            // highlighted row's opaque restore id (which the caller resolves via
+            // `history::load` + renders through `prosediff`, exactly as the buffer-path
+            // Compare does) and CLOSE the stack — you've navigated into the diff, not
+            // configured the picker. The synthetic "no history yet" row has an empty id,
+            // so it is a calm no-op. In ANY OTHER picker Tab stays inert (it was already
+            // a no-op there), so nothing else changes.
+            let ov = ctx.overlay.as_ref().unwrap();
+            if ov.kind == crate::overlay::OverlayKind::History {
+                let eff = match ov.selected_history_id() {
+                    Some(id) => Effect::CompareVersion(id.to_string()),
+                    None => Effect::None,
+                };
+                dispose_after_accept(ctx);
+                return eff;
+            }
+            return Effect::None;
+        }
         Action::Cancel => {
             // REVERT the live preview: the Theme picker restores the world, and
             // the Caret picker restores the LOOK, that was active when it opened.

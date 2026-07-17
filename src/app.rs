@@ -397,6 +397,35 @@ mod stats;
 /// arithmetic + the (de)serializer.
 mod streaks;
 
+/// THE WRITER'S DIFF: the read-only "Compare with version…" view state
+/// (`App::diff_view`). Holds the pre-rendered marked-up-manuscript `transcript`
+/// (`crate::prosediff` → awl's own strike / `==wash==` / blockquote-dim vocabulary)
+/// that `sync_view` shows in the writing column in place of the buffer, plus the
+/// `label` shown as the transcript heading + the page-mode gutter. The buffer is
+/// never touched; Esc drops the view and the next sync shows the live document.
+pub struct DiffView {
+    /// The marked-up-markdown transcript (`prosediff::render_markdown`), shown
+    /// read-only in the writing column. Built once on entry; never re-rendered while
+    /// the view is up (a read-only surface — the buffer it derives from can't change
+    /// under it, since edits are swallowed).
+    pub transcript: String,
+    /// The version being compared against, in human words (e.g. `"3 hr ago"` for a
+    /// loose-file snapshot, or a git commit's relative label) — the transcript's
+    /// heading and the sidecar/gutter identity of "what am I comparing to".
+    pub label: String,
+}
+
+/// THE WRITER'S DIFF read-only classification of ONE action while the diff view is
+/// up — the result of [`App::diff_view_gate`]. Keeps the read-only law a pure,
+/// unit-testable decision (no event loop needed): `Exit` leaves the view, `Pass`
+/// runs a read affordance (zoom / page-scroll) normally, `Swallow` is a calm no-op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffGate {
+    Exit,
+    Pass,
+    Swallow,
+}
+
 pub struct App {
     file: Option<PathBuf>,
     buffer: Buffer,
@@ -768,6 +797,18 @@ pub struct App {
     /// its version, and its undo history are NEVER touched. Dropped the moment the
     /// overlay closes (Esc = back to now exactly). `None` = no preview.
     history_preview: Option<(String, String)>,
+    /// THE WRITER'S DIFF: the read-only "Compare with version…" view, or `None` when
+    /// not comparing. `Some` holds the pre-rendered marked-up-manuscript transcript
+    /// (`crate::prosediff::render_markdown` — struck deletions, washed insertions,
+    /// moves, folds) that `sync_view` shows in the writing column IN PLACE OF the
+    /// buffer text (the Buffer, its version, and its undo history are NEVER touched —
+    /// exactly like the history preview override). Read-only: `App::apply` swallows
+    /// every editing action while it is `Some` (the caret parks on the transcript's
+    /// blank line 1 so no WYSIWYG line ever reveals raw). Esc / a buffer switch drops
+    /// it — back to the live document exactly. Entered by `Action::CompareVersion`
+    /// (the palette command, or the History picker's compare key). LIVE-ONLY state;
+    /// the headless capture renders the same transcript via the `AWL_DIFF_*` harness.
+    diff_view: Option<DiffView>,
     /// The document scroll (visual rows) captured when the History timeline
     /// OPENED, restored on a close-without-restore — a shorter previewed version
     /// can destructively clamp `scroll_lines` against ITS max-scroll, and "Esc =
@@ -1206,6 +1247,7 @@ impl App {
             pending_crash: None,
             title_dirty: false,
             history_preview: None,
+            diff_view: None,
             history_scroll_before: None,
             zoom_persist_at: None,
             zoom_reflow: ZoomReflow::default(),
@@ -3975,6 +4017,107 @@ mod tests {
         assert_eq!(app.scroll_lines, 3, "an accept never yanks the viewport");
         assert!(app.history_scroll_before.is_none());
         assert!(app.history_preview.is_none());
+    }
+
+    // ── THE WRITER'S DIFF — the read-only "Compare with version…" view ───────
+    //
+    // The diff view is a DERIVED transcript shown in place of the buffer text
+    // (`sync_view`'s preview override), read-only, Esc-exits. These pin the
+    // entry (`enter_diff_view_for` / `compare_with_latest` build the transcript,
+    // buffer untouched), the read-only law (`diff_view_gate`), and the exit.
+
+    #[test]
+    fn compare_view_renders_transcript_without_touching_buffer() {
+        use crate::fs::InMemoryFs;
+        let p = PathBuf::from("/notes/draft.md");
+        // Current buffer keeps the first paragraph, drops the second, adds a third.
+        let now = "Keep this opening paragraph exactly as it was.\n\nAn entirely fresh third paragraph appears here now.\n";
+        let mem = InMemoryFs::new().with_file(&p, now);
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        // Seed an older version (the one we compare against).
+        let old = "Keep this opening paragraph exactly as it was.\n\nDrop this whole second paragraph entirely please.\n";
+        crate::history::record(&p, old, &Config::empty());
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        let version_before = app.buffer.version();
+        let text_before = app.buffer.text();
+
+        // Compare against the most-recent version.
+        app.compare_with_latest();
+        let dv = app.diff_view.as_ref().expect("the diff view is active");
+        // The transcript speaks awl's diff vocabulary: a struck deletion (combining
+        // stroke) AND a highlight-washed insertion (`==`), under a title heading.
+        assert!(dv.transcript.starts_with("# Comparing with "));
+        assert!(dv.transcript.contains('\u{0336}'), "a struck deletion: {}", dv.transcript);
+        assert!(dv.transcript.contains("=="), "a washed insertion: {}", dv.transcript);
+        // The BUFFER was never touched — content, version, undo all intact.
+        assert_eq!(app.buffer.text(), text_before, "compare never mutates the buffer");
+        assert_eq!(app.buffer.version(), version_before, "no version bump");
+    }
+
+    #[test]
+    fn compare_view_is_read_only_and_esc_exits() {
+        use crate::fs::InMemoryFs;
+        let _g = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
+        let mut app = app_on(None, "/proj", Config::empty());
+        // Not comparing: the gate is inert (every action follows the normal path).
+        assert_eq!(app.diff_view_gate(&Action::InsertChar('x')), None);
+
+        // Enter a diff view directly (the transcript content is irrelevant here).
+        app.diff_view = Some(DiffView {
+            transcript: "# Comparing with earlier\n\ndemo\n".into(),
+            label: "earlier".into(),
+        });
+        // READ-ONLY LAW: every editing action is swallowed (a calm no-op) — typing,
+        // newline, delete, paste, undo, format, save, buffer switch, opening a picker.
+        for act in [
+            Action::InsertChar('z'),
+            Action::Newline,
+            Action::DeleteBackward,
+            Action::DeleteForward,
+            Action::Yank,
+            Action::Undo,
+            Action::Redo,
+            Action::Bold,
+            Action::Save,
+            Action::LastBuffer,
+            Action::OpenGoto,
+            Action::OpenHistory,
+        ] {
+            assert_eq!(
+                app.diff_view_gate(&act),
+                Some(DiffGate::Swallow),
+                "{act:?} must be a read-only no-op in the diff view"
+            );
+        }
+        // Read affordances pass through (zoom + page-scroll never mutate the buffer).
+        for act in [
+            Action::ZoomIn,
+            Action::ZoomOut,
+            Action::ZoomReset,
+            Action::PageScrollDown,
+            Action::PageScrollUp,
+        ] {
+            assert_eq!(app.diff_view_gate(&act), Some(DiffGate::Pass), "{act:?} reads");
+        }
+        // Esc and a second Compare EXIT the view.
+        assert_eq!(app.diff_view_gate(&Action::Cancel), Some(DiffGate::Exit));
+        assert_eq!(app.diff_view_gate(&Action::CompareVersion), Some(DiffGate::Exit));
+        // exit_diff_view drops it — back to the live document.
+        app.exit_diff_view();
+        assert!(app.diff_view.is_none(), "Esc returns to the buffer");
+        assert_eq!(app.diff_view_gate(&Action::InsertChar('x')), None, "gate inert again");
+    }
+
+    #[test]
+    fn compare_with_latest_no_history_is_a_calm_notice() {
+        use crate::fs::InMemoryFs;
+        let _g = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
+        let mut app = app_on(None, "/proj", Config::empty());
+        // A fresh scratch with no recorded history: comparing is a calm no-op notice,
+        // never an empty diff or a panic.
+        app.compare_with_latest();
+        assert!(app.diff_view.is_none(), "nothing to compare, no view opens");
+        assert_eq!(app.notice.as_deref(), Some("no earlier version to compare"));
     }
 
     #[test]

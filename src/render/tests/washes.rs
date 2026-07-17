@@ -309,6 +309,57 @@ fn markdown_highlight_inherits_wash_and_code_buffers_never_match() {
     );
 }
 
+/// THE WRITER'S DIFF — the marked-up-manuscript transcript DRAWS awl's real diff
+/// vocabulary: an inserted paragraph rides the `==highlight==` WASH (a drawn quad in
+/// `wash_rects`' highlight bucket, its own violet tint), a struck deletion carries
+/// combining strokes in the drawn text, and the fold/deletion blockquotes dim. This
+/// asserts the APPEARANCE at the DRAWN-quad level (the `wash_rects` oracle the
+/// codebase uses instead of pixel-diffing), so the washed region is proven present
+/// from the actual render, never inferred from state. The transcript is exactly what
+/// `prosediff::render_markdown` produces, so the live diff view + the capture harness
+/// both draw this.
+#[test]
+fn prose_diff_transcript_draws_highlight_wash_and_struck_deletion() {
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping prose_diff_transcript_draws_highlight_wash_and_struck_deletion: no wgpu adapter");
+        return;
+    };
+    // A deletion, an insertion, and an untouched-fold — the real serializer output.
+    let old = "Keep this opening line.\n\nDrop this whole paragraph entirely now.";
+    let new = "Keep this opening line.\n\nA brand new inserted paragraph arrives.";
+    let transcript = crate::prosediff::render_markdown(
+        old,
+        new,
+        crate::prosediff::Params::shipping(),
+        "Comparing with earlier",
+    );
+    // The transcript IS awl's diff vocabulary: a struck deletion + a washed insertion.
+    assert!(transcript.contains('\u{0336}'), "struck deletion in the drawn text");
+    assert!(transcript.contains("=="), "highlight-washed insertion in the drawn text");
+
+    // Park the caret on the blank line 1 (as the diff view does) so nothing reveals.
+    let mut v = view(&transcript, 1, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+
+    // md_report shows the washed insertion as a `highlight` span (its `==` dim markup).
+    let spans = p.md_report();
+    assert!(
+        spans.iter().any(|(_, _, t)| *t == "highlight"),
+        "the inserted paragraph is a highlight span: {spans:?}"
+    );
+    // APPEARANCE ORACLE: the highlight rides its OWN drawn wash quad (violet tint),
+    // decoupled from the comment/string buckets — the washed region is really drawn.
+    let (comments, strings, highlights) = p.wash_rects();
+    assert!(
+        !highlights.is_empty(),
+        "the inserted paragraph draws a highlight-wash quad: {highlights:?}"
+    );
+    assert!(comments.is_empty() && strings.is_empty(), "no code washes in a prose diff");
+}
+
 /// `merge_row_bands` PURE UNIT CONTRACT: vertically-contiguous same-x
 /// bands collapse to one quad spanning their union; a variable-width run
 /// merges to the UNION x-range; two bands on the SAME row (equal y) never

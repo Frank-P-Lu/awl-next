@@ -147,6 +147,15 @@ static COMMAND_SEED: &[Command] = &[
     // VERSION HISTORY (the local-history timeline): renamed from "History" so it no
     // longer shadows the "Local history" setting; says it is the version timeline.
     Command { name: "Version history…",  action: Action::OpenHistory,     native: "", emacs: ""        , native_only: true, web_only: false },
+    // THE WRITER'S DIFF: open the READ-ONLY prose-diff view (the marked-up manuscript
+    // — struck deletions, washed insertions, moves, folds; `crate::prosediff`)
+    // comparing the current buffer against a past version. From the buffer it compares
+    // the most-recent version (a loose file's newest snapshot / a git file's HEAD);
+    // also reachable from the Version-history picker (compare the highlighted row).
+    // Markdown buffers only (an accept-time gate in the core — a `.rs`/scratch buffer
+    // is a calm no-op). No default chord (a palette command like Version history),
+    // rebindable via `[keys] compare_with_version`.
+    Command { name: "Compare with version…", action: Action::CompareVersion, native: "", emacs: ""       , native_only: true, web_only: false },
     // CLEAN UNUSED ASSETS: summon the Asset Cleaner — a picker of the ORPHAN image
     // files under the active project (an `assets/` image no document references,
     // `crate::assets`). Enter moves the row's file to the macOS Trash (recoverable).
@@ -1332,6 +1341,7 @@ mod tests {
             "Toggle menu bar",
             "Keep version",
             "Clean unused assets…",
+            "Compare with version…",
             // Emacs C-x default retired, no native chord assigned (identity round):
             "Browse files…",
             "Move note…",
@@ -2154,6 +2164,7 @@ mod tests {
         "Quit",
         "Finish file",
         "Version history…",
+        "Compare with version…",
         "Keep version",
         "Lifetime stats",
         "Writing streaks",

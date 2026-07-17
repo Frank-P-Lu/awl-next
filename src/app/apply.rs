@@ -282,6 +282,28 @@ impl App {
             return false;
         }
 
+        // THE WRITER'S DIFF read-only gate: while the "Compare with version…" view is
+        // up, the writing column shows a DERIVED transcript, not the buffer — so the
+        // core (`apply_core`) is never reached for anything that would EDIT it. The
+        // pure classifier [`Self::diff_view_gate`] owns the decision; here we act on
+        // it. Placed before every edit/overlay path below, and before
+        // `page_scroll_intercept` so the two allowed scroll actions fall through to it.
+        if let Some(gate) = self.diff_view_gate(&action) {
+            match gate {
+                // Esc / a second Compare returns to the live document exactly.
+                DiffGate::Exit => {
+                    self.exit_diff_view();
+                    return false;
+                }
+                // Zoom + page-scroll pass through so a long diff stays readable
+                // (none mutate the buffer — the wheel reads it regardless).
+                DiffGate::Pass => {}
+                // Read-only: typing, delete, paste, format, undo, a buffer switch,
+                // opening a picker — every other action is a calm no-op.
+                DiffGate::Swallow => return false,
+            }
+        }
+
         // The buffer/zoom/search core is shared with the headless `--keys`
         // replay via `actions::apply_core`, so live editing and captured replay
         // behave identically. Everything that core can't reach — the system
@@ -771,6 +793,14 @@ impl App {
             // "Keep version": THE CONSCIOUS MARK — pin the current buffer as a
             // prune-exempt local-history snapshot (the store owns the git/off gates).
             actions::Effect::KeepVersion => self.keep_version(),
+            // THE WRITER'S DIFF from the HISTORY picker: open the read-only prose-diff
+            // view against the highlighted version (its restore id). The overlay was
+            // already closed by the core's `dispose_after_accept`.
+            actions::Effect::CompareVersion(id) => self.enter_diff_view_for(&id),
+            // THE WRITER'S DIFF from the buffer ("Compare with version…"): resolve the
+            // most-recent version's id (a loose file's newest snapshot / a git file's
+            // HEAD) and open the diff view; a buffer with no history is a calm no-op.
+            actions::Effect::CompareLatest => self.compare_with_latest(),
             // C-c C-o: open the markdown link under the caret in the OS default
             // browser (a user-initiated handoff — see `App::follow_link`).
             actions::Effect::FollowLink(url) => self.follow_link(&url),

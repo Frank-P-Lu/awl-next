@@ -69,6 +69,49 @@ fn history_picker_enter_emits_restore_id_of_the_highlighted_version() {
 }
 
 #[test]
+fn history_picker_tab_emits_compare_version_of_the_highlighted_row() {
+    // THE WRITER'S DIFF from the picker: TAB over a highlighted version emits
+    // Effect::CompareVersion(<id>) (not a restore) and CLOSES the picker — the
+    // caller resolves the id via history::load + renders the read-only diff view.
+    let row = |id: &str| crate::history::TimelineRow {
+        when: "just now".into(),
+        which: String::new(),
+        counts: "+0 −0".into(),
+        id: id.to_string(),
+        timestamp: id.parse().unwrap_or(0),
+        pinned: false,
+    };
+    let mut overlay = Some(OverlayState::new_history(
+        vec![row("300"), row("200"), row("100")],
+        None,
+        None,
+    ));
+    // Highlight the middle row, then TAB (Action::InsertTab) to compare it.
+    let mut accept = None;
+    drive(&mut overlay, &mut accept, &Action::NextLine);
+    // Drive Tab directly through the core to inspect the returned effect.
+    let mut buffer = Buffer::scratch();
+    let (mut shift, mut zoom, mut search) = (false, 1.0f32, None);
+    let mut make_overlay = |_k: OverlayKind| None;
+    let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
+    let mut ctx = ActionCtx {
+        buffer: &mut buffer,
+        shift_selecting: &mut shift,
+        zoom: &mut zoom,
+        search: &mut search,
+        scroll_page_lines: 1,
+        overlay: &mut overlay,
+        make_overlay: &mut make_overlay,
+        browse_to: &mut browse_to,
+        oracle: None,
+    };
+    let eff = apply_core(&mut ctx, &Action::InsertTab, false);
+    assert_eq!(eff, Effect::CompareVersion("200".to_string()), "Tab compares the highlighted row");
+    assert!(overlay.is_none(), "compare closes the picker (you navigated into the diff)");
+    assert_eq!(buffer.text(), "", "compare never touches the buffer in the core");
+}
+
+#[test]
 fn history_picker_empty_state_enter_is_a_no_op_close() {
     // The "no history yet" row has an empty id: Enter emits NO accept, just closes.
     let mut overlay = Some(OverlayState::new_history(Vec::new(), None, None));
@@ -464,6 +507,9 @@ fn every_catalog_command_dispatches_without_panicking() {
                     Action::OpenCredits => eff == Effect::OpenCredits,
                     Action::OpenGuide => eff == Effect::OpenGuide,
                     Action::KeepVersion => eff == Effect::KeepVersion,
+                    // Markdown fixture: Compare with version… defers the latest-version
+                    // resolve + diff-view open to the live App.
+                    Action::CompareVersion => eff == Effect::CompareLatest,
                     Action::FinishBuffer => eff == Effect::FinishBuffer,
                     // Caret sits inside the fixture link, so a URL resolves.
                     Action::FollowLink => matches!(eff, Effect::FollowLink(_)),

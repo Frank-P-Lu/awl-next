@@ -389,9 +389,11 @@ impl OverlayKind {
                 key("esc", "close"),
             ],
             // The faceted history timeline: ↵ RESTORES the highlighted version (an
-            // undoable edit), ←/→ switch the lens (All / Session / Today), esc closes.
+            // undoable edit), ⇥ COMPARES it against the current buffer (the read-only
+            // prose-diff view), ←/→ switch the lens (All / Session / Today), esc closes.
             OverlayKind::History => vec![
                 enter("restore"),
+                key("tab", "compare"),
                 key("\u{2190}/\u{2192}", "lens"),
                 key("esc", "close"),
             ],

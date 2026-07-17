@@ -96,6 +96,7 @@ mod popover;
 #[cfg(test)]
 mod println_audit;
 mod project;
+mod prosediff;
 mod recent_files;
 mod recents;
 mod render;

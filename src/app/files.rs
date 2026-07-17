@@ -1518,6 +1518,132 @@ impl App {
         }
     }
 
+    /// THE WRITER'S DIFF — open the READ-ONLY prose-diff view comparing the CURRENT
+    /// buffer against the version whose restore `id` is given (the History picker's
+    /// highlighted row). Resolves the old content via [`crate::history::load`] (the
+    /// awl log for a loose file, `git show` for a git-managed one — the SAME seam
+    /// `restore_history` uses, keyed by the same shared [`crate::history::source_path`]),
+    /// renders the marked-up-manuscript transcript (`crate::prosediff`, the gate's
+    /// SENTENCE × 0.5 recipe), and parks it in `self.diff_view`. The BUFFER is never
+    /// touched — `sync_view` shows the transcript in place of the buffer text, Esc
+    /// (or a second Compare) drops the view. A no-op for an unnamed note / an
+    /// unresolvable id (best-effort — a failed compare must never disrupt the buffer).
+    pub(super) fn enter_diff_view_for(&mut self, id: &str) {
+        let Some(path) = crate::history::source_path(
+            self.buffer.path(),
+            self.file.as_deref(),
+            self.buffer.is_note(),
+        ) else {
+            return;
+        };
+        let Some(old) = crate::history::load(&path, id) else {
+            return;
+        };
+        // A human LABEL for "what am I comparing against": a git-managed version
+        // carries its commit SUBJECT; a loose snapshot uses its relative-time label
+        // (the same wording the timeline row shows). Best-effort — an id not found in
+        // the current listing falls back to a calm generic label.
+        let label = crate::history::list(&path)
+            .into_iter()
+            .find(|s| s.id == id)
+            .map(|s| {
+                s.subject.clone().unwrap_or_else(|| {
+                    crate::history::relative_label(crate::history::now_millis(), s.timestamp)
+                })
+            })
+            .unwrap_or_else(|| "an earlier version".to_string());
+        self.open_diff_view(&old, label);
+    }
+
+    /// THE WRITER'S DIFF — "Compare with version…" from the buffer: open the diff view
+    /// against the MOST-RECENT version. Lists the store ([`crate::history::list`],
+    /// newest-first) and compares against `[0]` — a loose file's newest snapshot, or
+    /// a git-managed file's HEAD (its git log's first entry, resolved by `git show`).
+    /// A buffer with NO history (an untracked loose file never saved, an unnamed note)
+    /// shows a calm notice and stays put — never an empty diff or a crash.
+    pub(super) fn compare_with_latest(&mut self) {
+        let Some(path) = crate::history::source_path(
+            self.buffer.path(),
+            self.file.as_deref(),
+            self.buffer.is_note(),
+        ) else {
+            self.set_toast_notice("no earlier version to compare");
+            return;
+        };
+        match crate::history::list(&path).into_iter().next() {
+            Some(latest) => self.enter_diff_view_for(&latest.id),
+            None => self.set_toast_notice("no earlier version to compare"),
+        }
+    }
+
+    /// Shared owner of ENTERING the diff view: render `old` (the compared version) vs
+    /// the current buffer into the marked-up transcript, park it in `self.diff_view`,
+    /// close any open overlay + drop its live-preview state, reset the viewport to the
+    /// top of the transcript, and resync. The ONE place `diff_view` is set, so the
+    /// two entry points (`enter_diff_view_for`, `compare_with_latest`) can't diverge.
+    fn open_diff_view(&mut self, old: &str, label: String) {
+        let new = self.buffer.text();
+        let title = format!("Comparing with {label}");
+        let transcript = crate::prosediff::render_markdown(
+            old,
+            &new,
+            crate::prosediff::Params::shipping(),
+            &title,
+        );
+        // Close any summoned overlay (the History picker this may have come from) and
+        // drop its derived-preview state, so the diff view owns the screen cleanly.
+        self.overlay = None;
+        self.history_preview = None;
+        self.history_scroll_before = None;
+        self.diff_view = Some(super::DiffView { transcript, label });
+        // Start at the TOP of the transcript (a fresh document); the caret parks on
+        // line 1 in `sync_view`, and Esc's resync re-clamps the buffer's own scroll.
+        self.scroll_lines = 0;
+        self.sync_view(false);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// THE WRITER'S DIFF read-only gate — the ONE classifier `App::apply` consults to
+    /// keep the "Compare with version…" view read-only. `None` when NOT comparing (the
+    /// normal apply path proceeds untouched). While comparing, EVERY action falls into
+    /// exactly one class: [`DiffGate::Exit`] (Esc / a second Compare — leave the view),
+    /// [`DiffGate::Pass`] (zoom + page-scroll — read affordances that never mutate the
+    /// buffer, so they run normally), or [`DiffGate::Swallow`] (everything else — typing,
+    /// delete, paste, format, undo, Save, a buffer switch, opening a picker — a calm
+    /// no-op, so the derived transcript can never be edited under the caret). Pure over
+    /// `(self.diff_view.is_some(), action)`, so the read-only law is unit-testable
+    /// without an event loop.
+    pub(super) fn diff_view_gate(&self, action: &crate::keymap::Action) -> Option<DiffGate> {
+        use crate::keymap::Action;
+        if self.diff_view.is_none() {
+            return None;
+        }
+        Some(match action {
+            Action::Cancel | Action::CompareVersion => DiffGate::Exit,
+            Action::ZoomIn
+            | Action::ZoomOut
+            | Action::ZoomReset
+            | Action::PageScrollDown
+            | Action::PageScrollUp => DiffGate::Pass,
+            _ => DiffGate::Swallow,
+        })
+    }
+
+    /// THE WRITER'S DIFF — leave the read-only view (Esc, or a second Compare): drop
+    /// `self.diff_view` and resync so the writing column shows the LIVE document again
+    /// (the buffer was never touched — "back to now exactly"). The follow-resync
+    /// re-clamps the viewport onto the buffer's own caret. A no-op when not comparing.
+    pub(super) fn exit_diff_view(&mut self) {
+        if self.diff_view.take().is_some() {
+            self.sync_view(true);
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window.request_redraw();
+            }
+        }
+    }
+
     /// ASSET CLEANER: move the orphan at root-relative `rel` to the OS Trash
     /// (recoverable — never `rm`), then — ONLY on success — remove its row from the
     /// still-open picker (`OverlayState::remove_asset_row`), so the list shrinks as you

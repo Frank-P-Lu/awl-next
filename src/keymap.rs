@@ -433,6 +433,16 @@ pub enum Action {
     /// a plain Cmd-H free; also a palette command ("Version history…"), rebindable via `[keys]`.
     /// See `overlay/` (`OverlayKind::History`) + `history/`.
     OpenHistory,
+    /// THE WRITER'S DIFF (palette "Compare with version…", markdown buffers only):
+    /// open the READ-ONLY prose-diff view comparing the CURRENT buffer against a
+    /// past version — the marked-up manuscript (`crate::prosediff`: struck deletions,
+    /// washed insertions, moves, folds). From the BUFFER (no overlay) it compares
+    /// against the most-recent version (a loose file's newest history snapshot, or a
+    /// git-managed file's HEAD via `git show`); from the open HISTORY picker it
+    /// compares against the HIGHLIGHTED row. Esc returns to the live document exactly
+    /// (the buffer is never touched). No default chord (a palette command like
+    /// Version history / Settings), rebindable via `[keys] compare_with_version`.
+    CompareVersion,
     /// Clean unused assets (summon by name, Cmd-P): open the ASSET CLEANER — a
     /// summoned, transient picker listing the ORPHAN image files under the active
     /// project (an image under an `assets/` directory that no document references, per
@@ -1624,6 +1634,7 @@ browse_files|||
 go_to_heading|||
 spell_suggestions|Cmd-;|C-;|
 version_history|Cmd-S-h|C-S-h|
+compare_with_version|||
 clean_unused_assets|||
 keep_version|||
 last_file|C-Tab|C-Tab|

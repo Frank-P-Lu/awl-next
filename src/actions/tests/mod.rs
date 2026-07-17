@@ -517,6 +517,7 @@ pub(super) fn delete_flinch_fixture(
         | Action::OpenCredits
         | Action::OpenGuide
         | Action::OpenHistory
+        | Action::CompareVersion
         | Action::OpenAssetClean
         | Action::KeepVersion
         | Action::FinishBuffer
@@ -715,6 +716,7 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::OpenCredits
             | Action::OpenGuide
             | Action::OpenHistory
+        | Action::CompareVersion
             | Action::OpenAssetClean
             | Action::KeepVersion
             | Action::FinishBuffer
@@ -820,6 +822,7 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::OpenCredits,
         Action::OpenGuide,
         Action::OpenHistory,
+        Action::CompareVersion,
         Action::OpenAssetClean,
         Action::KeepVersion,
         Action::FinishBuffer,
@@ -911,6 +914,10 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::OpenCredits
         | Action::OpenGuide
         | Action::KeepVersion
+        // THE WRITER'S DIFF: the smoke fixture is a markdown buffer, so
+        // "Compare with version…" signals `Effect::CompareLatest` for the live
+        // App to resolve the latest version + open the read-only diff view.
+        | Action::CompareVersion
         | Action::FinishBuffer
         | Action::FollowLink
         | Action::ReportProblem

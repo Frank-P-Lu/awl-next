@@ -662,10 +662,10 @@ fn history_picker_lists_versions_navigates_and_carries_ids() {
     assert_eq!(ov.selected_history_id(), Some("100"));
     // No git / dir markers on the version rows.
     assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
-    // The hint teaches restore + lens + close (informational, button-free).
+    // The hint teaches restore + compare + lens + close (informational, button-free).
     assert_eq!(
         OverlayKind::History.hint(),
-        "\u{2191}/\u{2193} move   ↵ restore   \u{2190}/\u{2192} lens   esc close"
+        "\u{2191}/\u{2193} move   ↵ restore   tab compare   \u{2190}/\u{2192} lens   esc close"
     );
     assert!(ov.foot_hint().contains("restore"));
 }

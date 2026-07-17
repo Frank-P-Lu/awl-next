@@ -73,7 +73,16 @@ impl App {
         // the overlay and the next sync pushes the buffer's own text again —
         // "back to now exactly". `None` whenever the picker isn't open / the row
         // is the empty-state one.
-        let preview = self.history_preview_text();
+        // THE WRITER'S DIFF takes priority over the history preview (they are mutually
+        // exclusive — entering the diff view closes any History overlay): its
+        // pre-rendered marked-up transcript is what the writing column shows, IN PLACE
+        // OF the buffer text, exactly like the history preview override. The buffer is
+        // never touched, so Esc just drops `diff_view` and the next sync shows the live
+        // document again.
+        let preview = match self.diff_view.as_ref().map(|d| d.transcript.clone()) {
+            Some(t) => Some(t),
+            None => self.history_preview_text(),
+        };
         // ROPE-CLONE SHORT-CIRCUIT: reuse the last materialised rope clone while the
         // buffer version is unchanged (see [`Self::view_text`]). A PREVIEW bypasses
         // `view_text` entirely — the version-keyed `sync_text_cache` must never hold
@@ -250,8 +259,18 @@ impl App {
                 .and_then(|o| o.selected_caret_mode()),
             // PAGE-MODE GUTTER: the buffer's display name (saved file name, or the
             // derived scratch/slug name for an unsaved note) over the project name.
-            gutter_name: self.buffer.display_name(),
-            gutter_project: self.project.name.clone(),
+            // THE WRITER'S DIFF: while comparing, the gutter names WHAT is being
+            // compared against ("comparing · 3 hr ago") so the read-only context stays
+            // visible after the transcript's title scrolls off — the buffer's file
+            // name still rides the project line below.
+            gutter_name: match &self.diff_view {
+                Some(d) => format!("comparing · {}", d.label),
+                None => self.buffer.display_name(),
+            },
+            gutter_project: match &self.diff_view {
+                Some(_) => self.buffer.display_name(),
+                None => self.project.name.clone(),
+            },
             // MARKDOWN STYLING gate: a buffer is "markdown" only once it has a
             // `.md`/`.markdown` path. An unnamed scratch / `.rs` / `.txt` buffer is
             // left untouched (no markup dimming of `#` comments etc.).
@@ -301,6 +320,18 @@ impl App {
                 crate::history::clamp_line_col(&view.text, view.cursor_line, view.cursor_col);
             view.cursor_line = l;
             view.cursor_col = c;
+            // THE WRITER'S DIFF: park the caret on the transcript's blank line 1
+            // (between the `# title` and the first diff block) so NO line's WYSIWYG
+            // conceal reveals — the reveal is caret-line-scoped and line 1 carries no
+            // markup, so the title's `#` and every `==`/`>`/strike marker stay
+            // concealed: the clean marked-up manuscript, never a revealed-raw line.
+            // The ONE reveal-suppression rule, shared with the `AWL_DIFF_*` capture
+            // harness (`main/run.rs` parks the same way), so live == capture.
+            if self.diff_view.is_some() {
+                let (dl, dc) = crate::history::clamp_line_col(&view.text, 1, 0);
+                view.cursor_line = dl;
+                view.cursor_col = dc;
+            }
             view.selection = None;
             view.preedit = String::new();
             view.misspelled = Vec::new();

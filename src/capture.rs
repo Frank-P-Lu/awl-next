@@ -279,7 +279,13 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // the `--streaks` capture flag. The figures + `cells` intensity grid are the LIVE
 // year the App pushed OR the fixed synthetic `streaks::placeholder` in a capture
 // (no persisted store), so a `--streaks` capture is deterministic + byte-stable.
-pub const SCHEMA_VERSION: u32 = 171;
+// `/172` — THE WRITER'S DIFF: a new top-level `diff` block — `null` for every
+// ordinary capture (a plain `--screenshot` is byte-identical apart from the added
+// key), else `{ active, label, struck, washed, modified, moved, folds }` reporting
+// the STATE of the read-only prose-diff view (`crate::prosediff`) the capture
+// harness rendered (`AWL_DIFF_OLD`/`AWL_DIFF_NEW`). A state oracle only — the
+// struck/washed APPEARANCE is asserted over the PNG's pixels.
+pub const SCHEMA_VERSION: u32 = 172;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {
@@ -310,7 +316,7 @@ pub use film::{FilmRenderer, FRAME_MS};
 pub use modes::{
     capture_motion, capture_motion_diagonal, capture_motion_vertical, capture_with,
 };
-pub use opts::{BuffersInfo, CaptureInfo, CaptureOpts, OverlayInfo, ProjectInfo};
+pub use opts::{BuffersInfo, CaptureInfo, CaptureOpts, DiffInfo, OverlayInfo, ProjectInfo};
 pub use oracle::build_oracle;
 // The sidecar module stays private (write-only); its JSON-string escaper is the
 // crate's ONE escaper, shared with the storyboard trace so the two artifacts
