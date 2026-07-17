@@ -254,6 +254,10 @@ pub(in crate::render) use overlay::{
     CARD_MAX_W, CARD_MAX_W_FACETED,
 };
 mod overlay_shape;
+// Test-only re-export so `render::tests` can name the pure placard-size quantizer
+// without traversing the private `overlay_shape` submodule (the AtlasFull ladder law).
+#[cfg(test)]
+pub(in crate::render) use overlay_shape::snap_placard_size;
 mod theme_picker;
 mod gutter;
 mod outline;

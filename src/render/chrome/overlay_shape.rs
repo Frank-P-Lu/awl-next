@@ -46,6 +46,41 @@ const PLACARD_MIN_HEIGHT: f32 = 56.0;
 /// world's reference height, so the clamp is inert at the reference canvas.
 const PLACARD_MAX_HEIGHT: f32 = 512.0;
 
+/// PLACARD ATLAS-SAFETY (AtlasFull fix, 2026-07-17) — the geometric step the
+/// wordmark's font size is SNAPPED to. The proportional sizing above tracks the
+/// window short side CONTINUOUSLY, so a live resize sweep asked the shaper for a
+/// fresh giant Archivo-Black size every pixel of drag travel; each distinct size
+/// rasterizes its own glyph set into the ONE shared glyph atlas
+/// (`TextPipeline::atlas` — document body text, rows and placard all live there),
+/// and a fast sweep on a large display filled it faster than the per-frame
+/// `atlas.trim()` reclaimed → [`glyphon::PrepareError::AtlasFull`], which blanked
+/// the card AND starved the document text sharing the atlas. Snapping to a ~3%
+/// ladder bounds the whole clamp band [`PLACARD_MIN_HEIGHT`]..[`PLACARD_MAX_HEIGHT`]
+/// to ≈ `log(512/56)/log(1.03) ≈ 75` distinct rungs — a wordmark this large moves
+/// a pixel or two between rungs, imperceptible, while the atlas stays bounded no
+/// matter how long the drag. 3–4% was the board's call; 1.03 sits at the calm end.
+const PLACARD_SIZE_STEP: f32 = 1.03;
+
+/// Snap a placard font target (px) to the geometric ladder of
+/// [`PLACARD_SIZE_STEP`], anchored at `anchor` (the world's REFERENCE-canvas
+/// size — so the 1200×800 reference short side is an EXACT fixed point and every
+/// default-zoom placard capture stays byte-identical). `round_down` FLOORS to the
+/// ladder (used by the shrink-to-fit path, so the snapped size never exceeds the
+/// fit target and the wordmark still fits the canvas); otherwise rounds to the
+/// nearest rung. Because BOTH the main and shrink paths anchor at the same
+/// `anchor`, every size either path can produce is `anchor · step^k` for integer
+/// `k` — ONE ladder, so the two paths' union stays bounded (never a product). Pure
+/// → the bounded-ladder law is unit-testable without a GPU (see
+/// `render::tests::overlay_personality`).
+pub(in crate::render) fn snap_placard_size(target: f32, anchor: f32, round_down: bool) -> f32 {
+    if !(target > 0.0) || !(anchor > 0.0) {
+        return target;
+    }
+    let steps = (target / anchor).ln() / PLACARD_SIZE_STEP.ln();
+    let k = if round_down { steps.floor() } else { steps.round() };
+    anchor * (k * PLACARD_SIZE_STEP.ln()).exp()
+}
+
 /// The glyph-coverage cut for a STIPPLE placard ([`theme::PlacardInk::Stipple`]):
 /// a rasterized wordmark pixel joins the stipple's candidate set iff its swash
 /// coverage clears this (≥ 50%). A HARD threshold, deliberately — the stipple's
@@ -213,7 +248,15 @@ impl TextPipeline {
         // 4K/5K window never blows it up. `line_height = font_size · 1.1` below, so
         // this drives the whole box.
         let short_side = self.window_w.min(self.window_h);
-        let font_size = (scale * PLACARD_HEIGHT_PER_SCALE * short_side)
+        // The world's REFERENCE-canvas height (short side == PLACARD_REFERENCE_SHORT_SIDE):
+        // the anchor the size ladder is pinned to, so the reference canvas is an exact
+        // fixed point (byte-identical there) and both this main size and the shrink-to-fit
+        // size below land on the SAME ladder (see `snap_placard_size`).
+        let reference_size = scale * PLACARD_HEIGHT_PER_SCALE * PLACARD_REFERENCE_SHORT_SIDE;
+        // ATLAS-SAFETY: snap the continuous window-tracked size to the ladder BEFORE the
+        // clamp, so a live resize sweep produces a BOUNDED set of distinct giant sizes
+        // (never a fresh atlas entry per drag pixel — the AtlasFull fix).
+        let font_size = snap_placard_size(scale * PLACARD_HEIGHT_PER_SCALE * short_side, reference_size, false)
             .clamp(PLACARD_MIN_HEIGHT, PLACARD_MAX_HEIGHT);
         // A generous plain leading — no body text ever sits inside a
         // single-line wordmark box to match against.
@@ -267,11 +310,18 @@ impl TextPipeline {
         // free.
         let avail = anchor.2 - 2.0 * PLACARD_INSET;
         if avail > 0.0 && w > avail {
-            let shrink = avail / w;
-            line_height *= shrink;
+            // ATLAS-SAFETY: snap the fit target DOWN to the same ladder the main size
+            // rode. Flooring guarantees the shrunk mark still fits `avail` (the snapped
+            // size never exceeds `font_size · avail/w`), and anchoring at the same
+            // `reference_size` keeps every width-only-resize shrink size on the ONE
+            // bounded ladder — so a horizontal drag of a long title can't fill the atlas
+            // either (the width-sweep the main clamp alone never covered).
+            let shrunk =
+                snap_placard_size(font_size * (avail / w), reference_size, true);
+            line_height = shrunk * 1.1;
             self.placard_buffer.set_metrics(
                 &mut self.font_system,
-                GlyphMetrics::new(font_size * shrink, line_height),
+                GlyphMetrics::new(shrunk, line_height),
             );
             self.placard_buffer
                 .shape_until_scroll(&mut self.font_system, false);
