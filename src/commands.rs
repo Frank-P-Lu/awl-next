@@ -1408,6 +1408,11 @@ mod tests {
 
     #[test]
     fn recent_mru_records_newest_first_deduped_and_capped() {
+        // RECENT is a process-wide global WRITER — take the ONE reentrant guard
+        // so a parallel test can't interleave its clear/record/read (the
+        // CLAUDE.md flake tripwire: every `cfg(test)` global writer acquires
+        // `testlock::serial()`; with one lock there's no order to invert).
+        let _l = crate::testlock::serial();
         clear_recent();
         assert!(recent_indices().is_empty(), "fresh process starts empty");
         record_recent(&Action::Undo);
@@ -2288,6 +2293,9 @@ mod tests {
 
     #[test]
     fn visible_recent_indices_drops_hidden_catalog_entries_and_translates_the_rest() {
+        // RECENT is a process-wide global WRITER — take the ONE reentrant guard
+        // (see the sibling test above; the CLAUDE.md flake tripwire).
+        let _l = crate::testlock::serial();
         clear_recent();
         record_recent(&Action::Undo);
         record_recent(&Action::Quit); // a hidden-on-web command
