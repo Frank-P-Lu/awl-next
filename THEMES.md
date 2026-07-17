@@ -768,7 +768,7 @@ and the Wagtail frame 1px-vs-2px pair).
 
 ### Roster decisions (harvested from the retired WORLD-ROLES working doc, 2026-07-15)
 
-The `WORLD-ROLES.md` working doc — a build-time planning sheet that scored the
+The WORLD-ROLES working doc — a build-time planning sheet that scored the
 roster by role and drafted the path to a larger world count — was retired once
 its decisions landed; the two that bind the world contract are recorded here,
 and the still-open roster PLANNING (the light/dark balance, the light-silent /
