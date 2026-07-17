@@ -142,6 +142,9 @@ pub const DEFAULT_TEMPLATE: &str = "\
 #                line; a fenced code block's marker lines hide until the caret is
 #                anywhere inside the block. Set false for today's always-visible
 #                markup.
+#   popover    : float a small format toolbar (B I == ` ~~ H Link) over a MOUSE
+#                selection in a markdown buffer (default on) — set false to turn
+#                the reveal-on-select popover off entirely.
 #   inline_images : render a markdown `![alt](img.png)` reference as the decoded
 #                image in a tall fit-to-column row — its source concealing off the
 #                caret's line — instead of plain text (default on, native only).
@@ -196,6 +199,7 @@ pub const DEFAULT_TEMPLATE: &str = "\
 # autosave = true
 # project_root = \"~/code/my-project\"
 # wysiwyg = true
+# popover = true
 # inline_images = true
 # code_ligatures = true
 # cjk_priority = [\"ja\", \"zh-Hans\", \"zh-Hant\", \"ko\"]

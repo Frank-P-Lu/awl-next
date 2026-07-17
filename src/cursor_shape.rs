@@ -119,6 +119,12 @@ pub struct CursorContext {
     /// geometry. Ranked with the page edge (below an open overlay's scrim, which covers
     /// the images). `None` when the pointer is over no image border.
     pub image_hover: Option<ImageHandle>,
+    /// The pointer is over a clickable BUTTON of the summoned FORMAT POPOVER (the
+    /// reveal-on-select format toolbar — NOT an overlay). A button you can click to
+    /// apply a format earns the pointing hand, exactly like a picker row. Computed
+    /// from the popover's OWN hit-test (`TextPipeline::popover_hit`); only ever set
+    /// while the popover is up (and it never coexists with an open overlay/search).
+    pub over_popover_button: bool,
 }
 
 /// The OS cursor glyph for a given inline-image resize HANDLE: a horizontal
@@ -179,6 +185,11 @@ pub fn cursor_icon_for(ctx: CursorContext) -> CursorIcon {
         CursorIcon::ColResize
     } else if let Some(handle) = ctx.image_drag {
         image_handle_icon(handle)
+    } else if ctx.over_popover_button {
+        // The format popover's button — the pointing HAND (a clickable affordance),
+        // ranked with the other hands (it never coexists with an overlay/menu, so
+        // the relative order among the hands never matters, only that it earns one).
+        CursorIcon::Pointer
     } else if ctx.over_menu_hand {
         CursorIcon::Pointer
     } else if ctx.over_clickable_overlay_row || ctx.over_clickable_lens {
@@ -246,6 +257,7 @@ mod tests {
             over_case_toggle: false,
             image_drag: None,
             image_hover: None,
+            over_popover_button: false,
         }
     }
 
@@ -266,6 +278,7 @@ mod tests {
             over_case_toggle: false,
             image_drag: Some(handle),
             image_hover: None,
+            over_popover_button: false,
         }
     }
 
@@ -286,6 +299,7 @@ mod tests {
             over_case_toggle: false,
             image_drag: None,
             image_hover: Some(handle),
+            over_popover_button: false,
         }
     }
 
@@ -306,6 +320,7 @@ mod tests {
             over_case_toggle: false,
             image_drag: None,
             image_hover: None,
+            over_popover_button: false,
         }
     }
 
@@ -326,6 +341,7 @@ mod tests {
             over_case_toggle: false,
             image_drag: None,
             image_hover: None,
+            over_popover_button: false,
         }
     }
 
@@ -346,6 +362,7 @@ mod tests {
             over_case_toggle: false,
             image_drag: None,
             image_hover: None,
+            over_popover_button: false,
         }
     }
 
@@ -366,6 +383,7 @@ mod tests {
             over_case_toggle: false,
             image_drag: None,
             image_hover: None,
+            over_popover_button: false,
         }
     }
 
@@ -538,6 +556,7 @@ mod tests {
             over_case_toggle: false,
             image_drag: None,
             image_hover: None,
+            over_popover_button: false,
         };
         assert_eq!(cursor_icon_for(both), CursorIcon::Pointer);
     }
@@ -576,6 +595,7 @@ mod tests {
             over_case_toggle: false,
             image_drag: None,
             image_hover: None,
+            over_popover_button: false,
         };
         assert_eq!(cursor_icon_for(both), CursorIcon::Pointer);
     }
@@ -596,6 +616,16 @@ mod tests {
         assert_eq!(cursor_icon_for(ctx_outline(false, false, true)), CursorIcon::Pointer);
     }
 
+    #[test]
+    fn a_format_popover_button_is_the_pointing_hand() {
+        // Hovering a popover button reads as a clickable affordance — the pointing
+        // hand, exactly like a picker row (the popover never coexists with an
+        // overlay, so it just needs to earn the hand).
+        let mut c = ctx(false, false, false, false);
+        c.over_popover_button = true;
+        assert_eq!(cursor_icon_for(c), CursorIcon::Pointer);
+    }
+
     // --- the WEB/LINUX MENU BAR: title/item = hand, dead bar space = arrow --------
 
     /// A context over a clickable menu-bar title / dropdown item (the pointing hand).
@@ -614,6 +644,7 @@ mod tests {
             over_case_toggle: false,
             image_drag: None,
             image_hover: None,
+            over_popover_button: false,
         }
     }
 
@@ -634,6 +665,7 @@ mod tests {
             over_case_toggle: false,
             image_drag: None,
             image_hover: None,
+            over_popover_button: false,
         }
     }
 
@@ -680,6 +712,7 @@ mod tests {
             over_case_toggle: true,
             image_drag: None,
             image_hover: None,
+            over_popover_button: false,
         }
     }
 

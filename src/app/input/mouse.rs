@@ -621,6 +621,10 @@ impl App {
         // overlay is open (the panel is its own floating card, never behind a scrim).
         let over_case_toggle = !overlay_open
             && matches!(gpu.pipeline.panel_hit(px, py), Some(crate::render::PanelHit::CaseToggle));
+        // FORMAT POPOVER: a clickable button earns the pointing hand, from the
+        // popover's OWN hit-test (`popover_hit`) — the SAME geometry a click reads.
+        // `None`/false when the popover is down.
+        let over_popover_button = self.popover_open && gpu.pipeline.popover_hit(px, py).is_some();
         let ctx = crate::cursor_shape::CursorContext {
             dragging_edge: self.page_resizing,
             overlay_open,
@@ -635,6 +639,7 @@ impl App {
             over_case_toggle,
             image_drag: self.image_resizing.map(|d| d.handle),
             image_hover,
+            over_popover_button,
         };
         let desired = crate::cursor_shape::cursor_icon_for(ctx);
         let hidden = self.pointer_hide == crate::pointer_hide::PointerHide::Hidden;
@@ -805,6 +810,33 @@ impl App {
                 {
                     return;
                 }
+                // FORMAT POPOVER: a press on the summoned format toolbar fires that
+                // button's catalog Action through the SAME `App::apply` seam a chord
+                // uses (the menu-bar precedent — no popover-only edit path), keeping
+                // the popover OPEN so a run of toggles is one gesture; a press inside
+                // the card but off a button is swallowed (calm no-op, stays open); a
+                // press OFF the card dismisses it and falls through to the normal
+                // document press. Only on the bare document (the popover never shows
+                // over an overlay / search panel).
+                if self.popover_open && self.overlay.is_none() && self.search.is_none() {
+                    let (px, py) = self.cursor_px;
+                    let hit = self.gpu.as_ref().and_then(|g| g.pipeline.popover_hit(px, py));
+                    if let Some(button) = hit {
+                        // A direct, learned gesture — the FAST path, `Door::Chord`.
+                        let _ = self.apply(button.action(), false, event_loop, crate::stats::Door::Chord);
+                        self.sync_view(true);
+                        if let Some(gpu) = self.gpu.as_ref() {
+                            gpu.window.request_redraw();
+                        }
+                        return;
+                    }
+                    if self.gpu.as_ref().is_some_and(|g| g.pipeline.over_popover(px, py)) {
+                        // In the card but off a button: swallow (keep the popover open).
+                        return;
+                    }
+                    // Off the card: dismiss, then let the press become a normal gesture.
+                    self.popover_open = false;
+                }
                 // A summoned picker OWNS the click (modal): a click ON a row
                 // ACCEPTS it (same as Enter), a click OUTSIDE the card DISMISSES
                 // it (same as Esc), a click inside but off a row is swallowed —
@@ -864,6 +896,19 @@ impl App {
                 if !self.buffer.has_selection() {
                     self.buffer.clear_mark();
                 }
+                // FORMAT POPOVER: a MOUSE selection that leaves a non-empty
+                // selection SUMMONS the reveal-on-select format toolbar (a
+                // drag-release, or a double-/triple-click select — all land on this
+                // release path). Markdown buffers only + config-gated. A KEYBOARD
+                // selection never reaches this mouse-release path, so it can never
+                // summon (the mouse-only rule); a plain click (no selection) leaves
+                // it down. A popover-button press returned early above, so its own
+                // release just re-affirms `true` here (stays open across applies).
+                self.popover_open = crate::popover::popover_on()
+                    && self.buffer.has_selection()
+                    && self.buffer.is_markdown()
+                    && self.overlay.is_none()
+                    && self.search.is_none();
                 self.sync_view(true);
             }
         }

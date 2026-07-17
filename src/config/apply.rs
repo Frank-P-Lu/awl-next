@@ -94,6 +94,13 @@ impl Config {
         if let Some(on) = self.wysiwyg {
             crate::markdown::set_wysiwyg_on(on);
         }
+        // FORMAT POPOVER: same pattern (no CLI flag) — the remembered on/off
+        // applies when present; absent = the built-in default (ON), which
+        // `popover::POPOVER_ON` already carries. OFF makes the mouse-summon a total
+        // no-op, so a plain launch stays byte-identical.
+        if let Some(on) = self.popover {
+            crate::popover::set_popover_on(on);
+        }
         // INLINE IMAGES: same pattern — the remembered on/off applies when
         // present; absent = the built-in default (ON), which
         // `markdown::INLINE_IMAGES_ON` already carries (and which is inert on

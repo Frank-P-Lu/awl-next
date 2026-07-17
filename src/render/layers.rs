@@ -2077,6 +2077,11 @@ impl TextPipeline {
         // prefix's follow-up keys. Drawn only while summoned (the App set its rows on a
         // prefix pause); parked off-screen otherwise, so a default capture is byte-identical.
         self.prepare_whichkey(device, queue, width, height)?;
+        // THE FORMAT POPOVER (reveal-on-select format toolbar): its own float
+        // elevation + active-button wash + labels, anchored over the selection.
+        // Parked (nothing drawn) unless a mouse selection summoned it (or the
+        // `AWL_POPOVER` capture probe forced it), so a default capture is byte-identical.
+        self.prepare_popover(device, queue, width, height)?;
         // The WEB/LINUX MENU BAR (top strip + open dropdown). Parks everything
         // off-screen/empty when the bar is hidden (default off on macOS), so a default
         // capture stays byte-identical; `--menu-bar` / a web/Linux launch shows it.

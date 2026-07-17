@@ -106,6 +106,27 @@ impl App {
         // non-keyboard sync (IME/wheel) doesn't inherit a stale held flag.
         let held = std::mem::take(&mut self.caret_held);
 
+        // FORMAT POPOVER: recompute the lit/label model from the LIVE selection
+        // each sync (so it reflects a format apply the instant it lands), gated on
+        // the mouse-summoned flag + the config toggle + an actual selection + no
+        // modal surface (overlay / search) owning the screen. A pure fn of the
+        // buffer state (`actions::popover::plan`); `None` parks every popover quad.
+        let popover = if self.popover_open
+            && crate::popover::popover_on()
+            && self.overlay.is_none()
+            && self.search.is_none()
+            && self.buffer.has_selection()
+        {
+            crate::actions::popover::plan(
+                &self.buffer.text(),
+                self.buffer.anchor_char(),
+                self.buffer.cursor_char(),
+                self.buffer.is_markdown(),
+            )
+        } else {
+            None
+        };
+
         // Map the active isearch state (if any) into render-facing fields: each
         // match CHAR range -> ((l,c),(l,c)) so highlight quads reuse the
         // selection-rect geometry; the current match is shown only by the real
@@ -263,6 +284,9 @@ impl App {
             // LINE ENDINGS: the active buffer's on-disk ending, for the held stats
             // HUD's LINE ENDINGS row (a pure buffer fact, not re-derivable from text).
             eol: self.buffer.eol(),
+            // FORMAT POPOVER: the mouse-summoned format toolbar's model (computed
+            // above), or `None` when down.
+            popover,
         };
         // HISTORY PREVIEW geometry safety: the pushed text is a DIFFERENT (possibly
         // shorter) version than the buffer, so every field whose line/col spans
@@ -288,6 +312,9 @@ impl App {
             view.search_replace_active = false;
             view.search_replacement = String::new();
             view.search_editing_replacement = false;
+            // A history preview shows a DIFFERENT version's text; the popover's
+            // spans would index the wrong bytes, so it never rides a preview frame.
+            view.popover = None;
         }
         {
             let gpu = self.gpu.as_mut().unwrap();

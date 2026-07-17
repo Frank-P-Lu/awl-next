@@ -1164,6 +1164,17 @@ pub struct ViewState {
     /// real value in a headless capture (unlike the dropped clock/fs HUD fields)
     /// and the sidecar asserts it (`hud.eol`).
     pub eol: crate::buffer::Eol,
+    /// THE FORMAT POPOVER model for this frame ([`crate::popover::PopoverModel`]),
+    /// or `None` when the popover is down. Built by the caller — the live App's
+    /// `sync_view` (mouse-summoned + config-gated) or the capture force-summon
+    /// probe (`AWL_POPOVER`) — from [`crate::actions::popover::plan`] over the
+    /// current selection, so the lit toggles + the `H` button's level stay live
+    /// and reflective across format applies. Drives the floating button row + its
+    /// hit-test + the sidecar `popover` block. The row is ANCHORED off `selection`
+    /// (its earlier endpoint), so a `Some` model always rides a live selection.
+    /// `None` parks every popover quad/glyph empty, so a default capture is
+    /// byte-identical.
+    pub popover: Option<crate::popover::PopoverModel>,
 }
 
 impl ViewState {
@@ -1227,6 +1238,7 @@ impl ViewState {
             notice: String::new(),
             cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
             eol: crate::buffer::Eol::Lf,
+            popover: None,
         }
     }
 }
@@ -3520,6 +3532,30 @@ pub struct TextPipeline {
     /// down. Set by [`Self::set_whichkey`]; a settled/idle frame leaves it `None`, so a
     /// default capture is byte-identical.
     whichkey_rows: Option<Vec<(String, String)>>,
+    /// THE FORMAT POPOVER (`crate::popover`) — its OWN float-elevation trio +
+    /// active-button wash + button-label text renderer, drawn in `draw_chrome_tail`
+    /// (over the document, like the which-key panel) so it never races the shared
+    /// `float_*`/`panel_*` quads the overlay + caret-preview + search panels own.
+    /// Parked (nothing drawn) unless [`Self::popover_model`] is `Some` — set from
+    /// [`ViewState::popover`], so a popover-down frame is byte-identical.
+    pub popover_shadow: SelectionPipeline,
+    pub popover_border: SelectionPipeline,
+    pub popover_card: SelectionPipeline,
+    /// The value-step wash quad behind each LIT (active-toggle) button — a
+    /// `base_content` value ladder step, NEVER amber (DESIGN §3; the caret keeps
+    /// the one accent).
+    pub popover_wash: SelectionPipeline,
+    pub popover_renderer: TextRenderer,
+    pub popover_buffer: GlyphBuffer,
+    /// The format popover's model this frame (mirrored from [`ViewState::popover`]),
+    /// or `None` when down. Drives the button row + the sidecar `popover` block.
+    popover_model: Option<crate::popover::PopoverModel>,
+    /// The popover's laid-out geometry (card rect + per-button pixel spans),
+    /// computed in `prepare_popover` and read by the pure `&self` hit-test
+    /// [`Self::popover_hit`] + the sidecar — the SAME geometry the buttons draw
+    /// from, so a click can never disagree with where a button is painted. `None`
+    /// when the popover is down.
+    popover_geom: Option<crate::render::chrome::PopoverGeom>,
     /// The CALM NOTICE text mirrored from [`ViewState::notice`]; empty parks the
     /// label off-screen (nothing drawn). Live-only content by construction.
     notice: String,
@@ -4059,6 +4095,18 @@ impl TextPipeline {
         let wk_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let wk_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // FORMAT POPOVER: its own float-panel elevation (shadow -> raised border ->
+        // base_300 card) + an active-button value-step wash + a button-label text
+        // renderer, kept separate from every shared float/panel quad. Empty/off
+        // until a mouse selection summons it (or the `AWL_POPOVER` capture probe).
+        let popover_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
+        let popover_border =
+            SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
+        let popover_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        let popover_wash = SelectionPipeline::new(device, format, theme::base_200().rgba_bytes());
+        let popover_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let popover_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Wavy spell-check underlines, also drawn under the text.
         let spell_pipeline =
             SpellUnderlinePipeline::new(device, format, theme::error().rgba_bytes());
@@ -4225,6 +4273,14 @@ impl TextPipeline {
             wk_card,
             wk_renderer,
             wk_buffer,
+            popover_shadow,
+            popover_border,
+            popover_card,
+            popover_wash,
+            popover_renderer,
+            popover_buffer,
+            popover_model: None,
+            popover_geom: None,
             hud_stats: None,
             hud_saved: None,
             hud_update_checked: None,
@@ -4386,6 +4442,14 @@ impl TextPipeline {
         self.wk_shadow.set_color(float_shadow_srgba());
         self.wk_border.set_color(theme::surface_selected().rgba_bytes());
         self.wk_card.set_color(theme::base_300().rgba_bytes());
+        // FORMAT POPOVER elevation + active-button wash re-tint with the world
+        // (same float tokens as which-key; the wash is a `base_200` value step,
+        // never amber). O(1); geometry is theme-independent.
+        self.popover_shadow.set_color(float_shadow_srgba());
+        self.popover_border
+            .set_color(theme::surface_selected().rgba_bytes());
+        self.popover_card.set_color(theme::base_300().rgba_bytes());
+        self.popover_wash.set_color(theme::base_200().rgba_bytes());
         // WEB/LINUX MENU BAR: re-tint from the world's own tokens (O(1) — the bar/
         // dropdown GEOMETRY is theme-independent, so the theme-picker preview re-tints
         // it for free). Bar ground = a value step off the room (`base_200`); the open
@@ -4705,6 +4769,10 @@ impl TextPipeline {
         self.search_replace_active = view.search_replace_active;
         self.search_replacement = view.search_replacement.clone();
         self.search_editing_replacement = view.search_editing_replacement;
+        // FORMAT POPOVER: mirror the model (built by the App / capture probe); the
+        // geometry is (re)computed in `prepare_popover`, which also parks the quads
+        // when this is `None`.
+        self.popover_model = view.popover.clone();
         // A summoned overlay appears + disappears INSTANTLY (no rise-in / sink-out
         // motion) on every CALM world: the overlay content syncs verbatim from the
         // view every frame, so a close snaps the card off the frame the App clears
@@ -5672,6 +5740,17 @@ impl TextPipeline {
         self.menu_chord_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon menu-drop chord render failed: {e:?}"))?;
+        // THE FORMAT POPOVER, drawn LAST so it floats over the document (like the
+        // which-key panel): float elevation (shadow -> raised border -> card) ->
+        // active-button value-step wash -> button labels. ALL parked off-screen/empty
+        // when the popover is down, so a default render is byte-identical.
+        self.popover_shadow.draw(pass);
+        self.popover_border.draw(pass);
+        self.popover_card.draw(pass);
+        self.popover_wash.draw(pass);
+        self.popover_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon popover render failed: {e:?}"))?;
         Ok(())
     }
 

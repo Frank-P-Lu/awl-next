@@ -155,7 +155,7 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"xray\": {xray},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"popover\": {popover},\n  \"tables\": {tables},\n  \"xray\": {xray},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
         schema_json = json_string(&schema),
         caret_extra = caret_extra,
         cjk = cjk_json(pipeline),
@@ -171,6 +171,7 @@ pub(super) fn write_sidecar(
         peek = peek_json(pipeline),
         caret_preview = caret_preview_json(pipeline),
         wysiwyg = wysiwyg_json(pipeline),
+        popover = popover_json(pipeline),
         tables = tables_json(pipeline),
         xray = xray_json(pipeline),
         images = images_json(pipeline),
@@ -489,6 +490,41 @@ fn wysiwyg_json(pipeline: &TextPipeline) -> String {
         "{{ \"on\": {on}, \"concealed\": {} }}",
         span_array_json(&concealed)
     )
+}
+
+/// FORMAT POPOVER block: `{ on, shown, card, buttons }`. `on` mirrors
+/// `crate::popover::popover_on()` (the config gate). `shown` is whether the popover
+/// is actually up THIS frame (a mouse selection summoned it live, or the
+/// `AWL_POPOVER` capture probe forced it). When shown, `card` is the popover's
+/// `[x, y, w, h]` and `buttons` is one `{ label, active, x0, x1 }` per button — the
+/// SAME laid-out geometry the buttons draw + the click hit-test reads
+/// (`TextPipeline::popover_report`), so a reviewer can assert each button is
+/// in-bounds + distinct + that the lit toggles / `H` level are correct. When down:
+/// `shown: false`, `card: null`, `buttons: []` — so a default capture (no probe) is
+/// byte-identical apart from the always-present block.
+fn popover_json(pipeline: &TextPipeline) -> String {
+    let on = crate::popover::popover_on();
+    match pipeline.popover_report() {
+        Some((card, rows)) => {
+            let card_json = format!("[{}, {}, {}, {}]", card[0], card[1], card[2], card[3]);
+            let buttons: Vec<String> = rows
+                .iter()
+                .map(|(label, active, span)| {
+                    format!(
+                        "{{ \"label\": {}, \"active\": {active}, \"x0\": {}, \"x1\": {} }}",
+                        json_string(label),
+                        span[0],
+                        span[1]
+                    )
+                })
+                .collect();
+            format!(
+                "{{ \"on\": {on}, \"shown\": true, \"card\": {card_json}, \"buttons\": [{}] }}",
+                buttons.join(", ")
+            )
+        }
+        None => format!("{{ \"on\": {on}, \"shown\": false, \"card\": null, \"buttons\": [] }}"),
+    }
 }
 
 /// PERSISTENT MARGIN OUTLINE block: `{ on, headings, current, ancestors }`. `on`

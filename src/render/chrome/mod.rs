@@ -275,6 +275,9 @@ mod debug_text;
 mod hud;
 mod whichkey;
 mod preview;
+mod popover;
+#[allow(unused_imports)] // PopoverButtonGeom named only inside the popover module
+pub(in crate::render) use popover::{PopoverButtonGeom, PopoverGeom};
 
 impl TextPipeline {
     // ===== FLOATING PANEL PRIMITIVE + CARET-STYLE PREVIEW PANEL ============
