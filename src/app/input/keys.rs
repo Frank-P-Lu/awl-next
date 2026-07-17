@@ -195,7 +195,14 @@ impl App {
     pub(in crate::app) fn mark_zoom_dirty(&mut self) {
         self.zoom_persist_at = Some(Instant::now());
         self.zoom_reflow.queue();
-        if let Some(gpu) = self.gpu.as_ref() {
+        // ZOOM READOUT: a quiet muted percentage near the pointer while the gesture is
+        // in flight (mirrors the page-drag readout). Armed on EVERY zoom step (this is
+        // the ONE owner both the keyboard ⌘± and wheel ⌘-scroll paths funnel through),
+        // floated at the last pointer position; cleared on settle in `about_to_wait`.
+        let (px, py) = self.cursor_px;
+        let zoom = self.zoom;
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.pipeline.set_zoom_readout(Some((px, py, zoom)));
             gpu.window.request_redraw();
         }
     }

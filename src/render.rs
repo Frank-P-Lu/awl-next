@@ -3370,6 +3370,15 @@ pub struct TextPipeline {
     /// every `--keys` replay — stays byte-identical.
     pub page_drag_renderer: TextRenderer,
     pub page_drag_buffer: GlyphBuffer,
+    /// Renderer + buffer for the ZOOM READOUT — a quiet muted percentage (e.g.
+    /// "120%") floating near the pointer while a zoom gesture is IN FLIGHT (the
+    /// sticky-zoom debounce window). Its own glyph buffer so it composes
+    /// independently; parked off-screen while `zoom_readout` is `None` (and no
+    /// `AWL_ZOOM_READOUT` probe), which is the ONLY state a headless capture ever
+    /// sees by default (it is set only by the live App's zoom debounce), so a
+    /// default capture — and every `--keys` replay — stays byte-identical.
+    pub zoom_readout_renderer: TextRenderer,
+    pub zoom_readout_buffer: GlyphBuffer,
     /// Renderer + buffer for the opt-in DEBUG panel, drawn DIM in the top-LEFT
     /// corner ONLY when [`crate::debug::debug_on`]. Its own glyph buffer so it
     /// composes independently of the wordcount text. Parked off-screen when the
@@ -3544,6 +3553,18 @@ pub struct TextPipeline {
     /// [`ViewState`] — mirrors the debug perf fields, which are also fed straight
     /// by the live loop rather than riding the deterministic view snapshot.
     page_drag_readout: Option<(f32, f32, usize)>,
+    /// LIVE-ONLY: the pointer position (physical px) + the zoom factor while a zoom
+    /// gesture (Cmd-± / Cmd-scroll) is IN FLIGHT (the sticky-zoom debounce window),
+    /// or `None` when the zoom has settled — the default, and the ONLY state a
+    /// headless capture/replay ever constructs (zoom mirrors through `apply_core`,
+    /// never the live-App-only `App::mark_zoom_dirty`), so a default capture stays
+    /// byte-identical. Set (and cleared on settle) by the live App's zoom debounce
+    /// via [`Self::set_zoom_readout`]; deliberately NOT part of [`ViewState`] —
+    /// mirrors `page_drag_readout`, fed straight by the live loop rather than the
+    /// deterministic view snapshot. A capture-only `AWL_ZOOM_READOUT` env probe
+    /// synthesizes it at canvas-center for the gallery (see
+    /// [`Self::prepare_zoom_readout`]).
+    zoom_readout: Option<(f32, f32, f32)>,
     /// Latest completed frame's cost + the worst over the last 120 drawn frames
     /// (ms), fed by the live loop for the debug panel's frame line, or `None` when
     /// there is no clock (the headless capture) or before the first measured frame
@@ -3975,6 +3996,11 @@ impl TextPipeline {
         let page_drag_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let page_drag_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // Zoom readout renderer + buffer (quiet, muted, floats at the pointer; only
+        // while the live App has a zoom gesture in flight).
+        let zoom_readout_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let zoom_readout_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // DEBUG panel renderer + buffer (quiet, dim, top-left; only when
         // `debug::debug_on()`).
         let debug_renderer =
@@ -4164,6 +4190,8 @@ impl TextPipeline {
             notice_buffer,
             page_drag_renderer,
             page_drag_buffer,
+            zoom_readout_renderer,
+            zoom_readout_buffer,
             debug_renderer,
             debug_buffer,
             gutter_renderer,
@@ -4213,6 +4241,7 @@ impl TextPipeline {
             overlay_band_t: 1.0,
             overlay_band_last: None,
             page_drag_readout: None,
+            zoom_readout: None,
             debug_frame_cost: None,
             debug_latency_ms: None,
             debug_redraws: None,
@@ -5597,6 +5626,11 @@ impl TextPipeline {
         self.page_drag_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon page-drag-readout render failed: {e:?}"))?;
+        // The ZOOM READOUT (floats at the pointer while a zoom gesture is in flight):
+        // parked off-screen while settled, so a default render is byte-identical.
+        self.zoom_readout_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon zoom-readout render failed: {e:?}"))?;
         // Float-panel elevation, painter's order: drop shadow -> raised border -> card.
         self.hud_shadow.draw(pass);
         self.hud_border.draw(pass);

@@ -96,6 +96,14 @@ pub struct CursorContext {
     /// (never the document I-beam beneath the bar). Ranked ABOVE `over_edge`/`over_text`
     /// (the bar covers them). Computed from `TextPipeline::over_menu_surface`.
     pub over_menu_bar: bool,
+    /// The pointer is over the summoned find/replace panel's `Aa` CASE-TOGGLE cell
+    /// (the clickable indicator on the find row) — a press there flips
+    /// case-sensitivity (`PanelHit::CaseToggle`), so it earns the pointing HAND, the
+    /// same clickable-affordance signal as a picker row. The find panel is NOT an
+    /// overlay (its own floating card), so this is only ever set while no overlay is
+    /// open and the panel is up; computed from the SAME `TextPipeline::panel_hit`
+    /// the click path uses (no parallel geometry).
+    pub over_case_toggle: bool,
     /// An inline-image DRAG-RESIZE is in progress right now (button held on one of an
     /// image's edges/corners, its width tracking the pointer) — `Some(handle)` names
     /// the grabbed edge/corner, whose glyph ([`image_handle_icon`]) tracks the gesture.
@@ -153,6 +161,10 @@ pub fn image_handle_icon(handle: ImageHandle) -> CursorIcon {
 /// 5b. dead menu-bar space (the bar strip / an open dropdown's card, off any clickable
 ///    title/item) → the plain arrow, ranked ABOVE the page edge + text it covers, so the
 ///    bar reads as chrome not the document beneath it;
+/// 5c. hovering the find/replace panel's `Aa` CASE-TOGGLE cell gets the pointing HAND —
+///    a clickable-affordance signal like a picker row, ranked ABOVE the page edge + text
+///    the floating panel covers (the panel is not an overlay, so this is the only arm
+///    that surfaces its clickability);
 /// 6. hovering a page-column edge (not yet dragging) still beats plain text;
 /// 7. hovering an inline image's resize EDGE/CORNER gets that handle's glyph — a
 ///    resize affordance like the page edge, ranked just under it (the page edge wins
@@ -177,6 +189,8 @@ pub fn cursor_icon_for(ctx: CursorContext) -> CursorIcon {
         CursorIcon::Default
     } else if ctx.over_menu_bar {
         CursorIcon::Default
+    } else if ctx.over_case_toggle {
+        CursorIcon::Pointer
     } else if ctx.over_edge {
         CursorIcon::ColResize
     } else if let Some(handle) = ctx.image_hover {
@@ -229,6 +243,7 @@ mod tests {
             over_outline_row: false,
             over_menu_hand: false,
             over_menu_bar: false,
+            over_case_toggle: false,
             image_drag: None,
             image_hover: None,
         }
@@ -248,6 +263,7 @@ mod tests {
             over_outline_row: false,
             over_menu_hand: false,
             over_menu_bar: false,
+            over_case_toggle: false,
             image_drag: Some(handle),
             image_hover: None,
         }
@@ -267,6 +283,7 @@ mod tests {
             over_outline_row: false,
             over_menu_hand: false,
             over_menu_bar: false,
+            over_case_toggle: false,
             image_drag: None,
             image_hover: Some(handle),
         }
@@ -286,6 +303,7 @@ mod tests {
             over_outline_row: true,
             over_menu_hand: false,
             over_menu_bar: false,
+            over_case_toggle: false,
             image_drag: None,
             image_hover: None,
         }
@@ -305,6 +323,7 @@ mod tests {
             over_outline_row: false,
             over_menu_hand: false,
             over_menu_bar: false,
+            over_case_toggle: false,
             image_drag: None,
             image_hover: None,
         }
@@ -324,6 +343,7 @@ mod tests {
             over_outline_row: false,
             over_menu_hand: false,
             over_menu_bar: false,
+            over_case_toggle: false,
             image_drag: None,
             image_hover: None,
         }
@@ -343,6 +363,7 @@ mod tests {
             over_outline_row: false,
             over_menu_hand: false,
             over_menu_bar: false,
+            over_case_toggle: false,
             image_drag: None,
             image_hover: None,
         }
@@ -514,6 +535,7 @@ mod tests {
             over_outline_row: false,
             over_menu_hand: false,
             over_menu_bar: false,
+            over_case_toggle: false,
             image_drag: None,
             image_hover: None,
         };
@@ -551,6 +573,7 @@ mod tests {
             over_outline_row: false,
             over_menu_hand: false,
             over_menu_bar: false,
+            over_case_toggle: false,
             image_drag: None,
             image_hover: None,
         };
@@ -588,6 +611,7 @@ mod tests {
             over_outline_row: false,
             over_menu_hand: true,
             over_menu_bar: true, // the hand is always within the bar surface
+            over_case_toggle: false,
             image_drag: None,
             image_hover: None,
         }
@@ -607,6 +631,7 @@ mod tests {
             over_outline_row: false,
             over_menu_hand: false,
             over_menu_bar: true,
+            over_case_toggle: false,
             image_drag: None,
             image_hover: None,
         }
@@ -634,6 +659,48 @@ mod tests {
     #[test]
     fn dead_menu_bar_space_beats_a_would_be_page_edge_beneath_it() {
         assert_eq!(cursor_icon_for(ctx_menu_bar(true, false)), CursorIcon::Default);
+    }
+
+    // --- the find/replace panel's Aa CASE-TOGGLE cell earns the pointing HAND -------
+
+    /// A context over the find panel's `Aa` case-toggle cell (no overlay — the panel
+    /// is its own floating card, mutually exclusive with a summoned overlay).
+    fn ctx_case_toggle(over_edge: bool, over_text: bool) -> CursorContext {
+        CursorContext {
+            dragging_edge: false,
+            overlay_open: false,
+            over_edge,
+            over_text,
+            over_clickable_overlay_row: false,
+            over_clickable_lens: false,
+            over_query_input: false,
+            over_outline_row: false,
+            over_menu_hand: false,
+            over_menu_bar: false,
+            over_case_toggle: true,
+            image_drag: None,
+            image_hover: None,
+        }
+    }
+
+    #[test]
+    fn the_case_toggle_cell_is_the_pointing_hand() {
+        assert_eq!(cursor_icon_for(ctx_case_toggle(false, false)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn the_case_toggle_cell_beats_the_plain_text_beneath_the_floating_panel() {
+        // The panel floats over the writing column; a hover on its Aa cell reads as
+        // the clickable hand, never the document I-beam under the card.
+        assert_eq!(cursor_icon_for(ctx_case_toggle(false, true)), CursorIcon::Pointer);
+    }
+
+    #[test]
+    fn an_active_page_edge_drag_still_beats_the_case_toggle_hand() {
+        // A page-resize drag in progress is a higher-priority literal gesture.
+        let mut c = ctx_case_toggle(false, false);
+        c.dragging_edge = true;
+        assert_eq!(cursor_icon_for(c), CursorIcon::ColResize);
     }
 
     #[test]
