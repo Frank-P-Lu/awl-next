@@ -246,6 +246,10 @@ pub(super) struct OverlayGeom {
 // owner, the sidecar report structs — plus the hit-test unit sweep.
 mod panel;
 mod overlay;
+// The shipped overlay UI scale, re-exported so the OVERLAY-EXPLORATION density
+// probe's default ([`crate::render::TypeDensity::shipped`]) can name it without
+// hand-copying the magic number (it stays the ONE owner in `overlay`).
+pub(in crate::render) use overlay::OVERLAY_UI_SCALE;
 // Re-export the card horizontal-box policy + its tokens so the width-sweep law
 // can reach them without naming the private `overlay` submodule (test-only).
 #[cfg(test)]
@@ -473,6 +477,25 @@ pub(super) fn grow_span(x: f32, w: f32, grow: f32, mirror: bool) -> (f32, f32) {
     } else {
         // Grow RIGHT: the LEFT edge stays put; the right edge juts `g` into the room.
         (x, w + g)
+    }
+}
+
+/// PURE geometry (SLANT-ON-BARS) — shift a bar's `(x, w)` right by the stair
+/// offset `dx` for its display row. A `hug` plate (never at the card's right
+/// edge) simply translates; a FULL-WIDTH plate keeps its RIGHT edge flush and
+/// sheds `dx` of width (mirroring the Pane band's `[card_x + dx, w - dx]`), so a
+/// slanted full-width bar can never paint past the card. `dx == 0.0` (the
+/// unslanted default, or a fan-in at rest) → the input span verbatim
+/// (byte-identical). The ONE owner both the unselected and selected slanted
+/// plates read, so the two extents cascade identically.
+pub(super) fn slant_bar_span(x: f32, w: f32, hug: bool, dx: f32) -> (f32, f32) {
+    if dx <= 0.0 {
+        return (x, w);
+    }
+    if hug {
+        (x + dx, w)
+    } else {
+        (x + dx, (w - dx).max(1.0))
     }
 }
 

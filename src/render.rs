@@ -2433,6 +2433,203 @@ pub(crate) fn effective_facet_style() -> theme::FacetStyle {
     }
 }
 
+// --- THE OVERLAY-EXPLORATION round's dev probes ------------------------------
+//
+// INERT dials for the per-world summoned-menu personality exploration, each
+// byte-identical by default and reachable only through the established
+// `AWL_*_FORCE` idiom (read once, memoized, malformed → the world default, total
+// no-op unset, no config key, no CLI flag, no `RenderCaps` field — probe-gated
+// until a later gallery win):
+//   1. DENSITY   (`AWL_OVERLAY_DENSITY_FORCE`)  — the whole-menu type scale +
+//      leading, the cheapest per-line distinctness (proposal 1). Default is the
+//      shipped `OVERLAY_UI_SCALE` with zero extra leading.
+//   2. SLANT-ON-BARS — the EXISTING `AWL_OVERLAY_SLANT_FORCE` stair, now applied
+//      to the BAR PLATES too (each bar cascades with its label) and MIRRORED
+//      under a right-anchored card so it steps toward the open margin. No new env
+//      knob: it composes with `AWL_OVERLAY_LIST_FORCE=bars` +
+//      `AWL_OVERLAY_ANCHOR_FORCE`.
+//   3+4. TWO MOTION CHOREOGRAPHIES — the slant FAN-IN (the diagonal unfurls as
+//      the card springs in, riding `overlay_enter_t`) and the selected-bar
+//      GROW-POP (the ledge juts into the margin on each selection move, riding
+//      `overlay_band_t`). Both are LIVE-ONLY (the `juice_live` gate; settled in
+//      every capture, folded to nothing under Reduce Motion) and both compose
+//      with the slant/bars dials. The MID-ANIMATION frame-dump probe below
+//      (`AWL_OVERLAY_MOTION_FORCE`) pins their phase so a headless `--screenshot`
+//      can witness a frame partway through (the `--screenshot-motion` idiom for
+//      the overlay).
+
+/// THE OVERLAY DENSITY PROBE's parsed shape (proposal 1): the whole-menu UI
+/// `scale` (a step below the reading body — dense chrome, DESIGN §4) and extra
+/// `leading` (device px added to the row line-height). Both feed the ONE row
+/// owners [`TextPipeline::overlay_metrics`] / [`TextPipeline::overlay_lh`], so
+/// the card height, row-Y, hit-test, band, and bars inherit the new texture for
+/// free. PROBE-ONLY — no `RenderCaps` field; ships only on a later gallery win.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TypeDensity {
+    pub scale: f32,
+    pub leading: f32,
+}
+
+impl TypeDensity {
+    /// The shipped default: the historical [`chrome::OVERLAY_UI_SCALE`] with zero
+    /// extra leading, so an unset probe is byte-identical.
+    pub(crate) fn shipped() -> Self {
+        TypeDensity { scale: chrome::OVERLAY_UI_SCALE, leading: 0.0 }
+    }
+}
+
+/// `AWL_OVERLAY_DENSITY_FORCE` grammar: `"<scale>"` (a positive finite float — a
+/// tight `0.78` timetable, an airy `1.0` table-of-contents) or
+/// `"<scale>:<leading>"` (leading = non-negative device px added per row).
+/// Malformed / non-positive scale / negative leading → `None` (the shipped
+/// density, byte-identical).
+fn parse_overlay_density_force(s: &str) -> Option<TypeDensity> {
+    let s = s.trim();
+    let (scale_s, leading) = match s.split_once(':') {
+        Some((sc, ld)) => {
+            let ld: f32 = ld.trim().parse().ok()?;
+            if !ld.is_finite() || ld < 0.0 {
+                return None;
+            }
+            (sc, ld)
+        }
+        None => (s, 0.0),
+    };
+    let scale: f32 = scale_s.trim().parse().ok()?;
+    if scale.is_finite() && scale > 0.0 {
+        Some(TypeDensity { scale, leading })
+    } else {
+        None
+    }
+}
+
+/// The `AWL_OVERLAY_DENSITY_FORCE` dev knob, read ONCE and memoized.
+fn awl_overlay_density_force() -> &'static Option<TypeDensity> {
+    static ONCE: std::sync::OnceLock<Option<TypeDensity>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        read_forced_knob(
+            "AWL_OVERLAY_DENSITY_FORCE",
+            "<scale> | <scale>:<leading>",
+            parse_overlay_density_force,
+        )
+    })
+}
+
+/// TEST-ONLY escape hatch for the overlay density (mirrors
+/// [`set_slant_test_override`]; `serial()`-guarded at call sites).
+#[cfg(test)]
+static DENSITY_TEST_OVERRIDE: std::sync::Mutex<Option<TypeDensity>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_overlay_density_test_override(d: Option<TypeDensity>) {
+    *DENSITY_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = d;
+}
+
+/// The EFFECTIVE overlay type density for this frame: a `cfg(test)` override if
+/// set, else the `AWL_OVERLAY_DENSITY_FORCE` dev probe if set, else the shipped
+/// [`TypeDensity::shipped`] — so an unset, non-test run is BYTE-IDENTICAL.
+pub(crate) fn effective_overlay_density() -> TypeDensity {
+    #[cfg(test)]
+    {
+        if let Some(d) = *DENSITY_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return d;
+        }
+    }
+    match awl_overlay_density_force() {
+        Some(d) => *d,
+        None => TypeDensity::shipped(),
+    }
+}
+
+/// The EFFECTIVE overlay UI SCALE this frame — the density probe's `scale`,
+/// [`chrome::overlay::OVERLAY_UI_SCALE`] by default. The ONE reader every row +
+/// strip metric consults so shaping and geometry can never drift on the size.
+pub(crate) fn effective_overlay_scale() -> f32 {
+    effective_overlay_density().scale
+}
+
+/// The EFFECTIVE extra overlay LEADING this frame (device px) — the density
+/// probe's `leading`, `0.0` by default (byte-identical). Added into the row
+/// line-height alongside the row gap.
+pub(crate) fn effective_overlay_leading() -> f32 {
+    effective_overlay_density().leading
+}
+
+/// THE OVERLAY MOTION frame-dump PROBE's parsed shape (choreographies 3+4): a
+/// pinned ENTRANCE phase (the slant fan-in progress) and BAND phase (the
+/// selected-bar grow-pop progress), each in `[0, 1]` (`0` = start, `1` =
+/// settled). PROBE-ONLY — the mid-animation still the `--screenshot` path can
+/// witness (the overlay's `--screenshot-motion`). Unset, the live animators run
+/// off `overlay_enter_t` / `overlay_band_t` and every capture stays settled.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct OverlayMotionProbe {
+    pub enter: f32,
+    pub band: f32,
+}
+
+/// `AWL_OVERLAY_MOTION_FORCE` grammar: `"<enter>"` (band = same phase) or
+/// `"<enter>:<band>"`, each a finite float CLAMPED to `[0, 1]`. Empty /
+/// non-numeric → `None` (the settled state, byte-identical).
+fn parse_overlay_motion_force(s: &str) -> Option<OverlayMotionProbe> {
+    let s = s.trim();
+    let (enter_s, band_s) = match s.split_once(':') {
+        Some((e, b)) => (e, Some(b)),
+        None => (s, None),
+    };
+    let enter: f32 = enter_s.trim().parse().ok()?;
+    if !enter.is_finite() {
+        return None;
+    }
+    let band: f32 = match band_s {
+        Some(b) => {
+            let b: f32 = b.trim().parse().ok()?;
+            if !b.is_finite() {
+                return None;
+            }
+            b
+        }
+        None => enter,
+    };
+    Some(OverlayMotionProbe { enter: enter.clamp(0.0, 1.0), band: band.clamp(0.0, 1.0) })
+}
+
+/// The `AWL_OVERLAY_MOTION_FORCE` dev knob, read ONCE and memoized.
+fn awl_overlay_motion_force() -> &'static Option<OverlayMotionProbe> {
+    static ONCE: std::sync::OnceLock<Option<OverlayMotionProbe>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        read_forced_knob(
+            "AWL_OVERLAY_MOTION_FORCE",
+            "<enter> | <enter>:<band>  (each 0..1)",
+            parse_overlay_motion_force,
+        )
+    })
+}
+
+/// TEST-ONLY escape hatch for the overlay motion frame-dump probe (mirrors
+/// [`set_slant_test_override`]; `serial()`-guarded at call sites).
+#[cfg(test)]
+static OVERLAY_MOTION_TEST_OVERRIDE: std::sync::Mutex<Option<OverlayMotionProbe>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_overlay_motion_test_override(m: Option<OverlayMotionProbe>) {
+    *OVERLAY_MOTION_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = m;
+}
+
+/// The EFFECTIVE overlay motion frame-dump phase this frame, or `None` (the
+/// live/settled path): a `cfg(test)` override if set, else the
+/// `AWL_OVERLAY_MOTION_FORCE` dev probe. `None` on every ordinary run, so the
+/// animators read their live timers and captures stay settled.
+pub(crate) fn overlay_motion_probe() -> Option<OverlayMotionProbe> {
+    #[cfg(test)]
+    {
+        if let Some(m) = *OVERLAY_MOTION_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return Some(m);
+        }
+    }
+    *awl_overlay_motion_force()
+}
+
 /// Remove [`BAD_FALLBACK_FAMILIES`] from the font system's database so cosmic-text
 /// never selects them during fallback. Safe no-op if none are present (e.g. on
 /// non-macOS, or if the system set changes). Only affects fallback for glyphs the
@@ -4739,6 +4936,57 @@ impl TextPipeline {
         }
         let e = crate::ease::out_back(self.overlay_band_t);
         self.overlay_band_from + (target - self.overlay_band_from) * e
+    }
+
+    /// The slant FAN-IN progress this frame (motion choreography 3): the fraction
+    /// of the diagonal stair currently drawn. `1.0` (full stagger) in EVERY
+    /// capture and on every unarmed / CALM pipeline (byte-identical to the settled
+    /// slant), so the determinism law holds by construction; the mid-animation
+    /// frame-dump probe ([`crate::render::overlay_motion_probe`]) pins it; a live
+    /// SpringIn world eases it from `0` as the card springs in (the stair
+    /// UNFURLS). Reduce Motion → `1.0` (settled instantly). It multiplies the
+    /// per-row DRAW offset only — the width TAX stays at the full max offset, so
+    /// rows never reflow mid-flight (they are pre-elided for the settled stair and
+    /// merely slide into place).
+    pub(in crate::render) fn overlay_slant_progress(&self) -> f32 {
+        if let Some(m) = crate::render::overlay_motion_probe() {
+            return crate::ease::out_back(m.enter);
+        }
+        if !self.juice_live || crate::motion::reduced() {
+            return 1.0;
+        }
+        crate::ease::out_back(self.overlay_enter_t)
+    }
+
+    /// The selected-bar GROW-POP progress this frame (motion choreography 4): the
+    /// fraction of the `grow_px` ledge currently extended. `1.0` (full ledge) in
+    /// every capture / unarmed / CALM pipeline (byte-identical); pinned by the
+    /// frame-dump probe; on a live Slide world it rides `overlay_band_t` so the
+    /// ledge COLLAPSES then juts back out on each selection move (the grow and the
+    /// band slide share one timer, one spring). Reduce Motion → `1.0`.
+    pub(in crate::render) fn overlay_grow_progress(&self) -> f32 {
+        if let Some(m) = crate::render::overlay_motion_probe() {
+            return crate::ease::out_back(m.band);
+        }
+        if !self.juice_live || crate::motion::reduced() {
+            return 1.0;
+        }
+        crate::ease::out_back(self.overlay_band_t)
+    }
+
+    /// The per-DISPLAY-ROW slant DRAW offset (device px) this frame — the ONE
+    /// owner every slant consumer (the row text areas, the Pane selected band,
+    /// and the Bars plates) reads, so the stair, its fan-in, and every surface
+    /// that rides it can never disagree. `0.0` when the slant probe is unset
+    /// (byte-identical); else [`crate::render::slant_offset`] scaled by the
+    /// fan-in progress. Unsigned (always steps right, width-taxed on the right);
+    /// the right-anchor composition rides the EXISTING grow mirror, not a slant
+    /// mirror (banked — a left-stepping stair clips the text bounds' left edge).
+    pub(in crate::render) fn overlay_slant_dx(&self, row: usize) -> f32 {
+        match crate::render::overlay_slant() {
+            None => 0.0,
+            Some(s) => crate::render::slant_offset(&s, row) * self.overlay_slant_progress(),
+        }
     }
 
     /// THE EFFECTIVE margin background this frame — the active world's own
