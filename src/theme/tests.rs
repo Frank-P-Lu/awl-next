@@ -1794,8 +1794,8 @@ fn stipple_placard_density_clears_the_legibility_floor_over_its_own_ground() {
 #[test]
 fn personality_assignments_are_exactly_the_decided_table() {
     use model::{
-        BarCoverage, BarExtent, Elevation, FacetStyle, ListStyle, PageFrame, PlacardCorner,
-        PlacardInk, RenderCaps, TitleStyle,
+        BarCoverage, BarExtent, ChipVariant, Elevation, FacetStyle, ListStyle, PageFrame,
+        PlacardCorner, PlacardInk, RenderCaps, TitleStyle,
     };
     // FLIP ROUND (user FINAL PICKS 2026-07-17): the SHIPPING poster list surface
     // every statement world carries — the Bars HUG-ALL HYBRID (`HugLabel`: plate
@@ -1824,25 +1824,28 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 title_style: auto(PlacardInk::Ghost),
                 card_anchor: model::CardAnchor::TopLeft,
                 elevation: Elevation::Bordered,
-                // FLIP ROUND (2026-07-17): poster world → the Bars hug-all hybrid + Chips.
+                // FLIP ROUND (2026-07-17): poster world → the Bars hug-all hybrid;
+                // Galah wears HAIRLINE chips (user's confirmed chip map).
                 list_style: poster_bars,
-                facet_style: FacetStyle::Text,
+                facet_style: FacetStyle::Chips(ChipVariant::Hairline),
                 ..RenderCaps::DEFAULT
             },
             "Magpie" => RenderCaps {
                 title_style: auto(PlacardInk::Ghost),
                 card_anchor: model::CardAnchor::TopLeft,
                 elevation: Elevation::Bordered,
+                // Magpie wears UNDERLINE chips (user's confirmed chip map).
                 list_style: poster_bars,
-                facet_style: FacetStyle::Text,
+                facet_style: FacetStyle::Chips(ChipVariant::Underline),
                 ..RenderCaps::DEFAULT
             },
             "Mangrove" => RenderCaps {
                 title_style: auto(PlacardInk::Stipple),
                 card_anchor: model::CardAnchor::TopLeft,
                 elevation: Elevation::Bordered,
+                // Mangrove wears BRACKET chips (user's confirmed chip map).
                 list_style: poster_bars,
-                facet_style: FacetStyle::Text,
+                facet_style: FacetStyle::Chips(ChipVariant::Bracket),
                 ..RenderCaps::DEFAULT
             },
             // CHROME-VOICES FLIP (2026-07-16): the loud-end world's own loud
@@ -1860,9 +1863,10 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 chrome_face: model::ChromeFace::Named("Archivo Black"),
                 elevation: Elevation::Bordered,
                 // FLIP ROUND (2026-07-17): the maximalist showcase world → the Bars
-                // hug-all hybrid + Chips (the poster surfaces the four share).
+                // hug-all hybrid; Firetail wears FILLED chips (the loudest — user's
+                // confirmed chip map).
                 list_style: poster_bars,
-                facet_style: FacetStyle::Text,
+                facet_style: FacetStyle::Chips(ChipVariant::FilledActive),
                 ..RenderCaps::DEFAULT
             },
             // C2: the iconic dark-technical statement world anchors TopLeft.

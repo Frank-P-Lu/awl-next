@@ -121,10 +121,20 @@ fn parse_facet_style_force_grammar() {
     assert_eq!(parse_facet_style_force("BAND"), Some(theme::FacetStyle::Band));
     // V6 P5 round — `chips` is WIRED for real now (the two prior attempts left it
     // unrecognized, so a `-chips` shot silently came out as `text`). It parses.
-    assert_eq!(parse_facet_style_force("chips"), Some(theme::FacetStyle::Chips));
-    assert_eq!(parse_facet_style_force("CHIPS"), Some(theme::FacetStyle::Chips));
-    // An unrelated typo still falls back to None (the world's own facet style).
+    // The bare `chips` word == the landed baseline (`Hairline`); each suffix maps
+    // to its treatment (CHIP-VARIATIONS PROBE).
+    let chips = |v| Some(theme::FacetStyle::Chips(v));
+    assert_eq!(parse_facet_style_force("chips"), chips(theme::ChipVariant::Hairline));
+    assert_eq!(parse_facet_style_force("CHIPS"), chips(theme::ChipVariant::Hairline));
+    assert_eq!(parse_facet_style_force("chips:filled"), chips(theme::ChipVariant::FilledActive));
+    assert_eq!(parse_facet_style_force("chips:underline"), chips(theme::ChipVariant::Underline));
+    assert_eq!(parse_facet_style_force("chips:bracket"), chips(theme::ChipVariant::Bracket));
+    // The DROPPED variants (user's confirmed map) no longer parse — they fall to None.
+    assert_eq!(parse_facet_style_force("chips:bold"), None);
+    assert_eq!(parse_facet_style_force("chips:tinted"), None);
+    // An unrelated typo — or an unknown chip suffix — falls back to None.
     assert_eq!(parse_facet_style_force("pill"), None);
+    assert_eq!(parse_facet_style_force("chips:sparkle"), None);
     assert_eq!(parse_facet_style_force(""), None);
 }
 
@@ -150,7 +160,7 @@ fn forced_knob_classifies_unset_parsed_and_retired() {
     // silent `text` duplicate the two prior attempts shipped.
     assert!(matches!(
         classify_forced_knob(Some("chips"), parse_facet_style_force),
-        ForcedKnob::Parsed(theme::FacetStyle::Chips)
+        ForcedKnob::Parsed(theme::FacetStyle::Chips(theme::ChipVariant::Hairline))
     ));
     // A genuine typo, but SET → Retired (loud fallback): never a silent
     // duplicate of the default masquerading under a bogus name.
@@ -1378,7 +1388,7 @@ fn facet_chips_render_a_pill_per_label_and_differ_from_text() {
     };
 
     let text = frame(&mut p, theme::FacetStyle::Text);
-    let chips = frame(&mut p, theme::FacetStyle::Chips);
+    let chips = frame(&mut p, theme::FacetStyle::Chips(theme::ChipVariant::Hairline));
     let active_pills = p.overlay_lens_underline.instance_count();
     let ghost_pills = p.overlay_facet_ghost.instance_count();
     let ghost_stroke = p.overlay_facet_ghost.stroke();
@@ -1434,7 +1444,7 @@ fn facet_chips_leave_a_breathing_gap_between_pills() {
         ("View".into(), false),
     ];
 
-    set_facet_style_test_override(Some(theme::FacetStyle::Chips));
+    set_facet_style_test_override(Some(theme::FacetStyle::Chips(theme::ChipVariant::Hairline)));
     p.set_view(&v);
     p.prepare(&device, &queue, w, h).unwrap();
 

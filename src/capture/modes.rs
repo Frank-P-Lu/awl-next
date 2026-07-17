@@ -364,6 +364,25 @@ pub(super) fn settled_viewstate(
     vstate.overlay_hint = opts.overlay.as_ref().map(|o| o.hint.clone()).unwrap_or_default();
     // THEME PICKER: the lens strip + per-row section labels (drives the faceted render).
     vstate.overlay_lens = opts.overlay.as_ref().map(|o| o.lens_strip.clone()).unwrap_or_default();
+    // CHIP-VARIATIONS PROBE (capture-only, inert unless `AWL_THEME_LENS_DEMO` is set):
+    // the theme picker's runtime lens strip was RETIRED (facets.rs), so a live
+    // `--keys "Cmd-T"` capture carries an EMPTY strip and the chip skins have no
+    // labels to mark. This dev knob injects a representative strip (one active
+    // facet + neighbours) ONLY into the theme picker capture, so the six
+    // `AWL_FACET_STYLE_FORCE=chips:<variant>` shots have something to render. No-op
+    // unless the env is set; never compiled into any live-app path.
+    if theme_panel
+        && vstate.overlay_lens.is_empty()
+        && std::env::var("AWL_THEME_LENS_DEMO").is_ok()
+    {
+        vstate.overlay_lens = vec![
+            ("All".to_string(), false),
+            ("Warm".to_string(), true),
+            ("Cool".to_string(), false),
+            ("Light".to_string(), false),
+            ("Dark".to_string(), false),
+        ];
+    }
     vstate.overlay_sections = opts.overlay.as_ref().map(|o| o.sections.clone()).unwrap_or_default();
     // SPELL contextual panel: the misspelled word's span (from the still-open spell
     // picker) anchors the small floating panel at the word — no blur backdrop.
