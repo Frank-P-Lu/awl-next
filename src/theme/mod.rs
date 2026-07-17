@@ -74,7 +74,7 @@ pub use model::{Lens, RoleOverrides, ThemeTags};
 // them through `Theme::render_caps.<field>` rather than this bare re-export.
 pub use model::{
     Backdrop, BandResponse, BarCoverage, BarExtent, CardAnchor, CaretBlockStyle,
-    ChromeFace, DecorativeWash, Elevation, FacetStyle, HighlightTexture, HighlightTreatment,
+    ChipVariant, ChromeFace, DecorativeWash, Elevation, FacetStyle, HighlightTexture, HighlightTreatment,
     ImageReveal, ListStyle, MotionJuice, OverlayEntrance, PageFrame, PlacardCorner, PlacardInk,
     RenderCaps, SelectionStyle, TitleStyle,
 };

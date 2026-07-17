@@ -1565,30 +1565,79 @@ impl TextPipeline {
         // SAME shaped strip glyphs (in `overlay_shape_theme`), so the skin can't
         // disagree with the hit-test.
         let facet_style = crate::render::effective_facet_style();
-        // The inactive ghost pills (empty unless Chips on a theme card).
+        // The inactive ghost pills / active corner ticks (empty unless Chips on a theme card).
         let mut ghosts: Vec<[f32; 4]> = Vec::new();
+        let band = match theme::active()
+            .highlight_treatment(crate::render::effective_overlay_selrow_band())
+        {
+            theme::HighlightTreatment::ValueBand(c) => c,
+            theme::HighlightTreatment::InverseFill { band, .. } => band,
+        };
         match facet_style {
             theme::FacetStyle::Text => {}
-            theme::FacetStyle::Band | theme::FacetStyle::Chips => {
-                let band = match theme::active()
-                    .highlight_treatment(crate::render::effective_overlay_selrow_band())
-                {
-                    theme::HighlightTreatment::ValueBand(c) => c,
-                    theme::HighlightTreatment::InverseFill { band, .. } => band,
-                };
+            theme::FacetStyle::Band => {
                 self.overlay_lens_underline.set_color(band.rgba_bytes());
                 self.overlay_lens_underline.set_corner(FACET_CHIP_RADIUS);
-                if matches!(facet_style, theme::FacetStyle::Chips) && geom.theme {
+                self.overlay_lens_underline.set_stroke(0.0);
+            }
+            // CHIP-VARIATIONS PROBE — the six chip TREATMENTS drive the two facet
+            // rect pipelines here (geometry is recorded in `overlay_shape_theme`;
+            // only the FILL / STROKE / colour differ). See [`theme::ChipVariant`].
+            theme::FacetStyle::Chips(v) => {
+                use theme::ChipVariant as V;
+                let content = theme::base_content();
+                let muted = theme::muted();
+                let stroke = crate::render::BAR_OUTLINE_STROKE_PX;
+                // The ACTIVE pill pipeline: (fill rgba, corner, stroke).
+                let (a_fill, a_corner, a_stroke): ([u8; 4], f32, f32) = match v {
+                    V::Hairline => (band.rgba_bytes(), FACET_CHIP_RADIUS, 0.0),
+                    V::BoldStroke => (content.rgba_bytes(), FACET_CHIP_RADIUS, 2.0),
+                    // Solid value-step fill; the active label already inverted to the
+                    // card ground up in the shaper so it reads on the fill.
+                    V::FilledActive => (content.rgba_bytes(), FACET_CHIP_RADIUS, 0.0),
+                    // A thick short bar; small corner so it reads as a bar, not a pill.
+                    V::Underline => (content.rgba_bytes(), 1.75, 0.0),
+                    // The world's selection hue, one value-step quieter toward the ground.
+                    V::Tinted => (
+                        theme::selection().lerp(theme::base_300(), 0.28).rgba_bytes(),
+                        FACET_CHIP_RADIUS,
+                        0.0,
+                    ),
+                    // No active pill under Bracket (the ticks ride the ghost pipeline).
+                    V::Bracket => (content.rgba_bytes(), 0.0, 0.0),
+                };
+                self.overlay_lens_underline.set_color(a_fill);
+                self.overlay_lens_underline.set_corner(a_corner);
+                self.overlay_lens_underline.set_stroke(a_stroke);
+                // The GHOST / TICK pipeline: (colour, corner, stroke). A `0.0` stroke
+                // fills (Bracket's corner ticks); a positive stroke outlines (the
+                // inactive ghost pills). Empty `ghosts` means these are unused.
+                let (g_color, g_corner, g_stroke): ([u8; 4], f32, f32) = match v {
+                    V::Hairline | V::Tinted => (muted.rgba_bytes(), FACET_CHIP_RADIUS, stroke),
+                    V::BoldStroke => (muted.rgba_bytes(), FACET_CHIP_RADIUS, 2.0),
+                    V::Bracket => (content.rgba_bytes(), 0.0, 0.0),
+                    // FilledActive / Underline draw no inactive marks; keep sane defaults.
+                    V::FilledActive | V::Underline => {
+                        (muted.rgba_bytes(), FACET_CHIP_RADIUS, stroke)
+                    }
+                };
+                self.overlay_facet_ghost.set_color(g_color);
+                self.overlay_facet_ghost.set_corner(g_corner);
+                self.overlay_facet_ghost.set_stroke(g_stroke);
+                if geom.theme {
                     ghosts = self.overlay_theme_facet_ghosts.clone();
                 }
             }
         }
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &underline);
-        // The Chips ghost pills: a muted hairline stroke pill per inactive facet.
-        self.overlay_facet_ghost.set_corner(FACET_CHIP_RADIUS);
-        self.overlay_facet_ghost
-            .set_stroke(crate::render::BAR_OUTLINE_STROKE_PX);
+        // Non-chip skins draw an EMPTY ghost set — keep the historical corner/stroke
+        // so `Text`/`Band` prepare it byte-identically (the chip arm set them above).
+        if !matches!(facet_style, theme::FacetStyle::Chips(_)) {
+            self.overlay_facet_ghost.set_corner(FACET_CHIP_RADIUS);
+            self.overlay_facet_ghost
+                .set_stroke(crate::render::BAR_OUTLINE_STROKE_PX);
+        }
         self.overlay_facet_ghost
             .prepare(device, queue, width, height, &ghosts);
     }

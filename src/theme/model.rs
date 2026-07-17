@@ -487,11 +487,47 @@ pub enum BarCoverage {
 /// PROVES it (pixel delta vs `Text` + one pill instance per label).
 ///
 /// NO world ships a non-`Text` value yet (probe: `AWL_FACET_STYLE_FORCE`).
+///
+/// CHIP-VARIATIONS PROBE (2026-07-17) — `Chips` now carries a [`ChipVariant`]:
+/// SIX chip TREATMENTS, all reachable ONLY through the `AWL_FACET_STYLE_FORCE`
+/// dev knob (`chips:<variant>`), none ever shipped by a world. `Chips` cannot be
+/// spelled without a variant, so every match site consciously handles the axis.
+/// The bare `chips` word parses to [`ChipVariant::Hairline`] — the landed
+/// baseline (filled active pill + hairline ghost inactive) — so an existing
+/// `-chips` shot is byte-identical.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FacetStyle {
     Text,
     Band,
-    Chips,
+    Chips(ChipVariant),
+}
+
+/// The SIX chip TREATMENTS the chip-variations probe A/Bs (all `AWL_FACET_STYLE_
+/// FORCE=chips:<variant>` only, inert by default). The renderer reads this to
+/// drive the two facet rect pipelines (`overlay_lens_underline` active mark +
+/// `overlay_facet_ghost` inactive/tick marks) and, for [`ChipVariant::FilledActive`],
+/// the active label's INVERTED ink. Same strip metrics (`CHIP_STRIP_GAP`) for all.
+///
+/// - `Hairline` — the LANDED baseline: a FILLED value pill hugs the active label,
+///   each inactive label a 1.5px GHOST stroke pill. Generous padding.
+/// - `BoldStroke` — a 2px heavy OUTLINE, no fill; active in full ink, inactive
+///   muted. The P4-bookstore register.
+/// - `FilledActive` — the active chip a SOLID value-step fill with INVERTED ink;
+///   inactive labels are BARE text (no outline at all — chips only exist active).
+/// - `Underline` — no box; the active label gets a THICK SHORT underline bar
+///   hugging the label (the P5 nav idiom).
+/// - `Tinted` — the active chip filled with the world's SELECTION hue one
+///   value-step quieter; inactive a hairline ghost pill.
+/// - `Bracket` — no closed box; small corner TICKS around the active label (the
+///   terminal register).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChipVariant {
+    Hairline,
+    BoldStroke,
+    FilledActive,
+    Underline,
+    Tinted,
+    Bracket,
 }
 
 /// Whether a thin FRAME draws around the WRITING COLUMN — the page-frame
