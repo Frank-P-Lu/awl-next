@@ -20,6 +20,23 @@ use super::ornament::{
     ORNAMENT_SCALE_ORNATE,
 };
 
+/// FLIP ROUND (user FINAL PICKS 2026-07-17) — the SHIPPING poster list surface,
+/// shared by every statement world (Firetail / Galah / Magpie / Mangrove) so the
+/// four can never drift: `Bars` with the HUG-ALL HYBRID extent
+/// ([`BarExtent::HugLabel`] — the plate hugs the LABEL, the shortcut chord
+/// renders as bare dim text in the right-aligned column OUTSIDE the plate), the
+/// gate's MID corner radius (6.0), every row a bar ([`BarCoverage::All`]), the
+/// default gap (10) + selected-bar grow (24 px, one step past the label plate).
+/// The calm/quiet worlds keep [`ListStyle::Pane`] (their selected row is already
+/// the full-width band; the panel wants an unbroken rectangle).
+const POSTER_BARS: ListStyle = ListStyle::Bars {
+    radius: 6.0,
+    gap: 10.0,
+    grow_px: 24.0,
+    extent: super::model::BarExtent::HugLabel,
+    coverage: super::model::BarCoverage::All,
+};
+
 // --- The sixteen worlds (exact hex from the theme spec) ----------------------
 
 /// Gumtree — light eucalyptus reading room (coral caret on a cool green page).
@@ -640,6 +657,12 @@ pub const MANGROVE: Theme = Theme {
         },
         card_anchor: CardAnchor::TopLeft,
         elevation: Elevation::Bordered,
+        // FLIP ROUND (user FINAL PICKS 2026-07-17): a poster/statement world →
+        // the Bars HUG-ALL HYBRID (label-hug plate + bare right-aligned chords,
+        // `BarExtent::HugLabel`) at the gate's MID radius (6), every row a bar;
+        // and CHIPS facets. The calm worlds keep Pane/Text.
+        list_style: POSTER_BARS,
+        facet_style: FacetStyle::Text,
         ..RenderCaps::DEFAULT
     },
 };
@@ -700,6 +723,9 @@ pub const GALAH: Theme = Theme {
         // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries
         // the card edge off the pale ground.
         elevation: Elevation::Bordered,
+        // FLIP ROUND (2026-07-17): poster world → the Bars hug-all hybrid + Chips.
+        list_style: POSTER_BARS,
+        facet_style: FacetStyle::Text,
         ..RenderCaps::DEFAULT
     },
 };
@@ -763,6 +789,9 @@ pub const MAGPIE: Theme = Theme {
         // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries
         // the card edge off the pale ground.
         elevation: Elevation::Bordered,
+        // FLIP ROUND (2026-07-17): poster world → the Bars hug-all hybrid + Chips.
+        list_style: POSTER_BARS,
+        facet_style: FacetStyle::Text,
         ..RenderCaps::DEFAULT
     },
 };
@@ -1154,6 +1183,10 @@ pub const FIRETAIL: Theme = Theme {
         card_anchor: CardAnchor::TopLeft,
         chrome_face: ChromeFace::Named("Archivo Black"),
         elevation: Elevation::Bordered,
+        // FLIP ROUND (2026-07-17): the maximalist showcase world → the Bars
+        // hug-all HYBRID (label-hug plate + bare right-aligned chords) + Chips.
+        list_style: POSTER_BARS,
+        facet_style: FacetStyle::Text,
         ..RenderCaps::DEFAULT
     },
 };

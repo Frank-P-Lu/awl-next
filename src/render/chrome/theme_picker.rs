@@ -135,6 +135,11 @@ impl TextPipeline {
         // — via the SAME horizontal-box owner (edge inset + narrow-window fallback),
         // just a slightly wider cap ([`CARD_MAX_W_FACETED`]).
         let (card_x, card_w) = self.overlay_card_box(width, super::overlay::CARD_MAX_W_FACETED);
+        // item 4 (NARROW FOLD): the placard folds to InlinePrefix once even the
+        // floor inset can't seat the faceted card's desired width — the SAME
+        // owner the width fallback above reads.
+        let card_narrow =
+            super::overlay::overlay_card_fill_regime(width as f32, super::overlay::CARD_MAX_W_FACETED);
         // List-style-aware horizontal text inset (the ONE owner shared with the
         // flat picker); vertical padding stays `pad`. `Pane` keeps `hpad == pad`.
         let hpad = self.overlay_text_hpad();
@@ -175,6 +180,7 @@ impl TextPipeline {
             text_left,
             text_top,
             text_w,
+            card_narrow,
         }
     }
 
@@ -498,8 +504,9 @@ impl TextPipeline {
         // (`draws_title_prefix` excludes only Rename/InsertLink, neither of which
         // this shaper serves). SUPPRESSED under a `Placard` title style (the corner
         // wordmark already names the picker) — the SAME `overlay_title_prefix` owner
-        // the flat shaper uses, so the two inline paths cannot diverge.
-        let title_prefix = self.overlay_title_prefix();
+        // the flat shaper uses, so the two inline paths cannot diverge; the NARROW
+        // FOLD (`geom.card_narrow`) brings the prefix back when the poster folds.
+        let title_prefix = self.overlay_title_prefix(geom);
         let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
         // The "<title> › " prefix is CHROME — the chrome face (== the body
         // face on every `ChromeFace::Body` world, byte-identical today); the

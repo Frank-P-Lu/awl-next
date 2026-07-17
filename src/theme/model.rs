@@ -416,10 +416,43 @@ pub enum ListStyle {
 /// bar to its own row's text width + a symmetric pad, so the right edges go
 /// RAGGED (the P5 main-menu look); a row that carries a right-column shortcut
 /// extends its bar to include the shortcut (full width), a bare row stays short.
+///
+/// FLIP-ROUND HYBRID (`HugLabel`, the user's FINAL PICK 2026-07-17) — the
+/// SHIPPING poster arm: each bar's plate hugs the row's LABEL ONLY (like
+/// `HugText`, symmetric pad, ragged right), but a row's SHORTCUT chord is NOT
+/// folded into the plate — it renders as BARE dim text in the RIGHT-ALIGNED
+/// column (like `FullWidth`), OUTSIDE any bar. So the plate ends at the label
+/// and the chord floats past it at the card's right text edge. The two hug arms
+/// ([`BarExtent::hugs`]) share the label-hug SPAN geometry; only `HugText`
+/// composes the shortcut inline ([`BarExtent::inline_shortcut`]). The SELECTED
+/// bar still grows its `grow_px` step past its LABEL plate under either.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BarExtent {
     FullWidth,
     HugText,
+    HugLabel,
+}
+
+impl BarExtent {
+    /// Whether the bar's PLATE hugs its row content (label + a symmetric pad)
+    /// instead of spanning the card full-width — true for BOTH hug arms
+    /// (`HugText` and the `HugLabel` hybrid). The ONE reader every bar-SPAN site
+    /// consults, so the two hug arms can never disagree about the plate shape.
+    /// (`HugText`'s plate additionally swallows the inline shortcut, because the
+    /// shortcut sits on the label's own shaped line under that arm; `HugLabel`'s
+    /// label line carries no shortcut, so its hugged width is the label alone.)
+    pub fn hugs(self) -> bool {
+        matches!(self, BarExtent::HugText | BarExtent::HugLabel)
+    }
+
+    /// Whether a row's SHORTCUT chord is composed INLINE onto its own label line
+    /// (so the plate hugs `label + gap + shortcut`) — true ONLY for `HugText`.
+    /// `HugLabel` (the hybrid) and `FullWidth` both leave the shortcut in the
+    /// separate RIGHT-ALIGNED column; the ONE reader the shapers consult to pick
+    /// the inline vs right-column path.
+    pub fn inline_shortcut(self) -> bool {
+        matches!(self, BarExtent::HugText)
+    }
 }
 
 /// V6 P5 round — the BAR-COVERAGE axis (see [`ListStyle::Bars`]). `All` gives

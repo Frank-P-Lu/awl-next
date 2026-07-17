@@ -786,6 +786,145 @@ fn forced_placard_suppresses_the_inline_title_prefix_on_both_shapers() {
     set_title_style_test_override(None);
 }
 
+// --- FLIP ROUND: proportional placard sizing + the narrow fold (item 3 + 4) ---
+
+/// THE WIDTH-SWEEP LAW (flip-round spec item 4). Across a window-width sweep, a
+/// placard world's poster is ALWAYS one of two clean states — never a
+/// partial/clipped middle:
+///   - WIDE cells: the wordmark SHAPES, fully ON-CANVAS, and the inline
+///     `title › ` prefix is SUPPRESSED (the poster already names the picker).
+///   - NARROWEST cells (below the card's fill-regime point): the placard FOLDS —
+///     `overlay_shape_placard` returns `None` (ZERO placard pixels) and the
+///     inline `title › ` prefix RETURNS (the world behaves as `InlinePrefix`).
+/// The fold reads the SAME geometry the card WIDTH fallback reads
+/// (`overlay_card_fill_regime` over `CARD_MAX_W`), so the two can never drift and
+/// no clipped wordmark ever survives at any width. The query row (line 0 of the
+/// shaped `panel_buffer`) is the end-to-end witness of which state fired.
+#[test]
+fn placard_width_sweep_folds_narrow_shows_wide_never_clips() {
+    let _g = crate::testlock::serial();
+    let force = theme::TitleStyle::Placard {
+        corner: theme::PlacardCorner::BL,
+        scale: 4.5,
+        ink: theme::PlacardInk::Ghost,
+    };
+    let ink = theme::base_content().to_glyphon();
+    let muted = theme::muted().to_glyphon();
+    // The flat card's fill regime begins once the window can't seat `CARD_MAX_W`
+    // at the floor inset each side; the sweep straddles that boundary.
+    let boundary = chrome::CARD_MAX_W + 2.0 * chrome::CARD_EDGE_INSET_FLOOR;
+    let (mut saw_wide, mut saw_folded) = (false, false);
+    for &wpx in &[360.0f32, 440.0, boundary - 20.0, boundary + 40.0, 800.0, 1200.0] {
+        let Some((_d, _q, mut p)) = headless_dqp(wpx, 800.0) else {
+            eprintln!("skipping placard_width_sweep: no wgpu adapter");
+            return;
+        };
+        set_title_style_test_override(Some(force));
+        set_card_anchor_test_override(Some(theme::CardAnchor::TopCenter));
+        let mut v = view("", 0, 0);
+        v.overlay_active = true;
+        v.overlay_title = "commands";
+        v.overlay_items = (0..6).map(|i| format!("Command {i}")).collect();
+        p.set_view(&v);
+        let geom = p.overlay_geometry(wpx as u32);
+        let expect_fold = chrome::overlay_card_fill_regime(wpx, chrome::CARD_MAX_W);
+        let placard = p.overlay_shape_placard(&geom);
+        // Shape the card text so line 0 (the query row) reports the prefix state.
+        p.overlay_shape_text(&geom, ink, muted, None);
+        let query = p
+            .panel_buffer
+            .layout_runs()
+            .find(|r| r.line_i == 0)
+            .map(|r| r.text.to_string())
+            .unwrap_or_default();
+        if expect_fold {
+            saw_folded = true;
+            assert!(
+                placard.is_none(),
+                "w={wpx}: below the card fill-regime the placard must FOLD (zero placard pixels)"
+            );
+            assert_eq!(
+                query, "commands › ",
+                "w={wpx}: folded → the inline `title › ` prefix returns (behaves as InlinePrefix)"
+            );
+        } else {
+            saw_wide = true;
+            let (x, y, ww, hh) = placard.expect("a wide window must shape the poster");
+            assert!(
+                x >= -0.5 && x + ww <= wpx + 0.5 && y >= -0.5 && y + hh <= 800.5,
+                "w={wpx}: the wide-window wordmark [{x:.1}..{:.1}]×[{y:.1}..{:.1}] stays fully \
+                 on-canvas — never a clipped middle",
+                x + ww,
+                y + hh
+            );
+            assert_eq!(
+                query, "› ",
+                "w={wpx}: the poster is drawn → the inline prefix is suppressed (bare sigil)"
+            );
+        }
+    }
+    assert!(
+        saw_wide && saw_folded,
+        "the sweep must exercise BOTH the wide (poster) and the folded (inline) regimes"
+    );
+    set_title_style_test_override(None);
+    set_card_anchor_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// PROPORTIONAL PLACARD SIZING (flip-round spec item 3) — the wordmark height is
+/// WINDOW-scaled (the short side), NEVER zoom-scaled. Two witnesses:
+///   1. ZOOM-INDEPENDENCE: the SAME window at zoom 1 vs zoom 2 shapes the SAME
+///      wordmark size (the old `metrics.font_size · TITLE · scale` formula rode
+///      zoom and would have doubled it).
+///   2. WINDOW-SCALING: growing the window's short side grows the wordmark
+///      (proportionally), so a taller window yields a bigger poster.
+#[test]
+fn placard_size_is_window_scaled_not_zoom_scaled() {
+    let _g = crate::testlock::serial();
+    let force = theme::TitleStyle::Placard {
+        corner: theme::PlacardCorner::BL,
+        scale: 4.5,
+        ink: theme::PlacardInk::Ghost,
+    };
+    // Shape the forced poster at a given window size + zoom, return (w, h).
+    let shape = |wpx: f32, hpx: f32, zoom: f32| -> Option<(f32, f32)> {
+        let (_d, _q, mut p) = headless_dqp(wpx, hpx)?;
+        set_title_style_test_override(Some(force));
+        set_card_anchor_test_override(Some(theme::CardAnchor::TopCenter));
+        let mut v = view("", 0, 0);
+        v.overlay_active = true;
+        v.overlay_title = "commands";
+        v.overlay_items = vec!["Save".into(), "Undo".into()];
+        v.zoom = zoom;
+        p.set_view(&v);
+        let geom = p.overlay_geometry(wpx as u32);
+        let (_, _, w, h) = p.overlay_shape_placard(&geom).expect("forced poster shapes");
+        Some((w, h))
+    };
+
+    let Some(z1) = shape(1200.0, 800.0, 1.0) else {
+        eprintln!("skipping placard_size_is_window_scaled_not_zoom_scaled: no wgpu adapter");
+        return;
+    };
+    let z2 = shape(1200.0, 800.0, 2.0).unwrap();
+    // (1) ZOOM changes nothing — the poster is Frame, not zoom-scaled text.
+    assert!(
+        (z1.1 - z2.1).abs() < 0.5 && (z1.0 - z2.0).abs() < 0.5,
+        "the wordmark size must be INDEPENDENT of zoom (zoom1 {z1:?} vs zoom2 {z2:?})"
+    );
+    // (2) A larger window short side grows the poster (proportional).
+    let big = shape(1600.0, 1200.0, 1.0).unwrap();
+    assert!(
+        big.1 > z1.1 * 1.2,
+        "a taller window (short side 1200 vs 800) must grow the wordmark \
+         (big {big:?} vs reference {z1:?})"
+    );
+    set_title_style_test_override(None);
+    set_card_anchor_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 // --- THE PERSONALITY-ASSIGNMENT ROUND: the STIPPLE placard's pixel laws ---
 
 /// THE STIPPLE INK LAW, at REAL PIXELS (the placard-ink law extended to

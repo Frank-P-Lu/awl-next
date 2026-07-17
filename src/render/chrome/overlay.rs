@@ -130,6 +130,22 @@ pub(in crate::render) fn overlay_card_box_policy(
     (left, cw)
 }
 
+/// Whether the summoned card is forced into its NARROWEST (fill) regime for a
+/// WIDE desired width `desired_w` at window width `ww`: the window is too tight
+/// to seat the card at even the floor inset each side, so
+/// [`overlay_card_box_policy`] clamps the width below `desired_w` and re-centers.
+///
+/// THE ONE OWNER of the narrow-fallback test, shared two ways (item 4 — the
+/// NARROW FOLD): the card LAYOUT enters fill exactly here, and a `Placard` title
+/// FOLDS to the calm `InlinePrefix` here (the placard shaper returns `None`, the
+/// inline `title › ` prefix comes back) so no partial/clipped poster wordmark
+/// ever shows below the card's own fallback point. Reads the SAME
+/// [`CARD_EDGE_INSET_FLOOR`] geometry the policy clamps against, so the fold
+/// threshold and the width fallback can never drift.
+pub(in crate::render) fn overlay_card_fill_regime(ww: f32, desired_w: f32) -> bool {
+    desired_w > (ww - 2.0 * CARD_EDGE_INSET_FLOOR).max(0.0)
+}
+
 /// TEST-ONLY snapshot of every summoned-overlay row's Y, per element — the fixture
 /// the y-agreement law reads (see [`TextPipeline::overlay_row_y_probe`]).
 #[cfg(test)]
@@ -666,6 +682,10 @@ impl TextPipeline {
         // narrows the width only in the fill regime, so the text column can
         // never starve.
         let (card_x, card_w) = self.overlay_card_box(width, CARD_MAX_W);
+        // item 4 (NARROW FOLD): the placard folds to InlinePrefix once even the
+        // floor inset can't seat the flat card's desired width — the SAME owner
+        // the width fallback above reads (`overlay_card_box`'s policy).
+        let card_narrow = overlay_card_fill_regime(width as f32, CARD_MAX_W);
         // Horizontal text inset is list-style aware (`Bars` pads the glyphs inside
         // each bar's edge — the ONE owner `overlay_text_hpad`); vertical padding
         // stays `pad` (12) so the card height math is untouched. `Pane` keeps
@@ -714,6 +734,7 @@ impl TextPipeline {
             text_left,
             text_top,
             text_w,
+            card_narrow,
         }
     }
 
@@ -863,6 +884,9 @@ impl TextPipeline {
             text_left,
             text_top,
             text_w,
+            // The contextual spell popup carries no title and never a placard, so
+            // the fold flag is inert here.
+            card_narrow: false,
         }
     }
 
@@ -1387,13 +1411,15 @@ impl TextPipeline {
                 let r = radius.max(0.0);
                 let g = gap.max(0.0);
                 let bar_h = (lh - g).max(1.0);
-                // V6 P5 HugText — per-row primary widths, measured from the
+                // V6 P5 hug extents — per-row primary widths, measured from the
                 // just-shaped name buffer (read before the &mut pipeline calls
-                // below). Under HugText a row's shortcut is composed INLINE into
-                // its own name line (V7 taste-gate — see `overlay_shape_text`), so
-                // this width already includes any trailing shortcut and the bar
-                // hugs the whole content. Only consulted under `HugText`.
-                let hug = matches!(extent, theme::BarExtent::HugText);
+                // below). BOTH hug arms (`extent.hugs()`) size the plate to the
+                // shaped name line: under `HugText` the shortcut is composed INLINE
+                // into that line (so the width includes it and the plate hugs the
+                // whole content); under the `HugLabel` HYBRID the line carries the
+                // LABEL alone (the chord stays in the right column, outside the
+                // plate), so the plate hugs the label. `FullWidth` → no hug.
+                let hug = extent.hugs();
                 let primary_px = if hug {
                     self.overlay_row_primary_px(geom)
                 } else {

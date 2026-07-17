@@ -226,6 +226,17 @@ pub(super) struct OverlayGeom {
     pub(super) text_left: f32,
     text_top: f32,
     text_w: f32,
+    /// item 4 (NARROW FOLD): `true` when the card sits in its NARROWEST (fill)
+    /// regime — the window is too tight to seat the card's desired width at even
+    /// the floor inset ([`overlay::overlay_card_fill_regime`], the SAME owner the
+    /// width fallback reads). A [`theme::TitleStyle::Placard`] title then FOLDS to
+    /// `InlinePrefix`: the placard shaper returns `None` and the inline `title › `
+    /// prefix comes back, so no partial/clipped poster wordmark ever shows below
+    /// the card's own fallback point. `false` for the contextual spell popup (no
+    /// title, never a placard). BOTH placard readers ([`TextPipeline::overlay_shape_placard`]
+    /// and [`TextPipeline::overlay_title_prefix`]) consult THIS, so the wordmark
+    /// and the inline prefix can never both fire or both vanish.
+    card_narrow: bool,
 }
 
 // The chrome cluster is decomposed into cohesive per-subsystem submodules; each
@@ -239,8 +250,8 @@ mod overlay;
 // can reach them without naming the private `overlay` submodule (test-only).
 #[cfg(test)]
 pub(in crate::render) use overlay::{
-    overlay_card_box_policy, CARD_EDGE_INSET, CARD_EDGE_INSET_FLOOR, CARD_MAX_W,
-    CARD_MAX_W_FACETED,
+    overlay_card_box_policy, overlay_card_fill_regime, CARD_EDGE_INSET, CARD_EDGE_INSET_FLOOR,
+    CARD_MAX_W, CARD_MAX_W_FACETED,
 };
 mod overlay_shape;
 mod theme_picker;
@@ -406,14 +417,17 @@ pub(super) const BAR_TEXT_PAD: f32 = 13.0;
 /// EVERY row then hugs its own content and the rag derives from length alone.
 pub(super) const INLINE_SHORTCUT_GAP: &str = "   ";
 
-/// Whether this frame draws TEXT-HUGGING bars ([`theme::BarExtent::HugText`]) —
-/// the ONE reader the shapers consult to decide whether to compose a row's
-/// shortcut INLINE (trailing its label) instead of into the right-aligned
-/// column. Any other list style (Pane, full-width bars) → `false`, byte-identical.
-pub(super) fn hug_bars() -> bool {
+/// Whether this frame composes a row's SHORTCUT chord INLINE (trailing its
+/// label on the label's own shaped line) instead of into the separate
+/// right-aligned column — the ONE reader the shapers consult. True ONLY under
+/// [`theme::BarExtent::HugText`] (see [`theme::BarExtent::inline_shortcut`]);
+/// the [`theme::BarExtent::HugLabel`] HYBRID and full-width bars both leave the
+/// chord in the right column (bare, outside any plate). Any non-Bars style →
+/// `false`, byte-identical.
+pub(super) fn bars_inline_shortcut() -> bool {
     matches!(
         crate::render::effective_list_style(),
-        theme::ListStyle::Bars { extent: theme::BarExtent::HugText, .. }
+        theme::ListStyle::Bars { extent, .. } if extent.inline_shortcut()
     )
 }
 
