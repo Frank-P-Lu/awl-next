@@ -239,6 +239,42 @@ pub(super) struct OverlayGeom {
     card_narrow: bool,
 }
 
+impl OverlayGeom {
+    /// The INERT base — every field at its no-op value, so each of the three
+    /// geometry sites ([`TextPipeline::overlay_geometry`], its spell-popup arm, and
+    /// [`TextPipeline::theme_overlay_geometry`]) assembles by overriding only the
+    /// fields it owns and finishing with `..OverlayGeom::base()`, instead of
+    /// hand-listing all 22 fields (three of which — the `theme`/`strip`/`plan`
+    /// faceted-only trio — every flat card had to spell out as `false`/empty). A new
+    /// field lands here ONCE with an inert default; the three sites inherit it unless
+    /// they mean to set it. Mirrors the `ViewState::base()` convention.
+    fn base() -> Self {
+        OverlayGeom {
+            visible: 0,
+            top_idx: 0,
+            n_items: 0,
+            hint: String::new(),
+            hint_rows: 0,
+            footer: Vec::new(),
+            footer_rows: 0,
+            theme: false,
+            strip: Vec::new(),
+            plan: Vec::new(),
+            header_rows: 0,
+            header_gap: 0.0,
+            empty: None,
+            card_x: 0.0,
+            card_y: 0.0,
+            card_w: 0.0,
+            card_h: 0.0,
+            text_left: 0.0,
+            text_top: 0.0,
+            text_w: 0.0,
+            card_narrow: false,
+        }
+    }
+}
+
 // The chrome cluster is decomposed into cohesive per-subsystem submodules; each
 // carries its own `impl TextPipeline { .. }` block (Rust merges the inherent impls
 // across the module tree). This file keeps the SHARED items every submodule needs —

@@ -173,6 +173,39 @@ pub(super) fn symbol_runs(text: &str) -> Vec<std::ops::Range<usize>> {
     runs
 }
 
+/// THE ONE OWNER of the chrome symbol-split PUSH loop. Append `text` onto `spans`
+/// as alternating non-symbol / [`is_symbol`] runs (via [`symbol_runs`]): every
+/// symbol run takes `sym`'s attrs (the bundled [`SYMBOL_FAMILY`] face — real,
+/// finite advances for the macOS modifier glyphs ⌘ ⇧ ⌥ ⌃ and keycap ornaments
+/// ↵ ⇥ …, which the display/mono faces render as tofu), every other run takes
+/// `plain`'s. The overlay foot hint, the keybindings-tips footer, the inline
+/// trailing shortcut, and the right-aligned chord column all shared this loop
+/// verbatim (the C2 footer round's `push_overlay_hint_spans` was the first copy);
+/// they now route through here so a symbol-split can never drift between them.
+/// A symbol-free `text` pushes exactly ONE `plain` span — byte-identical to a bare
+/// `spans.push((text, plain()))`. The attrs come from CLOSURES so each caller keeps
+/// its own color / metrics without this owner knowing them. Does NOT emit any line
+/// break: a caller that wants the run on its own line pushes the `"\n"` itself.
+pub(super) fn push_symbol_split<'a>(
+    spans: &mut Vec<(&'a str, Attrs<'a>)>,
+    text: &'a str,
+    plain: impl Fn() -> Attrs<'a>,
+    sym: impl Fn() -> Attrs<'a>,
+) {
+    let mut last = 0usize;
+    for run in symbol_runs(text) {
+        if run.start > last {
+            spans.push((&text[last..run.start], plain()));
+        }
+        let end = run.end;
+        spans.push((&text[run], sym()));
+        last = end;
+    }
+    if last < text.len() {
+        spans.push((&text[last..], plain()));
+    }
+}
+
 /// Lay [`SYMBOL_FAMILY`] family spans over `al` for every [`is_symbol`] run in
 /// `text`, mirroring [`add_cjk_spans`]. The span inherits `base` (the doc/colored
 /// attrs — color, metrics, etc.) but overrides the family to the bundled symbol
