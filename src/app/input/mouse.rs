@@ -220,9 +220,10 @@ impl App {
             None => return,
         };
         // LIVE PREVIEW, identical to the keyboard nav path. Snapshot the OUTGOING
-        // world's background BEFORE `preview_overlay` switches the active theme,
-        // so `retint_theme_preview` can detect a lava-boundary crossing.
-        let prev_bg = crate::theme::background();
+        // world BEFORE `preview_overlay` switches the active theme, so
+        // `retint_theme_preview` can detect a heavyweight-pipeline crossing (lava
+        // OR one-bit).
+        let prev = crate::theme::active();
         if let Some(ov) = self.overlay.as_ref() {
             crate::actions::preview_overlay(ov);
         }
@@ -232,7 +233,7 @@ impl App {
         // to the settle (`retint_theme_preview`), so sweeping the pointer down the
         // list costs one recolor per row, not one reshape storm per row.
         if kind == crate::overlay::OverlayKind::Theme {
-            self.retint_theme_preview(prev_bg);
+            self.retint_theme_preview(prev);
         }
         self.sync_view(false);
         if let Some(gpu) = self.gpu.as_ref() {
@@ -258,13 +259,13 @@ impl App {
             }
             None => return,
         };
-        let prev_bg = crate::theme::background();
+        let prev = crate::theme::active();
         if let Some(ov) = self.overlay.as_ref() {
             crate::actions::preview_overlay(ov);
         }
         if kind == crate::overlay::OverlayKind::Theme {
             // Wheel preview: colors now, font reshape on settle (see overlay_hover).
-            self.retint_theme_preview(prev_bg);
+            self.retint_theme_preview(prev);
         }
         self.sync_view(false);
         if let Some(gpu) = self.gpu.as_ref() {
@@ -307,12 +308,12 @@ impl App {
             if let Some(ov) = self.overlay.as_mut() {
                 ov.set_facet_lens(lens_idx);
             }
-            let prev_bg = crate::theme::background();
+            let prev = crate::theme::active();
             if let Some(ov) = self.overlay.as_ref() {
                 crate::actions::preview_overlay(ov);
             }
             // Lens-click preview: colors now, font reshape on settle (see overlay_hover).
-            self.retint_theme_preview(prev_bg);
+            self.retint_theme_preview(prev);
             self.sync_view(false);
             if let Some(gpu) = self.gpu.as_ref() {
                 gpu.window.request_redraw();

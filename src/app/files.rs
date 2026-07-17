@@ -1261,10 +1261,13 @@ impl App {
         // anchor so its first caret sample re-anchors (see `load_path`).
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_reset_caret_anchor();
-        // WRITING STREAKS: a fresh note is a buffer swap — drop the word-delta
-        // anchor so the empty note re-anchors at 0 (see `load_path`).
+        // WRITING STREAKS: a fresh note is an awl-CREATED buffer born empty, so
+        // anchor EAGERLY at its birth count (0) rather than lazily — otherwise the
+        // words typed before the first idle flush would be anchored away on that
+        // flush (the anchor-swallow bug). See `streaks_anchor_now` vs the lazy
+        // `streaks_reset_baseline` an OPENED file uses.
         #[cfg(not(target_arch = "wasm32"))]
-        self.streaks_reset_baseline();
+        self.streaks_anchor_now();
         self.update_title();
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {

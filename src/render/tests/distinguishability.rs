@@ -681,24 +681,44 @@ fn check_real_pixels(
 }
 
 /// THE THEME-PREVIEW PAGE-SURFACE SWEEP — the law born from the user's
-/// "arrowing Mangrove→Magpie makes the page disappear" report (2026-07-17). The
-/// theme picker's LIVE preview applies only the O(1) COLOR half of a switch
+/// "arrowing Mangrove→Magpie makes the page disappear" report (2026-07-17) and
+/// widened to FULL SOURCE×DEST COVERAGE after the reopened "still missing from
+/// mangrove/magpie, switching from wagtail" (2026-07-18). The theme picker's LIVE
+/// preview applies only the O(1) COLOR half of a switch
 /// ([`TextPipeline::sync_theme_colors`]) and DEFERS the font reshape, so a bug
-/// where that retint left the PAGE SURFACE (the `base_100` column ground, the
-/// margins, the lava teardown) grounded to the SOURCE world — or blank — would
-/// show as the writing surface vanishing mid-arrow while the caller keeps
-/// arrowing (the deferred reshape never settles).
+/// where that retint left ANY world-varying render state (the `base_100` column
+/// ground, the margins, the lava teardown, the 1-bit dither/InverseFill uniforms)
+/// grounded to the SOURCE world — or blank — would show as the writing surface
+/// vanishing mid-arrow while the caller keeps arrowing (the deferred reshape never
+/// settles).
 ///
-/// The invariant this pins: after the COLOR-ONLY retint alone, the page column
-/// ground is the DESTINATION world's `base_100`, byte-for-byte identical to a
-/// full synchronous [`TextPipeline::sync_theme`] to the same world — regardless
-/// of the SOURCE world's ground (dark or light) or background kind (lava or
-/// flat). It sweeps EVERY world in `THEMES` as the destination (a NO-WILDCARD
-/// roster walk — a future world joins automatically) previewed FROM two
-/// deliberately maximal sources: Mangrove (a DARK LAVA world — the reported
-/// source) and Magpie (a LIGHT NON-LAVA world), so every ordered pair class
-/// (lava↔non-lava × dark↔light) is covered. Real GPU pixels, column-interior
-/// arithmetic — the Wagtail-bug tier, never a mechanism assertion.
+/// THE STRONGEST FORM the suite can afford: FULL SOURCE COVERAGE with WHOLE-FRAME
+/// BYTE-IDENTITY. For EVERY world in [`theme::THEMES`] as the SOURCE (a
+/// no-wildcard roster walk — a future world joins the source axis automatically)
+/// previewed into a DESTINATION sample chosen to cover every background class
+/// (lava, non-lava dark, non-lava light, one-bit — a runtime assertion pins the
+/// sample really spans all four, so a future trim can't silently drop a class),
+/// the color-only PREVIEW frame is BYTE-IDENTICAL to a cold synchronous load of
+/// the destination ([`TextPipeline::sync_theme`]).
+///
+/// WHY BYTE-IDENTITY IS ASSERTABLE: on an EMPTY buffer there are no glyphs, so the
+/// DEFERRED font reshape the preview skips changes zero pixels — every remaining
+/// pixel is world-varying render state (page ground, margins, lava field, 1-bit
+/// dither/InverseFill uniforms) that the O(1) retint alone must fully re-derive.
+/// The headless lava phase is FROZEN (`lava::LAVA_FROZEN_PHASE`), so a lava
+/// world's margins render identically every call — the frame is a pure
+/// deterministic function of the active theme. Comparing the WHOLE framebuffer
+/// (not a sampled region) means ANY source-state leak anywhere fails — including
+/// WAGTAIL's 1-bit pipeline state, the source class the original two-source sweep
+/// never exercised. (The full 16×16 pair matrix is byte-identical too — verified
+/// during the 2026-07-18 diagnosis — but destinations are class-sampled here so
+/// the standing law stays within the suite's time budget.)
+///
+/// NOTE this test is GREEN: the color retint is provably correct from every
+/// source. The reopened Wagtail vanish is therefore NOT a stale-color bug but the
+/// live-only present/compositor race, fixed by widening `lava::preview_crossing`
+/// to arm the present bracket on the one-bit boundary too (its own no-wildcard
+/// roster law `preview_crossing_arms_exactly_on_the_lava_or_one_bit_boundary`).
 #[test]
 fn theme_preview_retint_regrounds_the_page_surface_on_every_world() {
     let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
@@ -711,67 +731,110 @@ fn theme_preview_retint_regrounds_the_page_surface_on_every_world() {
     crate::caret::set_mode(CaretMode::Block);
     crate::page::set_page_on(true);
     crate::page::set_measure(40);
-    // An EMPTY buffer so the sampled column interior is pure page GROUND (no
-    // glyph ink), isolating the page-surface retint from any text color.
+    // An EMPTY buffer: no glyph ink, so the DEFERRED font reshape the preview seam
+    // skips changes zero pixels — the whole frame is world-varying page/chrome
+    // render state, and any of it left stale would show here.
     let v = view("", 0, 0);
     let w = 1200u32;
     let h = 800u32;
 
-    // The average color of the column INTERIOR at mid-height — the flat page
-    // ground (the lava mask is zero inside the column, so a lava world reads its
-    // `base_100` here exactly like a flat world). Sampled a comfortable inset in
-    // from both column edges so no margin/feather pixel leaks in.
-    let column_ground = |p: &mut TextPipeline, dev: &wgpu::Device, q: &wgpu::Queue| -> theme::Srgb {
+    // Render the current active world's whole frame (deterministic — see the doc).
+    let frame = |p: &mut TextPipeline, dev: &wgpu::Device, q: &wgpu::Queue| -> Vec<[u8; 4]> {
         p.set_view(&v);
         p.prepare(dev, q, w, h).unwrap();
-        let (_on, _m, cl, cw) = p.page_geometry();
-        let frame = pixeldiff::render_frame(p, dev, q, w, h);
-        let region = Region::new(cl + 24.0, (h as f32) * 0.5 - 8.0, cw - 48.0, 16.0);
-        average_color(&frame, w as i64, h as i64, region)
+        pixeldiff::render_frame(p, dev, q, w, h)
+    };
+    // Report the divergence between two frames: (differing pixels, worst channel
+    // delta, first differing (x,y)) — a real diagnostic, never a bare bool.
+    let diff = |a: &[[u8; 4]], b: &[[u8; 4]]| -> (usize, u16, Option<(i64, i64)>) {
+        let mut count = 0usize;
+        let mut worst = 0u16;
+        let mut first = None;
+        for (i, (pa, pb)) in a.iter().zip(b.iter()).enumerate() {
+            if pa != pb {
+                count += 1;
+                for c in 0..4 {
+                    worst = worst.max((pa[c] as i16 - pb[c] as i16).unsigned_abs());
+                }
+                if first.is_none() {
+                    first = Some((i as i64 % w as i64, i as i64 / w as i64));
+                }
+            }
+        }
+        (count, worst, first)
     };
 
-    // The two maximal SOURCES: a dark lava world + a light non-lava world.
-    for src in ["Mangrove", "Magpie"] {
-        for dst in theme::THEMES.iter() {
-            // Open on the source, fully applied (colors + font).
-            theme::set_active_by_name(src).unwrap();
+    // The DESTINATION class sample: one world per background class. Sources are
+    // the FULL roster; keeping destinations to a class sample bounds the render
+    // count while covering every kind the retint must re-ground into.
+    let dst_worlds: Vec<&theme::Theme> = ["Mangrove", "Currawong", "Magpie", "Wagtail"]
+        .iter()
+        .map(|n| theme::THEMES.iter().find(|t| t.name == *n).unwrap())
+        .collect();
+    // Self-verify the sample really spans every class (so a future trim can't
+    // silently drop one — the exact "a source/dest-class gap went unseen" failure).
+    assert!(dst_worlds.iter().any(|t| t.background.is_lava()), "sample covers a LAVA dest");
+    assert!(
+        dst_worlds.iter().any(|t| !t.background.is_lava() && t.dark && !t.is_one_bit()),
+        "sample covers a NON-LAVA DARK dest"
+    );
+    assert!(
+        dst_worlds.iter().any(|t| !t.background.is_lava() && !t.dark && !t.is_one_bit()),
+        "sample covers a NON-LAVA LIGHT dest"
+    );
+    assert!(dst_worlds.iter().any(|t| t.is_one_bit()), "sample covers the ONE-BIT dest");
+
+    // The COLD frame of each destination (a full synchronous switch) — the ground
+    // truth each preview into it must reproduce byte-for-byte.
+    let cold: Vec<Vec<[u8; 4]>> = dst_worlds
+        .iter()
+        .map(|t| {
+            theme::set_active_by_name(t.name).unwrap();
             p.sync_theme();
-            let _ = column_ground(&mut p, &device, &queue);
+            frame(&mut p, &device, &queue)
+        })
+        .collect();
+
+    // Every world in the roster as the SOURCE (no-wildcard) — Wagtail included.
+    for src in theme::THEMES.iter() {
+        for (di, dst) in dst_worlds.iter().enumerate() {
+            // Establish the SOURCE as the fully-rendered presented state (this is
+            // exactly the frame the user is looking at before they arrow) — a
+            // render, so any state only touched at draw time is genuinely present.
+            theme::set_active_by_name(src.name).unwrap();
+            p.sync_theme();
+            let src_frame = frame(&mut p, &device, &queue);
 
             // PREVIEW SEAM: switch active to the destination and apply the COLOR
-            // HALF ONLY — the exact state a picker arrow leaves before the
-            // deferred reshape (`App::retint_theme_preview`).
+            // HALF ONLY — the exact state a picker arrow leaves before the deferred
+            // reshape (`App::retint_theme_preview`).
             theme::set_active_by_name(dst.name).unwrap();
             p.sync_theme_colors();
-            let preview = column_ground(&mut p, &device, &queue);
+            let preview = frame(&mut p, &device, &queue);
 
-            // The destination's TRUE page ground (a full synchronous switch).
-            theme::set_active_by_name(dst.name).unwrap();
-            p.sync_theme();
-            let committed = column_ground(&mut p, &device, &queue);
-
-            // (1) PRESENT + CORRECTLY GROUNDED: the color-only preview's page
-            // ground is the destination's ground, not blanked and not the
-            // source's — byte-tight against the committed frame.
-            let d_commit = redmean(preview, committed);
+            // (1) BYTE-IDENTICAL to the destination's cold frame — the O(1) retint
+            // fully re-grounded the whole surface, leaving NO source state behind.
+            let (n, worst, first) = diff(&preview, &cold[di]);
             assert!(
-                d_commit <= 6.0,
-                "{src} -> {dst} PREVIEW page ground {preview:?} diverged from the committed \
-                 destination ground {committed:?} (redmean {d_commit:.1}, floor 6.0) — the O(1) \
-                 retint left the page surface stale/blank on the preview seam",
-                dst = dst.name
+                n == 0,
+                "{src} -> {dst} PREVIEW frame diverged from the cold destination frame: \
+                 {n} px differ (worst channel Δ {worst}, first at {first:?}) — the O(1) \
+                 retint left world-varying render state stale on the preview seam",
+                src = src.name,
+                dst = dst.name,
             );
-            // (2) WITNESS the retint did real work when the grounds actually
-            // differ: the preview must have LEFT the source's ground behind
-            // (the exact failure the user saw — the page keeping the old world).
-            let src_ground = theme::THEMES.iter().find(|t| t.name == src).unwrap().base_100;
-            if redmean(src_ground, committed) > 12.0 {
-                let d_src = redmean(preview, src_ground);
+            // (2) WITNESS the comparison is non-trivial: when the two worlds have
+            // visibly different grounds, their COLD frames genuinely differ, so
+            // (1)'s byte-identity means the preview truly re-grounded (not that the
+            // worlds happen to render the same).
+            if src.name != dst.name && redmean(src.base_100, dst.base_100) > 12.0 {
+                let (nc, ..) = diff(&src_frame, &cold[di]);
                 assert!(
-                    d_src > 12.0,
-                    "{src} -> {dst} PREVIEW page ground {preview:?} is still the SOURCE ground \
-                     {src_ground:?} (redmean {d_src:.1}) — the retint did not re-ground the page",
-                    dst = dst.name
+                    nc > 0,
+                    "{src} -> {dst}: the source and destination cold frames are identical, \
+                     so the byte-identity check above is trivially satisfied — the witness failed",
+                    src = src.name,
+                    dst = dst.name,
                 );
             }
         }

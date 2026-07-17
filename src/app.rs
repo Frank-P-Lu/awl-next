@@ -1311,6 +1311,19 @@ impl App {
         // whatever the scratch-stash restore above already picked.
         #[cfg(not(target_arch = "wasm32"))]
         app.apply_session_restore(file_arg_given);
+        // WRITING STREAKS: set the INITIAL word-delta anchor now that every startup
+        // buffer decision (scratch-stash restore + session restore, which can swap
+        // the active buffer) has settled. An awl-CREATED scratch (no path — fresh
+        // empty OR resumed stash) anchors EAGERLY at its birth word count, so words
+        // typed before the first idle flush are recorded rather than swallowed by a
+        // lazy first-flush anchor (the anchor-swallow bug); a resumed stash's own
+        // words are anchored, never miscounted as today's writing. An opened FILE
+        // (CLI arg or session-restored active) keeps the LAZY anchor — its
+        // pre-existing words are not "writing" — so `streaks_baseline` stays `None`.
+        #[cfg(not(target_arch = "wasm32"))]
+        if app.file.is_none() {
+            app.streaks_anchor_now();
+        }
         // A previous crash is passive state, not a startup interruption: retain
         // the marker for About + Settings, and acknowledge it only when the user
         // chooses Report a Problem.
@@ -2549,10 +2562,10 @@ mod tests {
     fn preview_crossing_the_lava_boundary_brackets_the_present_and_settles_once() {
         let _g = crate::testlock::serial();
         let prev = crate::theme::active_index();
-        let bg = |name: &str| {
-            crate::theme::THEMES.iter().find(|t| t.name == name).unwrap().background
+        let w = |name: &str| {
+            *crate::theme::THEMES.iter().find(|t| t.name == name).unwrap()
         };
-        let (mangrove_bg, magpie_bg) = (bg("Mangrove"), bg("Magpie"));
+        let (mangrove, magpie) = (w("Mangrove"), w("Magpie"));
 
         // Open the picker on the dark LAVA world, exactly as the report starts.
         crate::theme::set_active_by_name("Mangrove").unwrap();
@@ -2561,9 +2574,9 @@ mod tests {
 
         // ARROW to the static non-lava world: apply_core would have switched the
         // active world first, so mirror that, then run the real preview retint
-        // with the OUTGOING (lava) background it snapshotted.
+        // with the OUTGOING (lava) world it snapshotted.
         crate::theme::set_active_by_name("Magpie").unwrap();
-        app.retint_theme_preview(mangrove_bg);
+        app.retint_theme_preview(mangrove);
         assert!(app.crossing_settle_at.is_some(), "the crossing stamps the hold");
         assert!(
             app.present_sync_on,
@@ -2572,7 +2585,7 @@ mod tests {
 
         // ARROW BACK across the boundary (Magpie→Mangrove): re-stamps the hold.
         crate::theme::set_active_by_name("Mangrove").unwrap();
-        app.retint_theme_preview(magpie_bg);
+        app.retint_theme_preview(magpie);
         assert!(app.crossing_settle_at.is_some(), "the return crossing re-stamps");
         assert!(app.present_sync_on, "still armed across the return crossing");
 
@@ -2581,13 +2594,13 @@ mod tests {
         assert!(app.crossing_settle_at.is_none(), "settle clears the hold once");
         assert!(!app.present_sync_on, "presents return to async once settled");
 
-        // A SAME-SIDE hop (lava → lava, Mangrove → Firetail) is a total no-op:
-        // the cadence never changes, so nothing is armed.
+        // A SAME-SIDE hop (lava → lava, Mangrove → Firetail; neither one-bit) is a
+        // total no-op: no boundary changes, so nothing is armed.
         crate::theme::set_active_by_name("Firetail").unwrap();
-        app.retint_theme_preview(mangrove_bg);
+        app.retint_theme_preview(mangrove);
         assert!(
             app.crossing_settle_at.is_none(),
-            "a lava→lava hop leaves the cadence alone: no bracket"
+            "a lava→lava hop leaves both boundaries alone: no bracket"
         );
         assert!(!app.present_sync_on, "same-side hop arms nothing");
         crate::theme::set_active(prev);
@@ -2601,11 +2614,10 @@ mod tests {
     fn a_crossing_settle_never_strips_a_live_resize_streams_present_sync() {
         let _g = crate::testlock::serial();
         let prev = crate::theme::active_index();
-        let mangrove_bg = crate::theme::THEMES
+        let mangrove = *crate::theme::THEMES
             .iter()
             .find(|t| t.name == "Mangrove")
-            .unwrap()
-            .background;
+            .unwrap();
 
         crate::theme::set_active_by_name("Mangrove").unwrap();
         let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
@@ -2614,7 +2626,7 @@ mod tests {
         app.arm_live_resize_sync();
         assert!(app.present_sync_on, "resize stream arms the sync");
         crate::theme::set_active_by_name("Magpie").unwrap();
-        app.retint_theme_preview(mangrove_bg);
+        app.retint_theme_preview(mangrove);
         assert!(app.present_sync_on, "still armed with both sources live");
 
         // The crossing settles first: the resize stream still owns a claim.
@@ -4735,13 +4747,18 @@ mod tests {
             // the 2 added by the discoverability round: peek/footer ranking from a fake
             // ledger, and the fresh-ledger-empty case.)
             ("app/stats.rs", 9),
-            // 3 WRITING STREAKS tests, each inside its own `fs::with_fs(fake, ..)`
+            // 6 WRITING STREAKS tests, each inside its own `fs::with_fs(fake, ..)`
             // closure seeded with an `InMemoryFs` — they exist specifically to prove
             // what `streaks_flush` writes to / reads back from `streaks.toml` (and
             // that the kill switch never writes), so they need to CONTROL + INSPECT
             // the injected fs (which `new_hermetic`'s private fs hides). Same
-            // treatment as `app/stats.rs` above.
-            ("app/streaks.rs", 3),
+            // treatment as `app/stats.rs` above. `new_hermetic` also won't do here:
+            // it restores the real backend on construction return, but these tests
+            // keep driving the fs AFTER construction (`new_note`, the summon flush),
+            // so the fake must stay active across the whole closure. (The 3 added by
+            // the anchor-swallow fix: fresh-note + fresh-scratch record words typed
+            // before the first flush, and the card-summon-freshness flush.)
+            ("app/streaks.rs", 6),
             // input.rs's click tests all moved onto `App::new_hermetic` —
             // zero raw calls left.
         ];
