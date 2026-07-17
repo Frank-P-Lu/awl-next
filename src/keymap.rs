@@ -331,6 +331,11 @@ pub enum Action {
     /// and Print → Save as PDF). Same [`crate::actions::Effect::Export`] seam as
     /// [`ExportWord`](Action::ExportWord). No default chord.
     ExportHtml,
+    /// EXPORT AS PDF (native-only, palette-only, markdown buffers): render the
+    /// document to a self-contained, paginated A4 `.pdf` sibling. The native
+    /// App writes it through the same [`crate::actions::Effect::Export`] seam as
+    /// [`ExportWord`](Action::ExportWord). No default chord; hidden on web.
+    ExportPdf,
     /// Cmd-O: summon the GO-TO overlay over the active project's file index — the
     /// native go-to-file door (the emacs `C-x C-f` default is retired). While it is
     /// open, typed chars edit the overlay query (not the buffer).
@@ -1650,6 +1655,7 @@ highlight|||
 strikethrough|||
 export_as_word|||
 export_as_html|||
+export_as_pdf|||
 insert_link|Cmd-K|C-k|
 save|Cmd-S|C-s|
 quit|Cmd-Q|C-q|

@@ -98,8 +98,14 @@ pub fn emit(doc: &Document, images: &dyn ImageSource) -> Vec<u8> {
     zip.add("_rels/.rels", DOT_RELS.as_bytes());
     zip.add("word/document.xml", document_xml(&d.body).as_bytes());
     zip.add("word/styles.xml", STYLES_XML.as_bytes());
-    zip.add("word/numbering.xml", numbering_xml(&d.ordered_starts).as_bytes());
-    zip.add("word/_rels/document.xml.rels", document_rels(&d.rels).as_bytes());
+    zip.add(
+        "word/numbering.xml",
+        numbering_xml(&d.ordered_starts).as_bytes(),
+    );
+    zip.add(
+        "word/_rels/document.xml.rels",
+        document_rels(&d.rels).as_bytes(),
+    );
     for (name, bytes) in &d.media {
         zip.add(&format!("word/{name}"), bytes);
     }
@@ -131,9 +137,7 @@ impl Docx<'_> {
                     // A quoted paragraph takes the Quote style; nested non-paragraph
                     // blocks render normally (rare).
                     match b {
-                        Block::Paragraph(inlines) => {
-                            self.paragraph("Quote", None, None, inlines)
-                        }
+                        Block::Paragraph(inlines) => self.paragraph("Quote", None, None, inlines),
                         other => self.block(other, list_depth),
                     }
                 }
@@ -155,7 +159,8 @@ impl Docx<'_> {
         inlines: &[Inline],
     ) {
         self.body.push_str("<w:p><w:pPr>");
-        self.body.push_str(&format!("<w:pStyle w:val=\"{style}\"/>"));
+        self.body
+            .push_str(&format!("<w:pStyle w:val=\"{style}\"/>"));
         if let Some((num_id, ilvl)) = num {
             self.body.push_str(&format!(
                 "<w:numPr><w:ilvl w:val=\"{ilvl}\"/><w:numId w:val=\"{num_id}\"/></w:numPr>"
@@ -176,8 +181,12 @@ impl Docx<'_> {
     /// A fenced/indented code block: one paragraph, `Code` style, source lines
     /// separated by `<w:br/>` so the shaded band stays contiguous.
     fn code_block(&mut self, code: &str) {
-        self.body.push_str("<w:p><w:pPr><w:pStyle w:val=\"Code\"/></w:pPr>");
-        let mono = RunProps { code: true, ..RunProps::default() };
+        self.body
+            .push_str("<w:p><w:pPr><w:pStyle w:val=\"Code\"/></w:pPr>");
+        let mono = RunProps {
+            code: true,
+            ..RunProps::default()
+        };
         let lines: Vec<&str> = code.split('\n').collect();
         for (i, line) in lines.iter().enumerate() {
             self.body.push_str("<w:r>");
@@ -290,20 +299,25 @@ impl Docx<'_> {
     fn table_row(&mut self, cells: &[Vec<Inline>], aligns: &[Align], col_w: i64, header: bool) {
         self.body.push_str("<w:tr>");
         for (i, cell) in cells.iter().enumerate() {
-            self.body
-                .push_str(&format!("<w:tc><w:tcPr><w:tcW w:w=\"{col_w}\" w:type=\"dxa\"/></w:tcPr>"));
+            self.body.push_str(&format!(
+                "<w:tc><w:tcPr><w:tcW w:w=\"{col_w}\" w:type=\"dxa\"/></w:tcPr>"
+            ));
             let jc = match aligns.get(i).copied().unwrap_or(Align::None) {
                 Align::Center => Some("center"),
                 Align::Right => Some("right"),
                 Align::Left => Some("left"),
                 Align::None => None,
             };
-            self.body.push_str("<w:p><w:pPr><w:pStyle w:val=\"TableCellText\"/>");
+            self.body
+                .push_str("<w:p><w:pPr><w:pStyle w:val=\"TableCellText\"/>");
             if let Some(j) = jc {
                 self.body.push_str(&format!("<w:jc w:val=\"{j}\"/>"));
             }
             self.body.push_str("</w:pPr>");
-            let props = RunProps { bold: header, ..RunProps::default() };
+            let props = RunProps {
+                bold: header,
+                ..RunProps::default()
+            };
             let mut runs = String::new();
             for inl in cell {
                 self.inline(&mut runs, inl, props);
@@ -325,32 +339,47 @@ impl Docx<'_> {
                 out.push_str("</w:r>");
             }
             Inline::Code(c) => {
-                let p = RunProps { code: true, ..props };
+                let p = RunProps {
+                    code: true,
+                    ..props
+                };
                 out.push_str("<w:r>");
                 out.push_str(&p.rpr());
                 out.push_str(&text_element(c));
                 out.push_str("</w:r>");
             }
             Inline::Strong(children) => {
-                let p = RunProps { bold: true, ..props };
+                let p = RunProps {
+                    bold: true,
+                    ..props
+                };
                 for c in children {
                     self.inline(out, c, p);
                 }
             }
             Inline::Emphasis(children) => {
-                let p = RunProps { italic: true, ..props };
+                let p = RunProps {
+                    italic: true,
+                    ..props
+                };
                 for c in children {
                     self.inline(out, c, p);
                 }
             }
             Inline::Strikethrough(children) => {
-                let p = RunProps { strike: true, ..props };
+                let p = RunProps {
+                    strike: true,
+                    ..props
+                };
                 for c in children {
                     self.inline(out, c, p);
                 }
             }
             Inline::Highlight(children) => {
-                let p = RunProps { highlight: true, ..props };
+                let p = RunProps {
+                    highlight: true,
+                    ..props
+                };
                 for c in children {
                     self.inline(out, c, p);
                 }
@@ -362,13 +391,20 @@ impl Docx<'_> {
                     true,
                 );
                 out.push_str(&format!("<w:hyperlink r:id=\"{rid}\">"));
-                let p = RunProps { hyperlink: true, ..props };
+                let p = RunProps {
+                    hyperlink: true,
+                    ..props
+                };
                 for c in children {
                     self.inline(out, c, p);
                 }
                 out.push_str("</w:hyperlink>");
             }
-            Inline::Image { src, alt, width_hint } => self.image(out, src, alt, *width_hint),
+            Inline::Image {
+                src,
+                alt,
+                width_hint,
+            } => self.image(out, src, alt, *width_hint),
             Inline::SoftBreak => {
                 out.push_str("<w:r>");
                 out.push_str(&props.rpr());
@@ -380,7 +416,13 @@ impl Docx<'_> {
     }
 
     fn image(&mut self, out: &mut String, src: &str, alt: &str, width_hint: Option<u32>) {
-        let Some(ExportImage { bytes, width, height, mime }) = self.images.resolve(src) else {
+        let Some(ExportImage {
+            bytes,
+            width,
+            height,
+            mime,
+        }) = self.images.resolve(src)
+        else {
             // Unresolvable: the alt text stands in.
             if !alt.is_empty() {
                 out.push_str("<w:r>");
@@ -447,7 +489,13 @@ impl RunProps {
     /// The `<w:rPr>` element for these props (empty string when all-default),
     /// emitted in CT_RPr schema order (rStyle, rFonts, b, i, strike, highlight, shd).
     fn rpr(&self) -> String {
-        if !(self.bold || self.italic || self.strike || self.highlight || self.code || self.hyperlink) {
+        if !(self.bold
+            || self.italic
+            || self.strike
+            || self.highlight
+            || self.code
+            || self.hyperlink)
+        {
             return String::new();
         }
         let mut s = String::from("<w:rPr>");
@@ -561,9 +609,7 @@ fn document_rels(rels: &[Rel]) -> String {
 }
 
 fn numbering_xml(ordered_starts: &[u64]) -> String {
-    let mut s = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
-    );
+    let mut s = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
     s.push_str(&format!("<w:numbering xmlns:w=\"{NS_W}\">"));
     // abstractNum 0 — bullets (three levels).
     s.push_str("<w:abstractNum w:abstractNumId=\"0\">");

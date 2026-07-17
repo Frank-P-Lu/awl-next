@@ -173,8 +173,15 @@ pub enum Inline {
     Strikethrough(Vec<Inline>),
     Highlight(Vec<Inline>),
     Code(String),
-    Link { url: String, children: Vec<Inline> },
-    Image { src: String, alt: String, width_hint: Option<u32> },
+    Link {
+        url: String,
+        children: Vec<Inline>,
+    },
+    Image {
+        src: String,
+        alt: String,
+        width_hint: Option<u32>,
+    },
     SoftBreak,
     HardBreak,
 }
@@ -193,7 +200,9 @@ pub struct Document {
 /// (excluded from the export, matching every other awl consumer) and folds the
 /// pulldown event stream into the nesting-aware tree.
 pub fn parse(markdown: &str) -> Document {
-    let body_start = crate::frontmatter::detect(markdown).map(|f| f.range.end).unwrap_or(0);
+    let body_start = crate::frontmatter::detect(markdown)
+        .map(|f| f.range.end)
+        .unwrap_or(0);
     let src = &markdown[body_start..];
 
     let opts = Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
@@ -234,22 +243,42 @@ pub fn parse(markdown: &str) -> Document {
 enum Frame {
     Root(Vec<Block>),
     BlockQuote(Vec<Block>),
-    List { ordered: bool, start: u64, items: Vec<Item> },
+    List {
+        ordered: bool,
+        start: u64,
+        items: Vec<Item>,
+    },
     /// A list item. In a LOOSE list pulldown wraps each item's content in its
     /// own `Paragraph`; in a TIGHT list (no blank line between items — the
     /// dominant form) it emits the item's inlines BARE, with no paragraph. So
     /// the item is inline-accepting too: bare inlines land in `loose` and are
     /// flushed into an implicit `Paragraph` when a real block arrives or the
     /// item closes (dropping them was the tight-list content-loss bug).
-    Item { blocks: Vec<Block>, loose: Vec<Inline> },
+    Item {
+        blocks: Vec<Block>,
+        loose: Vec<Inline>,
+    },
     Paragraph(Vec<Inline>),
-    Heading { level: u8, inlines: Vec<Inline> },
+    Heading {
+        level: u8,
+        inlines: Vec<Inline>,
+    },
     Strong(Vec<Inline>),
     Emphasis(Vec<Inline>),
     Strikethrough(Vec<Inline>),
-    Link { url: String, children: Vec<Inline> },
-    Image { src: String, alt: String, width_hint: Option<u32> },
-    CodeBlock { lang: Option<String>, code: String },
+    Link {
+        url: String,
+        children: Vec<Inline>,
+    },
+    Image {
+        src: String,
+        alt: String,
+        width_hint: Option<u32>,
+    },
+    CodeBlock {
+        lang: Option<String>,
+        code: String,
+    },
     Table(TableFrame),
 }
 
@@ -267,32 +296,44 @@ struct TableFrame {
 fn open_frame(stack: &mut Vec<Frame>, tag: Tag) {
     match tag {
         Tag::Paragraph => stack.push(Frame::Paragraph(Vec::new())),
-        Tag::Heading { level, .. } => {
-            stack.push(Frame::Heading { level: heading_level(level), inlines: Vec::new() })
-        }
+        Tag::Heading { level, .. } => stack.push(Frame::Heading {
+            level: heading_level(level),
+            inlines: Vec::new(),
+        }),
         Tag::BlockQuote(_) => stack.push(Frame::BlockQuote(Vec::new())),
         Tag::CodeBlock(kind) => {
             let lang = match kind {
                 CodeBlockKind::Fenced(info) => {
                     let first = info.split_whitespace().next().unwrap_or("");
-                    if first.is_empty() { None } else { Some(first.to_string()) }
+                    if first.is_empty() {
+                        None
+                    } else {
+                        Some(first.to_string())
+                    }
                 }
                 CodeBlockKind::Indented => None,
             };
-            stack.push(Frame::CodeBlock { lang, code: String::new() })
+            stack.push(Frame::CodeBlock {
+                lang,
+                code: String::new(),
+            })
         }
         Tag::List(start) => stack.push(Frame::List {
             ordered: start.is_some(),
             start: start.unwrap_or(1),
             items: Vec::new(),
         }),
-        Tag::Item => stack.push(Frame::Item { blocks: Vec::new(), loose: Vec::new() }),
+        Tag::Item => stack.push(Frame::Item {
+            blocks: Vec::new(),
+            loose: Vec::new(),
+        }),
         Tag::Emphasis => stack.push(Frame::Emphasis(Vec::new())),
         Tag::Strong => stack.push(Frame::Strong(Vec::new())),
         Tag::Strikethrough => stack.push(Frame::Strikethrough(Vec::new())),
-        Tag::Link { dest_url, .. } => {
-            stack.push(Frame::Link { url: dest_url.into_string(), children: Vec::new() })
-        }
+        Tag::Link { dest_url, .. } => stack.push(Frame::Link {
+            url: dest_url.into_string(),
+            children: Vec::new(),
+        }),
         Tag::Image { dest_url, .. } => stack.push(Frame::Image {
             src: dest_url.into_string(),
             alt: String::new(),
@@ -374,10 +415,22 @@ fn close_frame(stack: &mut Vec<Frame>, tag: TagEnd, pending_task: &mut Option<bo
             }
             accept_block(stack, Block::CodeBlock { lang, code });
         }
-        Frame::List { ordered, start, items } => {
-            accept_block(stack, Block::List(List { ordered, start, items }))
-        }
-        Frame::Item { mut blocks, mut loose } => {
+        Frame::List {
+            ordered,
+            start,
+            items,
+        } => accept_block(
+            stack,
+            Block::List(List {
+                ordered,
+                start,
+                items,
+            }),
+        ),
+        Frame::Item {
+            mut blocks,
+            mut loose,
+        } => {
             // A tight item's bare inlines (or a trailing loose run after a
             // nested block) become an implicit paragraph so they survive.
             if !loose.is_empty() {
@@ -392,12 +445,25 @@ fn close_frame(stack: &mut Vec<Frame>, tag: TagEnd, pending_task: &mut Option<bo
         Frame::Strong(children) => push_inline(stack, Inline::Strong(children)),
         Frame::Strikethrough(children) => push_inline(stack, Inline::Strikethrough(children)),
         Frame::Link { url, children } => push_inline(stack, Inline::Link { url, children }),
-        Frame::Image { src, alt, width_hint } => {
-            push_inline(stack, Inline::Image { src, alt, width_hint })
-        }
+        Frame::Image {
+            src,
+            alt,
+            width_hint,
+        } => push_inline(
+            stack,
+            Inline::Image {
+                src,
+                alt,
+                width_hint,
+            },
+        ),
         Frame::Table(t) => accept_block(
             stack,
-            Block::Table(Table { aligns: t.aligns, head: t.head, rows: t.rows }),
+            Block::Table(Table {
+                aligns: t.aligns,
+                head: t.head,
+                rows: t.rows,
+            }),
         ),
         Frame::Root(_) => {}
     }
@@ -464,7 +530,10 @@ fn push_inline(stack: &mut [Frame], inline: Inline) {
 /// split out), to an open code block's body, or split on `==highlight==` pairs
 /// into the nearest inline container.
 fn push_text(stack: &mut Vec<Frame>, text: &str) {
-    if let Some(Frame::Image { alt, width_hint, .. }) = stack.last_mut() {
+    if let Some(Frame::Image {
+        alt, width_hint, ..
+    }) = stack.last_mut()
+    {
         // Alt text may carry the `|300` / `|300x200` size hint.
         let (a, hint) = split_alt_hint(text);
         alt.push_str(&a);
@@ -521,7 +590,8 @@ fn equals_runs(s: &str) -> Vec<std::ops::Range<usize>> {
     let mut out = Vec::new();
     let mut i = 0usize;
     while i + 1 < b.len() {
-        if b[i] == b'=' && b[i + 1] == b'='
+        if b[i] == b'='
+            && b[i + 1] == b'='
             && (i == 0 || b[i - 1] != b'=')
             && (i + 2 >= b.len() || b[i + 2] != b'=')
         {
@@ -538,7 +608,10 @@ fn equals_runs(s: &str) -> Vec<std::ops::Range<usize>> {
 /// `alt|300x200` → `("alt", 300)` (width only, height derived from aspect).
 fn split_alt_hint(alt: &str) -> (String, Option<u32>) {
     if let Some((a, hint)) = alt.rsplit_once('|') {
-        let width = hint.split(['x', 'X']).next().and_then(|w| w.trim().parse::<u32>().ok());
+        let width = hint
+            .split(['x', 'X'])
+            .next()
+            .and_then(|w| w.trim().parse::<u32>().ok());
         if let Some(w) = width {
             return (a.to_string(), Some(w));
         }

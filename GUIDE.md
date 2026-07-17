@@ -168,6 +168,7 @@ markers below, byte for byte).
 | Strikethrough |  |  |
 | Export as Word… |  |  |
 | Export as HTML… |  |  |
+| Export as PDF… |  |  |
 | Insert link… | ⌘K |  |
 | Save | ⌘S | Ctrl+S |
 | Quit | ⌘Q | Ctrl+Q |
@@ -196,6 +197,9 @@ markers below, byte for byte).
 | Settings… | ⌘, | Ctrl+, |
 | Keybindings… |  |  |
 <!-- GENERATED:keys-reference:END -->
+
+PDF export is available in the native app only; the browser continues to
+offer Word and HTML export.
 
 ## Looks
 

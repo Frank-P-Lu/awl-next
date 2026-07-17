@@ -482,6 +482,7 @@ fn every_catalog_command_dispatches_without_panicking() {
                     // its format for the live App to render + write.
                     Action::ExportWord => eff == Effect::Export(crate::export::Format::Docx),
                     Action::ExportHtml => eff == Effect::Export(crate::export::Format::Html),
+                    Action::ExportPdf => eff == Effect::Export(crate::export::Format::Pdf),
                     other => panic!("{other:?} classified Deferred but has no effect check"),
                 };
                 assert!(ok, "{}: unexpected deferred effect {:?}", c.name, eff);

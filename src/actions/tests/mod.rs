@@ -543,6 +543,7 @@ pub(super) fn delete_flinch_fixture(
         | Action::Strikethrough
         | Action::ExportWord
         | Action::ExportHtml
+        | Action::ExportPdf
         | Action::Ignore => None,
     }
 }
@@ -738,6 +739,7 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::Strikethrough
             | Action::ExportWord
             | Action::ExportHtml
+            | Action::ExportPdf
             | Action::Ignore => {}
         }
     }
@@ -840,6 +842,7 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::Strikethrough,
         Action::ExportWord,
         Action::ExportHtml,
+        Action::ExportPdf,
         Action::Ignore,
     ]
 }
@@ -911,6 +914,7 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         // `Effect::Export` for the live App to render + write.
         | Action::ExportWord
         | Action::ExportHtml
+        | Action::ExportPdf
         | Action::DuplicateNote => SmokeKind::Deferred,
 
         // Real catalog commands that mutate locally (buffer / globals / zoom /

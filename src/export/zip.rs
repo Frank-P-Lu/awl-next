@@ -60,7 +60,12 @@ impl ZipWriter {
         let size = data.len() as u32;
         self.write_local_header(name, crc, size);
         self.body.extend_from_slice(data);
-        self.entries.push(Entry { name: name.to_string(), size, crc, offset });
+        self.entries.push(Entry {
+            name: name.to_string(),
+            size,
+            crc,
+            offset,
+        });
     }
 
     fn write_local_header(&mut self, name: &str, crc: u32, size: u32) {
