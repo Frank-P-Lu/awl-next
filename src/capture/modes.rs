@@ -300,7 +300,7 @@ pub(super) fn settled_viewstate(
     if crate::popover::popover_on()
         && !search_active
         && !vstate.overlay_active
-        && std::env::var_os("AWL_POPOVER").is_some()
+        && (opts.force_popover || std::env::var_os("AWL_POPOVER").is_some())
     {
         if let Some(((l0, c0), (l1, c1))) = vstate.selection {
             let a = buffer.line_col_to_char(l0, c0);
