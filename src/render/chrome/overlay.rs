@@ -1109,17 +1109,39 @@ impl TextPipeline {
                 }],
                 _ => Vec::new(),
             };
-            self.placard_renderer
-                .prepare(
-                    device,
-                    queue,
-                    &mut self.font_system,
-                    &mut self.atlas,
-                    &self.viewport,
-                    placard_pass,
-                    &mut self.swash_cache,
-                )
-                .map_err(|e| anyhow::anyhow!("glyphon placard prepare failed: {e:?}"))?;
+            // GRACEFUL DEGRADATION (AtlasFull fix, 2026-07-17): the quantized sizing
+            // keeps the shared atlas bounded, but if it ever DOES fill (a huge display,
+            // an exotic GPU with a small `max_texture_dimension_2d`), SKIP the placard
+            // for this frame rather than erroring — prepare an empty pass so no stale
+            // wordmark lingers, and let the next frame retry after the off-frame
+            // `atlas.trim()` reclaims space. NEVER a print (the `gpu.rs` `prepare error:`
+            // eprintln is the thing this silences for the placard's own overflow); a
+            // non-AtlasFull error still propagates.
+            let placard_prepare = self.placard_renderer.prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                placard_pass,
+                &mut self.swash_cache,
+            );
+            match placard_prepare {
+                Ok(()) => {}
+                Err(glyphon::PrepareError::AtlasFull) => {
+                    self.placard_renderer
+                        .prepare(
+                            device,
+                            queue,
+                            &mut self.font_system,
+                            &mut self.atlas,
+                            &self.viewport,
+                            Vec::new(),
+                            &mut self.swash_cache,
+                        )
+                        .map_err(|e| anyhow::anyhow!("glyphon placard skip-prepare failed: {e:?}"))?;
+                }
+            }
         }
         // The placard wordmark is FIRST in the panel batch under `Pane` (drawn
         // behind everything that follows), clipped to the WHOLE CANVAS — a
@@ -1128,6 +1150,10 @@ impl TextPipeline {
         // Under `Bars` it was uploaded to `placard_renderer` above instead, so it
         // is withheld here.
         let mut areas: Vec<TextArea> = Vec::new();
+        // Whether the placard rides THIS (Pane) panel batch as the FIRST area — the
+        // one entry whose giant glyphs could overflow the shared atlas. Tracked so the
+        // graceful-degradation retry below can drop exactly it (see the prepare site).
+        let mut placard_in_panel = false;
         if let Some((px, py, _pw, _ph)) = placard {
             if !bars {
                 areas.push(TextArea {
@@ -1139,6 +1165,7 @@ impl TextPipeline {
                     default_color: ink,
                     custom_glyphs: &[],
                 });
+                placard_in_panel = true;
             }
         }
         // WILD-MENU SLANT PROBE (env-gated; `None` on every normal run, which
@@ -1225,17 +1252,43 @@ impl TextPipeline {
                 custom_glyphs: &[],
             });
         }
-        self.panel_renderer
-            .prepare(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.atlas,
-                &self.viewport,
-                areas,
-                &mut self.swash_cache,
-            )
-            .map_err(|e| anyhow::anyhow!("glyphon overlay prepare failed: {e:?}"))?;
+        // GRACEFUL DEGRADATION (AtlasFull fix, 2026-07-17): under `Pane` the placard
+        // rides this batch as `areas[0]` (drawn behind the rows). If its giant glyphs
+        // ever overflow the shared atlas, re-prepare WITHOUT the placard (the rows are
+        // the affordance that must survive; the watermark is the sacrificeable one), so
+        // an AtlasFull never blanks the whole card. The next frame retries after the
+        // off-frame `atlas.trim()`. A retry area-set is built only when the placard is
+        // actually in this batch — every other run pays nothing and never re-prepares.
+        // The placard-free fallback batch, built ONLY when the placard is in this batch
+        // (every other run keeps `None` and never clones).
+        let panel_retry: Option<Vec<TextArea>> =
+            placard_in_panel.then(|| areas.iter().skip(1).cloned().collect());
+        match self.panel_renderer.prepare(
+            device,
+            queue,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            areas,
+            &mut self.swash_cache,
+        ) {
+            Ok(()) => {}
+            Err(glyphon::PrepareError::AtlasFull) => match panel_retry {
+                Some(retry) => self
+                    .panel_renderer
+                    .prepare(
+                        device,
+                        queue,
+                        &mut self.font_system,
+                        &mut self.atlas,
+                        &self.viewport,
+                        retry,
+                        &mut self.swash_cache,
+                    )
+                    .map_err(|e| anyhow::anyhow!("glyphon overlay skip-placard prepare failed: {e:?}"))?,
+                None => return Err(anyhow::anyhow!("glyphon overlay prepare failed: AtlasFull")),
+            },
+        }
         Ok(())
     }
 
