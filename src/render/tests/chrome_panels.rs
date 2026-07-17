@@ -5,7 +5,7 @@
 //! `chrome_overlay` for the gutter + caret-preview-panel tests.
 
 use super::super::*;
-use super::{headless_pipeline, view};
+use super::{headless_dqp, headless_pipeline, pixeldiff, view};
 
 /// The CONTEXTUAL SPELL PANEL: the spell overlay renders as a SMALL floating panel
 /// anchored AT the misspelled word (its left edge at the word start, hanging just
@@ -1422,6 +1422,56 @@ fn overlay_hint_footer_is_compact_and_identical_across_kinds() {
             (below_flat - below_faceted).abs() < 0.6,
             "{world}: flat ({below_flat:.1}) and faceted ({below_faceted:.1}) footers must be IDENTICAL"
         );
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// LAW (c) — the JUMP HINT is PRESENT on every picker and never CLIPS. The universal
+/// lead teaches the affordance the user couldn't find ("↑/↓ move · type to filter"):
+/// this pins (1) every kind's hint carries the discoverable jump as DATA (the spans
+/// exist), and (2) fed into the NARROWEST (flat) card — the tightest budget, tighter
+/// than the wider faceted card the lens kinds actually use — the shaped footer glyphs
+/// stay WITHIN the card's inner text width at the default render zoom (0.8, the config
+/// default the `--screenshot` capture renders at). An OUTCOME measured over the shaped
+/// run widths through the ONE footer-measure owner, NOT inferred from the hint STRING
+/// (the Wagtail tripwire: appearance from pixels). Swept no-wildcard over every kind ×
+/// three worlds (a world whose font mis-shaped a glyph would widen the footer here).
+#[test]
+fn jump_hint_is_present_and_never_clips_for_every_kind() {
+    use crate::overlay::OverlayKind;
+    // (1) PRESENT — no adapter needed: every kind's foot hint teaches the jump.
+    for k in OverlayKind::ALL {
+        let h = k.hint();
+        assert!(h.contains("type to filter"), "{k:?} hint must teach type-to-filter: {h:?}");
+    }
+    // (2) IN-BOUNDS — the shaped footer fits the flat card at the default zoom.
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping jump_hint_is_present_and_never_clips_for_every_kind: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let width = 1200u32;
+    for world in ["Tawny", "Mopoke", "Wagtail"] {
+        theme::set_active_by_name(world).unwrap();
+        for k in OverlayKind::ALL {
+            let mut v = view("hello\n", 0, 0);
+            v.overlay_active = true;
+            v.zoom = 0.8; // the config-default render zoom (what `--screenshot` uses)
+            v.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+            v.overlay_selected = 0;
+            // The REAL per-kind hint (universal lead + kind actions). FLAT card (no
+            // lens strip) = the narrowest card, the worst clip budget.
+            v.overlay_hint = k.hint();
+            p.set_view(&v);
+            p.prepare(&device, &queue, width, 800).unwrap();
+            let _ = pixeldiff::render_frame(&mut p, &device, &queue, width, 800);
+            let (footer_px, text_w) = p.overlay_footer_fit_probe(width);
+            assert!(footer_px > 1.0, "{world}/{k:?}: the footer hint actually shaped glyphs");
+            assert!(
+                footer_px <= text_w,
+                "{world}/{k:?}: footer {footer_px:.1}px must fit the flat card text {text_w:.1}px (no clip)"
+            );
+        }
     }
     theme::set_active(theme::DEFAULT_THEME);
 }

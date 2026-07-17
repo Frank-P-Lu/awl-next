@@ -196,6 +196,25 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             preview_overlay(ctx.overlay.as_ref().unwrap());
             return Effect::None;
         }
+        // JUMP-TO-ENDS: a modal picker OWNS Home/End (and the very-start/end pair
+        // Cmd-↑/↓ + Ctrl-Home/End), which the document keymap resolves to
+        // LineStart/LineEnd + BufferStart/BufferEnd — none of which mean anything in a
+        // modal list, so they leaked to a no-op (the "you can't jump, you arrow one by
+        // one" report). Here they land the selection on the FIRST / LAST row (via the
+        // one-owner nav jumps) and — like every move above — fire the live PREVIEW, so
+        // jumping in the Theme picker auditions that world's motion exactly like ↑/↓.
+        // This is the LOWER-CHURN seam: these Actions already fell through to the modal
+        // no-op, so no keymap change is needed to claim them while a picker is open.
+        Action::LineStart | Action::BufferStart => {
+            ctx.overlay.as_mut().unwrap().select_first();
+            preview_overlay(ctx.overlay.as_ref().unwrap());
+            return Effect::None;
+        }
+        Action::LineEnd | Action::BufferEnd => {
+            ctx.overlay.as_mut().unwrap().select_last();
+            preview_overlay(ctx.overlay.as_ref().unwrap());
+            return Effect::None;
+        }
         Action::ForwardChar => {
             let ov = ctx.overlay.as_ref().unwrap();
             // FACETED PICKER (goto / browse / project / command / history / settings):

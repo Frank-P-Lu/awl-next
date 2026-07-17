@@ -525,8 +525,12 @@ fn caret_picker_lists_three_styles_navigates_and_maps_modes() {
     assert_eq!(ov2.selected_value(), Some("I-beam"));
     assert_eq!(ov2.original_caret, Some(CaretMode::Ibeam));
     assert!(!ov2.original_caret_was_auto);
-    // The hint names ↵'s action; flat picker (no descend).
-    assert_eq!(OverlayKind::Caret.hint(), "\u{2191}/\u{2193} move   \u{21B5} apply");
+    // The hint leads with the universal jump cluster (move + type-to-filter) then
+    // names ↵'s action; flat picker (no descend).
+    assert_eq!(
+        OverlayKind::Caret.hint(),
+        "\u{2191}/\u{2193} move   type to filter   \u{21B5} apply"
+    );
     // selected_caret_mode is None for a non-caret picker.
     let theme = OverlayState::new_theme(vec!["Tawny".into()], 0);
     assert_eq!(theme.selected_caret_mode(), None);
@@ -627,8 +631,12 @@ fn spell_picker_lists_suggestions_and_carries_target() {
     assert_eq!(ov.spell_target, Some((2, 6, 13)));
     // No git / dir markers on the suggestion rows.
     assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
-    // The hint names the ↵ action (replace), flat picker (no descend).
-    assert_eq!(OverlayKind::Spell.hint(), "\u{2191}/\u{2193} move   \u{21B5} replace");
+    // The hint names the ↵ action (replace) after the universal jump lead, flat
+    // picker (no descend).
+    assert_eq!(
+        OverlayKind::Spell.hint(),
+        "\u{2191}/\u{2193} move   type to filter   \u{21B5} replace"
+    );
 }
 
 /// Three history rows newest-first, exercising both WHICH shapes (a git
@@ -665,7 +673,7 @@ fn history_picker_lists_versions_navigates_and_carries_ids() {
     // The hint teaches restore + compare + lens + close (informational, button-free).
     assert_eq!(
         OverlayKind::History.hint(),
-        "\u{2191}/\u{2193} move   ↵ restore   tab compare   \u{2190}/\u{2192} lens   esc close"
+        "\u{2191}/\u{2193} move   type to filter   \u{21B5} restore   tab compare   \u{2190}/\u{2192} lens   esc close"
     );
     assert!(ov.foot_hint().contains("restore"));
 }
@@ -953,15 +961,19 @@ fn hint_formatter_is_consistent_across_pickers() {
     assert_eq!(HINT_SEP, "   ", "the one canonical separator is a triple space");
 
     // Every kind's rendered hint obeys the shape: each action is `glyph SPACE
-    // label` (exactly one space), the separator is HINT_SEP, ↵ leads, and any
-    // cancel action is the lowercase `esc` (never `Esc`) sitting LAST.
+    // label` (exactly one space), the separator is HINT_SEP, the universal JUMP
+    // lead (move → type-to-filter) comes first, the ↵ primary follows it, and any
+    // cancel action is the lowercase `esc` (never `Esc`) LAST.
     for k in OverlayKind::ALL {
         let actions = k.hint_actions();
-        assert!(actions.len() >= 2, "{k:?} must teach move + at least one action");
-        // Move-first: the universal ↑/↓ move leads, then the ↵ Return primary.
+        assert!(actions.len() >= 3, "{k:?} must teach the move/filter lead + ↵ primary");
+        // The universal jump-affordance lead, in order: ↑/↓ move, type to filter —
+        // the discoverability fix for "you can only go one by one".
         assert_eq!(actions[0].glyph, "\u{2191}/\u{2193}", "{k:?} leads with ↑/↓ move");
         assert_eq!(actions[0].label, "move", "{k:?} lead action is labelled move");
-        assert_eq!(actions[1].glyph, "\u{21B5}", "{k:?} ↵ primary follows the move lead");
+        assert_eq!(actions[1].glyph, "type", "{k:?} type-to-filter is the 2nd lead cell");
+        assert_eq!(actions[1].label, "to filter", "{k:?} 2nd lead cell reads type to filter");
+        assert_eq!(actions[2].glyph, "\u{21B5}", "{k:?} ↵ primary follows the jump lead");
         // Cancel-last + lowercase esc: no action names capital `Esc`; if any
         // action is the esc cancel, it is the LAST one.
         for (i, a) in actions.iter().enumerate() {
