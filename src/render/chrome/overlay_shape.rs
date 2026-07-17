@@ -915,7 +915,14 @@ impl TextPipeline {
         // band uses ([`overlay_selected_display_line`]), so recolor and highlight
         // can never disagree.
         let sel_line = self.overlay_selected_display_line(geom);
-        let sel_muted = {
+        // The flip is CORRECT only when the chord actually sits ON the band. Under a
+        // HUGGING plate (`HugLabel`) the bare right chord rides the GROUND, not the
+        // plate, so contrasting the band drives it into the ground — the chord stays
+        // `muted` there (legible, identical to the unselected rows). One owner:
+        // `selected_secondary_on_band`.
+        let sel_muted = if !super::selected_secondary_on_band() {
+            None
+        } else {
             let band = crate::render::effective_overlay_selrow_band();
             match theme::active().highlight_treatment(band) {
                 theme::HighlightTreatment::InverseFill { ink, .. } => Some(ink.to_glyphon()),
