@@ -30,6 +30,9 @@ SCOPE: the held batch (docs repair · decoupling · preview-vanish · pitch law 
 - 🐛 **POPOVER FAT CHIN** (user screenshot; "popover is awesome!!! but what's with the fat chin?"): the button row floats high with dead card below — the card-fits-content discipline was never applied to the new popover panel; extend the fits law to it. CLAIMED.
 - ✅ **CHROME SWEEP: WORD GIVEN** (user: "yeah land the sweep!") — landing 426a612.
 
+- 🐛 **STREAKS: NEW-NOTE WORDS NOT COUNTED** (user live: "doesn't seem to track the stuff i added in a new note"): suspected anchor-swallow — the FIRST flush of a buffer only ANCHORS (correct for opened files, whose pre-existing words must never count), but a NEW note anchors at whatever the user already typed before that first idle flush, swallowing it. Fix: awl-CREATED buffers (new note / scratch) anchor EAGERLY at birth (word count 0), opened files keep the lazy anchor; plus flush-on-card-summon so the readout is live. Laws for both. CLAIMED — branch streaks-anchor.
+- 🎨 **HEADING LADDER A/B** (user quoting Butterick: "is our heading too big you reckon?"): current type_scale TITLE 1.8 / SECTION 1.5 / SUBHEAD 1.25; gallery A/B vs a gentler 1.6/1.35/1.2 ladder, user picks. CLAIMED — gallery only, no code change without the word.
+
 ## ✅ MORNING VERDICTS (user, 2026-07-18)
 - **MERGES: NONE.** Potoroo STAYS (user: personal namesake of their iOS app + "that rich brown colour is nice" — personal meaning counts as a point). Currawong → TWINKLING-STARS differentiation round (queued); Bilby → DAWN light-pole round (queued); Quokka/Galah keep both; Eva remains a future NEW world seed.
 - **PROSE-DIFF: SHIP** (user: "sentence level is great… i think we just ship it lol") — the feature round fires now: productionize the probe (sentence × c50 default, move detection, folds, struck-whitespace polish fix), entry via "Compare with version…" from the history picker, read-only manuscript view.
