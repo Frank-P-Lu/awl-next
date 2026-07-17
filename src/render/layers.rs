@@ -2065,6 +2065,10 @@ impl TextPipeline {
         // The PAGE-WIDTH DRAG READOUT (floats at the pointer; live-only, mouse-driven
         // content). `None` parks it off-screen, so every capture stays byte-identical.
         self.prepare_page_drag_readout(device, queue, width, height)?;
+        // The ZOOM READOUT (floats at the pointer while a zoom gesture is in flight;
+        // live-only content). `None` parks it off-screen, so every default capture
+        // stays byte-identical (the `AWL_ZOOM_READOUT` gallery probe is opt-in).
+        self.prepare_zoom_readout(device, queue, width, height)?;
         // The SUMMONED-WHILE-HELD stats HUD: a dim scrim + centered stacked stats,
         // drawn only while held (`crate::hud::hud_held`); released, the scrim is empty
         // and the text is parked off-screen, so a default capture stays byte-identical.

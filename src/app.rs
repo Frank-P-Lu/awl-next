@@ -1833,11 +1833,14 @@ impl ApplicationHandler<AwlEvent> for App {
                 true => {
                     self.zoom_persist_at = None;
                     self.persist_zoom_now();
+                    // The gesture settled: clear the floating zoom readout (armed per
+                    // step in `mark_zoom_dirty`), parking its label off-screen again.
                     // Fire like the sibling debounces above: request a redraw so the
                     // RedrawRequested handler re-decides control flow (Wait when settled),
                     // instead of leaving it at this now-elapsed WaitUntil — which would
                     // busy-spin the loop at ~100% CPU until the next input (DESIGN §6).
-                    if let Some(gpu) = self.gpu.as_ref() {
+                    if let Some(gpu) = self.gpu.as_mut() {
+                        gpu.pipeline.set_zoom_readout(None);
                         gpu.window.request_redraw();
                     }
                 }

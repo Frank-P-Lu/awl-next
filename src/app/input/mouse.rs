@@ -610,6 +610,12 @@ impl App {
         // covers). Both `false` when the bar is hidden (default off on macOS).
         let over_menu_hand = gpu.pipeline.menubar_hand_at(px, py);
         let over_menu_bar = gpu.pipeline.over_menu_surface(px, py);
+        // The summoned find/replace panel's `Aa` case-toggle cell reads as click-to-
+        // toggle (the pointing hand) — reuses the SAME `panel_hit` the press path uses,
+        // so a hover can never disagree with where a click would land. Only while no
+        // overlay is open (the panel is its own floating card, never behind a scrim).
+        let over_case_toggle = !overlay_open
+            && matches!(gpu.pipeline.panel_hit(px, py), Some(crate::render::PanelHit::CaseToggle));
         let ctx = crate::cursor_shape::CursorContext {
             dragging_edge: self.page_resizing,
             overlay_open,
@@ -621,6 +627,7 @@ impl App {
             over_outline_row,
             over_menu_hand,
             over_menu_bar,
+            over_case_toggle,
             image_drag: self.image_resizing.map(|d| d.handle),
             image_hover,
         };
