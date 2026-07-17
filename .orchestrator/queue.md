@@ -2,6 +2,12 @@
 
 > **Multi-tool claiming protocol** (Codex + Claude Code + human): see `README.md` beside this file — claim-then-work (commit the claim BEFORE writing code), work in a worktree branch named on the claim line, re-read this board at HEAD before firing anything, flip to ✅ LANDED @ sha when merged.
 
+## 🌙 NIGHT 2 PLAN (2026-07-18, user asleep — no new blanket land-word; land only what carries user words)
+- **IN FLIGHT, serialized on main:** streaks+vanish train (both merged locally @ 74dfe84, gate running → push on green) → popover-chin a3d3076 (told-user: lands after train) → prose-diff ship (user: "i think we just ship it lol"; serialized behind train) → palette-jump (user: "no doubt its good to have these too" — land on green, flag for morning eyeball) → strikethrough + self-demonstrating popover labels (user-requested fix; fires after prose-diff, shared strike-line owner).
+- **HELD FOR MORNING PICKS (never land):** heading ladder — D vs the mixed-weight G/H/I now being shot (G = bold ### only, user's idea; H = the flip; I = bold ##+###; F RETIRED — blank source lines + scaled row height already give heading space, user confirmed "F was basically the same"); living-band motion voice.
+- **NIGHT BUILD QUEUE (staggered as agent slots free; 4 cargo-heavy agents running now, don't thrash the machine):** flake chore #2 (fixed-name temp-PNG collision — hygiene, LAND on green) · replay-shift harness fix (unshifted-chord trap — harness truth, LAND on green) · named save points (BUILD+HOLD) · streaks view-toggle per-day↔cumulative (spec = the STREAKS amendment above; streaks landed @ 04eaf2c so build against main; BUILD+HOLD) · twinkling-stars Currawong (BUILD+GALLERY+HOLD) · dawn Bilby (BUILD+GALLERY+HOLD).
+- Morning artifact (statuses + gallery links + live-check list) closes the night.
+
 ## 📣 PUSH-POLICY UPDATE (2026-07-15) — REPO IS PUBLIC, CI-MINUTE HOLD LIFTED
 Verified via `gh repo view`: visibility PUBLIC, Actions enabled. Standard-runner minutes (including mac) are free on public repos → the July "pushes held" batching constraint is obsolete. Resume the normal policy: push main after each green merge train (tags/releases still need the user's explicit word). 4 commits unpushed right now (56616d8 checkpoint + 3 board commits) — the push rides the first cooking round's green landing so the checkpoint gets hard-gated on a full suite first. CLAUDE.md's "mac runners bill 10× on the private repo" line is now stale — fix at the next doc-sync (the working tree currently carries a user edit to CLAUDE.md; don't mix).
 
