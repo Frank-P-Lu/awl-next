@@ -854,7 +854,10 @@ fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
         ])
     );
     assert_eq!(nav["overlay"]["selected_index"], serde_json::json!(2));
-    assert_eq!(nav["overlay"]["hint"], serde_json::json!("\u{2191}/\u{2193} move   \u{21B5} apply"));
+    assert_eq!(
+        nav["overlay"]["hint"],
+        serde_json::json!("\u{2191}/\u{2193} move   type to filter   \u{21B5} apply")
+    );
     // NO PREVIEW: merely highlighting "English (Australia)" must not flip the
     // active dictionary — the defining difference from the caret/theme pickers.
     assert_eq!(nav["dictionary"], serde_json::json!("en_US"), "navigating alone must not switch");

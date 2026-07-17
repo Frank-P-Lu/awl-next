@@ -1033,4 +1033,19 @@ impl TextPipeline {
         w
     }
 
+    /// TEST HOOK (jump-hint round): the widest shaped FOOTER line (the foot hint,
+    /// plus any keybindings tips) vs the card's inner text width, for the
+    /// currently-shaped flat overlay — so the discoverability law can assert the
+    /// enriched jump hint NEVER CLIPS (`footer_px <= text_w`), an OUTCOME measured
+    /// over the shaped GLYPHS (the Wagtail tripwire: appearance from pixels, not
+    /// from the hint STRING). Reads the private `geom.visible`/`text_w` inside the
+    /// chrome module and routes the width through the ONE footer-measure owner
+    /// [`Self::overlay_footer_content_px`]. Flat cards only (the narrowest card, so
+    /// the tightest clip budget); call after a frame has shaped `panel_buffer`.
+    #[cfg(test)]
+    pub(in crate::render) fn overlay_footer_fit_probe(&self, width: u32) -> (f32, f32) {
+        let geom = self.overlay_geometry(width);
+        (self.overlay_footer_content_px(&geom, geom.visible), geom.text_w)
+    }
+
 }

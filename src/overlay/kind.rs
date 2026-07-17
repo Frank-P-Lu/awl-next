@@ -323,12 +323,28 @@ impl OverlayKind {
     /// (combined `←/→` for a lens axis); `⌫` Backspace (ascend a level); and a short
     /// lowercase WORD (`esc`, `del`) for a key with no bundled glyph.
     pub fn hint_actions(self) -> Vec<HintAction> {
-        // Every summoned overlay is a navigable LIST — ↑/↓ (and C-n/C-p) always move
-        // the selection — so the MOVE affordance is UNIVERSAL and LEADS every kind's
-        // line. Prepended here in the ONE shared owner so no kind can forget to teach
-        // it (users otherwise reach for the OS-eaten Ctrl-Up/Down and think nav is
-        // broken). The per-kind primary/nav/cancel actions follow, from `kind_actions`.
-        let mut actions = vec![HintAction { glyph: "\u{2191}/\u{2193}", label: "move" }];
+        // Every summoned overlay is a navigable LIST that shares the SAME jump
+        // affordances, so a UNIVERSAL NAV CLUSTER leads every kind's line — the fix
+        // for the "you can't jump, you go up or down one by one" report (the arrow-only
+        // model was the only advertised motion). Three universal cells, prepended here
+        // in the ONE shared owner so no kind can forget them:
+        //   ↑/↓ move        — the row-at-a-time step (C-n/C-p also fire it).
+        //   type to filter  — random access by NAME (`push`/`refilter` runs on every
+        //                     kind), the STRONGEST jump — the direct answer to "you
+        //                     can't jump, you go up or down one by one".
+        // KEPT DELIBERATELY TO TWO CELLS (a calm line that still fits the flat card at
+        // every zoom): PgUp/PgDn paging and Home/End jump-to-ends still WORK (and are
+        // drivable + tested), just unadvertised — a third "pgup/dn page" cell pushed
+        // the longest kinds (Keybindings/History) past the card's text width at the
+        // default zoom, and the ⇞/⇟ keycaps tofu (they live in neither the per-world
+        // display faces nor the bundled `AwlMarks` set). The per-kind primary/nav/
+        // cancel actions (↵ / lens / esc) follow, from `kind_actions`. (Rename/
+        // InsertLink never show this line — their `foot_hint` returns their own modal
+        // prompt — so the cluster never misleads a text edit.)
+        let mut actions = vec![
+            HintAction { glyph: "\u{2191}/\u{2193}", label: "move" },
+            HintAction { glyph: "type", label: "to filter" },
+        ];
         actions.extend(self.kind_actions());
         actions
     }
