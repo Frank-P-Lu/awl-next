@@ -257,9 +257,36 @@ pub fn parse_motion_force(s: &str) -> Option<MotionForce> {
 /// The `AWL_OVERLAY_MOTION_FORCE` dev knob, read ONCE and memoised. `None` on
 /// every ordinary run (env unset), so the renderer's living-band branch is
 /// unreachable and every default capture stays byte-identical.
-pub fn overlay_motion_force() -> &'static Option<MotionForce> {
+fn awl_overlay_motion_force() -> &'static Option<MotionForce> {
     static ONCE: std::sync::OnceLock<Option<MotionForce>> = std::sync::OnceLock::new();
     ONCE.get_or_init(|| std::env::var("AWL_OVERLAY_MOTION_FORCE").ok().and_then(|s| parse_motion_force(&s)))
+}
+
+/// TEST-ONLY escape hatch for the living-band probe (mirrors
+/// [`crate::render::set_slant_test_override`]; `serial()`-guarded at call sites)
+/// — the memoised env `OnceLock` can't be re-armed per test, so a capture-level
+/// law test pins the choreography + mid-flight phase through this instead.
+#[cfg(test)]
+static MOTION_TEST_OVERRIDE: std::sync::Mutex<Option<MotionForce>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub fn set_motion_test_override(m: Option<MotionForce>) {
+    *MOTION_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = m;
+}
+
+/// The EFFECTIVE living-band probe for this frame — `None` (the shipped single
+/// band) on every run without the env probe / test override, so the renderer's
+/// living-band branch is unreachable and every default capture is byte-identical.
+/// A `cfg(test)` override wins so a capture-level law test can pin a deterministic
+/// mid-flight frame without re-arming the memoised env `OnceLock`.
+pub fn overlay_motion_force() -> Option<MotionForce> {
+    #[cfg(test)]
+    {
+        if let Some(m) = *MOTION_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return Some(m);
+        }
+    }
+    *awl_overlay_motion_force()
 }
 
 #[cfg(test)]

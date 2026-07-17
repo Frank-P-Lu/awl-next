@@ -381,24 +381,64 @@ impl TextPipeline {
     /// frame (see [`livingband::covered_rows`]), so the shaper flips those rows'
     /// ink to the on-band pole instead of the static selected row ("ink rides
     /// the band, not the state"). `None` on every ordinary run (env unset, a
-    /// Bars/theme/empty picker, or no selection), where the shaper is
-    /// byte-identical (the old `overlay_selected` flip). Reads the SAME phase +
-    /// rects owner (`living_band_phase` / `living_band_rects`) `overlay_draw_card`
-    /// draws from, so the flipped rows can never disagree with the fill's
-    /// position — this is the exact phase-seam fix the outcome audit demands.
+    /// Bars or empty picker, or no selection), where the shaper is byte-identical
+    /// (the old `overlay_selected` flip). Applies to BOTH the flat and the FACETED
+    /// (Cmd-P palette / Settings) layouts — the target row is placed through the
+    /// shared [`Self::overlay_selected_disp`] owner so it matches the fill exactly
+    /// on either. Reads the SAME phase + rects owner (`living_band_phase` /
+    /// `living_band_rects`) `overlay_draw_card` draws from, so the flipped rows can
+    /// never disagree with the fill's position — the exact phase-seam fix the
+    /// outcome audit demands.
+    /// The selected candidate's 0-based DISPLAY row (0 == the first candidate /
+    /// plan line, at `overlay_row_top(text_top, header_rows, header_gap, 0, lh)`),
+    /// per layout family; `None` for an empty picker. THE ONE OWNER shared by the
+    /// selected-band FILL ([`Self::overlay_draw_card`]) and the living-band INK
+    /// flip ([`Self::living_covered_rows`]), so the band the fill draws and the
+    /// target row whose ink flips can never read a different row (the exact
+    /// fill/ink phase-seam the outcome audit demands).
+    pub(in crate::render) fn overlay_selected_disp(&self, geom: &OverlayGeom) -> Option<usize> {
+        if geom.n_items == 0 {
+            None
+        } else if geom.theme {
+            // FACETED card (theme picker AND the Cmd-P palette / Settings / Browse
+            // once a lens strip is populated): the selected item's DISPLAY row = its
+            // position in the plan (section headers push it down); the `header_rows`
+            // (query + strip) offset is folded in by `overlay_row_top`, not here.
+            Some(
+                geom.plan
+                    .iter()
+                    .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
+                    .unwrap_or(0),
+            )
+        } else {
+            // 0-based row among the visible window. `OverlayState` keeps the selection
+            // inside `[top_idx, top_idx+visible)`; saturate + clamp defensively so a
+            // transient mismatch (e.g. the list just shrank) can never underflow/overflow.
+            Some(
+                self.overlay_selected
+                    .saturating_sub(geom.top_idx)
+                    .min(geom.visible.saturating_sub(1)),
+            )
+        }
+    }
+
     pub(in crate::render) fn living_covered_rows(&mut self, geom: &OverlayGeom) -> Option<Vec<usize>> {
-        let motion = (*crate::render::livingband::overlay_motion_force())?;
-        if geom.theme
-            || geom.n_items == 0
-            || !matches!(crate::render::effective_list_style(), theme::ListStyle::Pane)
-        {
+        let motion = crate::render::livingband::overlay_motion_force()?;
+        if !matches!(crate::render::effective_list_style(), theme::ListStyle::Pane) {
             return None;
         }
+        // The band flies to (and covers) the selected candidate's DISPLAY row —
+        // the SAME per-layout-family owner `overlay_draw_card` places the fill on
+        // (`overlay_selected_disp`, handling the faceted plan-position case), so
+        // the rows whose ink flips can never read a different target than the fill
+        // draws. `None` (empty picker) → no covered rows. FIXED: the old
+        // `geom.theme` bail made this dead code on every FACETED surface (the Cmd-P
+        // palette / Settings — `geom.theme == true` there), so the fill animated
+        // while the ink stayed state-tied → covered rows washed out (white-on-white
+        // on Wagtail). The shaper's `covered` seam threads through the faceted path
+        // too now, so ink rides the band wherever the fill does.
+        let sel_disp = self.overlay_selected_disp(geom)?;
         let lh = self.overlay_lh();
-        let sel_disp = self
-            .overlay_selected
-            .saturating_sub(geom.top_idx)
-            .min(geom.visible.saturating_sub(1));
         let target =
             overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, sel_disp, lh);
         let (from, to, t) = self.living_band_phase(motion, target, lh);
@@ -419,6 +459,38 @@ impl TextPipeline {
             lh,
             geom.visible,
         ))
+    }
+
+    /// TEST ONLY — whether this geom takes the FACETED (lens-strip) layout.
+    #[cfg(test)]
+    pub(in crate::render) fn overlay_geom_is_faceted(&self, geom: &OverlayGeom) -> bool {
+        geom.theme
+    }
+
+    /// TEST ONLY — the living-band ink probe's geometry for a capture-level PIXEL
+    /// law (the Wagtail fill/ink-divergence class): the covered display rows, the
+    /// selected TARGET display row, the candidate-row band (`first_top`, `lh`), and
+    /// the LEADING band's drawn rect `[x, top, w, h]` this frame. Reads the SAME
+    /// owners the renderer draws from (`living_covered_rows`, `overlay_selected_disp`,
+    /// `overlay_row_top`, `living_band_phase`/`living_band_rects`), so a pixel test
+    /// samples exactly where the fill lands. Panics unless the motion probe is armed.
+    #[cfg(test)]
+    pub(in crate::render) fn living_probe_geom(
+        &mut self,
+        geom: &OverlayGeom,
+    ) -> (Vec<usize>, usize, f32, f32, [f32; 4]) {
+        let motion = crate::render::livingband::overlay_motion_force()
+            .expect("living_probe_geom needs the motion probe armed");
+        let covered = self.living_covered_rows(geom).unwrap_or_default();
+        let target = self.overlay_selected_disp(geom).expect("a selected row");
+        let lh = self.overlay_lh();
+        let first_top = overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, 0, lh);
+        let sel_top =
+            overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, target, lh);
+        let (from, to, t) = self.living_band_phase(motion, sel_top, lh);
+        let (primary, _echo, _cross) =
+            self.living_band_rects(motion, from, to, t, geom.card_x, geom.card_w, lh);
+        (covered, target, first_top, lh, primary[0])
     }
 
     /// PARK every overlay pipeline empty for a frame with NO active overlay —
@@ -1406,28 +1478,10 @@ impl TextPipeline {
             theme::HighlightTreatment::InverseFill { band, .. } => band,
         };
         self.overlay_rows.set_color(band_color.rgba_bytes());
-        // The selected row's DISPLAY index + settled row-top, per layout family.
-        let sel_disp: Option<usize> = if geom.n_items == 0 {
-            None
-        } else if geom.theme {
-            // THEME PICKER: the selected world's DISPLAY row = its position in the plan
-            // (headers push it down), offset past the query + strip lines (`header_rows`).
-            Some(
-                geom.plan
-                    .iter()
-                    .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
-                    .unwrap_or(0),
-            )
-        } else {
-            // 0-based row among the visible window. `OverlayState` keeps the selection
-            // inside `[top_idx, top_idx+visible)`; saturate + clamp defensively so a
-            // transient mismatch (e.g. the list just shrank) can never underflow/overflow.
-            Some(
-                self.overlay_selected
-                    .saturating_sub(geom.top_idx)
-                    .min(geom.visible.saturating_sub(1)),
-            )
-        };
+        // The selected row's DISPLAY index + settled row-top, per layout family —
+        // the ONE owner shared with the living-band ink flip (`living_covered_rows`
+        // → `overlay_selected_disp`), so band fill and flipped ink read the same row.
+        let sel_disp: Option<usize> = self.overlay_selected_disp(geom);
         // PER-ITEM LIST SURFACES round: `Pane` (default) draws the byte-identical
         // full-width selected BAND; `Bars` gives each candidate row its own
         // rounded surface (unselected → `overlay_bars`, quiet; selected →
@@ -1442,7 +1496,7 @@ impl TextPipeline {
         // the selection band's morph / two-shape choreography. Pane-only; when
         // active it OWNS the band rects (the ordinary `overlay_band_drawn` slide
         // is skipped for that frame).
-        let motion = *crate::render::livingband::overlay_motion_force();
+        let motion = crate::render::livingband::overlay_motion_force();
         // The selected row's settled TARGET top, through the ONE row-y owner —
         // shared by the ordinary slide and the living-band choreography.
         let sel_target: Option<f32> = sel_disp

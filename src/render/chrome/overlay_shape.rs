@@ -372,8 +372,9 @@ impl TextPipeline {
         // ARM B LIVING-BAND PROBE — the DISPLAY rows the moving band COVERS this
         // frame (whose ink flips instead of the static selected row). `None` on
         // every ordinary run: the shaper flips exactly `overlay_selected`
-        // (byte-identical). Pane/flat pickers only — the theme faceted path
-        // never runs the probe, so it ignores this.
+        // (byte-identical). Threaded through BOTH the flat AND the FACETED path
+        // (the demo surface is the Cmd-P palette, which is faceted) so the ink
+        // rides the band wherever the fill animates it.
         covered: Option<&[usize]>,
     ) -> bool {
         // FACETED (lens-strip) pickers — the theme worlds AND the Cmd-P command
@@ -382,10 +383,12 @@ impl TextPipeline {
         // shaper, which also records the active-lens underline rect) PLUS, when the
         // picker fills a right column (chords / times / git), that column aligned to
         // the plan's item rows. `shape_faceted` owns both halves and returns whether
-        // a right column was built.
+        // a right column was built. It ALSO threads `covered` through to the
+        // section-grouped shaper, so the living-band ink flip works on the palette
+        // (the demo surface) exactly like the flat pickers.
         self.overlay_right_shown = false;
         if geom.theme {
-            return self.shape_faceted(geom, ink, muted, selected_ink);
+            return self.shape_faceted(geom, ink, muted, selected_ink, covered);
         }
         let visible = geom.visible;
         let top_idx = geom.top_idx;
@@ -536,6 +539,11 @@ impl TextPipeline {
         ink: glyphon::Color,
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
+        // ARM B LIVING-BAND PROBE — the DISPLAY (plan-line) rows the moving band
+        // covers this frame; their ink flips instead of the static selected item.
+        // `None` on every ordinary run → the theme shaper flips exactly the
+        // selected item (byte-identical).
+        covered: Option<&[usize]>,
     ) -> bool {
         // The dim RIGHT column: the SAME precedence the flat path uses (bindings →
         // times → git; only one is ever populated). Empty on the literal Theme
@@ -593,7 +601,7 @@ impl TextPipeline {
         };
         // The section-grouped name column + the active-lens underline (unchanged,
         // save the inline shortcuts composed onto the ITEM rows under hug bars).
-        self.overlay_shape_theme(geom, ink, muted, selected_ink, &trailing);
+        self.overlay_shape_theme(geom, ink, muted, selected_ink, covered, &trailing);
         if !has_right || hug_inline {
             return false;
         }
