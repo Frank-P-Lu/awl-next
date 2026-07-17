@@ -23,6 +23,7 @@ mod geometry;
 mod geometry_reshape;
 mod hud;
 mod images;
+mod list_surfaces;
 mod markdown;
 mod markdown_headings;
 mod nits;

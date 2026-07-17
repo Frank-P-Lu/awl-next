@@ -41,7 +41,29 @@ pub(in crate::render) const CARD_MAX_W_FACETED: f32 = 600.0;
 /// The QUERY-INPUT BEAT (item 4), as a fraction of the overlay row height — the
 /// clear breath between the input line and the first result row. A single dial
 /// the gallery A/Bs; see [`TextPipeline::overlay_header_gap`].
-const OVERLAY_QUERY_BEAT: f32 = 0.72;
+///
+/// REFIT (2026-07-16): the user found `0.72` still read cramped under the input
+/// box on EVERY picker (Pane and Bars alike). Widened to a clearly-breathing
+/// FULL row of air — the beat moves the candidate band AND the glyphs together
+/// by construction (the shaper inflates the last header line's real metrics by
+/// exactly this; the y-agreement law holds), so this is a pure taste dial with
+/// no alignment risk. LIVE-ONLY: whether the fuller beat reads right needs an eye.
+///
+/// THE ROUND'S ONE SHIPPED VISUAL CHANGE. This `0.72 -> 1.0` widening is a
+/// user-directed taste change that moves EVERY summoned picker's query line (and
+/// the whole candidate stack below it) down a fraction vs the `main` base — so
+/// byte-identity-vs-`main` is by design IMPOSSIBLE for any query-line surface,
+/// and the Persona-list inert guarantee is scoped to self-consistency + the
+/// model-level inert law instead (see `render/tests/list_surfaces.rs`'s module
+/// doc). NOTE the caret's y is NOT derived from this constant: it reads the
+/// query line's real shaped `line_height` (`overlay_place_caret`), so it tracks
+/// the glyphs through cosmic-text's half-leading whatever this dial is set to
+/// (the full-bleed caret bug this refit closed).
+const OVERLAY_QUERY_BEAT: f32 = 1.0;
+
+/// PER-ITEM LIST SURFACES round — the corner radius (device px) of the faceted
+/// strip's active [`theme::FacetStyle::Band`] pill. A single dial the gallery A/Bs.
+const FACET_CHIP_RADIUS: f32 = 6.0;
 
 /// The foot HINT row height (item 5), as a fraction of the overlay row height —
 /// a compact footer that hugs the card's bottom edge instead of floating a full
@@ -95,6 +117,15 @@ pub(in crate::render) fn overlay_card_box_policy(
                 .max(floor)
                 .min(free)
         }
+        // RIGHT-ANCHOR MIRROR: PLACEMENT mirrors `Inset { x_frac: 1.0 }` — the
+        // card's right edge one full inset in from the canvas right, collapsing
+        // toward the floor as the window tightens (the mirror of `TopLeft`). The
+        // MIRROR half (bar-growth direction) is a separate concern read via
+        // `CardAnchor::mirrors_growth`, not a placement change.
+        theme::CardAnchor::TopRight => {
+            let span = (ww - cw - 2.0 * full).max(0.0);
+            (full + span).min(anchored_max).max(floor).min(free)
+        }
     };
     (left, cw)
 }
@@ -113,6 +144,14 @@ pub(in crate::render) struct OverlayYProbe {
     pub caret_center: f32,
     /// The query line's own glyph TOP (absolute canvas y).
     pub query_line_top: f32,
+    /// The query line's ACTUAL shaped height (its first run's `line_height`) —
+    /// inflated by `header_gap` on the flat pickers, plain on the faceted ones.
+    /// The caret centre must ride THIS, not `lh` (the full-bleed caret bug).
+    pub query_line_height: f32,
+    /// The query line's BASELINE (absolute canvas y) — an INDEPENDENT witness of
+    /// where the glyphs sit, so the y-agreement law is not circular: the caret
+    /// centre must sit a sane, constant offset above this, not a half-beat high.
+    pub query_baseline: f32,
     /// Candidate-row index → the PRIMARY name's absolute glyph TOP.
     pub primary: std::collections::BTreeMap<usize, f32>,
     /// Candidate-row index → the SECONDARY label's absolute glyph TOP.
@@ -136,14 +175,49 @@ impl TextPipeline {
     /// reader shares — so shaping and geometry can never drift on the row size.
     pub(in crate::render) fn overlay_metrics(&self) -> GlyphMetrics {
         let m = self.metrics;
-        GlyphMetrics::new(m.font_size * OVERLAY_UI_SCALE, m.line_height * OVERLAY_UI_SCALE)
+        GlyphMetrics::new(
+            m.font_size * OVERLAY_UI_SCALE,
+            m.line_height * OVERLAY_UI_SCALE + self.overlay_row_gap(),
+        )
+    }
+
+    /// PER-ITEM LIST SURFACES round — the vertical GAP (device px) opened
+    /// between candidate rows under [`theme::ListStyle::Bars`]; `0.0` under
+    /// `Pane` (byte-identical). It is folded into the ONE overlay row-pitch
+    /// owner [`Self::overlay_lh`] (and thus into `overlay_metrics`), so the card
+    /// height, the shaped text spread, the selected band, and the pointer
+    /// hit-test all widen the row pitch TOGETHER — bars and text can never
+    /// disagree about a row's y (round A's y-agreement law holds by
+    /// construction). The bar surfaces then draw `lh - gap` tall, leaving the
+    /// gap as the space between them.
+    pub(in crate::render) fn overlay_row_gap(&self) -> f32 {
+        match crate::render::effective_list_style() {
+            theme::ListStyle::Bars { gap, .. } => gap.max(0.0),
+            theme::ListStyle::Pane => 0.0,
+        }
+    }
+
+    /// PER-ITEM LIST SURFACES round — the horizontal inset (device px) the row
+    /// TEXT column holds from the layout bound (`card_x` .. `card_x + card_w`).
+    /// `Pane` keeps the historical `12` pad (byte-identical). `Bars` insets
+    /// `BAR_SIDE_INSET + BAR_TEXT_PAD` so the glyphs sit a comfortable pad INSIDE
+    /// each bar's edge (the user's "bar text needs real left padding" refit),
+    /// symmetric so the secondary chord column mirrors it inside the bar's right
+    /// edge. The ONE owner both `overlay_geometry` and `theme_overlay_geometry`
+    /// read for `text_left`/`text_w`, so shaping, hit-test, caret, and the
+    /// right-aligned chords all inset together.
+    pub(in crate::render) fn overlay_text_hpad(&self) -> f32 {
+        match crate::render::effective_list_style() {
+            theme::ListStyle::Bars { .. } => BAR_SIDE_INSET + BAR_TEXT_PAD,
+            theme::ListStyle::Pane => 12.0,
+        }
     }
 
     /// The overlay row LINE HEIGHT — the single-owner metric the card height, the
     /// row-Y ([`overlay_row_top`]), the hit-test ([`overlay_row_of`]), and the
     /// selected-row band all read, so a click always lands on the row it highlights.
     pub(in crate::render) fn overlay_lh(&self) -> f32 {
-        self.metrics.line_height * OVERLAY_UI_SCALE
+        self.metrics.line_height * OVERLAY_UI_SCALE + self.overlay_row_gap()
     }
 
     /// THE ONE OWNER of the summoned takeover card's horizontal BOX — its
@@ -257,15 +331,19 @@ impl TextPipeline {
         // true 1-bit world (`HighlightTreatment::InverseFill`) — black on the
         // white band — so they land crisp instead of the gamma-grey a
         // framebuffer invert of the antialiased row text produced (see that
-        // variant's doc). `None` on every ordinary (`ValueBand`) world, where
-        // the selected row keeps its content ink on the value band — the
-        // shaper then stays byte-identical. Read from the SAME owner
-        // (`highlight_treatment`) `overlay_draw_card` fills the band from.
-        let selected_ink = match theme::active()
-            .highlight_treatment(crate::render::effective_overlay_selrow_band())
-        {
+        // variant's doc). On an ordinary (`ValueBand`) world the row normally
+        // keeps its content ink (`None`, byte-identical), but when the value band
+        // washes that ink out (`theme::selected_row_ink` — the InverseFill lesson
+        // for fill worlds; Undertow-under-Bars was the 2.53:1 exhibit) the ONE
+        // derive owner flips it to the reading pole and the shaper recolors the
+        // selected row to match. Read from the SAME band `overlay_draw_card` fills.
+        let sel_band = crate::render::effective_overlay_selrow_band();
+        let selected_ink = match theme::active().highlight_treatment(sel_band) {
             theme::HighlightTreatment::InverseFill { ink, .. } => Some(ink.to_glyphon()),
-            theme::HighlightTreatment::ValueBand(_) => None,
+            theme::HighlightTreatment::ValueBand(band) => {
+                let flipped = theme::selected_row_ink(band);
+                (flipped != theme::base_content()).then(|| flipped.to_glyphon())
+            }
         };
         let has_right = self.overlay_shape_text(&geom, ink, muted, selected_ink);
         self.overlay_upload_text(
@@ -304,12 +382,32 @@ impl TextPipeline {
         self.panel_shadow.prepare(device, queue, width, height, &[]);
         self.panel_border.prepare(device, queue, width, height, &[]);
         self.overlay_rows.prepare(device, queue, width, height, &[]);
+        // PER-ITEM LIST SURFACES: the bar surfaces park empty too, so a closed
+        // picker carries no stale bar quads into the next frame.
+        self.overlay_bars.prepare(device, queue, width, height, &[]);
         self.overlay_lens_underline
+            .prepare(device, queue, width, height, &[]);
+        // V6 P5: the Chips ghost pills park empty too, so a closed picker carries
+        // no stale ghost-pill quads into the next frame.
+        self.overlay_facet_ghost
             .prepare(device, queue, width, height, &[]);
         // The stipple placard: parked (zero instances) — the frame after a
         // stipple-world overlay closes carries zero stale wordmark pixels.
         self.placard_stipple
             .prepare(device, queue, width, height, &[]);
+        // The Bars behind-the-bars placard pass: parked (no areas) so a closed
+        // picker carries no stale wordmark into the next frame.
+        self.placard_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                Vec::<TextArea>::new(),
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon placard park failed: {e:?}"))?;
         // The amber query caret: parked (nothing drawn).
         self.panel_caret.prepare_empty();
         // The overlay TEXT renderer: shape an EMPTY buffer off-screen and prepare
@@ -429,17 +527,32 @@ impl TextPipeline {
             }
         }
         let strip_underline_y = self.overlay_theme_underline.map(|q| q[1]);
+        // The query line's OWN shaped run — the SAME first run the render path
+        // reads for the caret's y and x. Its `line_height` is inflated by
+        // `header_gap` on the flat pickers; `line_y` is its baseline.
+        let query_run = self.panel_buffer.layout_runs().next();
+        let query_line_height = query_run
+            .as_ref()
+            .map(|r| r.line_height)
+            .unwrap_or_else(|| self.overlay_lh());
+        let query_line_top = query_run
+            .as_ref()
+            .map(|r| geom.text_top + r.line_top)
+            .unwrap_or(geom.text_top);
+        let query_baseline = query_run
+            .as_ref()
+            .map(|r| geom.text_top + r.line_y)
+            .unwrap_or(geom.text_top);
         OverlayYProbe {
             lh,
             band_top,
             sel_disp,
-            caret_center: overlay_query_center(geom.text_top, lh),
-            query_line_top: self
-                .panel_buffer
-                .layout_runs()
-                .next()
-                .map(|r| geom.text_top + r.line_top)
-                .unwrap_or(geom.text_top),
+            // Mirror the render path EXACTLY: the caret centres on the query
+            // line's real shaped height, not the bare `lh`.
+            caret_center: overlay_query_center(geom.text_top, query_line_height),
+            query_line_top,
+            query_line_height,
+            query_baseline,
             primary,
             secondary,
             strip_baseline,
@@ -553,7 +666,12 @@ impl TextPipeline {
         // narrows the width only in the fill regime, so the text column can
         // never starve.
         let (card_x, card_w) = self.overlay_card_box(width, CARD_MAX_W);
-        let text_w = card_w - 2.0 * pad;
+        // Horizontal text inset is list-style aware (`Bars` pads the glyphs inside
+        // each bar's edge — the ONE owner `overlay_text_hpad`); vertical padding
+        // stays `pad` (12) so the card height math is untouched. `Pane` keeps
+        // `hpad == pad`, byte-identical.
+        let hpad = self.overlay_text_hpad();
+        let text_w = card_w - 2.0 * hpad;
         // The header gap adds to the card height alongside the row stack + padding,
         // so the card still FITS its content exactly (bottom padding == `pad`). The
         // foot hint (item 5) rides a SHORTER line, so reclaim `lh - hint_h` per
@@ -573,7 +691,7 @@ impl TextPipeline {
         // BEFORE `text_top`, so the card quad, rows, band, caret, and
         // hit-tests all ride the spring together through this ONE geometry.
         let card_y = margin + 40.0 + self.menubar_reserve() + self.overlay_entrance_offset();
-        let text_left = card_x + pad;
+        let text_left = card_x + hpad;
         let text_top = card_y + pad;
         OverlayGeom {
             visible,
@@ -932,30 +1050,67 @@ impl TextPipeline {
             default_color: ink,
             custom_glyphs: &[],
         };
-        // The placard wordmark is FIRST in the batch (drawn behind everything
-        // that follows), clipped to the WHOLE CANVAS — a screen-corner
-        // watermark that bleeds OVER the scrim behind the card (never the
-        // tighter card/text rect), per `overlay_shape_placard`'s doc. It is
-        // still uploaded first, so the rows composite over it, and it rides
-        // the text pass (above the scrim quad) so the dimmed document below
-        // still shows through.
+        // DESIGNER PIXEL-PASS FIX (2026-07-16) — the placard's DRAW SLOT depends on
+        // the list style. Under `Bars` it must sit BEHIND the bar quads, so it rides
+        // its own `placard_renderer` pass (run between the room veil and the bars in
+        // `draw_overlay_card`); under `Pane` it stays FIRST-in-batch in
+        // `panel_renderer` below (drawn behind the rows, over the opaque card — the
+        // byte-identical historical slot). The dedicated pass is prepared empty
+        // whenever it is not used, so a stale wordmark never lingers.
+        let bars = matches!(
+            crate::render::effective_list_style(),
+            theme::ListStyle::Bars { .. }
+        );
+        let canvas_bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
+        {
+            let placard_pass: Vec<TextArea> = match placard {
+                Some((px, py, _pw, _ph)) if bars => vec![TextArea {
+                    buffer: &self.placard_buffer,
+                    left: px,
+                    top: py,
+                    scale: 1.0,
+                    bounds: canvas_bounds,
+                    default_color: ink,
+                    custom_glyphs: &[],
+                }],
+                _ => Vec::new(),
+            };
+            self.placard_renderer
+                .prepare(
+                    device,
+                    queue,
+                    &mut self.font_system,
+                    &mut self.atlas,
+                    &self.viewport,
+                    placard_pass,
+                    &mut self.swash_cache,
+                )
+                .map_err(|e| anyhow::anyhow!("glyphon placard prepare failed: {e:?}"))?;
+        }
+        // The placard wordmark is FIRST in the panel batch under `Pane` (drawn
+        // behind everything that follows), clipped to the WHOLE CANVAS — a
+        // screen-corner watermark that bleeds OVER the scrim behind the card
+        // (never the tighter card/text rect), per `overlay_shape_placard`'s doc.
+        // Under `Bars` it was uploaded to `placard_renderer` above instead, so it
+        // is withheld here.
         let mut areas: Vec<TextArea> = Vec::new();
         if let Some((px, py, _pw, _ph)) = placard {
-            let canvas_bounds = TextBounds {
-                left: 0,
-                top: 0,
-                right: width as i32,
-                bottom: height as i32,
-            };
-            areas.push(TextArea {
-                buffer: &self.placard_buffer,
-                left: px,
-                top: py,
-                scale: 1.0,
-                bounds: canvas_bounds,
-                default_color: ink,
-                custom_glyphs: &[],
-            });
+            if !bars {
+                areas.push(TextArea {
+                    buffer: &self.placard_buffer,
+                    left: px,
+                    top: py,
+                    scale: 1.0,
+                    bounds: canvas_bounds,
+                    default_color: ink,
+                    custom_glyphs: &[],
+                });
+            }
         }
         // WILD-MENU SLANT PROBE (env-gated; `None` on every normal run, which
         // keeps the single verbatim `panel_area` push below — byte-identical):
@@ -1078,11 +1233,59 @@ impl TextPipeline {
         geom: &OverlayGeom,
     ) {
         let lh = self.overlay_lh();
+        let list_style = crate::render::effective_list_style();
         let card_rect = [geom.card_x, geom.card_y, geom.card_w, geom.card_h];
         if self.overlay_spell.is_some() {
             // Contextual spell panel: elevate on the float primitive, no flat card.
             self.prepare_float_panel(device, queue, width, height, Some(card_rect));
             self.panel_card.prepare(device, queue, width, height, &[]);
+            self.panel_shadow.prepare(device, queue, width, height, &[]);
+            self.panel_border.prepare(device, queue, width, height, &[]);
+        } else if matches!(list_style, theme::ListStyle::Bars { .. }) {
+            // PER-ITEM LIST SURFACES round — BARS DROP THE PANE (the user's refit:
+            // "with the bars, there shouldn't be a pane!"). No boxed card (no
+            // border, no shadow, no bright `base_300` fill) — the bars, title,
+            // query, strip and hint float in the Persona ROOM: bars sit ON the
+            // room, not IN a box.
+            //
+            // DESIGNER PIXEL-PASS FIX (2026-07-16, the "gap comb seam"): the theme
+            // picker is CRISP (no blur, no scrim — the doc stays bright so the live
+            // theme preview reads honestly), so with the box gone the RAW document
+            // showed through every gap between bars — its page-margin band on the
+            // left meeting the writing column mid-gap made a hard vertical seam
+            // repeated down the whole list. The room was never actually a room. So
+            // Bars lays a UNIFORM full-canvas value VEIL of the world's own ground
+            // (`base_100` at part alpha — a scrim, never a bordered box): it pulls
+            // the document a value back into one calm plane, killing the comb seam
+            // and the left-overhang stub in one stroke, while a hint of the
+            // re-tinted ground still ghosts through so the theme preview survives.
+            // The shadow/border stay empty (no elevation — it is a room, not a
+            // card). Drawn FIRST in `draw_overlay_card`, so the placard watermark,
+            // the bars, and the row text all composite over it.
+            self.panel_card.set_corner(0.0);
+            self.panel_card
+                .set_color(theme::overlay_bars_room().rgba_bytes());
+            // BLEED the room plane past ALL FOUR canvas edges. The panel quad
+            // pipeline feathers a ~1px antialiased edge (`selection.wgsl`'s
+            // `smoothstep(-1, 1, d)`), so a plane sized flush to `[0, 0, w, h]`
+            // left the FIRST pixel row (centre 0.5px inside the top edge) only
+            // ~84% covered — the calm ground showed a 1px LIGHTER seam along
+            // y = 0 (the designer's first-scanline nit). Growing the rect
+            // `ROOM_BLEED` px on every side pushes the whole feather off-screen,
+            // so every on-canvas pixel sits fully inside the plane (`d < -1`).
+            const ROOM_BLEED: f32 = 2.0;
+            self.panel_card.prepare(
+                device,
+                queue,
+                width,
+                height,
+                &[[
+                    -ROOM_BLEED,
+                    -ROOM_BLEED,
+                    width as f32 + 2.0 * ROOM_BLEED,
+                    height as f32 + 2.0 * ROOM_BLEED,
+                ]],
+            );
             self.panel_shadow.prepare(device, queue, width, height, &[]);
             self.panel_border.prepare(device, queue, width, height, &[]);
         } else {
@@ -1147,36 +1350,221 @@ impl TextPipeline {
                     .min(geom.visible.saturating_sub(1)),
             )
         };
-        let sel_rects: Vec<[f32; 4]> = match sel_disp {
-            None => Vec::new(),
-            Some(disp) => {
-                let target =
-                    overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, disp, lh);
-                // MOTION-JUICE BAND SLIDE (live-only; returns `target` verbatim
-                // on every Snap world / capture / Reduce Motion — see
-                // `overlay_band_drawn`'s doc). Purely visual: the shaped rows
-                // and the hit-test read the settled geometry.
-                let row_top = self.overlay_band_drawn(target);
-                // WILD-MENU SLANT PROBE (env-gated, `None` on every normal
-                // run): the band's left edge follows the selected row's own
-                // stair offset so the highlight hugs its slanted row.
-                let dx = crate::render::overlay_slant()
-                    .map(|s| crate::render::slant_offset(&s, disp))
-                    .unwrap_or(0.0);
-                vec![[geom.card_x + dx, row_top, geom.card_w - dx, lh]]
+        // PER-ITEM LIST SURFACES round: `Pane` (default) draws the byte-identical
+        // full-width selected BAND; `Bars` gives each candidate row its own
+        // rounded surface (unselected → `overlay_bars`, quiet; selected →
+        // `overlay_rows`, brighter + `grow_px` wider) with the gap already folded
+        // into `lh`. The row-y owner `overlay_row_top` feeds BOTH so bars and text
+        // agree on every row; the hit-test rides the same `lh`, so a click in a
+        // gap maps to the nearest row (no dead zones).
+        // `list_style` computed once at the top of this fn (drives the pane-drop).
+        let mirror = crate::render::effective_card_anchor().mirrors_growth();
+        // The selected row's drawn TOP, through the ONE row-y owner + the live-only
+        // band slide (verbatim `target` in capture / Snap worlds). Computed ONCE
+        // here so the animator runs once and both list styles read the same y.
+        let sel_top: Option<f32> = sel_disp.map(|disp| {
+            let target =
+                overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, disp, lh);
+            self.overlay_band_drawn(target)
+        });
+        let (sel_rects, bar_rects): (Vec<[f32; 4]>, Vec<[f32; 4]>) = match list_style {
+            theme::ListStyle::Pane => {
+                let rects = match (sel_disp, sel_top) {
+                    (Some(disp), Some(top)) => {
+                        // WILD-MENU SLANT PROBE (env-gated, `None` on every normal
+                        // run): the band's left edge follows the selected row's own
+                        // stair offset so the highlight hugs its slanted row.
+                        let dx = crate::render::overlay_slant()
+                            .map(|s| crate::render::slant_offset(&s, disp))
+                            .unwrap_or(0.0);
+                        vec![[geom.card_x + dx, top, geom.card_w - dx, lh]]
+                    }
+                    _ => Vec::new(),
+                };
+                (rects, Vec::new())
+            }
+            theme::ListStyle::Bars { radius, gap, grow_px, extent, coverage } => {
+                let r = radius.max(0.0);
+                let g = gap.max(0.0);
+                let bar_h = (lh - g).max(1.0);
+                // V6 P5 HugText — per-row primary widths, measured from the
+                // just-shaped name buffer (read before the &mut pipeline calls
+                // below). Under HugText a row's shortcut is composed INLINE into
+                // its own name line (V7 taste-gate — see `overlay_shape_text`), so
+                // this width already includes any trailing shortcut and the bar
+                // hugs the whole content. Only consulted under `HugText`.
+                let hug = matches!(extent, theme::BarExtent::HugText);
+                let primary_px = if hug {
+                    self.overlay_row_primary_px(geom)
+                } else {
+                    std::collections::BTreeMap::new()
+                };
+                // V6 P5 [`theme::BarExtent::HugText`] — the natural `(x, w)` span
+                // for a display row: full-width, or hugging the row's own content
+                // (label + inline shortcut) + a symmetric pad. EVERY row hugs; the
+                // rag derives from content length only (V7 taste-gate).
+                let span_of = |k: usize| -> (f32, f32) {
+                    if hug {
+                        super::bar_hug_span(
+                            geom.card_x,
+                            geom.card_w,
+                            geom.text_left,
+                            primary_px.get(&k).copied().unwrap_or(0.0),
+                        )
+                    } else {
+                        super::bar_full_span(geom.card_x, geom.card_w)
+                    }
+                };
+                let bar_off = g * 0.5;
+                // Both bar pipelines round to the world's radius (0 = sharp
+                // P4-Status bars, large = Velvet capsules). Bars are always FILLED
+                // (the V7 taste-gate dropped the outline-fill axis — the rim read
+                // as a focus ring, not a Persona ledge).
+                self.overlay_rows.set_corner(r);
+                self.overlay_bars.set_corner(r);
+                self.overlay_rows.set_stroke(0.0);
+                self.overlay_bars.set_stroke(0.0);
+                // Unselected bars: a QUIET rung one step above the card
+                // (`overlay_bar_unselected`, steps `1`) — deliberately well below
+                // the selected bar's band (`overlay_selected_band`, steps `3`), so
+                // the selected bar leads by a ~2-step VALUE gap (an obvious glance,
+                // never a hue — DESIGN §3). The old `surface_selected` (steps `2`)
+                // sat one lone step under the selected band and read as barely
+                // distinct on saturated worlds (the Kingfisher/Saltpan defect).
+                self.overlay_bars
+                    .set_color(theme::overlay_bar_unselected().rgba_bytes());
+                // The DISPLAY rows that get a bar: every drawn ITEM row (the theme
+                // picker's section-HEADER lines get none — a header is a label).
+                let item_rows: Vec<usize> = if geom.theme {
+                    geom.plan
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(k, l)| matches!(l, ThemeLine::Item(_)).then_some(k))
+                        .collect()
+                } else {
+                    (0..geom.visible).collect()
+                };
+                // V6 P5 [`theme::BarCoverage::SelectedOnly`] — unselected rows
+                // render as BARE floating text on the room (the P5 settings-screen
+                // look): no unselected bars at all. `All` (v5) gives every row a
+                // surface. The footer plate below is pushed regardless (it guards
+                // the hint over the placard, not a per-row affordance).
+                let mut unsel: Vec<[f32; 4]> = match coverage {
+                    theme::BarCoverage::SelectedOnly => Vec::new(),
+                    theme::BarCoverage::All => item_rows
+                        .iter()
+                        .copied()
+                        .filter(|k| Some(*k) != sel_disp)
+                        .map(|k| {
+                            let top = overlay_row_top(
+                                geom.text_top,
+                                geom.header_rows,
+                                geom.header_gap,
+                                k,
+                                lh,
+                            );
+                            let (x, w) = span_of(k);
+                            [x, top + bar_off, w, bar_h]
+                        })
+                        .collect(),
+                };
+                // THE FOOTER-OVER-POSTER GUARANTEE (taste-gate finding): under
+                // Bars the pane is dropped, so a giant corner PLACARD bleeds up
+                // behind the dim foot-hint / keybindings-tips footer and the muted
+                // glyphs drown in the poster letters. Lay an opaque whisper-value
+                // plate over that zone (same `overlay_bars` z-slot — over the
+                // placard, under the text) so the footer keeps its designed
+                // ground. Only when the picker HAS a footer (`hint`/`tips`);
+                // shares the ONE `overlay_row_top` owner via `footer_plate_rect`.
+                if geom.hint_rows + geom.footer_rows > 0 {
+                    let content_rows = if geom.theme {
+                        geom.plan.len()
+                    } else {
+                        geom.visible + geom.empty.is_some() as usize
+                    };
+                    // V8 — under HUG bars the footer plate hugs its own content
+                    // (same padding rule as the rows), so it never reads as a lone
+                    // full-width plate stretched under the ragged pills. Measured
+                    // from the SAME just-shaped `panel_buffer` as the row widths
+                    // (read before the &mut prepare calls below, like `primary_px`).
+                    let footer_hug = hug.then(|| {
+                        (geom.text_left, self.overlay_footer_content_px(geom, content_rows))
+                    });
+                    unsel.push(super::footer_plate_rect(
+                        geom.text_top,
+                        geom.header_rows,
+                        geom.header_gap,
+                        content_rows,
+                        lh,
+                        geom.card_x,
+                        geom.card_w,
+                        geom.card_y + geom.card_h,
+                        footer_hug,
+                    ));
+                }
+                // The SELECTED bar: its natural span (full or hugged), grown
+                // `grow_px` toward the open margin — RIGHT by default, mirrored
+                // LEFT under a right-anchored (`TopRight`) card. `grow_span` is the
+                // ONE pure owner shared with the full-width `bar_rect_selected`.
+                let sel = match (sel_disp, sel_top) {
+                    (Some(disp), Some(top)) => {
+                        let (bx, bw) = span_of(disp);
+                        let (x, w) = super::grow_span(bx, bw, grow_px, mirror);
+                        vec![[x, top + bar_off, w.max(1.0), bar_h]]
+                    }
+                    _ => Vec::new(),
+                };
+                (sel, unsel)
             }
         };
+        self.overlay_bars
+            .prepare(device, queue, width, height, &bar_rects);
         self.overlay_rows
             .prepare(device, queue, width, height, &sel_rects);
-        // THEME PICKER active-lens underline: the rect the shaper recorded; a non-theme
-        // card parks it empty (so a stale rect from a prior theme picker never lingers).
+        // FACETED STRIP active-lens mark: the rect the shaper recorded (its SHAPE
+        // set by `facet_style` — hairline underline / band / active chip); a
+        // non-theme card parks it empty (so a stale rect never lingers).
         let underline: Vec<[f32; 4]> = if geom.theme {
             self.overlay_theme_underline.iter().copied().collect()
         } else {
             Vec::new()
         };
+        // PER-ITEM LIST SURFACES round: `Text` (default) keeps the content-ink
+        // hairline byte-identically; `Band` recolors the ACTIVE mark to the
+        // selected-row band VALUE (never amber) and rounds it into a pill.
+        // V6 P5 [`theme::FacetStyle::Chips`] — REAL chips (third attempt): the
+        // ACTIVE label rides `overlay_lens_underline` as a FILLED value pill
+        // (same as `Band`), and EACH INACTIVE label draws a GHOST pill — a MUTED
+        // hairline STROKE — via `overlay_facet_ghost`. Both are recorded from the
+        // SAME shaped strip glyphs (in `overlay_shape_theme`), so the skin can't
+        // disagree with the hit-test.
+        let facet_style = crate::render::effective_facet_style();
+        // The inactive ghost pills (empty unless Chips on a theme card).
+        let mut ghosts: Vec<[f32; 4]> = Vec::new();
+        match facet_style {
+            theme::FacetStyle::Text => {}
+            theme::FacetStyle::Band | theme::FacetStyle::Chips => {
+                let band = match theme::active()
+                    .highlight_treatment(crate::render::effective_overlay_selrow_band())
+                {
+                    theme::HighlightTreatment::ValueBand(c) => c,
+                    theme::HighlightTreatment::InverseFill { band, .. } => band,
+                };
+                self.overlay_lens_underline.set_color(band.rgba_bytes());
+                self.overlay_lens_underline.set_corner(FACET_CHIP_RADIUS);
+                if matches!(facet_style, theme::FacetStyle::Chips) && geom.theme {
+                    ghosts = self.overlay_theme_facet_ghosts.clone();
+                }
+            }
+        }
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &underline);
+        // The Chips ghost pills: a muted hairline stroke pill per inactive facet.
+        self.overlay_facet_ghost.set_corner(FACET_CHIP_RADIUS);
+        self.overlay_facet_ghost
+            .set_stroke(crate::render::BAR_OUTLINE_STROKE_PX);
+        self.overlay_facet_ghost
+            .prepare(device, queue, width, height, &ghosts);
     }
 
     /// Place the one amber caret: a resting block at the end of the query line. Read
@@ -1215,11 +1603,26 @@ impl TextPipeline {
         // height, centered on the query line's own (UI-height) band.
         let caret_h = m.caret_h * 0.8 * OVERLAY_UI_SCALE;
         let caret_cx = caret_x + m.caret_w * 0.5;
-        // The caret rides the QUERY line through the shared owner (never its own
-        // y math): the query sits at `text_top`, above the header gap, so the
-        // caret takes no candidate-row shift — it stays on the query baseline in
-        // both the flat and faceted pickers.
-        let caret_cy = overlay_query_center(geom.text_top, self.overlay_lh());
+        // The caret rides the QUERY line through the SAME layout the query TEXT
+        // does — its first shaped run's own `line_height`, NOT the bare
+        // `overlay_lh()`. The FLAT pickers inflate the query line's height by
+        // `header_gap` to open the beat before the candidates (`shape_overlay_names`),
+        // and cosmic-text HALF-LEADS the glyphs — it centres them in that taller
+        // line rather than pinning them to the top. So the query text drops by
+        // `header_gap * 0.5`; a caret pinned to `overlay_lh() * 0.5` floated a full
+        // half-beat ABOVE it (the full-bleed caret bug — visible on `Bars`, where
+        // no card frames the mismatch, and present-but-masked on `Pane`). Reading
+        // the run's real `line_height` reproduces the known-good faceted offset
+        // (the caret centre lands a constant ~1/3-row above the baseline) in BOTH
+        // paths, since the faceted query line is NOT inflated (its beat rides the
+        // strip). Fallback to `overlay_lh()` only if shaping yielded no run.
+        let query_line_height = self
+            .panel_buffer
+            .layout_runs()
+            .next()
+            .map(|r| r.line_height)
+            .unwrap_or_else(|| self.overlay_lh());
+        let caret_cy = overlay_query_center(geom.text_top, query_line_height);
         self.panel_caret.prepare(
             queue,
             width,

@@ -52,8 +52,11 @@ pub(crate) use cjk::EMBEDDED_CJK_FAMILIES;
 pub use color::Srgb;
 pub use derive::{
     active, active_index, background, base_100, base_200, base_300, base_content, error, faint,
-    image_reveal_scrim, muted, overlay_selected_band, page_frame_ink, placard_ink,
-    placard_stipple_density, primary, selection, set_active, set_active_by_name, surface_selected,
+    image_reveal_scrim, muted, overlay_bar_unselected, overlay_bars_room, overlay_selected_band,
+    page_frame_ink,
+    placard_ink,
+    placard_stipple_density, primary, selected_row_ink, selection, set_active, set_active_by_name,
+    surface_selected,
 };
 #[allow(unused_imports)] // cycle/overlay_scrim/primary_content/tag_for: public API
 // surface, no NON-TEST in-crate caller today (tag_for's real callers all live
@@ -70,9 +73,10 @@ pub use model::{Lens, RoleOverrides, ThemeTags};
 // bundle type + one field's enum); every non-test in-crate caller today reaches
 // them through `Theme::render_caps.<field>` rather than this bare re-export.
 pub use model::{
-    Backdrop, BandResponse, CardAnchor, CaretBlockStyle, ChromeFace, DecorativeWash, Elevation,
-    HighlightTexture, HighlightTreatment, ImageReveal, MotionJuice, OverlayEntrance, PageFrame,
-    PlacardCorner, PlacardInk, RenderCaps, SelectionStyle, TitleStyle,
+    Backdrop, BandResponse, BarCoverage, BarExtent, CardAnchor, CaretBlockStyle,
+    ChromeFace, DecorativeWash, Elevation, FacetStyle, HighlightTexture, HighlightTreatment,
+    ImageReveal, ListStyle, MotionJuice, OverlayEntrance, PageFrame, PlacardCorner, PlacardInk,
+    RenderCaps, SelectionStyle, TitleStyle,
 };
 #[allow(unused_imports)] // the per-world ornament/bullet data: public API
 // surface, no NON-TEST in-crate caller today.

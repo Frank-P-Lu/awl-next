@@ -10,8 +10,9 @@ use super::cjk::{
 use super::color::Srgb;
 use super::model::{
     Backdrop, Background, CardAnchor, CaretBlockStyle, ChromeFace, DecorativeWash, Elevation,
-    HighlightTexture, ImageReveal, LavaEdge, MotionJuice, PageFrame, PlacardCorner, PlacardInk,
-    RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags, TitleStyle, WashOverride,
+    FacetStyle, HighlightTexture, ImageReveal, LavaEdge, ListStyle, MotionJuice, PageFrame,
+    PlacardCorner, PlacardInk, RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags,
+    TitleStyle, WashOverride,
 };
 use super::ornament::{
     Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, ORNAMENT_GARAMOND,
@@ -1044,6 +1045,11 @@ pub const WAGTAIL: Theme = Theme {
         // motion (the no-personality statement, again).
         chrome_face: ChromeFace::Body,
         motion: MotionJuice::CALM,
+        // PER-ITEM LIST SURFACES round: the silent pole keeps the single Pane +
+        // plain-text strip — bars/chips would be personality. Listed explicitly
+        // because this literal names every field (no `..DEFAULT` spread).
+        list_style: ListStyle::Pane,
+        facet_style: FacetStyle::Text,
     },
 };
 

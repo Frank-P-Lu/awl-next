@@ -52,6 +52,87 @@ fn overlay_selected_band_is_a_stronger_value_step_never_a_hue() {
     set_active(DEFAULT_THEME);
 }
 
+/// PER-ITEM LIST SURFACES round (2026-07-16 REFIT) — the OBVIOUS-GLANCE law at
+/// the derivation level, covering EVERY world (the pixel test
+/// `bars_draw_a_findable_surface_per_row` only exercises the headless default
+/// theme). Under [`ListStyle::Bars`] the PANE is dropped — the bars float on the
+/// GROUND (`base_100`, the scrim/room), not in a card. So the reference is the
+/// GROUND, not the vanished card: the unselected bar ([`overlay_bar_unselected`]
+/// == `base_200`) is a WHISPER one gentle step off the ground in the ramp's own
+/// direction, and the selected bar's band ([`overlay_selected_band`]) sits
+/// further up still — AND the selected↔unselected value step is at least as large
+/// as the unselected↔ground step, so the selected bar's pop leads its whisper
+/// neighbours at least as strongly as a whisper leads the bare ground. The user's
+/// rejected first cut inverted the taste (unselected == a saturated rung under the
+/// selected band — "a picket fence where every row shouts"); the whisper gives the
+/// selection somewhere to go. Value only, never a hue. One-bit worlds are exempt
+/// (a collapsed ramp draws its selected row via `InverseFill`; bars are inert).
+#[test]
+fn bars_unselected_sits_a_quiet_rung_below_the_selected_band() {
+    let _g = crate::testlock::serial();
+    // Local redmean (perceptual distance) — the same shape the distinguishability
+    // sweeps carry, nested per-test like this file's other color laws.
+    fn redmean(a: Srgb, b: Srgb) -> f32 {
+        let rbar = (a.r as f32 + b.r as f32) * 0.5;
+        let dr = a.r as f32 - b.r as f32;
+        let dg = a.g as f32 - b.g as f32;
+        let db = a.b as f32 - b.b as f32;
+        ((2.0 + rbar / 256.0) * dr * dr + 4.0 * dg * dg + (2.0 + (255.0 - rbar) / 256.0) * db * db)
+            .sqrt()
+    }
+    for t in THEMES.iter() {
+        set_active_by_name(t.name).unwrap();
+        if t.is_one_bit() {
+            // Collapsed ramp: `surface_step_band` folds every step to the ink
+            // pole, so the ordering degenerates by design — the selected row is
+            // drawn by `InverseFill`, not this fill. Declared exemption.
+            continue;
+        }
+        // The GROUND the bars float on now the pane is dropped (base_100), the
+        // reference the old card (base_300) used to be.
+        let ground = t.base_100;
+        let unsel = overlay_bar_unselected();
+        let sel = overlay_selected_band();
+        // Per channel: `unsel` moves in the ramp direction from the GROUND (a
+        // whisper), and `sel` moves at least as far again (whisper strictly between
+        // ground and selected in the ramp's own direction, value-only — no hue).
+        let chans = [
+            (ground.r, unsel.r, sel.r),
+            (ground.g, unsel.g, sel.g),
+            (ground.b, unsel.b, sel.b),
+        ];
+        // The overall ramp direction (base_200 -> base_300 carries it onward; the
+        // monotone surface ladder makes this the base_100 -> base_200 step's sign too).
+        let dir = [
+            (t.base_300.r as i32 - t.base_200.r as i32).signum(),
+            (t.base_300.g as i32 - t.base_200.g as i32).signum(),
+            (t.base_300.b as i32 - t.base_200.b as i32).signum(),
+        ];
+        for (i, (c, u, s)) in chans.iter().copied().enumerate() {
+            let d = dir[i];
+            let unsel_step = (u as i32 - c as i32) * d;
+            let sel_step = (s as i32 - c as i32) * d;
+            assert!(unsel_step >= 0, "{}: unselected whisper lifts off the ground in the ramp direction", t.name);
+            assert!(
+                sel_step >= unsel_step,
+                "{}: selected band ({s}) must sit at least as far up the ramp as the unselected whisper ({u}) from the ground ({c})",
+                t.name
+            );
+        }
+        // The OBVIOUS-GLANCE law (redmean): the selected↔unselected step reads at
+        // least as strong as the unselected↔ground step — selection's pop leads its
+        // whisper neighbours at least as much as a whisper leads the bare ground.
+        let d_sel = redmean(sel, unsel);
+        let d_bar = redmean(unsel, ground);
+        assert!(
+            d_sel >= d_bar,
+            "{}: selected bar {sel:?} must lead the unselected whisper {unsel:?} (redmean {d_sel:.1}) at least as much as the whisper leads the ground {ground:?} (redmean {d_bar:.1})",
+            t.name
+        );
+    }
+    set_active(DEFAULT_THEME);
+}
+
 
 #[test]
 fn worlds_ten_dark_six_light() {
@@ -1788,6 +1869,10 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 // INERT on every world — the silent pole included.
                 chrome_face: model::ChromeFace::Body,
                 motion: model::MotionJuice::CALM,
+                // PER-ITEM LIST SURFACES round: both new dials landed INERT on
+                // every world — the silent pole included.
+                list_style: model::ListStyle::Pane,
+                facet_style: model::FacetStyle::Text,
             },
             // LIGHT-WORLD BORDER (composition round item 6): the four remaining
             // pale-ground worlds gain the summoned-card border, DATA-only.

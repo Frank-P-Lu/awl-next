@@ -274,6 +274,59 @@ fn check_color_math(th: &theme::Theme, s: Surface, floor: f32) {
     }
 }
 
+/// WCAG relative-contrast ratio between two opaque colors, gamma-correct
+/// Rec.709 (the same recipe `theme::derive::contrast_ratio` uses at runtime and
+/// `syntax_roles.rs` uses for its role floors).
+fn wcag_contrast(a: theme::Srgb, b: theme::Srgb) -> f32 {
+    fn rel_lum(c: theme::Srgb) -> f32 {
+        fn lin(u: u8) -> f32 {
+            let s = u as f32 / 255.0;
+            if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        }
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    let (la, lb) = (rel_lum(a), rel_lum(b));
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// LAW (born from the Undertow-under-Bars taste-gate defect): the selected
+/// picker row's TEXT must clear a 3:1 contrast against its own selected-row
+/// value band on EVERY world. The band under [`theme::ListStyle::Bars`] is the
+/// world's `effective_overlay_selrow_band` (identical to the Pane band — Bars
+/// only drops the pane and widens the bar, not the fill VALUE), so a pass here
+/// covers both list styles. The exhibit: Undertow rendered light ink
+/// (236,232,242) on a mid sage band (132,152,144) = 2.53:1, washing out; the fix
+/// is `theme::selected_row_ink`, the ONE derive owner that flips the row's ink
+/// to the reading pole when `base_content` fails. NO-WILDCARD over
+/// `HighlightTreatment` — a new treatment variant fails to compile here until it
+/// declares which pair the row draws — AND over every world in `THEMES`.
+#[test]
+fn selected_row_text_clears_contrast_floor_on_every_world() {
+    const FLOOR: f32 = 3.0;
+    let _g = crate::testlock::serial();
+
+    for th in theme::THEMES.iter() {
+        theme::set_active_by_name(th.name).unwrap();
+        let band = crate::render::effective_overlay_selrow_band();
+        // The (band fill, selected-row ink) pair the renderer actually draws,
+        // resolved through the SAME owners the overlay's `selected_ink` path uses.
+        let (fill, ink) = match th.highlight_treatment(band) {
+            theme::HighlightTreatment::ValueBand(color) => (color, theme::selected_row_ink(color)),
+            theme::HighlightTreatment::InverseFill { band, ink } => (band, ink),
+        };
+        let c = wcag_contrast(fill, ink);
+        assert!(
+            c >= FLOOR,
+            "{}: selected-row ink {:?} on band {:?} = {c:.2}:1 (floor {FLOOR}:1) — the row \
+             text washes into its own selection fill",
+            th.name, ink, fill
+        );
+    }
+
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 /// TIER (b): REAL PIXELS, capability-driven sampling — every world carrying
 /// any non-default `RenderCaps` (today exactly Wagtail) plus one
 /// default-caps control world (Tawny, or whichever sorts first). This is the

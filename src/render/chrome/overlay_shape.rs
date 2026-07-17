@@ -375,6 +375,26 @@ impl TextPipeline {
         } else {
             usize::MAX
         };
+        // V7 TASTE-GATE — TEXT-HUGGING bars with a right column: the shortcut rides
+        // its own name line (trailing the label, `INLINE_SHORTCUT_GAP` between) so
+        // EVERY row's bar hugs its own content; the ragged right derives from
+        // content length alone. The names shape at FULL budget (the pane is dropped
+        // under bars — no right column to reserve against), and the separate
+        // right-aligned column is NOT drawn (`overlay_right_shown` stays false).
+        if has_right && super::hug_bars() {
+            let full = rowlayout::full_budget(total_chars);
+            let rows: Vec<String> = (0..visible)
+                .map(|row| rowlayout::fit_primary(&self.overlay_items[top_idx + row], full))
+                .collect();
+            let trailing: Vec<String> = (0..visible)
+                .map(|row| match right_labels.get(top_idx + row) {
+                    Some(s) if !s.is_empty() => format!("{}{}", super::INLINE_SHORTCUT_GAP, s),
+                    _ => String::new(),
+                })
+                .collect();
+            self.shape_overlay_names(geom, ink, muted, selected_ink, &rows, &trailing);
+            return false;
+        }
         let widest_right = if has_right {
             Some(right_labels.iter().map(|s| s.chars().count()).max().unwrap_or(0))
         } else {
@@ -393,7 +413,7 @@ impl TextPipeline {
                 }
             })
             .collect();
-        self.shape_overlay_names(geom, ink, muted, selected_ink, &rows);
+        self.shape_overlay_names(geom, ink, muted, selected_ink, &rows, &[]);
         if !has_right {
             return false;
         }
@@ -416,7 +436,7 @@ impl TextPipeline {
         let rows: Vec<String> = (0..visible)
             .map(|row| rowlayout::fit_primary(&self.overlay_items[top_idx + row], full))
             .collect();
-        self.shape_overlay_names(geom, ink, muted, selected_ink, &rows);
+        self.shape_overlay_names(geom, ink, muted, selected_ink, &rows, &[]);
         false
     }
 
@@ -453,8 +473,6 @@ impl TextPipeline {
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
     ) -> bool {
-        // The section-grouped name column + the active-lens underline (unchanged).
-        self.overlay_shape_theme(geom, ink, muted, selected_ink);
         // The dim RIGHT column: the SAME precedence the flat path uses (bindings →
         // times → git; only one is ever populated). Empty on the literal Theme
         // picker → no right column, byte-identical.
@@ -465,22 +483,55 @@ impl TextPipeline {
         } else {
             &self.overlay_git
         };
-        if right_labels.is_empty() {
-            return false;
-        }
+        let has_right = !right_labels.is_empty();
+        // V7 TASTE-GATE — under TEXT-HUGGING bars a right column rides INLINE on
+        // each ITEM row (trailing the label, `INLINE_SHORTCUT_GAP` between) so the
+        // bar hugs the whole content; the separate right-aligned column is dropped.
+        // One trailing string per PLAN line (a header line gets none). Empty on a
+        // non-hug frame or a picker with no right column → byte-identical.
+        let hug_inline = has_right && super::hug_bars();
+        // Both the INLINE trailing (hug) and the right-aligned bind lines (non-hug)
+        // are materialized into OWNED `Vec<String>`s up front, so the `right_labels`
+        // borrow of `self` ends before the `&mut self` shaper calls below.
+        let trailing: Vec<String> = if hug_inline {
+            geom.plan
+                .iter()
+                .map(|line| match line {
+                    ThemeLine::Item(i) => match right_labels.get(*i) {
+                        Some(s) if !s.is_empty() => {
+                            format!("{}{}", super::INLINE_SHORTCUT_GAP, s)
+                        }
+                        _ => String::new(),
+                    },
+                    ThemeLine::Header(_) => String::new(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         // One bind line per DISPLAY line of the plan, aligned to the ITEM rows: a
         // header line gets an empty label, an item line gets its own item's label,
         // and the first line pads by `header_rows` (query + strip) so the plan
-        // begins on display line 2.
-        let bind_strs = right_bind_lines(
-            geom.header_rows,
-            geom.plan.iter().map(|line| match line {
-                ThemeLine::Item(i) => {
-                    right_labels.get(*i).map(|s| s.as_str()).unwrap_or("")
-                }
-                ThemeLine::Header(_) => "",
-            }),
-        );
+        // begins on display line 2. Empty under hug (the shortcut rides inline).
+        let bind_strs: Vec<String> = if has_right && !hug_inline {
+            right_bind_lines(
+                geom.header_rows,
+                geom.plan.iter().map(|line| match line {
+                    ThemeLine::Item(i) => {
+                        right_labels.get(*i).map(|s| s.as_str()).unwrap_or("")
+                    }
+                    ThemeLine::Header(_) => "",
+                }),
+            )
+        } else {
+            Vec::new()
+        };
+        // The section-grouped name column + the active-lens underline (unchanged,
+        // save the inline shortcuts composed onto the ITEM rows under hug bars).
+        self.overlay_shape_theme(geom, ink, muted, selected_ink, &trailing);
+        if !has_right || hug_inline {
+            return false;
+        }
         self.shape_overlay_right(geom, ink, muted, &bind_strs);
         self.overlay_right_shown = true;
         true
@@ -564,6 +615,13 @@ impl TextPipeline {
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
         rows: &[String],
+        // V7 TASTE-GATE — one trailing INLINE-SHORTCUT string per candidate row
+        // (already `INLINE_SHORTCUT_GAP`-prefixed; empty = none). Non-empty ONLY
+        // under `HugText` bars with a right column, where the shortcut rides its
+        // own name line (muted, symbol-split for modifier glyphs) instead of the
+        // right-aligned column, so the bar hugs `label + gap + shortcut`. Pass
+        // `&[]` everywhere else — byte-identical (no trailing spans).
+        trailing: &[String],
     ) {
         // The flat/nav pickers show a `› query` line on top (`header_rows == 1`); the
         // contextual SPELL panel shows none (`0`) — just the suggestion rows.
@@ -572,6 +630,9 @@ impl TextPipeline {
         // Names/query/sigil render in the ACTIVE-WORLD face (`mk`).
         let base = panel_attrs();
         let mk = |c| base.clone().color(c);
+        // Symbol-face attrs for the inline shortcut's modifier glyphs (⌘ ⇧ ⌥ ⌃) —
+        // the same bundled `SYMBOL_FAMILY` the right-aligned column + hint use.
+        let sym_name = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
         let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
         // The query line occupies text line 0 when present; the spell panel skips it
         // so its first suggestion IS line 0. THE OVERLAY-TITLES ROUND: a picker that
@@ -589,8 +650,12 @@ impl TextPipeline {
         // space, no drawn rule). The candidate rows keep their normal height and
         // the selected-row band folds the same gap in through `overlay_row_top`,
         // so the band still lands on each row. `hk` = the header spans' attrs
-        // (taller line only when a gap is set); the query text/caret keep the top
-        // of the line, so the amber caret (centered on the UI row) stays aligned.
+        // (taller line only when a gap is set). NOTE cosmic-text HALF-LEADS the
+        // glyphs into this taller line — the query text sits `header_gap * 0.5`
+        // BELOW the top, NOT pinned to it — so the amber caret centres on this
+        // line's REAL shaped height (`overlay_place_caret` reads the run's own
+        // `line_height`), never the bare `overlay_lh()`, or it floats a half-beat
+        // above the text (the full-bleed caret bug).
         let name_fs = self.overlay_metrics().font_size;
         let header_lh = self.overlay_lh() + geom.header_gap;
         let hk = |c| {
@@ -665,6 +730,24 @@ impl TextPipeline {
                 spans.push((&content[..split], rk(dir_c)));
             }
             spans.push((&content[split..], rk(name_c)));
+            // V7 TASTE-GATE — the trailing INLINE SHORTCUT (HugText bars only),
+            // muted, on the SAME name line so the bar hugs label + gap + shortcut.
+            // Symbol-split so ⌘ ⇧ ⌥ ⌃ shape from the bundled face (real advances),
+            // exactly like the right-aligned column + the foot hint.
+            if let Some(t) = trailing.get(row).filter(|t| !t.is_empty()) {
+                let mut last = 0usize;
+                for sr in symbol_runs(t) {
+                    if sr.start > last {
+                        spans.push((&t[last..sr.start], mk(muted)));
+                    }
+                    let end = sr.end;
+                    spans.push((&t[sr], sym_name(muted)));
+                    last = end;
+                }
+                if last < t.len() {
+                    spans.push((&t[last..], mk(muted)));
+                }
+            }
         }
         // EMPTY STATE: with no candidate rows, one dim, non-selectable message row
         // (styled like the foot hint) sits in the candidate area — the shared calm
@@ -812,4 +895,49 @@ impl TextPipeline {
         }
         w
     }
+
+    /// V6 P5 [`theme::BarExtent::HugText`] — per DISPLAY-row PRIMARY text width
+    /// (px), read from the just-shaped `panel_buffer`, keyed by display-row index
+    /// (`line_i - header_rows`). A display row is a candidate line: for the flat
+    /// pickers that is candidate `N`, for the theme picker it is plan line `N`
+    /// (a section-header plan line is present too, but the bar draw only looks up
+    /// the ITEM rows). The hug-extent bars read this so each bar's right edge
+    /// hugs its own row's text — the SAME shaped glyphs the text draws from, so
+    /// bar and glyph can't disagree.
+    pub(in crate::render) fn overlay_row_primary_px(
+        &self,
+        geom: &OverlayGeom,
+    ) -> std::collections::BTreeMap<usize, f32> {
+        let mut m = std::collections::BTreeMap::new();
+        for run in self.panel_buffer.layout_runs() {
+            if run.line_i >= geom.header_rows {
+                m.insert(run.line_i - geom.header_rows, run.line_w);
+            }
+        }
+        m
+    }
+
+    /// V8 — the WIDEST shaped FOOTER content line (px) in the just-shaped
+    /// `panel_buffer`: the dim foot-hint plus the keybindings-tips lines, which
+    /// all sit BELOW the `content_rows` candidate/empty lines (`line_i >=
+    /// header_rows + content_rows`). Read so the [`super::footer_plate_rect`] can
+    /// HUG the footer text under [`theme::BarExtent::HugText`] instead of drawing
+    /// a lone full-width plate under hugging rows — the SAME shaped glyphs the
+    /// footer draws from, so plate and text can't disagree. `0.0` when there is no
+    /// footer content (the plate then collapses to its 1px floor, never drawn).
+    pub(in crate::render) fn overlay_footer_content_px(
+        &self,
+        geom: &OverlayGeom,
+        content_rows: usize,
+    ) -> f32 {
+        let first = geom.header_rows + content_rows;
+        let mut w = 0.0f32;
+        for run in self.panel_buffer.layout_runs() {
+            if run.line_i >= first {
+                w = w.max(run.line_w);
+            }
+        }
+        w
+    }
+
 }

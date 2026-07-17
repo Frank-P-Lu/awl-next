@@ -111,12 +111,31 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
     let items: Vec<String> = (0..8).map(|i| format!("Command number {i}")).collect();
     let binds: Vec<String> = (0..8).map(|i| format!("C-{i}")).collect();
 
+    // Sweep BOTH list styles: `Pane` (default) and `Bars` (the no-pane layout,
+    // where the flat picker inflates the query line by `header_gap` and cosmic-text
+    // half-leads the glyphs down — the full-bleed caret bug lived here).
+    let styles = [
+        ("pane", None),
+        (
+            "bars",
+            Some(theme::ListStyle::Bars {
+                radius: 6.0,
+                gap: 8.0,
+                grow_px: 24.0,
+                extent: theme::BarExtent::FullWidth,
+                coverage: theme::BarCoverage::All,
+            }),
+        ),
+    ];
     for world in ["Currawong", "Saltpan", "Wagtail"] {
         theme::set_active_by_name(world).unwrap();
         p.sync_theme();
         for faceted in [false, true] {
+        for (sname, style) in styles {
+            crate::render::set_list_style_test_override(style);
             let mut v = view("hello\n", 0, 0);
             v.overlay_active = true;
+            v.overlay_title = "themes";
             v.overlay_items = items.clone();
             v.overlay_bindings = binds.clone();
             v.overlay_selected = 3;
@@ -128,7 +147,7 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
             p.set_view(&v);
             p.prepare(&device, &queue, 1200, 800).unwrap();
             let pr = p.overlay_row_y_probe();
-            let ctx = format!("world={world} faceted={faceted}");
+            let ctx = format!("world={world} faceted={faceted} list={sname}");
 
             // Per row: the name and the chord label sit on the same y.
             for (row, &prim) in &pr.primary {
@@ -150,24 +169,29 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
                 "{ctx}: selected band top {} must sit on its name top {sel_prim}",
                 pr.band_top
             );
-            // The caret rides the query line (centered on it, never above/below).
+            // The caret rides the query line (centered on its REAL shaped height,
+            // never above/below). On the flat pickers under a beat, that line is
+            // inflated by `header_gap`, so the caret must ride the inflated height,
+            // NOT the bare `lh` — the old `lh`-based centre floated a half-beat high.
             assert!(
                 pr.caret_center >= pr.query_line_top
-                    && pr.caret_center <= pr.query_line_top + pr.lh,
+                    && pr.caret_center <= pr.query_line_top + pr.query_line_height,
                 "{ctx}: caret center {} must sit on the query line [{}, {}]",
                 pr.caret_center,
                 pr.query_line_top,
-                pr.query_line_top + pr.lh
+                pr.query_line_top + pr.query_line_height
             );
             assert!(
-                (pr.caret_center - (pr.query_line_top + pr.lh * 0.5)).abs() <= 1.0,
-                "{ctx}: caret center {} must be centered on the query row",
+                (pr.caret_center - (pr.query_line_top + pr.query_line_height * 0.5)).abs() <= 1.0,
+                "{ctx}: caret center {} must be centered on the query line's real height",
                 pr.caret_center
             );
             // C2 STRIP-UNDERLINE Y-OWNER LAW (the element round A's law missed):
             // a faceted card records an active-lens underline; it MUST sit BELOW
             // the strip label's shaped baseline (never mid-glyph — the
             // Tawny/Firetail strike-through) and stay within the strip row box.
+            // (The list-style sweep never sets a Band/Chips facet skin, so the
+            // recorded mark stays the baseline underline throughout.)
             if faceted {
                 let base = pr.strip_baseline.unwrap_or_else(|| {
                     panic!("{ctx}: a faceted card must expose a strip baseline")
@@ -187,8 +211,26 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
                      (bottom {bottom})"
                 );
             }
+            // INDEPENDENT (non-circular) witness: cosmic-text half-leads the query
+            // glyphs so their baseline sits near the BOTTOM of the (possibly
+            // inflated) line. The caret centre must land a sane ~1/3-row ABOVE that
+            // baseline — covering the x-height — not a half-beat above the whole
+            // line. This is the assertion the full-bleed bug failed: it put the
+            // caret centre a full `header_gap * 0.5` (≈ a third of the *card*)
+            // above the baseline instead of a fraction of one row.
+            let above_baseline = pr.query_baseline - pr.caret_center;
+            assert!(
+                above_baseline > 0.0 && above_baseline <= pr.lh * 0.55,
+                "{ctx}: caret center {} must sit just above the query baseline {} \
+                 (0 < {above_baseline} <= {}), not float a half-beat high",
+                pr.caret_center,
+                pr.query_baseline,
+                pr.lh * 0.55
+            );
+        }
         }
     }
+    crate::render::set_list_style_test_override(None);
     theme::set_active(theme::DEFAULT_THEME);
 }
 

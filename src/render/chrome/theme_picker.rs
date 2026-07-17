@@ -135,7 +135,10 @@ impl TextPipeline {
         // — via the SAME horizontal-box owner (edge inset + narrow-window fallback),
         // just a slightly wider cap ([`CARD_MAX_W_FACETED`]).
         let (card_x, card_w) = self.overlay_card_box(width, super::overlay::CARD_MAX_W_FACETED);
-        let text_w = card_w - 2.0 * pad;
+        // List-style-aware horizontal text inset (the ONE owner shared with the
+        // flat picker); vertical padding stays `pad`. `Pane` keeps `hpad == pad`.
+        let hpad = self.overlay_text_hpad();
+        let text_w = card_w - 2.0 * hpad;
         // Foot hint (item 5) rides a SHORTER line — reclaim `lh - hint_h` per hint
         // row so the card hugs the tighter footer (matching the flat owner).
         let card_h = total_rows as f32 * lh + header_gap + 2.0 * pad
@@ -145,7 +148,7 @@ impl TextPipeline {
         // never change how many rows fit), mirroring `overlay_geometry`'s own
         // placement of the same one-owner offset. `+ 0.0` when settled.
         let card_y = card_y + self.overlay_entrance_offset();
-        let text_left = card_x + pad;
+        let text_left = card_x + hpad;
         let text_top = card_y + pad;
         OverlayGeom {
             // The DRAWN window: `visible` = candidate DISPLAY LINES shown (headers + item
@@ -190,9 +193,14 @@ impl TextPipeline {
             return None;
         }
         let lh = self.overlay_lh();
-        // Strip is display line 1 (row band [text_top + lh, text_top + 2*lh)).
+        // Strip is display line 1, whose HEIGHT is inflated to `lh + header_gap` by
+        // the query BEAT (the labels center in that tall box, so they sit lower than
+        // a plain `lh` band — the whole inflated line is the strip's clickable region,
+        // meeting row 0's top exactly). Using the plain `lh` band would leave the
+        // lower half of the labels un-clickable once the beat widened.
         let strip_top = geom.text_top + lh;
-        if py < strip_top || py >= strip_top + lh {
+        let strip_lh = lh + geom.header_gap;
+        if py < strip_top || py >= strip_top + strip_lh {
             return None;
         }
         // Which label's shaped glyph span contains px? Scan the shaped strip line.
@@ -213,7 +221,7 @@ impl TextPipeline {
                     continue; // the All home is not a drawn label
                 }
                 if idx > 1 {
-                    s.push_str(STRIP_GAP);
+                    s.push_str(super::strip_gap());
                 }
                 let a = s.len();
                 s.push_str(lbl);
@@ -257,6 +265,12 @@ impl TextPipeline {
         ink: glyphon::Color,
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
+        // V7 TASTE-GATE — one trailing INLINE-SHORTCUT string per PLAN line
+        // (already `INLINE_SHORTCUT_GAP`-prefixed; empty = none / a header). Non-empty
+        // ONLY under `HugText` bars with a right column, where each item's shortcut
+        // rides its own name line so the bar hugs `label + gap + shortcut`. `&[]`
+        // otherwise — byte-identical (no trailing spans).
+        trailing: &[String],
     ) -> bool {
         // Build the strip LINE ("\n" then the faceting-lens labels) as one owned string,
         // tracking each label's byte range so the ACTIVE label's glyphs can be underlined.
@@ -271,7 +285,7 @@ impl TextPipeline {
             }
             if idx > 1 {
                 let s = strip_s.len();
-                strip_s.push_str(STRIP_GAP);
+                strip_s.push_str(super::strip_gap());
                 sep_ranges.push(s..strip_s.len());
             }
             let s = strip_s.len();
@@ -290,19 +304,30 @@ impl TextPipeline {
         // fit, so every lens stays present + hit-testable instead of the far
         // right clipping away. At any comfortable width the measured strip fits
         // and the single full-size pass stands (byte-identical wide captures).
-        self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, 1.0);
+        self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, trailing, 1.0);
         let strip_w = self.theme_strip_px();
         if strip_w > geom.text_w {
             let scale = (geom.text_w / strip_w).max(0.5);
-            self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, scale);
+            self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, trailing, scale);
         }
 
-        // Record the active-lens UNDERLINE from the shaped strip glyphs (line 1). Line-1
+        // Record the active-lens mark from the shaped strip glyphs (line 1). Line-1
         // glyphs are byte-indexed WITHIN the strip line's own text — the leading "\n" in
-        // `strip_s` split the lines — so the label's line-relative range is `active_range`
-        // shifted back by that one "\n" byte.
-        self.overlay_theme_underline = active_range.and_then(|ar| {
-            let (a, b) = (ar.start.saturating_sub(1), ar.end.saturating_sub(1));
+        // `strip_s` split the lines — so a label's line-relative range is its `strip_s`
+        // range shifted back by that one "\n" byte. The MARK'S SHAPE is the
+        // PER-ITEM LIST SURFACES round's `facet_style`:
+        //   - `Text`   (default, byte-identical) — a hairline UNDERLINE under the
+        //     active label.
+        //   - `Band`   — a rounded value PILL behind the active label (the killed
+        //     `Chips` skin's ghost-pill-per-label was dropped; only the active
+        //     mark draws).
+        // The x-spans come from the SAME shaped glyphs the strip hit-test reads, so
+        // the skin can never disagree with where a label is clicked.
+        let lh = self.overlay_lh();
+        // Scan line 1 for a strip-range's glyph x-span (min_x, max_x) + the shaped
+        // baseline (C2 y-owner), `None` if empty.
+        let span_of = |buf: &GlyphBuffer, r: &std::ops::Range<usize>| -> Option<(f32, f32, f32)> {
+            let (a, b) = (r.start.saturating_sub(1), r.end.saturating_sub(1));
             let mut min_x = f32::MAX;
             let mut max_x = f32::MIN;
             // Y-OWNER FIX (COMPOSITION-C2): the underline y must be read from the
@@ -316,7 +341,7 @@ impl TextPipeline {
             // it for every face. The strip's responsive fold reshapes into the
             // same `panel_buffer`, so this reads the FINAL (possibly scaled) run.
             let mut baseline = f32::MIN;
-            for run in self.panel_buffer.layout_runs() {
+            for run in buf.layout_runs() {
                 if run.line_i != 1 {
                     continue;
                 }
@@ -328,13 +353,74 @@ impl TextPipeline {
                     }
                 }
             }
-            if max_x > min_x && baseline > f32::MIN {
-                let y = geom.text_top + baseline + UNDERLINE_BASELINE_DROP;
-                Some([geom.text_left + min_x, y, max_x - min_x, 1.5])
-            } else {
-                None
-            }
+            (max_x > min_x && baseline > f32::MIN).then_some((min_x, max_x, baseline))
+        };
+        let facet_style = crate::render::effective_facet_style();
+        // Horizontal + vertical pad the active `Band` pill holds around its label.
+        const CHIP_HPAD: f32 = 6.0;
+        const CHIP_VPAD: f32 = 2.0;
+        // VERTICAL PLACEMENT (the misaligned-chip refit): the strip line's height is
+        // inflated to `strip_lh = lh + header_gap` by the query BEAT, and cosmic-text
+        // CENTERS the glyphs in that tall line box — so the labels sit near the box's
+        // vertical middle, well BELOW a plain `lh` band at line 1. The old pill top
+        // (`text_top + lh + CHIP_VPAD`) tracked that plain band, so the pills floated
+        // ABOVE the labels; the widened beat made it glaring. A facet mark that HUGS
+        // its label must center on the GLYPH center: `line-1 top (== lh) + strip_lh/2`.
+        // `chip_h` is sized off the strip's own gap-independent text line height (not
+        // `lh`, which swells with a Bars row-gap), so the pill hugs the label the same
+        // whether or not Bars is also active.
+        let strip_lh = lh + geom.header_gap;
+        let mark_cy = geom.text_top + lh + strip_lh * 0.5;
+        let strip_text_lh = self.metrics.line_height * super::overlay::OVERLAY_UI_SCALE;
+        let chip_h = (strip_text_lh - 2.0 * CHIP_VPAD).max(1.0);
+        // A PILL rect from an already-resolved (left, right) glyph-x pair (device
+        // px): centered on the strip glyphs' vertical middle. The active band
+        // builds through this — one owner, so shape + geometry can't drift.
+        let pill_px = |left: f32, right: f32| -> [f32; 4] {
+            [
+                geom.text_left + left,
+                mark_cy - chip_h * 0.5,
+                (right - left).max(1.0),
+                chip_h,
+            ]
+        };
+        self.overlay_theme_underline = active_range.as_ref().and_then(|ar| {
+            let (min_x, max_x, baseline) = span_of(&self.panel_buffer, ar)?;
+            Some(match facet_style {
+                theme::FacetStyle::Text => {
+                    // Y-OWNER (COMPOSITION-C2): a hairline just UNDER the active label,
+                    // read from the strip run's SHAPED baseline + a small drop — never
+                    // a fixed `2*lh` formula that struck mid-glyph on the taller CHROME
+                    // faces. The strip's responsive fold reshapes into `panel_buffer`,
+                    // so `baseline` is the FINAL (possibly scaled) run's baseline.
+                    let y = geom.text_top + baseline + UNDERLINE_BASELINE_DROP;
+                    [geom.text_left + min_x, y, max_x - min_x, 1.5]
+                }
+                // A single active BAND — or the ACTIVE chip under Chips — is a
+                // FILLED value pill hugging the label; no drawn neighbour to
+                // collide with, so it keeps the full pad.
+                theme::FacetStyle::Band | theme::FacetStyle::Chips => {
+                    pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD)
+                }
+            })
         });
+        // V6 P5 [`theme::FacetStyle::Chips`] — the INACTIVE ghost pills: one
+        // hairline STROKE pill per NON-active facet label, from the SAME shaped
+        // glyphs the active pill reads. Populated only under `Chips`; cleared for
+        // `Text`/`Band` so a non-Chips frame leaves no stale ghost rects. Drawn
+        // via `overlay_facet_ghost` with the pipeline's `stroke` uniform.
+        self.overlay_theme_facet_ghosts.clear();
+        if matches!(facet_style, theme::FacetStyle::Chips) {
+            for (r, active) in &label_ranges {
+                if *active {
+                    continue;
+                }
+                if let Some((min_x, max_x, _)) = span_of(&self.panel_buffer, r) {
+                    self.overlay_theme_facet_ghosts
+                        .push(pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD));
+                }
+            }
+        }
         false
     }
 
@@ -355,6 +441,9 @@ impl TextPipeline {
         strip_s: &str,
         label_ranges: &[(std::ops::Range<usize>, bool)],
         sep_ranges: &[std::ops::Range<usize>],
+        // V7 TASTE-GATE — trailing inline shortcut per PLAN line (see
+        // `overlay_shape_theme`); `&[]` on a non-hug frame.
+        trailing: &[String],
         strip_scale: f32,
     ) {
         let m = self.metrics;
@@ -369,6 +458,7 @@ impl TextPipeline {
         let header_metrics = GlyphMetrics::new(m.font_size * ui * label, lh);
         let base = panel_attrs();
         let mk = |c| base.clone().color(c);
+        let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
         let sigil = "› ";
 
         // The world rows share the lone-column budget every no-right-column picker
@@ -490,7 +580,7 @@ impl TextPipeline {
                 mk(c)
             }
         };
-        for (line, fit) in geom.plan.iter().zip(fitted.iter()) {
+        for (idx, (line, fit)) in geom.plan.iter().zip(fitted.iter()).enumerate() {
             spans.push(("\n", mk(ink)));
             match line {
                 ThemeLine::Header(h) => {
@@ -502,6 +592,23 @@ impl TextPipeline {
                         _ => ink,
                     };
                     spans.push((fit.as_deref().unwrap_or(""), rk(c)));
+                    // V7 TASTE-GATE — the trailing INLINE SHORTCUT (HugText bars),
+                    // muted, on the SAME item line so the bar hugs label + gap +
+                    // shortcut. Symbol-split so ⌘ ⇧ ⌥ ⌃ shape from the bundled face.
+                    if let Some(t) = trailing.get(idx).filter(|t| !t.is_empty()) {
+                        let mut last = 0usize;
+                        for sr in symbol_runs(t) {
+                            if sr.start > last {
+                                spans.push((&t[last..sr.start], mk(muted)));
+                            }
+                            let end = sr.end;
+                            spans.push((&t[sr], sym(muted)));
+                            last = end;
+                        }
+                        if last < t.len() {
+                            spans.push((&t[last..], mk(muted)));
+                        }
+                    }
                 }
             }
         }

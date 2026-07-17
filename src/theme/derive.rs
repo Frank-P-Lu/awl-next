@@ -293,6 +293,84 @@ pub fn overlay_selected_band() -> Srgb {
     surface_step_band(OVERLAY_SELROW_EXTRA_STEPS)
 }
 
+/// WCAG relative-contrast ratio `(L_hi + 0.05) / (L_lo + 0.05)` between two
+/// opaque colors, on the same gamma-correct [`rel_lum`] the law tests use.
+/// Needed at RUNTIME to pick the selected-row ink that actually reads on its
+/// own value band.
+fn contrast_ratio(a: Srgb, b: Srgb) -> f32 {
+    let (la, lb) = (rel_lum(a), rel_lum(b));
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// The minimum contrast the selected picker row's INK must clear against its
+/// own value band ([`overlay_selected_band`]) — the taste floor enforced for
+/// EVERY world by `render::tests::distinguishability::
+/// selected_row_text_clears_contrast_floor_on_every_world`. 3:1 is the WCAG
+/// large-text / UI-component floor; below it the glyphs wash into the fill (the
+/// Undertow-under-Bars exhibit: light ink on a mid sage band = 2.53:1).
+pub(super) const SELECTED_ROW_INK_CONTRAST_FLOOR: f32 = 3.0;
+
+/// THE ONE owner of the selected picker row's INK on a `ValueBand` world — the
+/// [`super::HighlightTreatment::InverseFill`] lesson (a selected row that erases
+/// its own text is the bug) applied to the ORDINARY-fill worlds. The row keeps
+/// the world's `base_content` ink UNLESS the selected-row value `band` washes it
+/// out (contrast below [`SELECTED_ROW_INK_CONTRAST_FLOOR`]), in which case the
+/// ink FLIPS to whichever ladder POLE (`base_100` ground vs `base_content` ink)
+/// reads harder against the fill. Derived purely from the fill's own luminance,
+/// never a per-world hand value: on a DARK world the light `base_content` fails
+/// against a mid band and the dark ground wins; on a LIGHT world the reverse.
+/// Undertow under Bars was the exhibit — light ink (236,232,242) on a mid sage
+/// band (132,152,144) = 2.53:1. Wagtail's 1-bit worlds resolve their pair
+/// through `InverseFill` instead and never reach here.
+pub fn selected_row_ink(band: Srgb) -> Srgb {
+    let content = base_content();
+    if contrast_ratio(band, content) >= SELECTED_ROW_INK_CONTRAST_FLOOR {
+        return content;
+    }
+    let ground = base_100();
+    if contrast_ratio(band, ground) > contrast_ratio(band, content) {
+        ground
+    } else {
+        content
+    }
+}
+
+/// PER-ITEM LIST SURFACES round — the UNSELECTED bar's fill under
+/// [`super::ListStyle::Bars`]. A WHISPER: the `base_200` code-fence-wash
+/// register — one gentle value step off the GROUND (`base_100`), near-invisible
+/// rhythm rather than a slab. The user's verdict on the first cut (unselected ==
+/// `surface_step_band(-1)`, a saturated rung one step below the card) was "a
+/// picket fence where every row shouts": with no card behind the bars (the Bars
+/// treatment drops the pane — see `overlay_draw_card`), the ground IS the scrim,
+/// and the unselected bar should barely lift off it so the SELECTED bar's strong
+/// `overlay_selected_band` pop has somewhere to go. Value only — never a hue,
+/// never the amber accent (DESIGN §3/§5). On a collapsed 1-bit ramp `base_200 ==
+/// base_100` (invisible), but Wagtail ships `Pane` + draws its selected row via
+/// `InverseFill`, so this fill is inert there anyway.
+pub fn overlay_bar_unselected() -> Srgb {
+    base_200()
+}
+
+/// PER-ITEM LIST SURFACES round — the ROOM PLANE laid full-canvas behind the
+/// bars under [`super::ListStyle::Bars`]. The world's own OPAQUE ground plane
+/// (`base_100` — the paper): a uniform field, never a bordered box (no shadow,
+/// no border, no bright `base_300` fill), so the bars read as floating ON the
+/// room rather than IN a card — the user's "with the bars, there shouldn't be a
+/// pane!" honoured. OPAQUE (not a translucent veil) for two reasons the designer
+/// pixel-pass proved: (1) a translucent scrim let the crisp document's page
+/// margin bleed through every gap, so the comb SEAM survived at reduced alpha; a
+/// solid plane erases it outright; (2) the unselected bar is a WHISPER one value
+/// step off the ground (`base_200`) — a translucent veil pulls the gap toward
+/// `base_200` too and COLLAPSES the whisper (invisible on light worlds), while
+/// the solid paper keeps the `base_100 → base_200` step the whisper needs to
+/// read. The trade — the document preview no longer ghosts behind the bars — is
+/// right for a bars world (a maximalist statement room, not a peek). Value only,
+/// never a hue (DESIGN §3/§5).
+pub fn overlay_bars_room() -> Srgb {
+    base_100()
+}
+
 pub fn surface_selected() -> Srgb {
     // The shared band: `base_300` stepped `SELECTED_BAND_STEPS` further up the
     // surface ramp, in the SAME direction `base_200 -> base_300` carries (toward

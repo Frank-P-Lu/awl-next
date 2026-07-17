@@ -34,6 +34,17 @@ struct Globals {
     /// WAGTAIL HIGHLIGHT TEXTURE's density (e.g. `0.25`). Unused by an
     /// `fs_invert`-built pipeline.
     dither: f32,
+    /// OUTLINE / STROKE MODE (V6 P5 round) — see `shaders/selection.wgsl`'s
+    /// `fs_main`: `0.0` is the original SOLID fill (byte-identical, every
+    /// shipping consumer); `> 0.0` draws only a hollow RING that many px wide
+    /// just inside the rounded-rect edge (the `FacetStyle::Chips` inactive ghost
+    /// pills; the V6 bar-fill `Outline` axis that also used it was dropped in the
+    /// V7 taste-gate).
+    stroke: f32,
+    /// Std140 tail padding so the uniform struct size is a 16-byte multiple
+    /// (viewport 8 + corner 4 + dither 4 + stroke 4 + pad 12 = 32). MUST match
+    /// the `_pad: vec2<f32>` in the WGSL `Globals`.
+    _pad: [f32; 3],
 }
 
 /// The selection render pipeline: an instanced quad draw, BEFORE the caret +
@@ -64,6 +75,12 @@ pub struct SelectionPipeline {
     /// but it CAN hard-discard outside a rounded-rect SDF, so the caret
     /// keeps a rounded (if aliased) silhouette instead of a hard square.
     corner: f32,
+    /// OUTLINE / STROKE width (px) uploaded into `Globals::stroke`. `0.0` (the
+    /// construction default) is the SOLID fill every shipping consumer draws —
+    /// byte-identical. [`Self::set_stroke`] raises it for the V6 `BarFill::
+    /// Outline` bars and the `FacetStyle::Chips` ghost pills, turning the quad
+    /// into a hairline ring. Meaningless on an `fs_invert` pipeline.
+    stroke: f32,
 }
 
 /// The ORIGINAL straight-alpha over-blend (`fs_main`'s non-dither path and
@@ -262,6 +279,7 @@ impl SelectionPipeline {
             color: srgba_u8_to_linear(srgba),
             dither: 0.0,
             corner,
+            stroke: 0.0,
         }
     }
 
@@ -295,6 +313,16 @@ impl SelectionPipeline {
         self.corner = corner;
     }
 
+    /// Set the OUTLINE / STROKE width (px) the NEXT `prepare` uploads into
+    /// `Globals::stroke` (V6 P5 round). `0.0` restores the SOLID fill
+    /// (byte-identical to a pipeline that never calls this); `> 0.0` turns the
+    /// quad into a hairline RING that wide just inside its edge — the
+    /// `FacetStyle::Chips` ghost pills. Set every frame from the draw path so a
+    /// mode change never leaves it stale.
+    pub fn set_stroke(&mut self, stroke: f32) {
+        self.stroke = stroke.max(0.0);
+    }
+
     /// How many quad instances the last `prepare` uploaded (0 = nothing drawn). A cheap
     /// headless assertion hook for "is this summoned rect present this frame?" (used by
     /// the render tests; no non-test caller in the shipping binary).
@@ -309,6 +337,14 @@ impl SelectionPipeline {
     #[allow(dead_code)]
     pub fn dither(&self) -> f32 {
         self.dither
+    }
+
+    /// The current OUTLINE / STROKE width (`0.0` = solid fill). A cheap headless
+    /// assertion hook for the `FacetStyle::Chips` ghost-pill law test; no non-test
+    /// caller in the shipping binary.
+    #[allow(dead_code)]
+    pub fn stroke(&self) -> f32 {
+        self.stroke
     }
 
     /// Build instances from per-line rectangles (`[x, y, w, h]` top-left, px)
@@ -371,6 +407,8 @@ impl SelectionPipeline {
             viewport: [width as f32, height as f32],
             corner: self.corner,
             dither: self.dither,
+            stroke: self.stroke,
+            _pad: [0.0; 3],
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
 

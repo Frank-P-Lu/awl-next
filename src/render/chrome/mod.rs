@@ -136,6 +136,26 @@ pub enum PanelHit {
 /// index 0) is not drawn as a label, so the strip is just the facets, gap-separated.
 const STRIP_GAP: &str = "  ";
 
+/// The WIDER inter-label gap the strip uses ONLY under [`theme::FacetStyle::Chips`]
+/// (V7 taste-gate). The default 2-space [`STRIP_GAP`] (~9px) is too tight to host a
+/// pill's `CHIP_HPAD` on both labels AND a readable gap between them — the pills
+/// abutted (measured: -3px, a segmented control). Four spaces (~18px) leaves each
+/// pill its full pad and ~6px of breathing room between chips, so they read as
+/// discrete pills. `Text`/`Band` keep [`STRIP_GAP`] — byte-identical.
+const CHIP_STRIP_GAP: &str = "    ";
+
+/// The inter-label separator string for the current facet style — the ONE owner
+/// both the strip SHAPER ([`TextPipeline::overlay_shape_theme`]) and the strip
+/// HIT-TEST ([`TextPipeline::overlay_lens_at`]) read, so the two can never disagree
+/// on where a label sits. Wider under [`theme::FacetStyle::Chips`] (see
+/// [`CHIP_STRIP_GAP`]); [`STRIP_GAP`] otherwise.
+pub(super) fn strip_gap() -> &'static str {
+    match crate::render::effective_facet_style() {
+        theme::FacetStyle::Chips => CHIP_STRIP_GAP,
+        theme::FacetStyle::Text | theme::FacetStyle::Band => STRIP_GAP,
+    }
+}
+
 /// One DISPLAY line in the THEME picker's candidate area (below the query + lens
 /// strip): either a faint uppercase SECTION header, or a world ROW (carrying its
 /// index into `overlay_items`). Built by [`TextPipeline::theme_plan`] from the
@@ -360,6 +380,178 @@ pub(super) fn overlay_row_top(
     text_top + header_rows as f32 * line_height + header_gap + row as f32 * line_height
 }
 
+/// PER-ITEM LIST SURFACES round — the horizontal inset (device px) an
+/// UNSELECTED bar holds from the summoned card's left/right edges under
+/// [`theme::ListStyle::Bars`], so each bar reads as a surface WITHIN the card
+/// rather than edge-to-edge. The SELECTED bar extends past this inset by its
+/// `grow_px` (toward the open margin, mirrored under `TopRight`) so it reads
+/// WIDER as well as brighter. A single dial the gallery A/Bs.
+pub(super) const BAR_SIDE_INSET: f32 = 8.0;
+
+/// PER-ITEM LIST SURFACES round — the extra left/right breathing room (device
+/// px) the ROW TEXT holds INSIDE a bar's edge under [`theme::ListStyle::Bars`],
+/// on top of [`BAR_SIDE_INSET`]. The default `Pane` text pad (12) put the glyph
+/// only ~4px inside the bar's left edge — the user's "bar text needs real left
+/// padding" note. Under Bars the text column insets `BAR_SIDE_INSET +
+/// BAR_TEXT_PAD` from the layout bound, so text sits a comfortable
+/// [`BAR_TEXT_PAD`] inside the bar (both edges — the secondary chord column
+/// mirrors it). The ONE owner both geometry builders read via
+/// [`TextPipeline::overlay_text_hpad`].
+pub(super) const BAR_TEXT_PAD: f32 = 13.0;
+
+/// V7 TASTE-GATE ([`theme::BarExtent::HugText`]) — the FIXED GAP text between a
+/// row's LABEL and its trailing inline SHORTCUT when a hug-bar row carries one.
+/// Composed into the row's own name line (not the right-aligned column) so the
+/// shortcut trails the label and the bar hugs `label + gap + shortcut + pad`;
+/// EVERY row then hugs its own content and the rag derives from length alone.
+pub(super) const INLINE_SHORTCUT_GAP: &str = "   ";
+
+/// Whether this frame draws TEXT-HUGGING bars ([`theme::BarExtent::HugText`]) —
+/// the ONE reader the shapers consult to decide whether to compose a row's
+/// shortcut INLINE (trailing its label) instead of into the right-aligned
+/// column. Any other list style (Pane, full-width bars) → `false`, byte-identical.
+pub(super) fn hug_bars() -> bool {
+    matches!(
+        crate::render::effective_list_style(),
+        theme::ListStyle::Bars { extent: theme::BarExtent::HugText, .. }
+    )
+}
+
+/// PURE geometry — the FULL-WIDTH bar span `(x, w)` inside a card
+/// `[card_x, card_x+card_w]`, inset [`BAR_SIDE_INSET`] each side. The shipped v5
+/// bar ([`theme::BarExtent::FullWidth`]); the ONE owner every full-width bar
+/// (selected + unselected) reads.
+pub(super) fn bar_full_span(card_x: f32, card_w: f32) -> (f32, f32) {
+    (
+        card_x + BAR_SIDE_INSET,
+        (card_w - 2.0 * BAR_SIDE_INSET).max(1.0),
+    )
+}
+
+/// PURE geometry (V6 P5 [`theme::BarExtent::HugText`]) — the TEXT-HUGGING bar
+/// span `(x, w)` for one row: the bar's left edge is the shared
+/// [`BAR_SIDE_INSET`], its right edge hugs the row's own content text
+/// (`primary_px`, measured from the shaped name line) plus a symmetric
+/// [`BAR_TEXT_PAD`], so `text_left` sits `BAR_TEXT_PAD` inside BOTH edges — the
+/// P5 main-menu ragged-right look. V7 TASTE-GATE: EVERY row hugs — a row that
+/// carries a shortcut composes it INLINE into its own name line (label + gap +
+/// shortcut), so `primary_px` already spans that content and the bar hugs the
+/// whole thing; there is no full-width special case. The right edge is clamped to
+/// the full-width edge so a very long primary can never jut past the card.
+pub(super) fn bar_hug_span(card_x: f32, card_w: f32, text_left: f32, primary_px: f32) -> (f32, f32) {
+    let (x, full_w) = bar_full_span(card_x, card_w);
+    let full_right = x + full_w;
+    let right = (text_left + primary_px + BAR_TEXT_PAD).min(full_right);
+    (x, (right - x).max(1.0))
+}
+
+/// PURE geometry — grow a bar's `(x, w)` by `grow` px toward the OPEN margin
+/// (RIGHT by default, LEFT when `mirror`, floored at the canvas edge) — the
+/// SELECTED-bar lead. The ONE owner both the full-width and hug-extent selected
+/// bars read, so the grow direction can't drift between extents.
+pub(super) fn grow_span(x: f32, w: f32, grow: f32, mirror: bool) -> (f32, f32) {
+    let g = grow.max(0.0);
+    if mirror {
+        // Grow LEFT: the RIGHT edge stays put; the left edge slides `g` left,
+        // floored at the canvas edge.
+        let left = (x - g).max(0.0);
+        (left, x + w - left)
+    } else {
+        // Grow RIGHT: the LEFT edge stays put; the right edge juts `g` into the room.
+        (x, w + g)
+    }
+}
+
+/// PURE geometry — the FULL-WIDTH UNSELECTED bar rect `[x, y, w, h]` for a
+/// candidate row whose pitch-cell top is `top`. A thin `[x, top, w, h]` wrapper
+/// over [`bar_full_span`] (the shipping renderer composes `bar_full_span` +
+/// `grow_span` directly now that the extent axis exists); kept as the law
+/// suite's stable full-width fixture.
+#[cfg(test)]
+pub(super) fn bar_rect_unselected(card_x: f32, card_w: f32, top: f32, bar_h: f32) -> [f32; 4] {
+    let (x, w) = bar_full_span(card_x, card_w);
+    [x, top, w, bar_h]
+}
+
+/// PURE geometry — the SELECTED bar rect: inset like the others
+/// ([`bar_rect_unselected`]) but grown `grow_px` WIDER toward the open margin —
+/// RIGHT by default, mirrored LEFT under a right-anchored (`TopRight`) card. On
+/// the default (left) anchor the selected bar shares the unselected LEFT edge
+/// and juts `grow_px` further RIGHT; mirrored it shares the RIGHT edge and juts
+/// `grow_px` further LEFT. Text alignment is never touched (rowlayout owns it) —
+/// only the surface grows. ONE owner for the renderer + the law.
+///
+/// DESIGNER PIXEL-PASS FIX (2026-07-16): the jut runs INTO THE ROOM, past the
+/// card's own edge — the old `card_x + card_w` clamp capped every jut at
+/// `BAR_SIDE_INSET` (~8px) no matter how large `grow_px` was, so the selected
+/// bar read as MISALIGNED, not as a deliberate Persona ledge. With the pane
+/// dropped there is no card box to stay within — the bar juts into the open
+/// margin/room and the framebuffer clips it at the canvas edge. Only the LEADING
+/// edge is floored at `0.0` so a mirrored jut never runs off the left side.
+///
+/// A `[x, top, w, h]` wrapper over [`bar_full_span`] + [`grow_span`] (the two
+/// pure owners the shipping renderer now composes directly, for both the
+/// full-width and hug extents); kept as the law suite's stable full-width
+/// selected-bar fixture.
+#[cfg(test)]
+pub(super) fn bar_rect_selected(
+    card_x: f32,
+    card_w: f32,
+    top: f32,
+    bar_h: f32,
+    grow_px: f32,
+    mirror: bool,
+) -> [f32; 4] {
+    let (bx, bw) = bar_full_span(card_x, card_w);
+    let (x, w) = grow_span(bx, bw, grow_px, mirror);
+    [x, top, w.max(1.0), bar_h]
+}
+
+/// PURE geometry — the FOOTER-PLATE rect `[x, y, w, h]` under
+/// [`theme::ListStyle::Bars`]: an opaque value band spanning the hint + footer
+/// zone (from the first hint row's top DOWN to the card bottom), inset like the
+/// bars ([`BAR_SIDE_INSET`]). THE FOOTER-OVER-POSTER GUARANTEE (the taste-gate
+/// finding): with the pane dropped, a giant corner PLACARD (`TitleStyle::Placard`
+/// — Firetail's wordmark) bleeds UP behind the dim foot-hint row, so the muted
+/// hint glyphs drowned in the poster letters (contrast collapse, DESIGN §5's
+/// legibility floor). This plate draws in the SAME z-slot as the bars (over the
+/// placard, under the overlay text — see `draw_overlay_card`) at the whisper
+/// [`theme::overlay_bar_unselected`] value, so it HIDES the poster exactly where
+/// the footer sits and restores the hint's designed ground (the same near-ground
+/// value the query line already reads on). Value only, never amber. `content_rows`
+/// is the number of drawn display rows ABOVE the hint (the flat window's
+/// `visible + empty` or the theme plan's line count); the y is the ONE
+/// [`overlay_row_top`] owner every other row reads, so plate and hint can't drift.
+///
+/// V8 — `hug` gates the HORIZONTAL span exactly like the ROWS do
+/// ([`theme::BarExtent::HugText`]): under a hugging list style the footer plate
+/// HUGS its own content (`Some((text_left, footer_content_px))` → the shared
+/// [`bar_hug_span`] rule) instead of a lone full-width plate stretched under
+/// ragged hugging rows (the "all rows hug" taste-gate finding — a single wide bar
+/// under the pills read as out of family). Full-width bars pass `None` and keep
+/// the byte-identical `card_w`-spanning plate. The footer-over-poster guarantee
+/// survives either way: the plate still covers exactly the footer glyphs (plus
+/// [`BAR_TEXT_PAD`]), so a placard behind it can't bleed into the footer text.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn footer_plate_rect(
+    text_top: f32,
+    header_rows: usize,
+    header_gap: f32,
+    content_rows: usize,
+    line_height: f32,
+    card_x: f32,
+    card_w: f32,
+    card_bottom: f32,
+    hug: Option<(f32, f32)>,
+) -> [f32; 4] {
+    let hint_top = overlay_row_top(text_top, header_rows, header_gap, content_rows, line_height);
+    let (x, w) = match hug {
+        Some((text_left, content_px)) => bar_hug_span(card_x, card_w, text_left, content_px),
+        None => bar_full_span(card_x, card_w),
+    };
+    [x, hint_top, w, (card_bottom - hint_top).max(1.0)]
+}
+
 /// The device-px TOP a uniform-line-height RIGHT-COLUMN buffer must be uploaded
 /// at so its chord/time labels — which lead with `header_rows` empty lines —
 /// land EXACTLY on the candidate band [`overlay_row_top`] draws. The secondary
@@ -378,14 +570,18 @@ pub(super) fn overlay_secondary_top(text_top: f32, header_gap: f32) -> f32 {
 }
 
 /// The device-px vertical CENTER of the overlay QUERY (input) line — the row the
-/// amber caret and the query glyphs share. The query sits at the card's inner
-/// text origin (`text_top`), ABOVE the header gap, so it never takes the
-/// candidate-row shift; centering the caret here keeps it on the query line in
-/// both the flat pickers (whose one header line is height-inflated to carry the
-/// gap, its glyphs top-aligned) and the faceted pickers (whose gap rides the
-/// lens strip, the query line left plain). ONE owner, read by
-/// [`TextPipeline::overlay_place_caret`] — the caret can never drift from the
-/// query line's own y again.
+/// amber caret and the query glyphs share. `line_height` is the query line's
+/// ACTUAL shaped height (its first layout run's `line_height`), NOT the bare
+/// [`TextPipeline::overlay_lh`]: the FLAT pickers inflate the query line by
+/// `header_gap` to open the beat before the candidates, and cosmic-text
+/// HALF-LEADS the glyphs (centres them in that taller line), so the query text
+/// sits `header_gap * 0.5` LOWER than the top. Centering the caret on the same
+/// inflated height keeps it on the glyphs; passing the un-inflated `overlay_lh()`
+/// floated the caret a half-beat ABOVE the text (the full-bleed caret bug). The
+/// faceted pickers leave the query line plain (their beat rides the lens strip),
+/// so their run height already equals `overlay_lh()` — byte-identical there. ONE
+/// owner, read by [`TextPipeline::overlay_place_caret`] and the y-agreement
+/// probe, so the caret can never compute its own y and drift from the text.
 pub(super) fn overlay_query_center(text_top: f32, line_height: f32) -> f32 {
     text_top + line_height * 0.5
 }
