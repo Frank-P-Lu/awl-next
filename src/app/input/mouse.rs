@@ -896,6 +896,13 @@ impl App {
             if lines.abs() >= 1.0 {
                 let dir = lines.signum();
                 self.set_zoom(self.zoom + dir * render::ZOOM_STEP);
+                // HOLD-⌘ SHORTCUT PEEK: a Cmd-scroll holds the arming modifier bare, so
+                // the peek may have armed (or already opened) before the wheel moved.
+                // The user is zooming to READ the text — put the frosted card down at
+                // once. `set_zoom` armed the sticky-zoom debounce, so `zoom_in_flight`
+                // is now true and `on_modifiers_changed`'s gate keeps it from re-arming
+                // until the zoom settles.
+                self.feed_peek(crate::peek::PeekStimulus::Interrupt);
             }
         } else if lines.abs() >= 1.0 {
             // Free scroll: wheel up moves content down (scroll up), so a
