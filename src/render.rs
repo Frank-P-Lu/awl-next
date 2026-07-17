@@ -2386,20 +2386,40 @@ pub(crate) fn effective_list_style() -> theme::ListStyle {
 /// so a `-chips` shot silently came out as `text` — the gallery trap). Malformed
 /// → `None` (the world's own `render_caps.facet_style`); a SET-but-unrecognized
 /// value is reported to stderr by [`read_forced_knob`] before it falls back.
+///
+/// CHIP-VARIATIONS PROBE → CONFIRMED MAP (2026-07-17) — the `chips` word takes an
+/// OPTIONAL `:<variant>` suffix selecting one of the four surviving
+/// [`theme::ChipVariant`] treatments; bare `chips` == `chips:hairline` (the landed
+/// baseline). An unknown suffix → `None` (loud fallback via [`read_forced_knob`]).
+/// `tinted`/`bold` were DROPPED with their variants (user's confirmed map).
 fn parse_facet_style_force(s: &str) -> Option<theme::FacetStyle> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "text" => Some(theme::FacetStyle::Text),
-        "band" => Some(theme::FacetStyle::Band),
-        "chips" => Some(theme::FacetStyle::Chips),
-        _ => None,
+    let low = s.trim().to_ascii_lowercase();
+    match low.as_str() {
+        "text" => return Some(theme::FacetStyle::Text),
+        "band" => return Some(theme::FacetStyle::Band),
+        "chips" => return Some(theme::FacetStyle::Chips(theme::ChipVariant::Hairline)),
+        _ => {}
     }
+    let variant = low.strip_prefix("chips:")?;
+    let v = match variant {
+        "hairline" => theme::ChipVariant::Hairline,
+        "filled" | "filledactive" => theme::ChipVariant::FilledActive,
+        "underline" => theme::ChipVariant::Underline,
+        "bracket" => theme::ChipVariant::Bracket,
+        _ => return None,
+    };
+    Some(theme::FacetStyle::Chips(v))
 }
 
 /// The `AWL_FACET_STYLE_FORCE` dev knob, read ONCE and memoized.
 fn awl_facet_style_force() -> &'static Option<theme::FacetStyle> {
     static ONCE: std::sync::OnceLock<Option<theme::FacetStyle>> = std::sync::OnceLock::new();
     ONCE.get_or_init(|| {
-        read_forced_knob("AWL_FACET_STYLE_FORCE", "text | band | chips", parse_facet_style_force)
+        read_forced_knob(
+            "AWL_FACET_STYLE_FORCE",
+            "text | band | chips[:hairline|bold|filled|underline|tinted|bracket]",
+            parse_facet_style_force,
+        )
     })
 }
 
