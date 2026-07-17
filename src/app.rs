@@ -377,6 +377,11 @@ mod session;
 /// travel on view sync, files-touched on open) + the flush on the autosave
 /// triggers. `crate::stats` owns the pure store + injected-clock helpers.
 mod stats;
+/// WRITING STREAKS' App-side wiring (native only): the per-buffer word-delta
+/// sampling on the autosave flush triggers, the local-calendar-day read, and the
+/// live year-view push. `crate::streaks` owns the pure store + calendar/intensity
+/// arithmetic + the (de)serializer.
+mod streaks;
 
 pub struct App {
     file: Option<PathBuf>,
@@ -876,6 +881,23 @@ pub struct App {
     /// flush with nothing new skips the atomic write.
     #[cfg(not(target_arch = "wasm32"))]
     stats_dirty: bool,
+    /// WRITING STREAKS: the persisted daily-net-words record (native-only, LOCAL/
+    /// PRIVATE — beside `stats.toml`). Loaded once at launch, sampled + persisted on
+    /// the SAME autosave flush triggers as the odometer.
+    #[cfg(not(target_arch = "wasm32"))]
+    streaks: crate::streaks::Streaks,
+    /// The active buffer's word count at the last streaks sample — the `last` side
+    /// of the per-flush word DELTA. `None` until the first sample of a buffer (a
+    /// fresh launch or right after a buffer swap), so opening a file's existing
+    /// words is ANCHORED (never counted as "written"); the next flush records the
+    /// delta from there. Reset to `None` on every buffer swap (`streaks_reset_baseline`).
+    #[cfg(not(target_arch = "wasm32"))]
+    streaks_baseline: Option<usize>,
+    /// Whether the streaks record has unpersisted changes since the last flush, so
+    /// a flush that recorded nothing (an anchor, or a no-net-change idle) skips the
+    /// atomic write.
+    #[cfg(not(target_arch = "wasm32"))]
+    streaks_dirty: bool,
     /// SINGLE-INSTANCE DAEMON (native only, and compiled out under `mas` — see
     /// `crate::daemon`'s module doc): the socket special file's path, so
     /// `daemon::daemon_shutdown` can unlink it on a clean quit — `None` when this
@@ -1178,6 +1200,14 @@ impl App {
             stats_last_cursor: None,
             #[cfg(not(target_arch = "wasm32"))]
             stats_dirty: false,
+            // WRITING STREAKS: load the persisted record (empty on a fresh install),
+            // beside the odometer. The baseline anchors on the first flush.
+            #[cfg(not(target_arch = "wasm32"))]
+            streaks: crate::streaks::load(&crate::streaks::streaks_path()),
+            #[cfg(not(target_arch = "wasm32"))]
+            streaks_baseline: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            streaks_dirty: false,
             #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
             daemon_socket_path: None,
             #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
@@ -1712,6 +1742,9 @@ impl ApplicationHandler<AwlEvent> for App {
         // right above it (native only; config + dirty gated inside).
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_flush();
+        // WRITING STREAKS: the final day-delta flush, beside the odometer's.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_flush();
         #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
         self.daemon_shutdown();
     }
@@ -1798,6 +1831,9 @@ impl ApplicationHandler<AwlEvent> for App {
                     // config + dirty gated inside).
                     #[cfg(not(target_arch = "wasm32"))]
                     self.stats_flush();
+                    // WRITING STREAKS: sample the day-delta on the same idle door.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.streaks_flush();
                     if let Some(gpu) = self.gpu.as_ref() {
                         gpu.window.request_redraw();
                     }
@@ -4403,6 +4439,13 @@ mod tests {
             // the 2 added by the discoverability round: peek/footer ranking from a fake
             // ledger, and the fresh-ledger-empty case.)
             ("app/stats.rs", 9),
+            // 3 WRITING STREAKS tests, each inside its own `fs::with_fs(fake, ..)`
+            // closure seeded with an `InMemoryFs` — they exist specifically to prove
+            // what `streaks_flush` writes to / reads back from `streaks.toml` (and
+            // that the kill switch never writes), so they need to CONTROL + INSPECT
+            // the injected fs (which `new_hermetic`'s private fs hides). Same
+            // treatment as `app/stats.rs` above.
+            ("app/streaks.rs", 3),
             // input.rs's click tests all moved onto `App::new_hermetic` —
             // zero raw calls left.
         ];

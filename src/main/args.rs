@@ -751,6 +751,16 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 // it via the palette "Lifetime stats" command instead.
                 lifetime::set_open(true);
             }
+            "--streaks" => {
+                // Summon the WRITING STREAKS card for the capture (mirrors `--lifetime`).
+                // Sets the process-global so it composes with any capture mode; the card
+                // renders the FIXED synthetic `streaks::placeholder` year + streak numbers
+                // (no live persisted store), so an explicit `--streaks` capture is
+                // deterministic + byte-stable while a plain capture (card closed) is
+                // byte-identical. The live app summons it via the palette "Writing
+                // streaks" command instead.
+                crate::streaks::set_open(true);
+            }
             "--peek" => {
                 // Summon the HOLD-⌘ SHORTCUT PEEK for the capture (mirrors `--hud` /
                 // `--lifetime`). Sets the process-global so it composes with any capture
@@ -834,6 +844,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --hud               summon the HELD stats HUD (live: hold Option-Cmd-I; clock/file-date fields are fixed placeholders in a capture)\n\
                      \x20 --menu-bar          show the web/Linux MENU BAR (default on web/Linux, off on macOS which has the native bar); --menu-open N drops menu N's dropdown\n\
                      \x20 --peek              summon the HOLD-⌘ shortcut peek (live: hold the convention's bare arming modifier — ⌘ on Mac, Ctrl on Linux — ~600ms; a capture shows the curated starter six)\n\
+                     \x20 --streaks           summon the WRITING STREAKS card (live: palette \"Writing streaks\"; a capture shows a fixed synthetic year + streak numbers)\n\
                      \x20 --whichkey          summon the WHICH-KEY panel: the C-x prefix's follow-up keys (live: press C-x and pause ~500ms)\n\
                      \x20 --notes-root DIR    quick-notes home for C-x n / C-x m (default ~/notes)\n\
                      \x20 --config PATH       load settings from PATH (default ~/.config/awl/config.toml)\n\

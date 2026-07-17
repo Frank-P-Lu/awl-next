@@ -757,6 +757,22 @@ pub struct PeekReport {
     pub rows: Vec<crate::peek::PeekRow>,
 }
 
+/// The summoned WRITING STREAKS card's machine-readable state for the capture
+/// sidecar (see [`TextPipeline::streaks_report`]). `open` mirrors
+/// [`crate::streaks::streaks_open`] (OFF by default → a default capture is
+/// byte-identical); the figures are the LIVE year the App pushed OR the fixed
+/// synthetic [`crate::streaks::placeholder`] in a headless capture (no persisted
+/// store), via the SAME `streaks_effective_view` owner the pixels use — so the
+/// sidecar can never claim a figure the card doesn't show, and a `--streaks`
+/// capture is deterministic + byte-stable across machines. `cells` is the row-major
+/// (`col*7 + row`) intensity-bucket grid.
+pub struct StreaksReport {
+    pub open: bool,
+    pub streak: u64,
+    pub today_words: u64,
+    pub cells: Vec<u8>,
+}
+
 /// The DEBUG panel's machine-readable perf state — the raw values behind the
 /// drawn lines, mirrored into the capture sidecar's `debug` block so the agent
 /// triages numbers, not prose. All clocked fields are `None` in a capture (no

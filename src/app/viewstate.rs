@@ -354,6 +354,11 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_sync_hud();
 
+        // WRITING STREAKS: push the live year-view so a summoned card this frame
+        // reads the real heatmap (live-only; a capture shows the placeholder).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_sync_card();
+
         // NOTES VERBS round: push the SAVED stat's live state (dirty, or clean +
         // elapsed seconds since the last successful write) — live-only, mirroring
         // `stats_sync_hud` exactly.

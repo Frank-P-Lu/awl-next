@@ -150,6 +150,7 @@ markers below, byte for byte).
 | Credits |  |  |
 | Guide |  |  |
 | Lifetime stats |  |  |
+| Writing streaks |  |  |
 | Line endings… |  |  |
 | Align table |  |  |
 | Report a Problem |  |  |
@@ -255,9 +256,9 @@ running in a `<canvas>` with no native filesystem underneath it.
 | Getting a file out | Already on disk | "Download file" ({{key:command_palette}}) — saves the active buffer as a plain-text download |
 
 **Hidden on web:** Recent projects…, Version history…, Clean unused
-assets…, Keep version, Finish file, Lifetime stats, Quit, Check for
-Updates — daemon, session-restore, and local-version-history machinery
-with nothing to attach to in a browser tab.
+assets…, Keep version, Finish file, Lifetime stats, Writing streaks, Quit,
+Check for Updates — daemon, session-restore, and local-version-history
+machinery with nothing to attach to in a browser tab.
 
 **A couple of native chords belong to the browser itself** (new tab,
 new window, and similar). {{key:new_note}} and {{key:switch_theme}}

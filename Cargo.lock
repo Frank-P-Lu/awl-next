@@ -165,6 +165,7 @@ dependencies = [
  "glyphon",
  "image",
  "js-sys",
+ "libc",
  "log",
  "muda",
  "naga",

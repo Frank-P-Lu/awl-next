@@ -263,7 +263,14 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // `/169` — PASSIVE CRASH RECOVERY: the `about` block gains `pending_crash`.
 // False by default/headlessly; an explicit injected pending marker reports true
 // and adds the matching quiet About-card line. The startup center notice is gone.
-pub const SCHEMA_VERSION: u32 = 169;
+// `/170` — WRITING STREAKS: a new top-level `streaks` block (`{ open, streak,
+// today_words, cells: [..] }`) — the summoned year-calendar heatmap card
+// (`streaks.rs`). `open` is false by default (a default capture is byte-identical
+// apart from the added block), true via the palette "Writing streaks" command /
+// the `--streaks` capture flag. The figures + `cells` intensity grid are the LIVE
+// year the App pushed OR the fixed synthetic `streaks::placeholder` in a capture
+// (no persisted store), so a `--streaks` capture is deterministic + byte-stable.
+pub const SCHEMA_VERSION: u32 = 170;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

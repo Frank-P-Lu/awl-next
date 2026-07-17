@@ -42,13 +42,14 @@ impl CardFlag {
     }
 }
 
-/// Dismiss whichever MODAL summoned card (About or Lifetime stats) is open,
-/// returning `true` iff one WAS open (and is now closed). THE one owner of the
-/// "a modal card OWNS the next key/click" intercept: `actions::apply_core`'s
-/// top-of-function arm and the live App's mouse-press handler both call this
-/// instead of duplicating a per-card check+close. The two are mutually exclusive
-/// (each opens only after the palette that summoned it closed, and each dismisses
-/// on the first key), so closing "the open one" is the whole contract. The
+/// Dismiss whichever MODAL summoned card (About, Lifetime stats, or Writing
+/// streaks) is open, returning `true` iff one WAS open (and is now closed). THE
+/// one owner of the "a modal card OWNS the next key/click" intercept:
+/// `actions::apply_core`'s top-of-function arm and the live App's mouse-press
+/// handler both call this instead of duplicating a per-card check+close. They are
+/// mutually exclusive (each opens only after the palette that summoned it closed,
+/// and each dismisses on the first key), so closing "the open one" is the whole
+/// contract. The
 /// hold-⌘ peek is deliberately absent — it is not modal (it closes when the hold
 /// breaks, via `peek::PeekArm`).
 pub fn dismiss_summoned_card() -> bool {
@@ -58,6 +59,10 @@ pub fn dismiss_summoned_card() -> bool {
     }
     if crate::lifetime::lifetime_open() {
         crate::lifetime::set_open(false);
+        return true;
+    }
+    if crate::streaks::streaks_open() {
+        crate::streaks::set_open(false);
         return true;
     }
     false

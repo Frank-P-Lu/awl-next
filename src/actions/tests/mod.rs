@@ -528,6 +528,7 @@ pub(super) fn delete_flinch_fixture(
         | Action::BeginPrefix
         | Action::About
         | Action::LifetimeStats
+        | Action::WritingStreaks
         | Action::ConvertLineEndings
         | Action::AlignTable
         | Action::ToggleBlockquote
@@ -724,6 +725,7 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::BeginPrefix
             | Action::About
             | Action::LifetimeStats
+            | Action::WritingStreaks
             | Action::ConvertLineEndings
             | Action::AlignTable
             | Action::ToggleBlockquote
@@ -827,6 +829,7 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::BeginPrefix,
         Action::About,
         Action::LifetimeStats,
+        Action::WritingStreaks,
         Action::ConvertLineEndings,
         Action::AlignTable,
         Action::ToggleBlockquote,
@@ -963,6 +966,7 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::ToggleWritingNits
         | Action::About
         | Action::LifetimeStats
+        | Action::WritingStreaks
         | Action::ConvertLineEndings
         | Action::AlignTable
         | Action::ToggleBlockquote

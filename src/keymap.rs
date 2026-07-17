@@ -234,6 +234,13 @@ pub enum Action {
     /// `lifetime::lifetime_open()`) or mouse click. Render-only (no buffer
     /// change). See `lifetime.rs`.
     LifetimeStats,
+    /// Palette "Writing streaks": OPEN the summoned Writing streaks card — the
+    /// year-calendar heatmap of how much you've written each day (net words),
+    /// plus the current streak + today's words. A calm `apply_core`-routed card,
+    /// mirroring About/Lifetime: stays open until dismissed by ANY key
+    /// (`apply_core`'s top-of-function intercept while `streaks::streaks_open()`)
+    /// or mouse click. Render-only (no buffer change). See `streaks.rs`.
+    WritingStreaks,
     /// Palette "Line endings…": TOGGLE the active buffer's line-ending
     /// discipline (`LF`↔`CRLF`, [`crate::buffer::Eol`]) — the rope is byte-identical
     /// either way (always pure `\n`); only the ON-DISK encoding a save restores
@@ -1637,6 +1644,7 @@ about|||
 credits|||
 guide|||
 lifetime_stats|||
+writing_streaks|||
 line_endings|||
 align_table|||
 report_a_problem|||

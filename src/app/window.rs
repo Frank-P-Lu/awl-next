@@ -126,6 +126,9 @@ impl App {
         // only; config-gated + dirty-gated inside).
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_flush();
+        // WRITING STREAKS: sample the day-delta on the SAME blur trigger.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_flush();
         // HOLD-⌘ SHORTCUT PEEK: the window losing focus breaks the hold — cancel a
         // pending peek / close an open one, so it never lingers behind another app
         // (the macOS focus-loss edge the HUD's own `hud_release_on_mods` covers for
