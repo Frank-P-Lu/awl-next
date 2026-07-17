@@ -1067,7 +1067,8 @@ pub const WAGTAIL: Theme = Theme {
         // PERSONALITY ASSIGNMENT (2026-07-15): the PAGE FRAME's first (and
         // only) assignment — a 2px frame around the writing column in this
         // world's ladder white (`theme::page_frame_ink` = `base_content`),
-        // the WORLD-ROLES "page reads as a deliberate object" idea. Drawn
+        // the "page reads as a deliberate object" idea (retired; decision
+        // recorded in THEMES.md). Drawn
         // hard-edged (dither-1.0 fill, no fractional-alpha AA rim) so it is
         // 1-bit-legal by construction. Graduated from the AWL_PAGE_BORDER
         // gallery probe (2px white was the user's pick over 1px).

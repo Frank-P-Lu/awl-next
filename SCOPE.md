@@ -125,7 +125,9 @@ inline** (fit-to-column, with drag-resize), **tables laid out as real grids**
 inline toggles — see below). The render is rich; the file stays plain. awl saves
 a single plain-markdown file, byte-for-byte editable anywhere else — the WYSIWYG
 lives in how awl *draws* the text, never in what it stores, and the caret drops
-any line back to its raw markdown to edit it. This is *"Live Preview with awl's
+any line back to its raw markdown to edit it. (Document **export** to Word /
+HTML / PDF is a separate ONE-WAY render — a snapshot out, never a second stored
+format; see below.) This is *"Live Preview with awl's
 taste,"* not a Word clone: no styled clipboard, no floating format toolbar, no
 proprietary document model.
 
@@ -149,6 +151,14 @@ Numbered / Task list, Heading, Code Block) and the remaining inline ones
 **palette-only** (like Align Table), summoned by name. All eleven are
 independently rebindable via `[keys]` (the emacs slot left empty for a user to
 fill).
+
+### Document export (`actions.rs` + `export/`, `web_export.rs`)
+
+A one-way render OUT, not a second saved format — the file on disk stays plain
+markdown. Three palette commands: **Export as Word…**, **Export as HTML…**, and
+**Export as PDF…** (PDF native-only). Native builds write docx / html / pdf; the
+web build offers docx / html / plain-text (no PDF). Each is a snapshot of the
+current buffer, never round-tripped back in.
 
 ## Tech (carried over from the awl rethink)
 - **Rust**, **wgpu** (2D only), **winit**. mac = Metal, linux = Vulkan.

@@ -203,7 +203,7 @@ offer Word and HTML export.
 
 ## Looks
 
-**Fifteen worlds, one chord away.** {{key:switch_theme}} opens the
+**Sixteen worlds, one chord away.** {{key:switch_theme}} opens the
 theme picker — each world pairs its own display face with its own ink
 ladder. Wagtail is the exception: awl's one monochrome world, drawn in
 black, white, and nothing between.

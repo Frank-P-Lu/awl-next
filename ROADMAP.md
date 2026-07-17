@@ -31,10 +31,16 @@ the way it is; nothing below overrides it.
   decorative washes, the image-reveal scrim, the highlight/search-match
   texture) into `Theme::render_caps` (`theme::model::RenderCaps`) —
   declarative fields, no theme may need its own code path. A pure,
-  behavior-preserving refactor (byte-identical captures across all fifteen
+  behavior-preserving refactor (byte-identical captures across all sixteen
   worlds); internal data model work only, no on-disk format, no migration
   risk. See `THEMES.md`'s "Render capabilities as data" section for the
   field table and `CLAUDE.md`'s round note. The foundation for what follows.
+- **Document export — SHIPPED.** "Export as Word…", "Export as HTML…", and
+  "Export as PDF…" (PDF native-only) render the current buffer out — docx /
+  html / pdf on native, docx / html / plain-text on the web build. It is a
+  ONE-WAY render: the file on disk stays plain markdown; export is a snapshot
+  out, never a second saved format. See `src/export/` (`Action::ExportWord` /
+  `ExportHtml` / `ExportPdf`) and `web_export.rs`.
 - **Theme experiments.** With capabilities as data: inverse-video selection on
   the mono worlds, stipple washes on the paper worlds, striped-gradient
   grounds, ruled-border cards on light worlds — tried as gallery captures
@@ -46,12 +52,52 @@ the way it is; nothing below overrides it.
   beside reduce-motion in the accessibility story.
 - **Typography as world data.** Leading, scale, and letter-spacing become
   per-world fields — a world owns its type the way it owns its color. Then
-  every world gets a deliberate typography readjustment pass (all fifteen,
+  every world gets a deliberate typography readjustment pass (all sixteen,
   with taste time budgeted). Deep row-geometry implications; follows the
   capabilities refactor.
 - **Generated world gallery.** Every world over the same document, regenerated
   by script — published on the themes page of the docs, not the front page.
   Screenshots that can't go stale.
+
+## The path to 20 worlds (roster planning — harvested from the retired WORLD-ROLES doc)
+
+Sixteen worlds ship today (ten dark, six light). ~20 is a deliberate LAUNCH
+number — where coverage saturates — not a forever cap; worlds are cheap DATA, so
+the roster grows over time. Past ~20 you are adding near-dupes to already-covered
+cells; go further only as a discretionary freshness bet on rooms you'd actually
+rotate between. The scarce resource is DISTINCTNESS, not effort. What the
+coverage read (`THEMES.md` §1) exposes about where the next 4–6 should point:
+
+- **Mode leans dark (6 light : 10 dark)** — the clearest imbalance; new worlds
+  should skew LIGHT. A **light technical / coding** world especially: nearly
+  every light world today is literary, so light-mode coders have nothing.
+- **A light STATEMENT world** — both Statement worlds (Mangrove, Firetail) are
+  dark, so nothing balances Firetail on the light side. Its own pole: colour-
+  forward and saturated (coral / persimmon / marigold), shouting with colour +
+  type + the placard (which read best on light grounds), where Firetail shouts
+  with dark-ground atmosphere. Complementary showcases, not twins.
+- **A light SILENT world** — Wagtail's mirror: a pale, colourless, max-focus
+  monochrome room (light-mode has no silent option — Magpie is high-contrast, a
+  bit loud). The harder pole to make stunning (it sits next to a blank Notepad):
+  a *chosen* paper tone, impeccable type, generous margins, and the dark-line
+  page-frame so the page reads as a deliberate object. A craft world.
+- **A 2nd/3rd NEUTRAL** — the thinnest temperature bucket.
+- **Hue-gap worlds** — the wheel is missing a true RED, a GOLD/yellow, a deep
+  forest-GREEN, a light PURPLE, and a BROWN.
+
+Two shapes for landing ~20: **pure add** (keep all 16, add 4 targeting the gaps
+— tolerates the near-pairs Quokka/Galah, Gumtree/Bilby, Tawny/Currawong as
+"variety"), or **tidy + add** (merge the tightest pair or two, then add 5–6 for
+tighter coverage). **The stunning bar governs either way:** every world must be
+*someone's* potential favourite — no filler, no "coverage world." That can't be
+law-tested (laws guarantee legible/distinct — floors, not ceilings), so the
+launch gate is a per-world QUALITY PASS by eye across the key states (writing /
+palette / selection / code / its personality treatment): stunning or cut.
+
+Open calls still needing a decision (the user's word): the exact target (20 vs
+18 / 24); merge the tight near-pairs or keep them as variety; which hue/role gaps
+to spend the new-world budget on first; and the four-tier loudness assignment
+(Silent / Quiet / Standard / Statement).
 
 ## Deliberately waiting (with reasons)
 
@@ -71,8 +117,6 @@ the way it is; nothing below overrides it.
 - **Screen-reader support (AccessKit).** The named accessibility project: a
   wgpu canvas exposes no accessibility tree today; AccessKit is the path.
   Honest status lives in `ACCESSIBILITY.md`.
-- **Print / PDF export.** Writers eventually need a manuscript out; awl's
-  render deserves to be the thing that prints.
 - **Wide-gamut (P3) color.** The ambers could sing more on modern displays;
   a rabbit hole until it isn't.
 - **Linux native menu bar (gtk via muda).** The in-app bar serves Linux today;
