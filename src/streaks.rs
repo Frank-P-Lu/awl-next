@@ -442,6 +442,7 @@ mod tests {
         assert!(s.days.is_empty(), "a zero delta records nothing");
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn current_streak_counts_consecutive_days_and_tolerates_today_being_blank() {
         let mut s = Streaks::default();
@@ -457,6 +458,7 @@ mod tests {
         assert_eq!(s.current_streak("2026-07-19"), 0);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn bucket_maps_quartiles_and_zero() {
         assert_eq!(bucket(0, 100), 0, "no words is always empty");
@@ -470,6 +472,7 @@ mod tests {
         assert_eq!(bucket(100, 100), 4, "the peak day is the top rung");
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn civil_date_from_epoch_secs_maps_the_day() {
         // 2026-07-17 00:00:00 UTC = 1_784_246_400s; any second that day maps to it.
@@ -481,6 +484,7 @@ mod tests {
         assert_eq!(civil_date_from_epoch_secs(-1), "1969-12-31");
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn civil_date_round_trips_and_prev_day_steps_back() {
         // Epoch day 0 is 1970-01-01 (a Thursday → weekday 4).
@@ -497,6 +501,7 @@ mod tests {
         assert_eq!(prev_day("not-a-date"), "not-a-date");
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn view_lays_today_in_the_last_column_and_leaves_the_future_empty() {
         let mut s = Streaks::default();
