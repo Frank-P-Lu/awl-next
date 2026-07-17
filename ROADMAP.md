@@ -31,10 +31,16 @@ the way it is; nothing below overrides it.
   decorative washes, the image-reveal scrim, the highlight/search-match
   texture) into `Theme::render_caps` (`theme::model::RenderCaps`) —
   declarative fields, no theme may need its own code path. A pure,
-  behavior-preserving refactor (byte-identical captures across all fifteen
+  behavior-preserving refactor (byte-identical captures across all sixteen
   worlds); internal data model work only, no on-disk format, no migration
   risk. See `THEMES.md`'s "Render capabilities as data" section for the
   field table and `CLAUDE.md`'s round note. The foundation for what follows.
+- **Document export — SHIPPED.** "Export as Word…", "Export as HTML…", and
+  "Export as PDF…" (PDF native-only) render the current buffer out — docx /
+  html / pdf on native, docx / html / plain-text on the web build. It is a
+  ONE-WAY render: the file on disk stays plain markdown; export is a snapshot
+  out, never a second saved format. See `src/export/` (`Action::ExportWord` /
+  `ExportHtml` / `ExportPdf`) and `web_export.rs`.
 - **Theme experiments.** With capabilities as data: inverse-video selection on
   the mono worlds, stipple washes on the paper worlds, striped-gradient
   grounds, ruled-border cards on light worlds — tried as gallery captures
@@ -46,7 +52,7 @@ the way it is; nothing below overrides it.
   beside reduce-motion in the accessibility story.
 - **Typography as world data.** Leading, scale, and letter-spacing become
   per-world fields — a world owns its type the way it owns its color. Then
-  every world gets a deliberate typography readjustment pass (all fifteen,
+  every world gets a deliberate typography readjustment pass (all sixteen,
   with taste time budgeted). Deep row-geometry implications; follows the
   capabilities refactor.
 - **Generated world gallery.** Every world over the same document, regenerated
@@ -71,8 +77,6 @@ the way it is; nothing below overrides it.
 - **Screen-reader support (AccessKit).** The named accessibility project: a
   wgpu canvas exposes no accessibility tree today; AccessKit is the path.
   Honest status lives in `ACCESSIBILITY.md`.
-- **Print / PDF export.** Writers eventually need a manuscript out; awl's
-  render deserves to be the thing that prints.
 - **Wide-gamut (P3) color.** The ambers could sing more on modern displays;
   a rabbit hole until it isn't.
 - **Linux native menu bar (gtk via muda).** The in-app bar serves Linux today;

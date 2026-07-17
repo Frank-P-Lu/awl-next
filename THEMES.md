@@ -13,7 +13,7 @@ world the design got wrong.
 ## 1. What a world is
 
 A **world** (`theme::Theme`, `src/theme.rs`) is a complete, curated mood — not a
-swatch. Fifteen ship today (nine dark, six light; `theme::THEMES`), each with:
+swatch. Sixteen ship today (ten dark, six light; `theme::THEMES`), each with:
 
 - **An identity**: a name (Tawny, Saltpan, Potoroo, …), a one-line character
   description in its doc comment, and — critically — its own **display font**
@@ -225,7 +225,7 @@ new law here, not a bypass of this one.
 ### Structural / identity laws
 
 Enforced by the `theme::tests` module (see file for exact assertions):
-`worlds_nine_dark_six_light`, `every_world_has_a_valid_background`,
+`worlds_ten_dark_six_light`, `every_world_has_a_valid_background`,
 `every_world_has_a_bundled_mono`, `cjk_fallback_matches_world_character`,
 `zh_hans_ladder_matches_world_character_with_klee_override`,
 `zh_hant_uniform_ko_splits_serif_from_sans`,
@@ -260,7 +260,7 @@ Enforced by `render::tests::syntax_roles::every_monochrome_world_renders_zero_sa
   from-comment-wash laws apply UNCHANGED — a monochrome highlight must still
   read as a highlight, by value instead of hue.
 - This is a property test layered ON TOP of, not a replacement for, the
-  ordinary structural laws above (`worlds_nine_dark_six_light`,
+  ordinary structural laws above (`worlds_ten_dark_six_light`,
   `role_style_laws_hold_for_every_world`, …) — those still separately pin
   Wagtail's exact hex literals; this law is what stops a future hand-edit from
   quietly nudging one of those greys toward a hue and surviving unnoticed.
@@ -613,7 +613,7 @@ behaviors would have had to grow another `is_one_bit()`-shaped special case
 rather than simply setting a field — exactly the "a theme needing its own
 code path means the design is wrong" smell `CLAUDE.md`'s engineering
 principles warn against. This round is a pure REFACTOR (behavior-preserving,
-verified by byte-identical before/after captures across all fifteen worlds —
+verified by byte-identical before/after captures across all sixteen worlds —
 no visual change to any world) that replaces every one of those branches with
 a read of a declarative field on `Theme::render_caps` (`theme::model::
 RenderCaps`):
@@ -629,6 +629,11 @@ RenderCaps`):
 | `highlight_texture` | `Wash` \| `Stipple { color, density }` | THE ONE emphasis texture `==highlight==` spans and search matches share (`highlight_wash`, `wagtail_dither_density`) — a hue-derived translucent wash vs. a fixed-color Bayer-ordered dither stipple at `density`. | Wagtail (`Stipple { white, 0.25 }`) |
 | `title_style` | `InlinePrefix` \| `Placard { corner, scale, ink }` | How a summoned overlay card announces its title: the quiet inline `"<title> › "` prefix, or a large corner-anchored dim WORDMARK behind the rows (the P3R watermark; **bleed is the contract** — it anchors to the CANVAS corner and may bleed past the card; rows always composite over it; the inline prefix is suppressed so titles never double). `ink` ∈ Faint / Ghost / **Stipple** (Bayer pixel-stipple of the wordmark — see the personality section below). | Galah, Magpie (`BL 3.0 Ghost` — the gallery reference), Mangrove (`BL 3.0 Stipple` — the dither is its own language), Firetail (`BL 3.0 Faint`, deliberately smooth — the foil) |
 | `page_frame` | `None` \| `Line { weight_px }` | A thin FRAME around the WRITING COLUMN (distinct from the card border) — four hard-edged quads straddling the column boundary over the document's vertical extent, ink always `theme::page_frame_ink()` = the world's own `base_content` (the WORLD-ROLES "dark-line page-frame"; graduated from the `AWL_PAGE_BORDER` probe). | Wagtail (`Line { 2.0 }`, its ladder white — the 2px pick from the probe gallery) |
+| `card_anchor` | `TopLeft` \| `TopCenter` \| `Inset { x_frac }` \| `TopRight` | Where the summoned overlay card anchors horizontally (one owner `render::effective_card_anchor` → `overlay_card_x`). `TopRight` is more than placement — it also mirrors the selected-BAR growth direction toward the anchored edge under `Bars` (never text alignment). | Currawong, Mangrove, Galah, Magpie, Wagtail, Firetail (`TopLeft`; the GLOBAL DEFAULT is `TopCenter`) |
+| `chrome_face` | `Body` \| `Named(family)` | Which FACE the overlay chrome (placard wordmark / title prefix / strip labels) shapes in — `Body` (the world's own display face) everywhere, byte-identical, until a world names another family. | Firetail (`Named("Archivo Black")`) |
+| `motion` | `MotionJuice { entrance, band }` | Live-only overlay ENTRANCE + selection-band response. `CALM` (zero animators, settled state byte-identical in capture) on every world today. | none ship non-`CALM` yet |
+| `list_style` | `Pane` \| `Bars { radius, gap, grow_px, extent, coverage }` | How a summoned picker draws the surfaces behind its candidate rows — one pane (default) vs. per-row plates that grow under the selection. | Mangrove, Galah, Magpie, Firetail (`Bars`, the poster worlds) |
+| `facet_style` | `Text` \| `Band` \| `Chips(variant)` | How the faceted picker's lens strip skins its labels. **Chips is rebuilt-for-real but ships INERT** (poster facets render `Text`) pending the user's variant pick. | Mangrove, Galah, Magpie, Firetail carry `Chips(…)` data (held inert) |
 
 `RenderCaps::DEFAULT` is what the QUIET worlds carry — every field at its
 ordinary value, byte-identical to the pre-capabilities render paths.
@@ -1095,7 +1100,7 @@ Checklist:
    wash and let `role_style_laws_hold_for_every_world` prove the pins still
    clear every law on their own.
 6. Add the const to `THEMES`; run `cargo test` — the structural laws
-   (`worlds_nine_dark_six_light` will need its counts updated), the role-style
+   (`worlds_ten_dark_six_light` will need its counts updated), the role-style
    laws, and the ink-ladder/selection laws all sweep `THEMES` automatically, so a
    new world is enrolled in every law the moment it's in the array. A new WORLD
    CLASS (Wagtail's monochrome one) may also need its own new law, per §2/§3's

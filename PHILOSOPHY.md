@@ -246,11 +246,11 @@ awl ships as one binary with everything it needs to write, offline, from the
 first launch: no plugin marketplace, no "download language pack," no first-run
 network fetch. That promise costs disk, so the cost is *tracked*, not assumed:
 
-- **Bundle identity — the world faces.** Fourteen worlds each name a real
+- **Bundle identity — the world faces.** Sixteen worlds each name a real
   display font + code mono (`THEMES.md` §1); a theme switch reskins glyph
   *shapes*, not just color. That only works if the fonts are actually bundled
-  (~2.4 MB today), so a fresh install on a machine with none of these faces
-  installed still looks exactly right.
+  (a few MB of Latin display + mono faces today), so a fresh install on a
+  machine with none of these faces installed still looks exactly right.
 - **The offline writing promise — dictionaries.** Spellcheck (`spell.rs`) is a
   bundled Hunspell dictionary set (~2.3 MB today), not a network call — awl
   writes on a plane exactly as well as it writes at a desk.
