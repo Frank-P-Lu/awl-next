@@ -218,7 +218,8 @@ touches the other. Drag the column's edge, or use "Widen page" /
 "Narrow page" / "Reset page width" in the palette.
 
 **WYSIWYG, reveal-on-caret.** Markdown markup — a heading's `#`,
-`**bold**`, `` `code` ``, `==highlight==`, a fenced code block's fence
+`**bold**`, `` `code` ``, `==highlight==`, `~~strikethrough~~`, a
+fenced code block's fence
 lines — renders concealed except on the line your caret is on, where
 it shows in full for editing. The file on disk is always plain
 markdown; only the render is rich. `wysiwyg = false` disables the

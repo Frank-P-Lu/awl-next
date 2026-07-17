@@ -535,25 +535,22 @@ fn merge_folds(blocks: Vec<Block>) -> Vec<Block> {
 // Serialize → marked-up markdown (awl's OWN render vocabulary)
 // ---------------------------------------------------------------------------
 
-/// Combining long stroke overlay after each NON-WHITESPACE char → genuine struck
-/// glyphs (no renderer change; verified to render in the bundled faces).
+/// Struck deletions speak REAL markdown now: `~~…~~`, wrapped per line by
+/// [`wrap_inline`] — routed through the renderer's own `MdKind::Strikethrough`
+/// (the strikethrough-render round), whose muted ink + drawn strike line come
+/// from THE ONE strike owner (`render::spans::strike_line_band` /
+/// `strike_ink`), the same fns the format popover's `S` button reads.
 ///
-/// Whitespace is deliberately LEFT UNSTRUCK: a combining stroke over a space (or
-/// the newline-join of a hard-wrapped paragraph) renders as a floating dash, and a
-/// run of them reads as "- - -" leaders — the struck block looked like static, not
-/// a calm crossed-out passage. Striking only the ink means each word carries its own
-/// stroke and the spaces between stay clean, so a full-paragraph deletion reads as
-/// one settled struck block. (`\u{0336}` still visibly bridges intra-word glyphs, so
-/// each word reads as a continuous strike.)
+/// HISTORY (the retired mechanism): before the renderer could draw `~~strike~~`
+/// at all, deletions were struck by inserting a COMBINING LONG STROKE OVERLAY
+/// (`\u{0336}`) after every non-whitespace char — genuine struck glyphs with
+/// zero render-path code, at the cost of per-word gaps (whitespace had to stay
+/// unstruck or read as "- - -" leaders) and of the transcript carrying invisible
+/// combining marks. With real strikethrough in the render vocabulary the
+/// serializer says what it means; the drawn line crosses spaces cleanly, so the
+/// whitespace exception died with the mechanism.
 fn strike(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 2);
-    for c in s.chars() {
-        out.push(c);
-        if !c.is_whitespace() {
-            out.push('\u{0336}');
-        }
-    }
-    out
+    wrap_inline(s, "~~")
 }
 
 /// Wrap each physical line's content in `==…==` (single-line pairs only — a
@@ -573,10 +570,19 @@ fn highlight_lines(s: &str) -> String {
         .join("\n")
 }
 
-/// Wrap ONE inline insertion run (may straddle hard-wrap newlines) so no `==` pair
-/// crosses a line, and so leading/trailing whitespace stays OUTSIDE the markers (a
-/// `== foo ==` with inner padding is inert in awl's scan).
+/// Wrap ONE inline insertion run in the highlight wash markers — see
+/// [`wrap_inline`] (the shared shape [`strike`] rides too).
 fn highlight_inline(s: &str) -> String {
+    wrap_inline(s, "==")
+}
+
+/// Wrap ONE inline run (may straddle hard-wrap newlines) in `marker` pairs so no
+/// pair crosses a line, and so leading/trailing whitespace stays OUTSIDE the
+/// markers (a `== foo ==` with inner padding is inert in awl's scan, and a
+/// `~~ foo ~~` fails GFM's flanking rules the same way). THE ONE wrapper both
+/// the `==insertion==` wash and the `~~deletion~~` strike serialize through —
+/// merge, don't align.
+fn wrap_inline(s: &str, marker: &str) -> String {
     let mut out = String::new();
     for (k, piece) in s.split('\n').enumerate() {
         if k > 0 {
@@ -590,9 +596,9 @@ fn highlight_inline(s: &str) -> String {
         let lead = &piece[..piece.len() - piece.trim_start().len()];
         let tail = &piece[piece.trim_end().len()..];
         out.push_str(lead);
-        out.push_str("==");
+        out.push_str(marker);
         out.push_str(trimmed);
-        out.push_str("==");
+        out.push_str(marker);
         out.push_str(tail);
     }
     out
@@ -641,6 +647,12 @@ fn strip_markdown(s: &str) -> String {
             match c {
                 '`' => {}
                 '*' | '_' => {}
+                // `~` is an inline marker in awl's markdown now (`~~strike~~`,
+                // the strikethrough-render round): a literal tilde inside a
+                // deleted run would open/close the serializer's own `~~` wrap
+                // early — exactly the nested-markdown fragility this strip
+                // exists to remove (the `*`/`_`/backtick precedent).
+                '~' => {}
                 '[' | ']' => {}
                 '(' if i > 0 && bytes[i - 1] == ']' => {
                     // skip a link's (url) tail entirely
@@ -1036,32 +1048,35 @@ Anchor two also stays.";
         let new = "Keep me.\n\nA fresh inserted paragraph here.";
         let md = render_markdown(old, new, Params::default(), "T");
         assert!(md.starts_with("# T\n\n"));
-        assert!(md.contains('\u{0336}')); // struck deletion
+        assert!(md.contains("~~")); // struck deletion — REAL markdown strikethrough
         assert!(md.contains("==")); // highlight-washed insertion
         assert!(md.contains("> ")); // blockquote (dim) for the deletion + folds
     }
 
     #[test]
-    fn strike_never_marks_whitespace() {
-        // The floating-dash / "- - -" artifact was a combining stroke laid over
-        // spaces and hard-wrap newlines. Every `\u{0336}` must sit on a
-        // non-whitespace char, so a struck block reads as clean crossed-out words.
+    fn strike_wraps_per_line_and_keeps_whitespace_outside_markers() {
+        // REAL `~~` markdown (the strikethrough-render round; the combining-
+        // stroke `\u{0336}` mechanism is RETIRED — see `strike`'s doc). Each
+        // hard-wrapped line carries its own pair (a cross-line pair would defeat
+        // the line-scoped marker conceal), and lead/tail whitespace stays
+        // OUTSIDE the markers (`~~ foo ~~` inner padding fails GFM's flanking
+        // rules, exactly like `== foo ==` is inert in awl's scan).
         let s = strike("A short  digression\nspanning two lines.");
-        let chars: Vec<char> = s.chars().collect();
-        for (i, &c) in chars.iter().enumerate() {
-            if c == '\u{0336}' {
-                let prev = chars[i - 1];
-                assert!(
-                    !prev.is_whitespace(),
-                    "combining stroke laid over whitespace {prev:?} at {i}"
-                );
-            }
-        }
-        // stripping the combining marks reproduces the source exactly (lossless)
-        let bare: String = s.chars().filter(|&c| c != '\u{0336}').collect();
-        assert_eq!(bare, "A short  digression\nspanning two lines.");
-        // and every non-whitespace glyph still carries its stroke (still struck)
-        assert!(s.contains('\u{0336}'));
+        assert_eq!(s, "~~A short  digression~~\n~~spanning two lines.~~");
+        // Whitespace-only pieces stay unwrapped; indentation survives outside.
+        assert_eq!(strike("  indented tail  "), "  ~~indented tail~~  ");
+        assert_eq!(strike("word\n\nnext"), "~~word~~\n\n~~next~~");
+        // No combining marks anywhere — the transcript is plain visible text.
+        assert!(!s.contains('\u{0336}'));
+        // And it rides the ONE wrapper the `==` wash shares (merge, don't align).
+        assert_eq!(highlight_inline("a b\nc"), "==a b==\n==c==");
+    }
+
+    #[test]
+    fn strip_markdown_removes_tildes_so_the_strike_wrap_never_nests() {
+        // A literal `~~` in source prose would close the serializer's own wrap
+        // early; the strip neutralizes tildes exactly like `*`/`_`/backticks.
+        assert_eq!(strip_markdown("approx ~40 chars, ~~old style~~"), "approx 40 chars, old style");
     }
 
     #[test]

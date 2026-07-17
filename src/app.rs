@@ -4056,10 +4056,11 @@ mod tests {
         // Compare against the most-recent version.
         app.compare_with_latest();
         let dv = app.diff_view.as_ref().expect("the diff view is active");
-        // The transcript speaks awl's diff vocabulary: a struck deletion (combining
-        // stroke) AND a highlight-washed insertion (`==`), under a title heading.
+        // The transcript speaks awl's diff vocabulary: a struck deletion (REAL
+        // `~~` markdown, the strikethrough-render round) AND a highlight-washed
+        // insertion (`==`), under a title heading.
         assert!(dv.transcript.starts_with("# Comparing with "));
-        assert!(dv.transcript.contains('\u{0336}'), "a struck deletion: {}", dv.transcript);
+        assert!(dv.transcript.contains("~~"), "a struck deletion: {}", dv.transcript);
         assert!(dv.transcript.contains("=="), "a washed insertion: {}", dv.transcript);
         // The BUFFER was never touched — content, version, undo all intact.
         assert_eq!(app.buffer.text(), text_before, "compare never mutates the buffer");

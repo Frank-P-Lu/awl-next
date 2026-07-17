@@ -372,6 +372,20 @@ one-const rule; never hand-copy the number). The detailed prose entries below
 document the earlier rounds; rather than transcribe every bump since `/99`, this
 is the CURRENT-STATE summary of what the sidecar carries now.
 
+Vocabulary note (STRIKETHROUGH render round — **no schema bump**; the shape is
+unchanged, only existing STRING fields gain a value, per `capture.rs`'s
+"bump once per sidecar-SHAPE change" criterion): `md_spans` gains the
+`"strikethrough"` content tag for GFM `~~struck~~` (its `~~` delimiters stay
+ordinary `"markup"`, like every other syntax character; exactly-two tildes only
+— a single `~x~` is inert, the `==` exactly-two precedent), and
+`wysiwyg.concealed` gains the LINE-scoped `"strikethrough"` marker-conceal tag.
+The struck text renders in the world's `muted` ink with a drawn strike line
+(`render::spans::strike_line_band`/`strike_ink`, the ONE owner the format
+popover's `S` button shares); the writer's-diff transcript serializes deletions
+as real `~~…~~` now (the combining-stroke `\u{0336}` mechanism is retired). The
+`popover.buttons` labels changed VALUE (not shape) to the self-demonstrating
+letters `B I A C S H Link`.
+
 Schema `/169` (`/170` timeline, `/171` held) is the state after the rounds
 between `/99` and here. Blocks/fields added or changed since the `/99` About
 card, each detailed in `capture.rs`'s table: `hud.eol` (line-endings, `/100`)

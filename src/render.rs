@@ -3084,6 +3084,12 @@ pub struct TextPipeline {
     /// muted neutral ink, so a nit reads as a calm hint distinct from the wavy
     /// error-red spell squiggle. Gated per-frame on [`crate::nits::nits_on`].
     pub nit_pipeline: SpellUnderlinePipeline,
+    /// The GPU quad pipeline that draws the markdown `~~strikethrough~~` STRIKE
+    /// LINES — the same flat-line trick as `nit_pipeline` (amplitude 0), tinted
+    /// THE strike ink (`spans::strike_srgba_bytes`, the one owner the struck
+    /// TEXT's muted transform and the popover's `S` demo share). Geometry from
+    /// [`rects`]' strike bucket (`strike_lines`); empty for a strike-less buffer.
+    pub strike_pipeline: SpellUnderlinePipeline,
     /// Spring + shape-morph animation state for the caret.
     pub caret: CaretAnim,
     /// Last view state applied (for caret placement + scroll during draw).
@@ -3559,8 +3565,21 @@ pub struct TextPipeline {
     pub popover_card: SelectionPipeline,
     /// The value-step wash quad behind each LIT (active-toggle) button — a
     /// `base_content` value ladder step, NEVER amber (DESIGN §3; the caret keeps
-    /// the one accent).
+    /// the one accent). ALSO carries the `C` button's ALWAYS-ON inline-code demo
+    /// pill: the doc pill's own `base_200` tint IS this pipeline's tint (one
+    /// derivation), so the pill rides here rather than a third quad pipeline.
     pub popover_wash: SelectionPipeline,
+    /// SELF-DEMONSTRATING `A` button: the real `==highlight==` wash pill behind
+    /// its letter — tinted by THE doc wash's own derivation
+    /// (`spans::highlight_wash_rgba_bytes`) + the one-bit dither density, both
+    /// re-fed at the same two sites the doc pipeline reads (construction +
+    /// `sync_theme_colors`).
+    pub popover_hl_wash: SelectionPipeline,
+    /// SELF-DEMONSTRATING `S` button: a real strike line through its letter,
+    /// positioned by THE ONE strike-line owner (`spans::strike_line_band`) and
+    /// tinted THE strike ink (`spans::strike_srgba_bytes`) — the same fn pair
+    /// the document's `~~strike~~` quads read, so the demo IS the effect.
+    pub popover_strike: SpellUnderlinePipeline,
     pub popover_renderer: TextRenderer,
     pub popover_buffer: GlyphBuffer,
     /// The format popover's model this frame (mirrored from [`ViewState::popover`]),
@@ -4126,6 +4145,13 @@ impl TextPipeline {
             SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
         let popover_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
         let popover_wash = SelectionPipeline::new(device, format, theme::base_200().rgba_bytes());
+        // SELF-DEMONSTRATING buttons: the `A` highlight pill (the doc wash's own
+        // derivation + one-bit dither) and the `S` strike line (THE strike ink).
+        let mut popover_hl_wash =
+            SelectionPipeline::new(device, format, highlight_wash_rgba_bytes());
+        popover_hl_wash.set_dither(wagtail_dither_density());
+        let popover_strike =
+            SpellUnderlinePipeline::new(device, format, strike_srgba_bytes());
         let popover_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let popover_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
@@ -4136,6 +4162,10 @@ impl TextPipeline {
         // tinted the neutral muted ink so they read as a quiet "tidy this" hint.
         let nit_pipeline =
             SpellUnderlinePipeline::new(device, format, nit_underline_srgba());
+        // Markdown `~~strikethrough~~` lines (same flat-line pipeline shape),
+        // tinted THE strike ink — the one owner the struck text shares.
+        let strike_pipeline =
+            SpellUnderlinePipeline::new(device, format, strike_srgba_bytes());
 
         let mut me = Self {
             font_system,
@@ -4189,6 +4219,7 @@ impl TextPipeline {
             preview_buffer,
             spell_pipeline,
             nit_pipeline,
+            strike_pipeline,
             caret: CaretAnim::new(),
             cursor_line: 0,
             cursor_col: 0,
@@ -4300,6 +4331,8 @@ impl TextPipeline {
             popover_border,
             popover_card,
             popover_wash,
+            popover_hl_wash,
+            popover_strike,
             popover_renderer,
             popover_buffer,
             popover_model: None,
@@ -4474,6 +4507,13 @@ impl TextPipeline {
             .set_color(theme::surface_selected().rgba_bytes());
         self.popover_card.set_color(theme::base_300().rgba_bytes());
         self.popover_wash.set_color(theme::base_200().rgba_bytes());
+        // SELF-DEMONSTRATING buttons: `A`'s pill re-tints from the doc highlight
+        // wash's own derivation (+ the one-bit dither density — a switch AWAY
+        // from a one-bit world must reset it, mirroring `wash_highlight_pipeline`);
+        // `S`'s line from THE strike ink.
+        self.popover_hl_wash.set_color(highlight_wash_rgba_bytes());
+        self.popover_hl_wash.set_dither(wagtail_dither_density());
+        self.popover_strike.set_color(strike_srgba_bytes());
         // WEB/LINUX MENU BAR: re-tint from the world's own tokens (O(1) — the bar/
         // dropdown GEOMETRY is theme-independent, so the theme-picker preview re-tints
         // it for free). Bar ground = a value step off the room (`base_200`); the open
@@ -4516,6 +4556,9 @@ impl TextPipeline {
         self.spell_pipeline.set_color(theme::error().rgba_bytes());
         // Re-tint the WRITING-NIT underline to the new world's MUTED ink.
         self.nit_pipeline.set_color(nit_underline_srgba());
+        // Re-tint the `~~strikethrough~~` line from THE strike-ink owner (the
+        // struck text's own muted transform re-reads the theme each reshape).
+        self.strike_pipeline.set_color(strike_srgba_bytes());
         // Re-tint the PAGE-MODE margin ground to the new world's tokens.
         self.background_pipeline.set_gradient(background_desc());
         // THE PAGE FRAME: re-tint from the one ink owner (`base_content`).
@@ -5305,6 +5348,7 @@ impl TextPipeline {
         self.prepare_chrome_layer(device, queue, width, height)?;
         self.prepare_spell_layer(device, queue, width, height);
         self.prepare_nit_layer(device, queue, width, height);
+        self.prepare_strike_layer(device, queue, width, height);
         self.prepare_blur(device, queue, width, height);
         Ok(())
     }
@@ -5572,6 +5616,10 @@ impl TextPipeline {
         self.match_pipeline.draw(pass);
         self.spell_pipeline.draw(pass);
         self.nit_pipeline.draw(pass);
+        // `~~strikethrough~~` lines — same under-text slot as the nit hint: the
+        // stroke shares the struck text's own muted ink, so under vs over the
+        // glyphs composites identically where they meet.
+        self.strike_pipeline.draw(pass);
         self.caret_pipeline.draw(pass);
         self.caret_trail_pipeline.draw(pass);
         self.renderer
@@ -5776,6 +5824,11 @@ impl TextPipeline {
         self.popover_border.draw(pass);
         self.popover_card.draw(pass);
         self.popover_wash.draw(pass);
+        // SELF-DEMONSTRATING quads: `A`'s highlight pill over the value-step
+        // washes, `S`'s strike line — both UNDER the labels (the doc's own
+        // wash-under-text / line-in-own-ink layering).
+        self.popover_hl_wash.draw(pass);
+        self.popover_strike.draw(pass);
         self.popover_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon popover render failed: {e:?}"))?;
