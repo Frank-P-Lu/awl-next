@@ -3459,9 +3459,14 @@ mod tests {
         );
 
         // Byte-identical captures: render both buffers and diff the PNG bytes.
+        // PID-suffixed (not just `serial()`-guarded): `serial()` is a per-process
+        // reentrant lock, so a SECOND concurrent `cargo test` process (e.g. a
+        // parallel native + AWL_CONVENTION_FORCE=linux run) can't be excluded by
+        // it — only a unique path can (mirrors every other temp-file test).
         let dir = std::env::temp_dir();
-        let pv = dir.join("awl_vl_visual.png");
-        let pl = dir.join("awl_vl_logical.png");
+        let pid = std::process::id();
+        let pv = dir.join(format!("awl_vl_visual_{pid}.png"));
+        let pl = dir.join(format!("awl_vl_logical_{pid}.png"));
         capture::capture_with(&pv, &visual, &opts).expect("render visual");
         capture::capture_with(&pl, &logical, &opts).expect("render logical");
         let bv = std::fs::read(&pv).expect("read visual png");
@@ -3684,8 +3689,14 @@ mod tests {
                 crate::caret::clear_override();
                 return;
             };
+            // PID-suffixed: `serial()` only excludes other tests IN THIS SAME
+            // process — a second concurrent `cargo test` process (e.g. a
+            // parallel native + AWL_CONVENTION_FORCE=linux run) has its own
+            // `serial()` and would clobber a fixed name (the ~1-in-3 flake
+            // under a full parallel suite; 6/6 clean in isolation).
             let dir = std::env::temp_dir();
-            let base_png = dir.join(format!("awl_caret_stateless_base_{mode:?}.png"));
+            let pid = std::process::id();
+            let base_png = dir.join(format!("awl_caret_stateless_base_{mode:?}_{pid}.png"));
             capture::capture_with(&base_png, &base_buf, &opts).expect("baseline capture");
 
             // DETOUR: the SAME (mode, world), reached via a real committed
@@ -3697,7 +3708,7 @@ mod tests {
             replay_keys(&mut detour_buf, &detour_keys, &[], &root, None, &root, &Config::empty(), None);
             assert_eq!(crate::theme::active().name, "Gumtree", "the detour lands back on Gumtree");
             assert_eq!(crate::caret::mode(), mode, "the detour never touched the pinned mode");
-            let detour_png = dir.join(format!("awl_caret_stateless_detour_{mode:?}.png"));
+            let detour_png = dir.join(format!("awl_caret_stateless_detour_{mode:?}_{pid}.png"));
             capture::capture_with(&detour_png, &detour_buf, &opts).expect("detour capture");
 
             let b1 = std::fs::read(&base_png).expect("read baseline png");
