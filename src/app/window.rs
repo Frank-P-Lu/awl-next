@@ -247,6 +247,7 @@ impl App {
         let want = present_sync_armed(
             self.resize_settle_at.is_some(),
             self.move_settle_at.is_some(),
+            self.crossing_settle_at.is_some(),
         );
         if want == self.present_sync_on {
             return;
@@ -293,6 +294,25 @@ impl App {
     pub(super) fn finish_move_settle(&mut self) {
         self.move_settle_at = None;
         self.lava_tick_at = None;
+        self.sync_present_txn();
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// The THEME-PREVIEW CROSSING settle (the `CROSSING_SYNC_SETTLE` debounce
+    /// elapsed with no further boundary crossing): drop this source's claim on
+    /// the present-transaction sync (the one owner keeps it armed while a resize
+    /// or move stream is still live — a crossing can overlap a drag) and request
+    /// the ONE guaranteed follow-up present. The crossing frame itself already
+    /// presented in-transaction (the sync was armed the instant the crossing was
+    /// detected, before the keypress's redraw ran); this settle redraw is the
+    /// bracket's far edge — a second solid present after the cadence changed, so
+    /// the compositor can never be left holding a single stale drawable. Clearing
+    /// `crossing_settle_at` first is what makes the `about_to_wait` arm (gated on
+    /// the stamp) fire exactly once. Live-only: a headless capture never previews.
+    pub(super) fn finish_crossing_settle(&mut self) {
+        self.crossing_settle_at = None;
         self.sync_present_txn();
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();

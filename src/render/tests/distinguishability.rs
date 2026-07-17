@@ -521,3 +521,104 @@ fn check_real_pixels(
         }
     }
 }
+
+/// THE THEME-PREVIEW PAGE-SURFACE SWEEP — the law born from the user's
+/// "arrowing Mangrove→Magpie makes the page disappear" report (2026-07-17). The
+/// theme picker's LIVE preview applies only the O(1) COLOR half of a switch
+/// ([`TextPipeline::sync_theme_colors`]) and DEFERS the font reshape, so a bug
+/// where that retint left the PAGE SURFACE (the `base_100` column ground, the
+/// margins, the lava teardown) grounded to the SOURCE world — or blank — would
+/// show as the writing surface vanishing mid-arrow while the caller keeps
+/// arrowing (the deferred reshape never settles).
+///
+/// The invariant this pins: after the COLOR-ONLY retint alone, the page column
+/// ground is the DESTINATION world's `base_100`, byte-for-byte identical to a
+/// full synchronous [`TextPipeline::sync_theme`] to the same world — regardless
+/// of the SOURCE world's ground (dark or light) or background kind (lava or
+/// flat). It sweeps EVERY world in `THEMES` as the destination (a NO-WILDCARD
+/// roster walk — a future world joins automatically) previewed FROM two
+/// deliberately maximal sources: Mangrove (a DARK LAVA world — the reported
+/// source) and Magpie (a LIGHT NON-LAVA world), so every ordered pair class
+/// (lava↔non-lava × dark↔light) is covered. Real GPU pixels, column-interior
+/// arithmetic — the Wagtail-bug tier, never a mechanism assertion.
+#[test]
+fn theme_preview_retint_regrounds_the_page_surface_on_every_world() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping theme_preview_retint_regrounds_the_page_surface_on_every_world: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+    crate::caret::set_mode(CaretMode::Block);
+    crate::page::set_page_on(true);
+    crate::page::set_measure(40);
+    // An EMPTY buffer so the sampled column interior is pure page GROUND (no
+    // glyph ink), isolating the page-surface retint from any text color.
+    let v = view("", 0, 0);
+    let w = 1200u32;
+    let h = 800u32;
+
+    // The average color of the column INTERIOR at mid-height — the flat page
+    // ground (the lava mask is zero inside the column, so a lava world reads its
+    // `base_100` here exactly like a flat world). Sampled a comfortable inset in
+    // from both column edges so no margin/feather pixel leaks in.
+    let column_ground = |p: &mut TextPipeline, dev: &wgpu::Device, q: &wgpu::Queue| -> theme::Srgb {
+        p.set_view(&v);
+        p.prepare(dev, q, w, h).unwrap();
+        let (_on, _m, cl, cw) = p.page_geometry();
+        let frame = pixeldiff::render_frame(p, dev, q, w, h);
+        let region = Region::new(cl + 24.0, (h as f32) * 0.5 - 8.0, cw - 48.0, 16.0);
+        average_color(&frame, w as i64, h as i64, region)
+    };
+
+    // The two maximal SOURCES: a dark lava world + a light non-lava world.
+    for src in ["Mangrove", "Magpie"] {
+        for dst in theme::THEMES.iter() {
+            // Open on the source, fully applied (colors + font).
+            theme::set_active_by_name(src).unwrap();
+            p.sync_theme();
+            let _ = column_ground(&mut p, &device, &queue);
+
+            // PREVIEW SEAM: switch active to the destination and apply the COLOR
+            // HALF ONLY — the exact state a picker arrow leaves before the
+            // deferred reshape (`App::retint_theme_preview`).
+            theme::set_active_by_name(dst.name).unwrap();
+            p.sync_theme_colors();
+            let preview = column_ground(&mut p, &device, &queue);
+
+            // The destination's TRUE page ground (a full synchronous switch).
+            theme::set_active_by_name(dst.name).unwrap();
+            p.sync_theme();
+            let committed = column_ground(&mut p, &device, &queue);
+
+            // (1) PRESENT + CORRECTLY GROUNDED: the color-only preview's page
+            // ground is the destination's ground, not blanked and not the
+            // source's — byte-tight against the committed frame.
+            let d_commit = redmean(preview, committed);
+            assert!(
+                d_commit <= 6.0,
+                "{src} -> {dst} PREVIEW page ground {preview:?} diverged from the committed \
+                 destination ground {committed:?} (redmean {d_commit:.1}, floor 6.0) — the O(1) \
+                 retint left the page surface stale/blank on the preview seam",
+                dst = dst.name
+            );
+            // (2) WITNESS the retint did real work when the grounds actually
+            // differ: the preview must have LEFT the source's ground behind
+            // (the exact failure the user saw — the page keeping the old world).
+            let src_ground = theme::THEMES.iter().find(|t| t.name == src).unwrap().base_100;
+            if redmean(src_ground, committed) > 12.0 {
+                let d_src = redmean(preview, src_ground);
+                assert!(
+                    d_src > 12.0,
+                    "{src} -> {dst} PREVIEW page ground {preview:?} is still the SOURCE ground \
+                     {src_ground:?} (redmean {d_src:.1}) — the retint did not re-ground the page",
+                    dst = dst.name
+                );
+            }
+        }
+    }
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}

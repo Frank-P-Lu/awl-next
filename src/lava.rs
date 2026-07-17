@@ -428,6 +428,46 @@ pub fn lava_paused(resizing: bool, moving: bool, blurred: bool) -> bool {
     resizing || moving || blurred
 }
 
+/// What a THEME-PICKER PREVIEW step must do about the ambient-present cadence
+/// when it swaps the active world out from under the compositor. See
+/// [`preview_crossing`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CrossingAction {
+    /// The present cadence is unchanged across this preview step — both worlds
+    /// tick the ambient lamp, or NEITHER does. The keypress's own redraw is the
+    /// whole story; no extra present machinery. (The vast majority of preview
+    /// steps: non-lava → non-lava, and the two lava worlds → each other.)
+    Steady,
+    /// The preview CROSSED the lava boundary (a ticking lava world ⇄ a static
+    /// non-lava world), so the ~10 fps ambient present cadence STARTS or STOPS
+    /// underfoot. Arm the present-transaction sync across the crossing frame (+
+    /// one guaranteed follow-up present at settle) so the macOS compositor can
+    /// never hold/blend a stale drawable while presents go sparse — the live
+    /// "the writing surface vanishes arrowing Mangrove→Magpie" report
+    /// (2026-07-17), the same present/compositor-race class the landed
+    /// resize-stretch + move-flash fixes closed.
+    SyncAcrossCrossing,
+}
+
+/// THE PREVIEW-CROSSING DECISION — pure, so the whole world-pair matrix is
+/// law-testable without a window. The ambient lava tick's cadence is gated on
+/// the active world's `is_lava()` (`App::about_to_wait`), so a preview step
+/// that flips that bit changes how often frames present: a lava world was
+/// pushing ~10 fps async presents; the non-lava world it lands on schedules
+/// none. Only that BOUNDARY crossing needs the transaction-sync bracket — a
+/// same-side hop (lava→lava, non-lava→non-lava) leaves the cadence alone. The
+/// decision is symmetric (either direction crosses), matching the report's "or
+/// arrowing back". `prev`/`next` are the OUTGOING and INCOMING worlds'
+/// backgrounds (the process-global active background before and after the
+/// preview's live theme switch).
+pub fn preview_crossing(prev: Background, next: Background) -> CrossingAction {
+    if prev.is_lava() == next.is_lava() {
+        CrossingAction::Steady
+    } else {
+        CrossingAction::SyncAcrossCrossing
+    }
+}
+
 /// Choose the viewport used to lay out the metaball field. During a live resize
 /// the last-settled dimensions are held while the live viewport and column mask
 /// continue to follow the window; the new dimensions become authoritative only
@@ -1453,5 +1493,56 @@ mod tests {
         assert_eq!((bright.r as i32, bright.g as i32, bright.b as i32), bound, "saturated frost == the worst bound");
         // And the worst bound is genuinely dimmer than the raw blob_hi (the dim works).
         assert!((bright.r as i32) < hi.r as i32, "the value dim pulls the pill back toward ground");
+    }
+
+    // --- The theme-preview CROSSING decision (the vanishing-page fix) ----------
+
+    /// THE PREVIEW-CROSSING LAW — born from the user's "arrowing Mangrove→Magpie
+    /// makes the writing surface vanish" report (2026-07-17). A no-wildcard sweep
+    /// over EVERY ordered world pair in [`crate::theme::THEMES`] (a new world
+    /// joins the matrix automatically): [`preview_crossing`] arms the present
+    /// bracket EXACTLY when the pair straddles the lava boundary — one world
+    /// ticks the ~10 fps ambient lamp, the other is static — and takes every
+    /// same-side hop as `Steady`. This is the ONLY input to the live arming seam
+    /// (`App::retint_theme_preview`), so pinning the pure decision pins the whole
+    /// choice of which preview steps get the compositor-race protection.
+    #[test]
+    fn preview_crossing_arms_exactly_on_the_lava_boundary() {
+        use crate::theme::THEMES;
+        for prev in THEMES.iter() {
+            for next in THEMES.iter() {
+                let crosses = prev.background.is_lava() != next.background.is_lava();
+                let want = if crosses {
+                    CrossingAction::SyncAcrossCrossing
+                } else {
+                    CrossingAction::Steady
+                };
+                assert_eq!(
+                    preview_crossing(prev.background, next.background),
+                    want,
+                    "{} -> {}: lava boundary crossed = {crosses}",
+                    prev.name,
+                    next.name,
+                );
+            }
+        }
+
+        // The reported pair, both directions, plus its neighbours — the concrete
+        // anchors the roster sweep above generalises (guards a future world roster
+        // reorder from silently emptying the matrix of a real crossing).
+        let bg = |name: &str| THEMES.iter().find(|t| t.name == name).unwrap().background;
+        let (mangrove, magpie, firetail, tawny) =
+            (bg("Mangrove"), bg("Magpie"), bg("Firetail"), bg("Tawny"));
+        assert!(mangrove.is_lava() && firetail.is_lava(), "both lava worlds present");
+        assert!(!magpie.is_lava() && !tawny.is_lava(), "the non-lava neighbours");
+        // The report, both ways: lava ⇄ non-lava crosses.
+        assert_eq!(preview_crossing(mangrove, magpie), CrossingAction::SyncAcrossCrossing);
+        assert_eq!(preview_crossing(magpie, mangrove), CrossingAction::SyncAcrossCrossing);
+        // Same-side hops stay Steady: lava→lava and non-lava→non-lava.
+        assert_eq!(preview_crossing(mangrove, firetail), CrossingAction::Steady);
+        assert_eq!(preview_crossing(magpie, tawny), CrossingAction::Steady);
+        // A world to itself never crosses.
+        assert_eq!(preview_crossing(mangrove, mangrove), CrossingAction::Steady);
+        assert_eq!(preview_crossing(magpie, magpie), CrossingAction::Steady);
     }
 }
