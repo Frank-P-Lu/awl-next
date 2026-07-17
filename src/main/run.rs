@@ -346,6 +346,18 @@ impl<'a> ReplaySession<'a> {
             });
             return Ok(());
         };
+        // SHIFT = SELECT-INTENT, the live dispatch's exact derivation
+        // (`app/input/keys.rs::on_keyboard_input`): the chord's `S-` modifier
+        // extends a selection across a motion, routed through the ONE owner
+        // `crate::app::motion_honors_shift_select` (so `M-<` / `M->`, whose
+        // Shift is incidental to typing the glyph, stay pure motion). Derived
+        // ONCE per pressed chord from the FIRST resolved action and carried
+        // into a palette-chained re-dispatch unchanged — mirroring the live
+        // `Effect::RunAction` arm, which re-applies with the same `shift` bool.
+        // (This retired the old "replay is unshifted" hole: `--keys "S-Right"`
+        // silently ran the motion unshifted and left `selection: null`.)
+        let shift = chord.mods.state().contains(winit::keyboard::ModifiersState::SHIFT)
+            && crate::app::motion_honors_shift_select(&resolved);
         // A tiny worklist so the COMMAND PALETTE's run-on-Enter chains: Enter on a
         // command writes `run_action`, which we then feed back through the core
         // (slot now empty) so an overlay-opening command opens its sub-overlay as
@@ -482,9 +494,7 @@ impl<'a> ReplaySession<'a> {
             browse_to: &mut browse_to,
             oracle: self.oracle.as_deref().map(|op| op.as_oracle()),
         };
-        // Replay is unshifted: selection comes from an explicit C-Space mark,
-        // matching the emacs-style sticky region the key-spec expresses.
-        let effect = actions::apply_core(&mut ctx, &action, false);
+        let effect = actions::apply_core(&mut ctx, &action, shift);
         drop(ctx);
         // STRICT REPLAY TRUTHFULNESS: consult the ONE classification
         // (`crate::replay::classify`, a no-wildcard match over `Effect`) BEFORE
@@ -1433,6 +1443,137 @@ mod tests {
         let root = PathBuf::from("/tmp");
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         assert_eq!(res.selection, Some(((0, 1), (0, 3))), "mark@3 + two Lefts -> [1,3)");
+    }
+
+    // ── REPLAY SHIFT-SELECT LAWS: `S-` on a motion is select-intent, exactly
+    // as a live held Shift (the retired "replay is unshifted" hole). The
+    // replay derives its `apply_core` shift flag through the ONE owner
+    // (`crate::app::motion_honors_shift_select`), so these laws pin the
+    // OUTCOME: a spec's `S-` chord builds the same selection live Shift+motion
+    // does, and the documented non-movers stay non-movers. ──
+
+    /// The shared fixture the shift-select laws replay over: three lines, so
+    /// every catalog motion has somewhere to go from the middle.
+    const SHIFT_FIXTURE: &str = "alpha beta\ngamma delta\nepsilon zeta\n";
+
+    /// Replay `spec` against a fresh [`SHIFT_FIXTURE`] buffer, returning the
+    /// post-replay `(selection, cursor)` — the exact pair the capture sidecar
+    /// publishes (`ReplayResult::selection` feeds `CaptureOpts::selection`
+    /// feeds the sidecar `selection` field; `cursor` is read off the buffer
+    /// the same way the capture's `ViewState` is).
+    #[allow(clippy::type_complexity)]
+    fn shift_replay(
+        spec: &str,
+    ) -> (Option<((usize, usize), (usize, usize))>, (usize, usize)) {
+        let mut buffer = Buffer::from_str(SHIFT_FIXTURE);
+        let keys = keyspec::parse_keys(spec).unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        (res.selection, buffer.cursor_line_col())
+    }
+
+    #[test]
+    fn replay_shift_arrow_extends_a_real_selection_then_unshifted_motion_collapses() {
+        // THE LAW that closes the trap: `--keys "S-Right S-Right"` extends a
+        // real two-char selection headlessly (the sidecar `selection` is this
+        // exact value — see `shift_replay`'s doc), where the old unshifted
+        // replay silently produced `selection: null` with the cursor at (0,2).
+        let (sel, cursor) = shift_replay("S-Right S-Right");
+        assert_eq!(cursor, (0, 2), "the motion itself still runs");
+        assert_eq!(
+            sel,
+            Some(((0, 0), (0, 2))),
+            "S-Right S-Right spans exactly the two chars the live Shift+Right pair selects"
+        );
+        // And the OTHER half of the live transient-selection contract: the next
+        // UNSHIFTED motion collapses it (GUI style), exactly like live.
+        let (sel, cursor) = shift_replay("S-Right S-Right Right");
+        assert_eq!(cursor, (0, 3));
+        assert_eq!(sel, None, "an unshifted motion collapses the transient shift-selection");
+    }
+
+    #[test]
+    fn replay_shift_extends_every_catalog_motion_exactly_as_live() {
+        // Enumerate the keymap's own motion roster — every catalog command whose
+        // action `is_motion()`, over BOTH binding slots — rather than a hand
+        // list that can drift: a new motion command is swept automatically.
+        // For each, replay its chord with an `S-` prefix from mid-document and
+        // assert the LIVE equivalence through the one owner: the selection
+        // extends iff `motion_honors_shift_select` says the Shift is
+        // select-intent (BufferStart/BufferEnd carry an incidental Shift live
+        // — `M-<`/`M->` — so they stay pure motion), and when it extends it
+        // spans exactly (pre-cursor, post-cursor).
+        // Setup: plain arrows walk to (1,3) — unshifted motions build no selection.
+        const SETUP: &str = "Down Right Right Right";
+        let (pre_sel, pre_cursor) = shift_replay(SETUP);
+        assert_eq!(pre_sel, None);
+        assert_eq!(pre_cursor, (1, 3), "setup parks the cursor mid-document");
+        let mut swept = 0usize;
+        for cmd in crate::commands::COMMANDS.iter().filter(|c| c.action.is_motion()) {
+            for chord in [cmd.native, cmd.emacs] {
+                if chord.is_empty() {
+                    continue;
+                }
+                swept += 1;
+                let (sel, cursor) = shift_replay(&format!("{SETUP} S-{chord}"));
+                assert_ne!(
+                    cursor, pre_cursor,
+                    "{} (S-{chord}): the motion must actually move (witness)",
+                    cmd.name
+                );
+                if crate::app::motion_honors_shift_select(&cmd.action) {
+                    let expected = (pre_cursor.min(cursor), pre_cursor.max(cursor));
+                    assert_eq!(
+                        sel,
+                        Some(expected),
+                        "{} (S-{chord}): Shift+motion extends exactly like live",
+                        cmd.name
+                    );
+                } else {
+                    assert_eq!(
+                        sel, None,
+                        "{} (S-{chord}): incidental Shift stays pure motion, like live",
+                        cmd.name
+                    );
+                }
+            }
+        }
+        assert!(swept >= 10, "the catalog motion roster shrank? swept only {swept} chords");
+    }
+
+    #[test]
+    fn replay_shift_named_key_arms_extend_like_live() {
+        // The KEYMAP-ONLY named-key arms (plain arrows, Home/End, and the
+        // convention-free Ctrl-arrow word aliases live as hand-written input
+        // policy in `resolve_named` — no data table exists to enumerate, so
+        // these pins mirror `keymap.rs`'s own arm-by-arm style). Each replays
+        // with `S-` from mid-document and must extend, spanning exactly
+        // (pre, post) — including Shift COMPOSED with M-/C- (the shifted-
+        // variant fill / Ctrl-arrow alias, resolving identically to live).
+        const SETUP: &str = "Down Right Right Right";
+        let (_, pre) = shift_replay(SETUP);
+        for chord in ["S-Left", "S-Right", "S-Up", "S-Down", "S-Home", "S-End", "S-M-Right", "S-M-Left", "S-C-Right", "S-C-Left"] {
+            let (sel, cursor) = shift_replay(&format!("{SETUP} {chord}"));
+            assert_ne!(cursor, pre, "{chord}: the motion must actually move (witness)");
+            assert_eq!(
+                sel,
+                Some((pre.min(cursor), pre.max(cursor))),
+                "{chord}: Shift extends the selection exactly like live"
+            );
+        }
+    }
+
+    #[test]
+    fn replay_shift_page_scroll_stays_a_documented_non_mover() {
+        // Shift-PageDown/PageUp deliberately do NOT extend a selection (the
+        // documented divergence — `is_motion` excludes PageScroll*, so the
+        // shift-select block never arms). Pin it so the replay-shift fix can
+        // never silently promote them; promoting is a conscious follow-up.
+        let (sel, cursor) = shift_replay("S-PageDown");
+        assert_ne!(cursor, (0, 0), "the page scroll still moves the cursor");
+        assert_eq!(sel, None, "Shift-PageDown stays a non-extending non-mover");
+        let (sel, _) = shift_replay("S-PageDown S-PageUp");
+        assert_eq!(sel, None, "Shift-PageUp stays a non-extending non-mover");
     }
 
     // ── STRICT REPLAY TRUTHFULNESS: the mode-aware replay engine ──
