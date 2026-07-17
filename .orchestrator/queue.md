@@ -25,6 +25,12 @@ SCOPE: the held batch (docs repair · decoupling · preview-vanish · pitch law 
 
 - 🧰 **HARNESS TRAP (found by the merge-evidence gate, 2026-07-18)**: headless replay applies chords UNSHIFTED (src/main/run.rs:487) — Shift+motion selections silently NO-OP in --keys, so scenario authors can shoot selection:null galleries without knowing. Follow-up: a replay-shift fix or a loud warning + the law test (per the audit rule). Also noted: Potoroo palette selected-row ⌘O renders amber-on-amber (weak, pre-existing) — next spot-check cell.
 
+## ✅ MORNING VERDICTS (user, 2026-07-18)
+- **MERGES: NONE.** Potoroo STAYS (user: personal namesake of their iOS app + "that rich brown colour is nice" — personal meaning counts as a point). Currawong → TWINKLING-STARS differentiation round (queued); Bilby → DAWN light-pole round (queued); Quokka/Galah keep both; Eva remains a future NEW world seed.
+- **PROSE-DIFF: SHIP** (user: "sentence level is great… i think we just ship it lol") — the feature round fires now: productionize the probe (sentence × c50 default, move detection, folds, struck-whitespace polish fix), entry via "Compare with version…" from the history picker, read-only manuscript view.
+- **LIVING-BAND: pick pending** — the artifact's shots were too small to judge (real complaint: not zoomable); a full-size clickable gallery ships this morning; the live minute follows.
+- **CHROME SWEEP: word pending** (explained to the user; awaiting "land the sweep").
+
 ## 🎓 TASTE PRINCIPLES (user interview, 2026-07-17 — GATE BRIEFING MATERIAL: every taste-gate agent reads this section)
 1. **The flavor sentence is the contract.** A world's WORLDS.md sentence JUSTIFIES its menu treatments — derive from the sentence, never from a generic loudness dial. Every world earns ONE point it makes (Wagtail: one-bit purity; Mangrove: the dither).
 2. **Share mechanisms, never gestalts.** Signatures are NOT exclusive — slant may recur on another in-your-face world; dither may return as "stars in the night" — but two worlds must never read as the same ROOM. Curation = maximal difference across the roster (the showcase).
