@@ -25,6 +25,11 @@ SCOPE: the held batch (docs repair · decoupling · preview-vanish · pitch law 
 
 - 🧰 **HARNESS TRAP (found by the merge-evidence gate, 2026-07-18)**: headless replay applies chords UNSHIFTED (src/main/run.rs:487) — Shift+motion selections silently NO-OP in --keys, so scenario authors can shoot selection:null galleries without knowing. Follow-up: a replay-shift fix or a loud warning + the law test (per the audit rule). Also noted: Potoroo palette selected-row ⌘O renders amber-on-amber (weak, pre-existing) — next spot-check cell.
 
+## 🔒 MORNING BATCH 2 (user live, 2026-07-18)
+- 🐛 **VANISHING PAGE REOPENED — WAGTAIL AS SOURCE** (user: "the page is still missing from mangrove/magpie. i'm switching from wagtail"): the prior diagnosis swept every DESTINATION from only TWO sources (Mangrove/Magpie) — Wagtail-as-source never tested, and it is the 1-bit world with unique pipeline state; Wagtail→Magpie crosses NO lava boundary so the landed crossing-sync never fires. Leads: (a) color-only preview leaves stale ONE-BIT state (headlessly testable NOW — the source-sweep gap); (b) the crossing detector is too narrow (should arm on any heavyweight pipeline boundary: lava OR one_bit). Fix + the FULL source×dest class-sweep law. CLAIMED.
+- 🐛 **POPOVER FAT CHIN** (user screenshot; "popover is awesome!!! but what's with the fat chin?"): the button row floats high with dead card below — the card-fits-content discipline was never applied to the new popover panel; extend the fits law to it. CLAIMED.
+- ✅ **CHROME SWEEP: WORD GIVEN** (user: "yeah land the sweep!") — landing 426a612.
+
 ## ✅ MORNING VERDICTS (user, 2026-07-18)
 - **MERGES: NONE.** Potoroo STAYS (user: personal namesake of their iOS app + "that rich brown colour is nice" — personal meaning counts as a point). Currawong → TWINKLING-STARS differentiation round (queued); Bilby → DAWN light-pole round (queued); Quokka/Galah keep both; Eva remains a future NEW world seed.
 - **PROSE-DIFF: SHIP** (user: "sentence level is great… i think we just ship it lol") — the feature round fires now: productionize the probe (sentence × c50 default, move detection, folds, struck-whitespace polish fix), entry via "Compare with version…" from the history picker, read-only manuscript view.
