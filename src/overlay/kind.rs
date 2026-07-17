@@ -351,12 +351,26 @@ impl OverlayKind {
     /// (combined `←/→` for a lens axis); `⌫` Backspace (ascend a level); and a short
     /// lowercase WORD (`esc`, `del`) for a key with no bundled glyph.
     pub fn hint_actions(self) -> Vec<HintAction> {
-        // Every summoned overlay is a navigable LIST — ↑/↓ (and C-n/C-p) always move
-        // the selection — so the MOVE affordance is UNIVERSAL and LEADS every kind's
-        // line. Prepended here in the ONE shared owner so no kind can forget to teach
-        // it (users otherwise reach for the OS-eaten Ctrl-Up/Down and think nav is
-        // broken). The per-kind primary/nav/cancel actions follow, from `kind_actions`.
-        let mut actions = vec![HintAction { glyph: "\u{2191}/\u{2193}", label: "move" }];
+        // Every summoned overlay is a navigable LIST that shares the SAME jump
+        // affordances, so a UNIVERSAL NAV CLUSTER leads every kind's line — the fix
+        // for the "you can't jump, you go up or down one by one" report (the arrow-only
+        // model was the only advertised motion). ONE universal cell, prepended here
+        // in the ONE shared owner so no kind can forget it:
+        //   type to filter  — random access by NAME (`push`/`refilter` runs on every
+        //                     kind), the STRONGEST jump — the direct answer to "you
+        //                     can't jump, you go up or down one by one".
+        // KEPT DELIBERATELY TO ONE CELL (a calm line that still fits the flat card at
+        // every zoom): arrows need no teaching (the report's author already lived in
+        // ↑/↓ — the gap was only that filter/jump went UNADVERTISED), and the width
+        // budget is real: with History's tab-compare cell the two-cell lead overflowed
+        // the flat card 585px > 496px (the no-clip law below caught it). PgUp/PgDn
+        // paging and Home/End jump-to-ends still WORK (drivable + tested), just
+        // unadvertised — the ⇞/⇟ keycaps also tofu (they live in neither the per-world
+        // display faces nor the bundled `AwlMarks` set). The per-kind primary/nav/
+        // cancel actions (↵ / lens / esc) follow, from `kind_actions`. (Rename/
+        // InsertLink never show this line — their `foot_hint` returns their own modal
+        // prompt — so the cluster never misleads a text edit.)
+        let mut actions = vec![HintAction { glyph: "type", label: "to filter" }];
         actions.extend(self.kind_actions());
         actions
     }
@@ -418,12 +432,16 @@ impl OverlayKind {
             ],
             // The faceted history timeline: ↵ RESTORES the highlighted version (an
             // undoable edit), ⇥ COMPARES it against the current buffer (the read-only
-            // prose-diff view), ←/→ switch the lens (All / Session / Today), esc closes.
+            // prose-diff view), ←/→ switch the lens (All / Session / Today). esc still
+            // closes but goes UNADVERTISED (the Spell/Settings precedent: plain-close
+            // esc is learned behavior; only an INFORMATIVE esc — the theme picker's
+            // "esc revert" — earns a cell). Width is why the trim landed HERE: with
+            // tab-compare + the universal filter cell, the advertised line overflowed
+            // the flat card (the no-clip law caught 498.7px > 496px).
             OverlayKind::History => vec![
                 enter("restore"),
                 key("tab", "compare"),
                 key("\u{2190}/\u{2192}", "lens"),
-                key("esc", "close"),
             ],
             // The faceted settings menu: ↵ edits the highlighted setting (toggle /
             // open a sub-picker — wired next phase), ←/→ switch the category lens,
