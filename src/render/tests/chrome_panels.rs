@@ -1427,7 +1427,7 @@ fn overlay_hint_footer_is_compact_and_identical_across_kinds() {
 }
 
 /// LAW (c) — the JUMP HINT is PRESENT on every picker and never CLIPS. The universal
-/// lead teaches the affordance the user couldn't find ("↑/↓ move · type to filter"):
+/// lead teaches the affordance the user couldn't find ("type to filter"):
 /// this pins (1) every kind's hint carries the discoverable jump as DATA (the spans
 /// exist), and (2) fed into the NARROWEST (flat) card — the tightest budget, tighter
 /// than the wider faceted card the lens kinds actually use — the shaped footer glyphs

@@ -529,7 +529,7 @@ fn caret_picker_lists_three_styles_navigates_and_maps_modes() {
     // names ↵'s action; flat picker (no descend).
     assert_eq!(
         OverlayKind::Caret.hint(),
-        "\u{2191}/\u{2193} move   type to filter   \u{21B5} apply"
+        "type to filter   \u{21B5} apply"
     );
     // selected_caret_mode is None for a non-caret picker.
     let theme = OverlayState::new_theme(vec!["Tawny".into()], 0);
@@ -635,7 +635,7 @@ fn spell_picker_lists_suggestions_and_carries_target() {
     // picker (no descend).
     assert_eq!(
         OverlayKind::Spell.hint(),
-        "\u{2191}/\u{2193} move   type to filter   \u{21B5} replace"
+        "type to filter   \u{21B5} replace"
     );
 }
 
@@ -673,7 +673,7 @@ fn history_picker_lists_versions_navigates_and_carries_ids() {
     // The hint teaches restore + compare + lens + close (informational, button-free).
     assert_eq!(
         OverlayKind::History.hint(),
-        "\u{2191}/\u{2193} move   type to filter   \u{21B5} restore   tab compare   \u{2190}/\u{2192} lens   esc close"
+        "type to filter   \u{21B5} restore   tab compare   \u{2190}/\u{2192} lens"
     );
     assert!(ov.foot_hint().contains("restore"));
 }
@@ -908,8 +908,8 @@ fn hint_teaches_descend_only_for_navigable_kinds() {
         assert!(h.contains('\u{2192}'), "{k:?} hint should teach → descend: {h}");
         assert!(h.contains('\u{2190}'), "{k:?} hint should teach ← ascend: {h}");
         assert!(!h.contains("C-f") && !h.contains("->"), "{k:?} no ASCII chord: {h}");
-        // The universal ↑/↓ move LEADS the line, then the primary ↵ Return action.
-        assert!(h.starts_with("\u{2191}/\u{2193} move"), "{k:?} hint leads with ↑/↓ move: {h}");
+        // The universal type-to-filter cell LEADS the line, then the primary ↵ Return action.
+        assert!(h.starts_with("type to filter"), "{k:?} hint leads with type to filter: {h}");
         assert!(h.contains("\u{21B5}"), "{k:?} hint names ↵ Return: {h}");
     }
     // Project ↵ SELECTS; MoveDest ↵ MOVES.
@@ -927,12 +927,12 @@ fn hint_teaches_descend_only_for_navigable_kinds() {
         let h = k.hint();
         assert!(!h.contains("C-f"), "{k:?} facets, no descend hint: {h}");
         assert!(h.contains("\u{2190}/\u{2192} lens"), "{k:?} hint should teach ←/→ lens: {h}");
-        assert!(h.starts_with("\u{2191}/\u{2193} move"), "{k:?} hint leads with ↑/↓ move: {h}");
+        assert!(h.starts_with("type to filter"), "{k:?} hint leads with type to filter: {h}");
     }
     // The FLAT theme picker teaches ↵ keep + esc revert, and NO lens axis (its strip
-    // was retired) — ↑/↓ move still leads.
+    // was retired) — type to filter still leads.
     let th = OverlayKind::Theme.hint();
-    assert!(th.starts_with("\u{2191}/\u{2193} move"), "theme hint leads with ↑/↓ move: {th}");
+    assert!(th.starts_with("type to filter"), "theme hint leads with type to filter: {th}");
     assert!(th.contains("\u{21B5} keep"), "theme ↵ keeps: {th}");
     assert!(th.contains("esc") && th.contains("revert"), "theme esc reverts: {th}");
     assert!(!th.contains("lens"), "the flat theme picker teaches no lens: {th}");
@@ -943,7 +943,7 @@ fn hint_teaches_descend_only_for_navigable_kinds() {
 
 /// The SHARED hint formatter produces ONE consistent shape for every picker:
 /// `glyph SPACE label`, actions joined by the single `HINT_SEP`, the universal
-/// `↑/↓ move` FIRST, then the primary (↵), and cancel (esc) — where present —
+/// `type to filter` FIRST, then the primary (↵), and cancel (esc) — where present —
 /// LAST and lowercase. This is the pass-2 unification law: a sample of overlays
 /// must all read identically formed.
 #[test]
@@ -966,14 +966,12 @@ fn hint_formatter_is_consistent_across_pickers() {
     // cancel action is the lowercase `esc` (never `Esc`) LAST.
     for k in OverlayKind::ALL {
         let actions = k.hint_actions();
-        assert!(actions.len() >= 3, "{k:?} must teach the move/filter lead + ↵ primary");
-        // The universal jump-affordance lead, in order: ↑/↓ move, type to filter —
+        assert!(actions.len() >= 2, "{k:?} must teach the filter lead + ↵ primary");
+        // The universal jump-affordance lead: type to filter —
         // the discoverability fix for "you can only go one by one".
-        assert_eq!(actions[0].glyph, "\u{2191}/\u{2193}", "{k:?} leads with ↑/↓ move");
-        assert_eq!(actions[0].label, "move", "{k:?} lead action is labelled move");
-        assert_eq!(actions[1].glyph, "type", "{k:?} type-to-filter is the 2nd lead cell");
-        assert_eq!(actions[1].label, "to filter", "{k:?} 2nd lead cell reads type to filter");
-        assert_eq!(actions[2].glyph, "\u{21B5}", "{k:?} ↵ primary follows the jump lead");
+        assert_eq!(actions[0].glyph, "type", "{k:?} leads with type to filter");
+        assert_eq!(actions[0].label, "to filter", "{k:?} lead cell reads type to filter");
+        assert_eq!(actions[1].glyph, "\u{21B5}", "{k:?} ↵ primary follows the jump lead");
         // Cancel-last + lowercase esc: no action names capital `Esc`; if any
         // action is the esc cancel, it is the LAST one.
         for (i, a) in actions.iter().enumerate() {
