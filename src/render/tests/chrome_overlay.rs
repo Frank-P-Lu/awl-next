@@ -92,13 +92,26 @@ fn overlay_card_box_stays_on_canvas_across_the_width_sweep() {
 
 /// Y-AGREEMENT OUTCOME LAW (Wagtail-lesson: assert what the shaped buffers +
 /// upload owners actually place, not a mechanism count) — across FLAT and
-/// FACETED pickers and three worlds, every candidate row's PRIMARY name, its
-/// SECONDARY chord label, and (for the selected row) the highlight BAND all sit
-/// on ONE y; and the amber caret rides the query line. Every element reads the
-/// shared owners (`overlay_row_top` / `overlay_secondary_top` /
-/// `overlay_query_center`) through [`TextPipeline::overlay_row_y_probe`], the
-/// same geometry the render path uploads from — so a shortcut can never ride a
-/// half-row high of its row again (the user-reported composition-round bug).
+/// FACETED pickers, both DPIs, and SEVEN worlds (incl. the four Bars poster
+/// worlds), every candidate row's PRIMARY name, its SECONDARY chord label, and
+/// (for the selected row) the highlight BAND all sit on ONE y; and the amber
+/// caret rides the query line. Every element reads the shared owners
+/// (`overlay_row_top` / `overlay_secondary_top` / `overlay_query_center`)
+/// through [`TextPipeline::overlay_row_y_probe`], the same geometry the render
+/// path uploads from — so a shortcut can never ride a half-row high of its row
+/// again (the user-reported composition-round bug).
+///
+/// EVERY-ROW PITCH clause (Firetail ↑/↓ "every second row" report, 2026-07-17):
+/// the SELECTED-row band check alone can't catch a shaper-vs-plate PITCH drift
+/// — a uniform per-row error would slide the whole list, and only the selected
+/// row is band-checked. So this law now asserts EVERY shaped row top equals the
+/// pitch the plates step by (`band_top + (k - sel_disp) * lh`). Under `Bars` the
+/// row-gap is folded into that one `lh`, so if the shaper ever read a different
+/// pitch than the plate/band renderer (the prime suspect for the report),
+/// row `k` would deviate and this fails — for Pane AND Bars, at 1× AND 2× DPI
+/// (retina, where the report came from), on the real poster fonts (Firetail's
+/// Monaspace Xenon). The report did NOT reproduce headlessly; this clause is the
+/// standing guard so the class can never regress silently.
 #[test]
 fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
     let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
@@ -127,7 +140,19 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
             }),
         ),
     ];
-    for world in ["Currawong", "Saltpan", "Wagtail"] {
+    // Retina too: the report was on a HiDPI display, where the row `lh` (and the
+    // unscaled Bars `gap` folded into it) shape at 2×. `set_dpi` rebuilds the
+    // pipeline metrics exactly like the live app's monitor scale.
+    for dpi in [1.0f32, 2.0] {
+        p.set_dpi(dpi);
+        // The four Bars poster worlds carry their real `list_style`/`facet_style`
+        // (Firetail's Monaspace Xenon + Chips facet); the three calm worlds keep
+        // Pane/Text. The `set_list_style_test_override` below forces BOTH styles
+        // on every world regardless, so the pitch clause covers Pane AND Bars
+        // uniformly — but a poster world also exercises its real face + facet skin.
+        for world in [
+            "Currawong", "Saltpan", "Wagtail", "Firetail", "Galah", "Magpie", "Mangrove",
+        ] {
         theme::set_active_by_name(world).unwrap();
         p.sync_theme();
         for faceted in [false, true] {
@@ -147,7 +172,7 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
             p.set_view(&v);
             p.prepare(&device, &queue, 1200, 800).unwrap();
             let pr = p.overlay_row_y_probe();
-            let ctx = format!("world={world} faceted={faceted} list={sname}");
+            let ctx = format!("world={world} dpi={dpi} faceted={faceted} list={sname}");
 
             // Per row: the name and the chord label sit on the same y.
             for (row, &prim) in &pr.primary {
@@ -169,6 +194,24 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
                 "{ctx}: selected band top {} must sit on its name top {sel_prim}",
                 pr.band_top
             );
+            // EVERY-ROW PITCH: the shaped text row `k` must land exactly where the
+            // plates step to it — `band_top + (k - sel_disp) * lh`. This is the
+            // shaper-pitch == plate/band-pitch invariant whose violation reads as
+            // the "every second row" desync. A tolerance of 1px allows sub-pixel
+            // rounding but nothing near a half-row; a per-row drift accumulates and
+            // trips well before the list ends.
+            for (&k, &prim) in &pr.primary {
+                let pitch_expected = pr.band_top + (k as f32 - pr.sel_disp as f32) * pr.lh;
+                assert!(
+                    (prim - pitch_expected).abs() <= 1.0,
+                    "{ctx}: row {k} text top {prim} must sit on the plate pitch \
+                     {pitch_expected} (lh={}, band={}, sel_disp={}) — a drift here is \
+                     the shaper reading a different pitch than the plate renderer",
+                    pr.lh,
+                    pr.band_top,
+                    pr.sel_disp
+                );
+            }
             // The caret rides the query line (centered on its REAL shaped height,
             // never above/below). On the flat pickers under a beat, that line is
             // inflated by `header_gap`, so the caret must ride the inflated height,
@@ -187,18 +230,22 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
                 pr.caret_center
             );
             // C2 STRIP-UNDERLINE Y-OWNER LAW (the element round A's law missed):
-            // a faceted card records an active-lens underline; it MUST sit BELOW
-            // the strip label's shaped baseline (never mid-glyph — the
+            // a `Text`-facet card records an active-lens UNDERLINE; it MUST sit
+            // at/BELOW the strip label's shaped baseline (never mid-glyph — the
             // Tawny/Firetail strike-through) and stay within the strip row box.
-            // (The list-style sweep never sets a Band/Chips facet skin, so the
-            // recorded mark stays the baseline underline throughout.)
-            if faceted {
+            // SCOPED to the `Text` facet skin: the poster worlds carry a
+            // `Band`/`Chips` mark whose shape + recording is a SEPARATE (in-flux,
+            // held-back) concern, not this row-geometry law's subject — they are
+            // in the sweep for the row-agreement + pitch clauses above, which do
+            // not depend on the facet skin.
+            if faceted && matches!(crate::render::effective_facet_style(), theme::FacetStyle::Text)
+            {
                 let base = pr.strip_baseline.unwrap_or_else(|| {
                     panic!("{ctx}: a faceted card must expose a strip baseline")
                 });
                 let bottom = pr.strip_line_bottom.unwrap();
                 let uy = pr.strip_underline_y.unwrap_or_else(|| {
-                    panic!("{ctx}: an active facet must record an underline y")
+                    panic!("{ctx}: an active Text facet must record an underline y")
                 });
                 assert!(
                     uy >= base,
@@ -229,8 +276,10 @@ fn overlay_row_elements_agree_in_y_flat_and_faceted_every_world() {
             );
         }
         }
+        }
     }
     crate::render::set_list_style_test_override(None);
+    p.set_dpi(1.0);
     theme::set_active(theme::DEFAULT_THEME);
 }
 
