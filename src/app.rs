@@ -2507,10 +2507,10 @@ mod tests {
     fn preview_crossing_the_lava_boundary_brackets_the_present_and_settles_once() {
         let _g = crate::testlock::serial();
         let prev = crate::theme::active_index();
-        let bg = |name: &str| {
-            crate::theme::THEMES.iter().find(|t| t.name == name).unwrap().background
+        let w = |name: &str| {
+            *crate::theme::THEMES.iter().find(|t| t.name == name).unwrap()
         };
-        let (mangrove_bg, magpie_bg) = (bg("Mangrove"), bg("Magpie"));
+        let (mangrove, magpie) = (w("Mangrove"), w("Magpie"));
 
         // Open the picker on the dark LAVA world, exactly as the report starts.
         crate::theme::set_active_by_name("Mangrove").unwrap();
@@ -2519,9 +2519,9 @@ mod tests {
 
         // ARROW to the static non-lava world: apply_core would have switched the
         // active world first, so mirror that, then run the real preview retint
-        // with the OUTGOING (lava) background it snapshotted.
+        // with the OUTGOING (lava) world it snapshotted.
         crate::theme::set_active_by_name("Magpie").unwrap();
-        app.retint_theme_preview(mangrove_bg);
+        app.retint_theme_preview(mangrove);
         assert!(app.crossing_settle_at.is_some(), "the crossing stamps the hold");
         assert!(
             app.present_sync_on,
@@ -2530,7 +2530,7 @@ mod tests {
 
         // ARROW BACK across the boundary (Magpie→Mangrove): re-stamps the hold.
         crate::theme::set_active_by_name("Mangrove").unwrap();
-        app.retint_theme_preview(magpie_bg);
+        app.retint_theme_preview(magpie);
         assert!(app.crossing_settle_at.is_some(), "the return crossing re-stamps");
         assert!(app.present_sync_on, "still armed across the return crossing");
 
@@ -2539,13 +2539,13 @@ mod tests {
         assert!(app.crossing_settle_at.is_none(), "settle clears the hold once");
         assert!(!app.present_sync_on, "presents return to async once settled");
 
-        // A SAME-SIDE hop (lava → lava, Mangrove → Firetail) is a total no-op:
-        // the cadence never changes, so nothing is armed.
+        // A SAME-SIDE hop (lava → lava, Mangrove → Firetail; neither one-bit) is a
+        // total no-op: no boundary changes, so nothing is armed.
         crate::theme::set_active_by_name("Firetail").unwrap();
-        app.retint_theme_preview(mangrove_bg);
+        app.retint_theme_preview(mangrove);
         assert!(
             app.crossing_settle_at.is_none(),
-            "a lava→lava hop leaves the cadence alone: no bracket"
+            "a lava→lava hop leaves both boundaries alone: no bracket"
         );
         assert!(!app.present_sync_on, "same-side hop arms nothing");
         crate::theme::set_active(prev);
@@ -2559,11 +2559,10 @@ mod tests {
     fn a_crossing_settle_never_strips_a_live_resize_streams_present_sync() {
         let _g = crate::testlock::serial();
         let prev = crate::theme::active_index();
-        let mangrove_bg = crate::theme::THEMES
+        let mangrove = *crate::theme::THEMES
             .iter()
             .find(|t| t.name == "Mangrove")
-            .unwrap()
-            .background;
+            .unwrap();
 
         crate::theme::set_active_by_name("Mangrove").unwrap();
         let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
@@ -2572,7 +2571,7 @@ mod tests {
         app.arm_live_resize_sync();
         assert!(app.present_sync_on, "resize stream arms the sync");
         crate::theme::set_active_by_name("Magpie").unwrap();
-        app.retint_theme_preview(mangrove_bg);
+        app.retint_theme_preview(mangrove);
         assert!(app.present_sync_on, "still armed with both sources live");
 
         // The crossing settles first: the resize stream still owns a claim.
