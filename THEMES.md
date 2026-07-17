@@ -628,7 +628,7 @@ RenderCaps`):
 | `image_reveal` | `Translucent` \| `Opaque` | The inline-image reveal caption scrim (`image_reveal_scrim`) — translucent veil vs. full opaque occlusion. | Wagtail (`Opaque`) |
 | `highlight_texture` | `Wash` \| `Stipple { color, density }` | THE ONE emphasis texture `==highlight==` spans and search matches share (`highlight_wash`, `wagtail_dither_density`) — a hue-derived translucent wash vs. a fixed-color Bayer-ordered dither stipple at `density`. | Wagtail (`Stipple { white, 0.25 }`) |
 | `title_style` | `InlinePrefix` \| `Placard { corner, scale, ink }` | How a summoned overlay card announces its title: the quiet inline `"<title> › "` prefix, or a large corner-anchored dim WORDMARK behind the rows (the P3R watermark; **bleed is the contract** — it anchors to the CANVAS corner and may bleed past the card; rows always composite over it; the inline prefix is suppressed so titles never double). `ink` ∈ Faint / Ghost / **Stipple** (Bayer pixel-stipple of the wordmark — see the personality section below). | Galah, Magpie (`BL 3.0 Ghost` — the gallery reference), Mangrove (`BL 3.0 Stipple` — the dither is its own language), Firetail (`BL 3.0 Faint`, deliberately smooth — the foil) |
-| `page_frame` | `None` \| `Line { weight_px }` | A thin FRAME around the WRITING COLUMN (distinct from the card border) — four hard-edged quads straddling the column boundary over the document's vertical extent, ink always `theme::page_frame_ink()` = the world's own `base_content` (the WORLD-ROLES "dark-line page-frame"; graduated from the `AWL_PAGE_BORDER` probe). | Wagtail (`Line { 2.0 }`, its ladder white — the 2px pick from the probe gallery) |
+| `page_frame` | `None` \| `Line { weight_px }` | A thin FRAME around the WRITING COLUMN (distinct from the card border) — four hard-edged quads straddling the column boundary over the document's vertical extent, ink always `theme::page_frame_ink()` = the world's own `base_content` (the "dark-line page-frame" idea, recorded in the roster-decisions note below; graduated from the `AWL_PAGE_BORDER` probe). | Wagtail (`Line { 2.0 }`, its ladder white — the 2px pick from the probe gallery) |
 | `card_anchor` | `TopLeft` \| `TopCenter` \| `Inset { x_frac }` \| `TopRight` | Where the summoned overlay card anchors horizontally (one owner `render::effective_card_anchor` → `overlay_card_x`). `TopRight` is more than placement — it also mirrors the selected-BAR growth direction toward the anchored edge under `Bars` (never text alignment). | Currawong, Mangrove, Galah, Magpie, Wagtail, Firetail (`TopLeft`; the GLOBAL DEFAULT is `TopCenter`) |
 | `chrome_face` | `Body` \| `Named(family)` | Which FACE the overlay chrome (placard wordmark / title prefix / strip labels) shapes in — `Body` (the world's own display face) everywhere, byte-identical, until a world names another family. | Firetail (`Named("Archivo Black")`) |
 | `motion` | `MotionJuice { entrance, band }` | Live-only overlay ENTRANCE + selection-band response. `CALM` (zero animators, settled state byte-identical in capture) on every world today. | none ship non-`CALM` yet |
@@ -765,6 +765,31 @@ at the Galah-reference scale 3.0 (its higher-contrast paper may want a dial);
 Mangrove's stipple-vs-flat call has its A/B pair in
 `gallery/personality-assigned/` (plus a Magpie stipple PROBE — not shipped —
 and the Wagtail frame 1px-vs-2px pair).
+
+### Roster decisions (harvested from the retired WORLD-ROLES working doc, 2026-07-15)
+
+The `WORLD-ROLES.md` working doc — a build-time planning sheet that scored the
+roster by role and drafted the path to a larger world count — was retired once
+its decisions landed; the two that bind the world contract are recorded here,
+and the still-open roster PLANNING (the light/dark balance, the light-silent /
+light-statement poles, the "stunning bar" quality gate, the ~20-world target and
+the hue gaps) moved to `ROADMAP.md`.
+
+- **The runtime lens picker is retired; the axes are a build-time ruler
+  (user decision, 2026-07-15).** The theme picker's runtime lens strip
+  (Time / Register / Voice / Temperature, cycled ←/→) is GONE — the picker is a
+  flat browsable list you scan by look-today, not a query surface. The four axes
+  survive ONLY as a build-time coverage check that the roster still spans the
+  space: every world carries a tag on every axis (`ThemeTags`) and
+  `theme::tests::axis_coverage_ruler` asserts no section goes uncovered. No
+  runtime code consults the axes. (Recorded in `src/facets.rs`,
+  `src/theme/model.rs`, `src/theme/tests.rs`.)
+- **The dark-line page-frame is a world capability, not a per-world code path.**
+  The "page reads as a deliberate object" idea — a thin full-ink frame around
+  the writing column — graduated from the `AWL_PAGE_BORDER` gallery probe into
+  the `page_frame` `RenderCaps` field above (Wagtail's 2px ladder-white frame is
+  its first and only assignment; the dark-line-on-light variant is reserved for
+  a future light-silent pole world).
 
 ### Per-script font resolution (i18n round — `FontId`; Chinese round — the zh-Hans/ko floors)
 

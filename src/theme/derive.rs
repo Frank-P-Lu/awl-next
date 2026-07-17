@@ -220,7 +220,8 @@ pub fn placard_stipple_density() -> f32 {
 /// THE ONE owner of the PAGE-FRAME ink ([`super::model::PageFrame`], the
 /// writing-column frame capability): the world's own `base_content` — the
 /// full-ink ladder rung, never a free color and never the amber accent. The
-/// WORLD-ROLES "dark-line page-frame" idea IS full ink (a dark line on a
+/// "dark-line page-frame" idea (retired; decision recorded in THEMES.md) IS
+/// full ink (a dark line on a
 /// light world; on Wagtail, the first assignment, this is its ladder's pure
 /// white). Weight lives on the capability; ink derivation lives here, so a
 /// frame can never invent a color (law-tested).

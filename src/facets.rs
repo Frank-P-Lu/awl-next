@@ -11,10 +11,10 @@
 //! Consumers today: the file pickers (Go-to / Browse / Switch-project), the
 //! Command palette, the History timeline, and the Settings menu — each registers
 //! its own [`FacetScheme`] in its domain module and adds one arm to [`scheme`].
-//! (The theme picker RETIRED its runtime lens strip — user decision, 2026-07-15,
-//! WORLD-ROLES.md "DECIDED — retire the runtime LENS picker; the axes become a
-//! build-time ruler": it is now a FLAT browsable list, and its axis data survives
-//! only as the `theme::tests::axis_coverage_ruler` build-time coverage check.)
+//! (The theme picker RETIRED its runtime lens strip — user decision, 2026-07-15
+//! (retired; decision recorded in THEMES.md): it is now a FLAT browsable list,
+//! and its axis data survives only as the `theme::tests::axis_coverage_ruler`
+//! build-time coverage check.)
 //!
 //! CONVENTION (settled): **"All" is HOME** — the flat, unfaceted list. It is the
 //! FIRST entry of every [`FacetScheme::strip`] (strip index 0), the lens a

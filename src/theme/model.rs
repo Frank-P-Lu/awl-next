@@ -538,7 +538,8 @@ pub enum ChipVariant {
 /// it). DISTINCT from the summoned card's border ([`Elevation::Bordered`] —
 /// that one rims a transient overlay card; this one is document furniture in
 /// the DESIGN §5 "orientation" sense: it makes the page read as a deliberate
-/// OBJECT, the WORLD-ROLES "dark-line page-frame" idea). `Line`'s
+/// OBJECT, the "dark-line page-frame" idea — retired; decision recorded in
+/// THEMES.md). `Line`'s
 /// `weight_px` is the stroke weight; the INK is never carried here — it is
 /// derived in ONE owner ([`super::derive::page_frame_ink`], the world's own
 /// `base_content`, the full-ink ladder rung: a "dark line" on a light world,
@@ -1245,8 +1246,8 @@ impl Theme {
 //
 // These four axes ([`Lens`]) once drove a runtime lens-switcher in the theme
 // picker (LEFT/RIGHT cycled them, grouping worlds into faint sections). That strip
-// was RETIRED (user decision, 2026-07-15 — WORLD-ROLES.md "DECIDED — retire the
-// runtime LENS picker; the axes become a build-time ruler"); the picker is now a
+// was RETIRED (user decision, 2026-07-15 — retired; decision recorded in
+// THEMES.md); the picker is now a
 // flat browsable list. The axes survive here ONLY as a BUILD-TIME coverage ruler:
 // every world carries a value on EACH of the four axes ([`ThemeTags`]), and
 // `tests::axis_coverage_ruler` asserts every section stays covered by a curated

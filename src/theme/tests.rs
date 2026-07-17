@@ -1179,8 +1179,8 @@ fn zh_hant_uniform_ko_splits_serif_from_sans() {
 /// any `Some(tag)` must be one of that axis's declared sections (no world under a
 /// header that doesn't exist); the name-keyed accessor [`tag_for`] agrees with the
 /// inline field; every world HEADLINES at least one axis; and `All` groups nothing.
-/// THIS is the coverage check WORLD-ROLES.md means by "the axes become a build-time
-/// ruler" — no runtime picker consults it.
+/// THIS is the coverage check meant by "the axes become a build-time ruler"
+/// (retired; decision recorded in THEMES.md) — no runtime picker consults it.
 #[test]
 fn axis_coverage_ruler() {
     for lens in [Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature] {
