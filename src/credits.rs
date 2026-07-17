@@ -12,8 +12,11 @@
 //! scratch stash the next time autosave flushes. Routing through a real path
 //! keeps Credits an ordinary, harmlessly-editable buffer instead.
 
-/// The full text of the repo's `CREDITS.md`, embedded at compile time.
-pub const CREDITS_MD: &str = include_str!("../CREDITS.md");
+/// The full text of the repo's `CREDITS.md`, embedded at compile time. The
+/// `include_str!` path itself lives in the ONE owner, `crate::embedded_docs`
+/// (a doc move is a one-line edit there); this re-export keeps
+/// `credits::CREDITS_MD` as the cohesive public name every consumer imports.
+pub use crate::embedded_docs::CREDITS_MD;
 
 #[cfg(test)]
 mod tests {

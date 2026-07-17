@@ -2114,14 +2114,14 @@ mod tests {
         // IN the file with NO overlay left open (like a palette value-pick keep, and
         // unlike the Esc breadcrumb pop).
         let mut buffer = Buffer::scratch();
-        let corpus = vec!["README.md".to_string()];
+        let corpus = vec!["doc-fixture.md".to_string()];
         let root = PathBuf::from("/tmp");
         let keys = keyspec::parse_keys("s-o RET").unwrap();
         let res = replay_keys(&mut buffer, &keys, &corpus, &root, None, &root, &Config::empty(), None);
         assert!(res.overlay.is_none(), "opening a file closes the overlay to the buffer");
         assert_eq!(
             res.accept,
-            Some((crate::overlay::OverlayKind::Goto, "README.md".to_string())),
+            Some((crate::overlay::OverlayKind::Goto, "doc-fixture.md".to_string())),
             "the file open still fired",
         );
     }
@@ -2135,7 +2135,7 @@ mod tests {
         let corpus = vec![
             ".gitignore".to_string(),
             ".env".to_string(),
-            "README.md".to_string(),
+            "doc-fixture.md".to_string(),
             "src/main.rs".to_string(),
         ];
         let root = PathBuf::from("/tmp");
@@ -2148,7 +2148,7 @@ mod tests {
         let shown = ov.item_strings();
         assert!(!shown.iter().any(|s| s == ".gitignore"), "dotfile hidden by default: {shown:?}");
         assert!(shown.iter().any(|s| s == ".env"), ".env stays visible: {shown:?}");
-        assert!(shown.iter().any(|s| s == "README.md"));
+        assert!(shown.iter().any(|s| s == "doc-fixture.md"));
         // Now open + toggle: the reveal chord flips show_hidden and .gitignore appears.
         let mut buffer = Buffer::scratch();
         let keys = keyspec::parse_keys("s-o s-S-.").unwrap();

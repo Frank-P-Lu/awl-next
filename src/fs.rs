@@ -392,10 +392,11 @@ fn leaf_name(path: &Path) -> String {
 // for any of the three items below, so they'd otherwise warn `dead_code`.
 #[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) const SEED_SAMPLES: &[(&str, &str)] = &[
-    ("/welcome.md", include_str!("../samples/welcome.md")),
-    ("/tour.md", include_str!("../samples/tour.md")),
-    ("/prose.md", include_str!("../samples/prose.md")),
-    ("/japanese.md", include_str!("../samples/japanese.md")),
+    // The `include_str!` paths live in the ONE owner, `crate::embedded_docs`.
+    ("/welcome.md", crate::embedded_docs::WELCOME_MD),
+    ("/tour.md", crate::embedded_docs::TOUR_MD),
+    ("/prose.md", crate::embedded_docs::PROSE_MD),
+    ("/japanese.md", crate::embedded_docs::JAPANESE_MD),
 ];
 
 /// The seed-generation sentinel key. Bumped `awlfs:seeded` -> `awlfs:seeded:v2`
