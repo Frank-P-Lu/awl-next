@@ -310,11 +310,20 @@ impl TextPipeline {
         // fit, so every lens stays present + hit-testable instead of the far
         // right clipping away. At any comfortable width the measured strip fits
         // and the single full-size pass stands (byte-identical wide captures).
-        self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, trailing, 1.0);
+        // CHIP-VARIATIONS PROBE — the `FilledActive` chip is a SOLID fill, so its
+        // active label INVERTS to the card ground (`base_300`) to read on the fill;
+        // every other facet style keeps the active label in content ink.
+        let active_ink = match crate::render::effective_facet_style() {
+            theme::FacetStyle::Chips(theme::ChipVariant::FilledActive) => {
+                theme::base_300().to_glyphon()
+            }
+            _ => ink,
+        };
+        self.shape_theme_spans(geom, ink, active_ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, trailing, 1.0);
         let strip_w = self.theme_strip_px();
         if strip_w > geom.text_w {
             let scale = (geom.text_w / strip_w).max(0.5);
-            self.shape_theme_spans(geom, ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, trailing, scale);
+            self.shape_theme_spans(geom, ink, active_ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, trailing, scale);
         }
 
         // Record the active-lens mark from the shaped strip glyphs (line 1). Line-1
@@ -390,9 +399,49 @@ impl TextPipeline {
                 chip_h,
             ]
         };
+        // CHIP-VARIATIONS PROBE — the ACTIVE-label corner TICKS for
+        // `ChipVariant::Bracket` (no closed box; small L-marks at each corner of the
+        // label pill box). Eight thin FILLED rects, drawn by `overlay_facet_ghost`
+        // as fills (stroke 0) — the ghost pipeline is otherwise idle under Bracket.
+        let corner_ticks = |l: f32, r: f32| -> Vec<[f32; 4]> {
+            const TICK: f32 = 6.0; // arm length
+            const TH: f32 = 1.6; // arm thickness
+            let top = mark_cy - chip_h * 0.5;
+            let bot = mark_cy + chip_h * 0.5;
+            let x0 = geom.text_left + l;
+            let x1 = geom.text_left + r;
+            vec![
+                [x0, top, TICK, TH],
+                [x0, top, TH, TICK], // TL
+                [x1 - TICK, top, TICK, TH],
+                [x1 - TH, top, TH, TICK], // TR
+                [x0, bot - TH, TICK, TH],
+                [x0, bot - TICK, TH, TICK], // BL
+                [x1 - TICK, bot - TH, TICK, TH],
+                [x1 - TH, bot - TICK, TH, TICK], // BR
+            ]
+        };
+        // The active mark rect (single-rect skins) + the ghost/tick collection. THE
+        // ONE owner: every skin below reads the SAME shaped glyph spans the strip
+        // hit-test does, so the mark can never disagree with where a label is clicked.
+        let mut ghosts: Vec<[f32; 4]> = Vec::new();
+        // The inactive ghost PILLS, shared by every chip skin that outlines its
+        // inactive labels (Hairline only, of the four). Filled per skin in overlay.rs.
+        let inactive_pills = || -> Vec<[f32; 4]> {
+            let mut v = Vec::new();
+            for (r, active) in &label_ranges {
+                if *active {
+                    continue;
+                }
+                if let Some((min_x, max_x, _)) = span_of(&self.panel_buffer, r) {
+                    v.push(pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD));
+                }
+            }
+            v
+        };
         self.overlay_theme_underline = active_range.as_ref().and_then(|ar| {
             let (min_x, max_x, baseline) = span_of(&self.panel_buffer, ar)?;
-            Some(match facet_style {
+            match facet_style {
                 theme::FacetStyle::Text => {
                     // Y-OWNER (COMPOSITION-C2): a hairline just UNDER the active label,
                     // read from the strip run's SHAPED baseline + a small drop — never
@@ -400,33 +449,40 @@ impl TextPipeline {
                     // faces. The strip's responsive fold reshapes into `panel_buffer`,
                     // so `baseline` is the FINAL (possibly scaled) run's baseline.
                     let y = geom.text_top + baseline + UNDERLINE_BASELINE_DROP;
-                    [geom.text_left + min_x, y, max_x - min_x, 1.5]
+                    Some([geom.text_left + min_x, y, max_x - min_x, 1.5])
                 }
-                // A single active BAND — or the ACTIVE chip under Chips — is a
-                // FILLED value pill hugging the label; no drawn neighbour to
-                // collide with, so it keeps the full pad.
-                theme::FacetStyle::Band | theme::FacetStyle::Chips => {
-                    pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD)
-                }
-            })
-        });
-        // V6 P5 [`theme::FacetStyle::Chips`] — the INACTIVE ghost pills: one
-        // hairline STROKE pill per NON-active facet label, from the SAME shaped
-        // glyphs the active pill reads. Populated only under `Chips`; cleared for
-        // `Text`/`Band` so a non-Chips frame leaves no stale ghost rects. Drawn
-        // via `overlay_facet_ghost` with the pipeline's `stroke` uniform.
-        self.overlay_theme_facet_ghosts.clear();
-        if matches!(facet_style, theme::FacetStyle::Chips) {
-            for (r, active) in &label_ranges {
-                if *active {
-                    continue;
-                }
-                if let Some((min_x, max_x, _)) = span_of(&self.panel_buffer, r) {
-                    self.overlay_theme_facet_ghosts
-                        .push(pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD));
-                }
+                // A single active BAND is a FILLED value pill hugging the label.
+                theme::FacetStyle::Band => Some(pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD)),
+                theme::FacetStyle::Chips(v) => match v {
+                    // HAIRLINE (baseline, ships Galah) + FILLED-ACTIVE (ships
+                    // Firetail) — both a single pill hugging the active label; the
+                    // FILL / STROKE / colour per skin is set in `prepare_overlay`.
+                    theme::ChipVariant::Hairline | theme::ChipVariant::FilledActive => {
+                        // Ghost pills only for HAIRLINE (it outlines inactive labels;
+                        // FilledActive leaves them bare).
+                        if matches!(v, theme::ChipVariant::Hairline) {
+                            ghosts = inactive_pills();
+                        }
+                        Some(pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD))
+                    }
+                    // UNDERLINE-CHIP (ships Magpie) — no box; a THICK SHORT bar hugging
+                    // the label width, sitting just under the baseline. No inactive marks.
+                    theme::ChipVariant::Underline => {
+                        let y = geom.text_top + baseline + UNDERLINE_BASELINE_DROP;
+                        Some([geom.text_left + min_x, y, max_x - min_x, 3.5])
+                    }
+                    // BRACKET (ships Mangrove) — no box; corner ticks around the active
+                    // label, routed through the (otherwise idle) ghost pipeline as fills.
+                    theme::ChipVariant::Bracket => {
+                        ghosts = corner_ticks(min_x - CHIP_HPAD, max_x + CHIP_HPAD);
+                        None
+                    }
+                },
             }
-        }
+        });
+        // Cleared for `Text`/`Band` (byte-identical); carries the inactive ghost
+        // pills or the active corner ticks under the chip skins that draw them.
+        self.overlay_theme_facet_ghosts = ghosts;
         false
     }
 
@@ -442,6 +498,10 @@ impl TextPipeline {
         &mut self,
         geom: &OverlayGeom,
         ink: glyphon::Color,
+        // CHIP-VARIATIONS PROBE — the ACTIVE lens label's ink, split from `ink` so
+        // `FacetStyle::Chips(FilledActive)` can invert it to the card ground while
+        // every other style passes `ink` through (byte-identical).
+        active_ink: glyphon::Color,
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
         strip_s: &str,
@@ -528,7 +588,7 @@ impl TextPipeline {
             let mut cursor = 0usize;
             let mut pushes: Vec<(std::ops::Range<usize>, glyphon::Color)> = Vec::new();
             for (r, active) in label_ranges {
-                pushes.push((r.clone(), if *active { ink } else { muted }));
+                pushes.push((r.clone(), if *active { active_ink } else { muted }));
             }
             for r in sep_ranges {
                 pushes.push((r.clone(), faint));

@@ -151,7 +151,7 @@ const CHIP_STRIP_GAP: &str = "    ";
 /// [`CHIP_STRIP_GAP`]); [`STRIP_GAP`] otherwise.
 pub(super) fn strip_gap() -> &'static str {
     match crate::render::effective_facet_style() {
-        theme::FacetStyle::Chips => CHIP_STRIP_GAP,
+        theme::FacetStyle::Chips(_) => CHIP_STRIP_GAP,
         theme::FacetStyle::Text | theme::FacetStyle::Band => STRIP_GAP,
     }
 }
