@@ -285,7 +285,16 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // the STATE of the read-only prose-diff view (`crate::prosediff`) the capture
 // harness rendered (`AWL_DIFF_OLD`/`AWL_DIFF_NEW`). A state oracle only — the
 // struck/washed APPEARANCE is asserted over the PNG's pixels.
-pub const SCHEMA_VERSION: u32 = 172;
+// `/173` — TWINKLING STARS: the `page` block gains `ambient` — the active
+// world's `AmbientStyle` capability. `{ "style": "none" }` for the fifteen
+// starless worlds (their PNG stays byte-identical; only this sidecar key is
+// new); for a stars world `{ "style": "stars", tint, count, phase }` — the
+// authored tint, the number of star instances actually drawn this frame
+// (post margin/ink-zone cull — 0 when page mode is off), and the effective
+// twinkle phase (the FIXED 0.0 in every headless capture, the determinism
+// law; the dev `AWL_STARS_PHASE` gallery knob pins another). A state oracle
+// only — star PLACEMENT/brightness are asserted over the PNG's pixels.
+pub const SCHEMA_VERSION: u32 = 173;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

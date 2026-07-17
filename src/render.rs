@@ -2858,6 +2858,26 @@ pub struct TextPipeline {
     /// this fixed while the page mask follows the current window, then snaps it
     /// once the resize debounce settles.
     lava_field_viewport: [f32; 2],
+    /// TWINKLING STARS (`theme::AmbientStyle::Stars`, the TWINKLING-STARS
+    /// round): tiny individually-phased breathing points in the page-mode
+    /// MARGINS — Currawong's ambient differentiator. A reused
+    /// `SelectionPipeline` (fully-rounded tiny quads via `set_corner`,
+    /// per-star alpha via `prepare_multicolor` — the writing-streaks
+    /// per-instance-color path; no new shader, nothing new for WebGL2).
+    /// ZERO instances for every `AmbientStyle::None` world (fifteen of
+    /// sixteen — byte-identical), and for page-off (no margins → no stars).
+    /// The twinkle rides [`Self::lava_phase`] — ONE ambient clock, two
+    /// consumers. See [`Self::prepare_stars_layer`] + [`crate::stars`].
+    pub stars_pipeline: SelectionPipeline,
+    /// The star-field PROTOS (the proto-cache shape): the scattered layout,
+    /// built once per (viewport size, star params) by [`crate::stars::layout`]
+    /// and re-culled/re-tinted per frame against the LIVE column geometry +
+    /// twinkle phase. Rebuilt only when [`Self::stars_proto_key`] misses.
+    stars_protos: Vec<crate::stars::Star>,
+    /// The proto cache key: `(width, height, cell_px bits, density bits)` —
+    /// a resize or a theme switch onto different star data rebuilds the
+    /// layout; everything else is pure per-frame arithmetic over the protos.
+    stars_proto_key: Option<(u32, u32, u32, u32)>,
     /// THE PAGE FRAME (`theme::PageFrame`, the personality-assignment round's
     /// graduated capability — subsumes the never-shipped `AWL_PAGE_BORDER`
     /// gallery probe): four thin quads framing the writing column over the
@@ -3877,6 +3897,11 @@ impl TextPipeline {
         let mut page_frame_pipeline =
             SelectionPipeline::new(device, format, theme::page_frame_ink().rgba_bytes());
         page_frame_pipeline.set_dither(1.0);
+        // TWINKLING STARS (theme::AmbientStyle): tiny fully-rounded quads in the
+        // margins, per-star color/alpha via `prepare_multicolor` (the stored
+        // pipeline color is inert — a placeholder). Starts empty; every
+        // AmbientStyle::None world uploads zero instances, forever.
+        let stars_pipeline = SelectionPipeline::new(device, format, [0, 0, 0, 0]);
         // SYNTAX WASH quads (under selection, over the ground): the warm band
         // behind prose comments + the green band behind dark-world strings. The
         // tints come from THE role style provider (`role_style_for`, via
@@ -4155,6 +4180,9 @@ impl TextPipeline {
             lava_pipeline,
             lava_phase: crate::lava::LAVA_FROZEN_PHASE,
             lava_field_viewport: [0.0, 0.0],
+            stars_pipeline,
+            stars_protos: Vec::new(),
+            stars_proto_key: None,
             page_frame_pipeline,
             wash_comment_pipeline,
             wash_string_pipeline,
@@ -5154,6 +5182,21 @@ impl TextPipeline {
         )
     }
 
+    /// THE EFFECTIVE TWINKLE PHASE this frame — the SAME determinism ladder as
+    /// [`Self::lava_render_phase`] (one resolver, [`crate::lava::lava_phase_for`]),
+    /// fed the stars' own dev gallery knob (`AWL_STARS_PHASE`): env override >
+    /// Reduce-Motion freeze (static stars — present, not twinkling) > the
+    /// App-driven ambient [`Self::lava_phase`] (ONE clock, two consumers; the
+    /// frozen 0.0 in every headless capture, since the capture never ticks).
+    /// Read by [`Self::prepare_stars_layer`] + the capture sidecar.
+    pub fn stars_render_phase(&self) -> f32 {
+        crate::lava::lava_phase_for(
+            self.lava_phase,
+            crate::motion::reduced(),
+            crate::stars::env_phase(),
+        )
+    }
+
     /// Advance the lava lamp's animation phase by `dt` seconds — called ONLY by
     /// the live App's slow ambient tick (`App::about_to_wait`), NEVER `advance()`'s
     /// hot per-frame loop (the lava's whole point is a ~10 fps sparse cadence, not
@@ -5282,6 +5325,9 @@ impl TextPipeline {
         // THE LAVA-LAMP GROUND: over the flat margin ground, before the washes.
         // A no-op (draws nothing) for every non-lava world.
         self.prepare_lava_layer(queue, width, height);
+        // TWINKLING STARS: the ambient star field in the margins (zero
+        // instances for every AmbientStyle::None world — byte-identical).
+        self.prepare_stars_layer(device, queue, width, height);
         // THE PAGE FRAME: the thin writing-column frame (zero rects for every
         // PageFrame::None world, so those stay byte-identical).
         self.prepare_page_frame(device, queue, width, height);
@@ -5527,6 +5573,10 @@ impl TextPipeline {
         // foreground layer. A total no-op (draws nothing) for every non-lava
         // world — so all fifteen shipped worlds render byte-identically.
         self.lava_pipeline.draw(pass);
+        // TWINKLING STARS: the ambient star field, over the margin ground and
+        // under everything foreground. Zero instances (draws nothing) for
+        // every AmbientStyle::None world.
+        self.stars_pipeline.draw(pass);
         // THE PAGE FRAME (theme::PageFrame): the thin writing-column frame,
         // right after the ground and before every wash/text layer — so text,
         // washes, selection all composite OVER it if they ever meet it (they

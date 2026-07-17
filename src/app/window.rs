@@ -232,7 +232,12 @@ impl App {
     /// structural guarantee) and its `Moved` events stay byte-identical to
     /// before the move machinery existed.
     pub(super) fn on_moved(&mut self, _position: winit::dpi::PhysicalPosition<i32>) {
-        if crate::theme::background().is_lava() {
+        // Gated on the AMBIENT capability (`Theme::has_ambient_motion` — lava
+        // OR twinkling stars, the one gate): both push the same ~10 fps async
+        // ambient presents this hold exists to keep out of the window-server's
+        // move transaction. A static world presents nothing around a move, so
+        // it takes this arm as a TOTAL no-op, byte-identical as ever.
+        if crate::theme::active().has_ambient_motion() {
             self.move_settle_at = Some(Instant::now());
             self.lava_tick_at = None;
             self.sync_present_txn();

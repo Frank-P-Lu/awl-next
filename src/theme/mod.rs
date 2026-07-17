@@ -75,7 +75,7 @@ pub use model::{Lens, RoleOverrides, ThemeTags};
 // bundle type + one field's enum); every non-test in-crate caller today reaches
 // them through `Theme::render_caps.<field>` rather than this bare re-export.
 pub use model::{
-    Backdrop, BandResponse, BarCoverage, BarExtent, CardAnchor, CaretBlockStyle,
+    AmbientStyle, Backdrop, BandResponse, BarCoverage, BarExtent, CardAnchor, CaretBlockStyle,
     ChipVariant, ChromeFace, DecorativeWash, Elevation, FacetStyle, HighlightTexture, HighlightTreatment,
     ImageReveal, ListStyle, MotionJuice, OverlayEntrance, PageFrame, PlacardCorner, PlacardInk,
     RenderCaps, SelectionStyle, TitleStyle,

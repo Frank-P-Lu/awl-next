@@ -34,6 +34,7 @@ mod outline;
 mod overlay_personality;
 mod page_frame;
 mod pixeldiff;
+mod stars;
 mod syntax_ligatures;
 mod syntax_roles;
 mod tables;

@@ -9,10 +9,10 @@ use super::cjk::{
 };
 use super::color::Srgb;
 use super::model::{
-    Backdrop, Background, CardAnchor, CaretBlockStyle, ChipVariant, ChromeFace, DecorativeWash,
-    Elevation, FacetStyle, HighlightTexture, ImageReveal, LavaEdge, ListStyle, MotionJuice, PageFrame,
-    PlacardCorner, PlacardInk, RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags,
-    TitleStyle, WashOverride,
+    AmbientStyle, Backdrop, Background, CardAnchor, CaretBlockStyle, ChipVariant, ChromeFace,
+    DecorativeWash, Elevation, FacetStyle, HighlightTexture, ImageReveal, LavaEdge, ListStyle,
+    MotionJuice, PageFrame, PlacardCorner, PlacardInk, RenderCaps, RoleOverrides, SelectionStyle,
+    Theme, ThemeTags, TitleStyle, WashOverride,
 };
 use super::ornament::{
     Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, ORNAMENT_GARAMOND,
@@ -566,9 +566,27 @@ pub const CURRAWONG: Theme = Theme {
     // stays quiet chrome.
     // COMPOSITION-C2: the iconic dark-technical statement world anchors its card
     // TOP-LEFT (a deliberate object, not a centred dialog).
+    // TWINKLING STARS (2026-07-18, the user's morning verdict): Currawong stays,
+    // differentiated by ambient TWINKLING STARS — the "aliveness ≠ loudness"
+    // pole (maximally quiet, unmistakably alive; the Pied Currawong's voice is
+    // the quiet dark). Tiny cool starlight points (#9DB0CF, ~217° — a night-sky
+    // steel-blue, ~170° clear of the gold caret) scattered sparsely through the
+    // page margins, each breathing its brightness on its own slow seconds-scale
+    // cycle between a `faint`-adjacent whisper (floor 0.12) and a sub-`muted`
+    // glint (peak 0.55 — the quiet-band law holds the composited peak under the
+    // world's own muted rung). All numbers are TASTE TUNABLE — flagged for the
+    // user's gallery pick (this round ships BUILD + GALLERY + HOLD).
     render_caps: RenderCaps {
         elevation: Elevation::Bordered,
         card_anchor: CardAnchor::TopLeft,
+        ambient: AmbientStyle::Stars {
+            tint: Srgb::rgb(0x9D, 0xB0, 0xCF),
+            cell_px: 34.0,
+            density: 0.16,
+            size_px: 2.6,
+            peak: 0.55,
+            floor: 0.12,
+        },
         ..RenderCaps::DEFAULT
     },
 };
@@ -1087,6 +1105,12 @@ pub const WAGTAIL: Theme = Theme {
         // because this literal names every field (no `..DEFAULT` spread).
         list_style: ListStyle::Pane,
         facet_style: FacetStyle::Text,
+        // TWINKLING-STARS round: NO ambient life — a fractional-alpha star
+        // breath is structurally illegal on a true 1-bit world (any
+        // intermediate composite is a forbidden third value; the theme-side
+        // law `ambient_stars_laws_hold_for_every_world` guards it), and the
+        // silent pole would decline the personality anyway.
+        ambient: AmbientStyle::None,
     },
 };
 

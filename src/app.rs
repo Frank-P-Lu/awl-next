@@ -2019,16 +2019,17 @@ impl ApplicationHandler<AwlEvent> for App {
                 false => {}
             }
         }
-        // AMBIENT LAVA TICK — the lava-lamp ground's slow ~10 fps drift, awl's
-        // FIRST time-varying background. A single `WaitUntil` cadence (NEVER the
-        // caret spring's hot per-frame `Poll` loop): when it elapses, advance the
-        // phase, request ONE redraw, and re-arm. Armed ONLY while
-        // `lava::lava_should_tick` holds — a lava world is active AND
-        // `ambient_motion` is on AND motion is not reduced AND the window is
-        // focused (pause on blur). Firetail + Mangrove are the two lava worlds;
-        // every other world has a static background, so `is_lava()` is false and
-        // schedules ZERO ambient frames — preserving 0% idle CPU there.
-        let lava_active = crate::theme::background().is_lava();
+        // AMBIENT TICK — the slow ~10 fps drift clock behind awl's time-varying
+        // grounds: the lava lamp (Firetail/Mangrove) AND the twinkling stars
+        // (Currawong) — ONE clock, two consumers (`TextPipeline::lava_phase`).
+        // A single `WaitUntil` cadence (NEVER the caret spring's hot per-frame
+        // `Poll` loop): when it elapses, advance the phase, request ONE redraw,
+        // and re-arm. Armed ONLY while `lava::lava_should_tick` holds — an
+        // ambient-motion world is active (`Theme::has_ambient_motion`, the ONE
+        // gate) AND `ambient_motion` is on AND motion is not reduced AND the
+        // window is focused (pause on blur). Every static world schedules ZERO
+        // ambient frames — preserving 0% idle CPU there.
+        let lava_active = crate::theme::active().has_ambient_motion();
         let lava_paused = crate::lava::lava_paused(
             self.resize_settle_at.is_some(),
             self.move_settle_at.is_some(),
@@ -2074,10 +2075,11 @@ impl ApplicationHandler<AwlEvent> for App {
                 }
             }
         } else if lava_active {
-            // A lava world, but the lamp must be STATIC: reduce motion OR ambient
-            // motion off (blur is handled at the focus edge, which merely HOLDS the
-            // phase). Stop ticking; hard-freeze the phase to the settled frame so a
-            // later resume restarts cleanly rather than from a stale mid-bob.
+            // An ambient-motion world (lava or stars), but the ground must be
+            // STATIC: reduce motion OR ambient motion off (blur is handled at
+            // the focus edge, which merely HOLDS the phase). Stop ticking;
+            // hard-freeze the shared phase to the settled frame so a later
+            // resume restarts cleanly rather than from a stale mid-breath.
             self.lava_tick_at = None;
             if crate::motion::reduced() || !self.config.ambient_motion_on() {
                 if let Some(gpu) = self.gpu.as_mut() {

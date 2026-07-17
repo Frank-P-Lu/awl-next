@@ -459,23 +459,26 @@ pub enum CrossingAction {
 /// gets the present-transaction bracket iff it crosses a HEAVYWEIGHT-PIPELINE
 /// BOUNDARY — one whose crossing frame changes the present cadence or reconfigures
 /// costly GPU state under the compositor:
-/// - **LAVA:** the ambient lava tick's cadence is gated on the active world's
-///   `is_lava()` (`App::about_to_wait`), so flipping that bit changes how often
-///   frames present — a lava world pushed ~10 fps async presents; the non-lava
-///   world it lands on schedules none.
+/// - **AMBIENT:** the ambient tick's cadence is gated on the active world's
+///   `Theme::has_ambient_motion()` (`App::about_to_wait`) — the lava lamp AND
+///   the twinkling stars ride the same ~10 fps clock — so flipping that bit
+///   changes how often frames present: an ambient world pushes ~10 fps async
+///   presents; the static world it lands on schedules none. (Formerly the
+///   narrower `is_lava()` boundary; the TWINKLING-STARS round widened it to the
+///   one shared gate the tick itself reads, so Currawong crossings bracket too.)
 /// - **ONE-BIT:** Wagtail is the monochrome world (dither uniforms on the search /
 ///   highlight pipelines, the InverseFill machinery). Leaving or entering it flips
 ///   that pipeline state on the crossing frame. This boundary is INDEPENDENT of
-///   lava — Wagtail↔Magpie is non-lava↔non-lava, a same-side LAVA hop that would
-///   otherwise read `Steady`, which is exactly how the reopened vanish slipped the
-///   bracket.
+///   the ambient one — Wagtail↔Magpie is static↔static, a same-side AMBIENT hop
+///   that would otherwise read `Steady`, which is exactly how the reopened vanish
+///   slipped the bracket.
 /// Either boundary (or both) arms `SyncAcrossCrossing`; a step on the same side of
 /// BOTH leaves the compositor alone. The decision is symmetric in each boundary
 /// (either direction crosses), matching the report's "or arrowing back".
 pub fn preview_crossing(prev: &crate::theme::Theme, next: &crate::theme::Theme) -> CrossingAction {
-    let lava_boundary = prev.background.is_lava() != next.background.is_lava();
+    let ambient_boundary = prev.has_ambient_motion() != next.has_ambient_motion();
     let one_bit_boundary = prev.is_one_bit() != next.is_one_bit();
-    if lava_boundary || one_bit_boundary {
+    if ambient_boundary || one_bit_boundary {
         CrossingAction::SyncAcrossCrossing
     } else {
         CrossingAction::Steady
@@ -1526,13 +1529,15 @@ mod tests {
     /// protection. The one-bit arm is what the lava-only test structurally missed:
     /// Wagtail→Magpie is non-lava→non-lava, a same-side LAVA hop that read `Steady`.
     #[test]
-    fn preview_crossing_arms_exactly_on_the_lava_or_one_bit_boundary() {
+    fn preview_crossing_arms_exactly_on_the_ambient_or_one_bit_boundary() {
         use crate::theme::THEMES;
         for prev in THEMES.iter() {
             for next in THEMES.iter() {
-                let lava = prev.background.is_lava() != next.background.is_lava();
+                // The AMBIENT boundary (TWINKLING-STARS round: widened from
+                // `is_lava` to the one gate the tick reads — lava OR stars).
+                let ambient = prev.has_ambient_motion() != next.has_ambient_motion();
                 let one_bit = prev.is_one_bit() != next.is_one_bit();
-                let crosses = lava || one_bit;
+                let crosses = ambient || one_bit;
                 let want = if crosses {
                     CrossingAction::SyncAcrossCrossing
                 } else {
@@ -1541,7 +1546,7 @@ mod tests {
                 assert_eq!(
                     preview_crossing(prev, next),
                     want,
-                    "{} -> {}: lava boundary = {lava}, one-bit boundary = {one_bit}",
+                    "{} -> {}: ambient boundary = {ambient}, one-bit boundary = {one_bit}",
                     prev.name,
                     next.name,
                 );
@@ -1569,12 +1574,25 @@ mod tests {
         // Wagtail ⇄ a lava world crosses BOTH boundaries — still one arm.
         assert_eq!(preview_crossing(wagtail, mangrove), CrossingAction::SyncAcrossCrossing);
         assert_eq!(preview_crossing(mangrove, wagtail), CrossingAction::SyncAcrossCrossing);
-        // Same-side-of-both hops stay Steady: lava→lava and hued-non-lava→hued-non-lava.
+        // Same-side-of-both hops stay Steady: lava→lava and hued-static→hued-static.
         assert_eq!(preview_crossing(mangrove, firetail), CrossingAction::Steady);
         assert_eq!(preview_crossing(magpie, tawny), CrossingAction::Steady);
         // A world to itself never crosses (Wagtail included).
         assert_eq!(preview_crossing(mangrove, mangrove), CrossingAction::Steady);
         assert_eq!(preview_crossing(magpie, magpie), CrossingAction::Steady);
         assert_eq!(preview_crossing(wagtail, wagtail), CrossingAction::Steady);
+        // THE TWINKLING-STARS ANCHORS: Currawong ticks the ambient clock via its
+        // STARS capability (non-lava!), so a Currawong ⇄ static hop crosses the
+        // cadence boundary exactly like a lava hop — while Currawong ⇄ a lava
+        // world is a SAME-SIDE ambient hop (both tick) and stays Steady.
+        let currawong = w("Currawong");
+        assert!(
+            currawong.has_ambient_motion() && !currawong.background.is_lava(),
+            "Currawong is the stars-ambient (non-lava) world"
+        );
+        assert_eq!(preview_crossing(currawong, tawny), CrossingAction::SyncAcrossCrossing);
+        assert_eq!(preview_crossing(tawny, currawong), CrossingAction::SyncAcrossCrossing);
+        assert_eq!(preview_crossing(currawong, mangrove), CrossingAction::Steady);
+        assert_eq!(preview_crossing(currawong, currawong), CrossingAction::Steady);
     }
 }
