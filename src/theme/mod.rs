@@ -55,7 +55,8 @@ pub use derive::{
     image_reveal_scrim, muted, overlay_bar_unselected, overlay_bars_room, overlay_selected_band,
     page_frame_ink,
     placard_ink,
-    placard_stipple_density, primary, selected_row_ink, selection, set_active, set_active_by_name,
+    placard_stipple_density, primary, selected_row_ink, selected_row_secondary_ink, selection,
+    set_active, set_active_by_name,
     surface_selected,
 };
 #[allow(unused_imports)] // cycle/overlay_scrim/primary_content/tag_for: public API

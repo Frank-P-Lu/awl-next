@@ -337,6 +337,34 @@ pub fn selected_row_ink(band: Srgb) -> Srgb {
     }
 }
 
+/// SIBLING of [`selected_row_ink`] for the picker row's SECONDARY (right-column)
+/// cell — the dim key-chord / time / git hints that ride `muted` on an ordinary
+/// row. The selected-row value band can wash `muted` out exactly as it washes
+/// `base_content`: Potoroo's saturated gold band drove its muted hints to an 8.8
+/// luminance delta — invisible (the Wagtail invisible-row class, SECONDARY
+/// edition — the primary flip landed but the secondary column never followed).
+/// The cell KEEPS `muted` UNLESS the band drops it below
+/// [`SELECTED_ROW_INK_CONTRAST_FLOOR`], in which case the ink FLIPS to whichever
+/// ladder POLE (`base_100` ground vs `base_content` ink) reads harder against
+/// the fill — the SAME reading-pole derive the primary uses, one register
+/// quieter by construction (it starts from `muted`, not `base_content`). Returns
+/// `muted` unchanged on every world whose band already clears the floor
+/// (byte-identical). Derived purely from the fill's own luminance, never a
+/// per-world hand value.
+pub fn selected_row_secondary_ink(band: Srgb) -> Srgb {
+    let dim = muted();
+    if contrast_ratio(band, dim) >= SELECTED_ROW_INK_CONTRAST_FLOOR {
+        return dim;
+    }
+    let ground = base_100();
+    let content = base_content();
+    if contrast_ratio(band, ground) > contrast_ratio(band, content) {
+        ground
+    } else {
+        content
+    }
+}
+
 /// PER-ITEM LIST SURFACES round — the UNSELECTED bar's fill under
 /// [`super::ListStyle::Bars`]. A WHISPER: the `base_200` code-fence-wash
 /// register — one gentle value step off the GROUND (`base_100`), near-invisible

@@ -327,6 +327,164 @@ fn selected_row_text_clears_contrast_floor_on_every_world() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
+/// LAW (born from the Potoroo taste-gate defect — the Wagtail invisible-row
+/// class, SECONDARY edition): the selected picker row's DIM right-column hint
+/// (key chord / last-edited time / git tag) must ALSO clear a 3:1 contrast
+/// against its own selected-row value band on EVERY world. The primary-ink flip
+/// ([`selected_row_text_clears_contrast_floor_on_every_world`]) landed but the
+/// secondary column kept riding `muted` unconditionally — on Potoroo's saturated
+/// gold band the muted hints washed to an 8.8 luminance delta (invisible), while
+/// the unselected rows read at 89.9. The fix is [`theme::selected_row_secondary_ink`],
+/// the ONE derive owner that flips the hint to the reading pole when `muted`
+/// fails. NO-WILDCARD over `HighlightTreatment` — a new treatment variant fails
+/// to compile here until it declares which ink the hint draws — AND over every
+/// world in `THEMES`.
+#[test]
+fn selected_row_secondary_clears_contrast_floor_on_every_world() {
+    const FLOOR: f32 = 3.0;
+    let _g = crate::testlock::serial();
+
+    for th in theme::THEMES.iter() {
+        theme::set_active_by_name(th.name).unwrap();
+        let band = crate::render::effective_overlay_selrow_band();
+        // The (band fill, SECONDARY hint ink) pair the renderer actually draws for
+        // the selected row, resolved through the SAME owners `shape_overlay_right`
+        // uses: `muted` unless the band washes it out, then the reading pole.
+        let (fill, ink) = match th.highlight_treatment(band) {
+            theme::HighlightTreatment::ValueBand(color) => {
+                (color, theme::selected_row_secondary_ink(color))
+            }
+            theme::HighlightTreatment::InverseFill { band, ink } => (band, ink),
+        };
+        let c = wcag_contrast(fill, ink);
+        assert!(
+            c >= FLOOR,
+            "{}: selected-row SECONDARY hint ink {:?} on band {:?} = {c:.2}:1 (floor \
+             {FLOOR}:1) — the dim right-column chord washes into its own selection fill",
+            th.name, ink, fill
+        );
+    }
+
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// LAW (born from the SLANT-ON-BARS regression — the Wagtail invisible-row class,
+/// SECONDARY-under-a-HUG-PLATE edition): the selected picker row's DIM
+/// right-column chord must SURVIVE — stay visible — even when the world is a Bars
+/// world AND the wild-menu slant is on. The prior secondary flip
+/// ([`theme::selected_row_secondary_ink`]) contrasts the chord against the
+/// selected-row BAND, which is correct ONLY when the chord sits ON the band (Pane,
+/// FULL-WIDTH bars). Under a HUGGING plate ([`theme::BarExtent::HugLabel`], the
+/// poster worlds' hybrid) the bare right chord rides the GROUND, not the plate, so
+/// contrasting the band drove it INTO the ground: Firetail's selected `⌘O` washed
+/// to a 13.5-maxlum background band while the unselected rows read 135. The color
+/// law above checked the chord against the band it never touched, so it stayed
+/// green while the pixel vanished — this is the OUTCOME proof over REAL pixels.
+///
+/// The assertion is SURVIVAL-under-selection: render the same chord row selected
+/// and unselected, and require the selected chord's peak contrast against its own
+/// local ground to stay within a fraction of the unselected chord's — a flip that
+/// erases it drops the selected peak to ~0 while the unselected stays bright.
+/// Swept across every world whose `list_style` is `Bars`, WITH the slant probe on
+/// (`px_per_row = 12.0`, the gallery's stair), so slant × selection × Bars is one
+/// cell per world.
+#[test]
+fn selected_row_secondary_survives_slant_on_bars_worlds() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping selected_row_secondary_survives_slant_on_bars_worlds: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let w = 1200u32;
+    let h = 800u32;
+
+    // The peak luminance deviation from the region's own background (its median
+    // luminance) — a glyph is a spike above/below the ground; a chord washed into
+    // the ground leaves ~0. Row-major RGBA over `[cx0,cx1) x [ry0,ry1)`.
+    fn chord_peak(buf: &[[u8; 4]], width: i64, cx0: i64, cx1: i64, ry0: i64, ry1: i64) -> f32 {
+        let lum = |p: [u8; 4]| 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32;
+        let mut lums: Vec<f32> = Vec::new();
+        for y in ry0..ry1 {
+            for x in cx0..cx1 {
+                lums.push(lum(buf[(y * width + x) as usize]));
+            }
+        }
+        if lums.is_empty() {
+            return 0.0;
+        }
+        let mut sorted = lums.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let ground = sorted[sorted.len() / 2];
+        lums.iter().map(|l| (l - ground).abs()).fold(0.0_f32, f32::max)
+    }
+
+    let bars_worlds: Vec<&theme::Theme> = theme::THEMES
+        .iter()
+        .filter(|t| matches!(t.render_caps.list_style, theme::ListStyle::Bars { .. }))
+        .collect();
+    assert!(
+        !bars_worlds.is_empty(),
+        "expected at least one Bars world (Firetail/Galah/Magpie/Mangrove)"
+    );
+
+    // The gallery's stair — the wild-menu slant that exposed the bug.
+    crate::render::set_slant_test_override(Some(crate::render::SlantProbe {
+        px_per_row: 12.0,
+        italic: false,
+    }));
+
+    for th in &bars_worlds {
+        theme::set_active_by_name(th.name).unwrap();
+        p.sync_theme();
+
+        // A flat picker whose FIRST row carries a chord (the exact `shape_overlay_right`
+        // surface). Render it selected, then with the selection moved off it.
+        let mut v = view("hello world\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec!["Go to file".into(), "Switch project".into(), "Recent".into()];
+        v.overlay_bindings = vec!["\u{2318}O".into(), String::new(), String::new()];
+        v.overlay_selected = 0;
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        let [cx, _cy, cw, _ch] = p.overlay_card_rect().expect("the Bars picker must have a card");
+        let region = overlay_row_region(&p, 0);
+        // The right-column chord band: the rightmost slab of the card text column,
+        // where the bare `⌘O` right-aligns — over the GROUND under a HugLabel plate.
+        let cx1 = (cx + cw - 6.0) as i64;
+        let cx0 = (cx + cw - 170.0) as i64;
+        let ry0 = region.y;
+        let ry1 = region.y + region.h;
+        let sel = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+        let sel_peak = chord_peak(&sel, w as i64, cx0, cx1, ry0, ry1);
+
+        v.overlay_selected = 1;
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        let unsel = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+        let unsel_peak = chord_peak(&unsel, w as i64, cx0, cx1, ry0, ry1);
+
+        // Sanity: the chord is genuinely drawn when unselected (the surface is real).
+        assert!(
+            unsel_peak >= 20.0,
+            "{}: the unselected row-0 chord must be visible (peak {unsel_peak:.1} \
+             < 20) — test setup did not draw a chord",
+            th.name
+        );
+        // SURVIVAL: selecting row 0 must not wash its chord away. A flip that drives
+        // it into the ground collapses the selected peak toward 0.
+        assert!(
+            sel_peak >= 0.5 * unsel_peak,
+            "{}: selected-row chord peak {sel_peak:.1} < half the unselected {unsel_peak:.1} \
+             — the selected row's secondary hint washed out under slant-on-bars \
+             (the invisible-selected-chord regression)",
+            th.name
+        );
+    }
+
+    crate::render::set_slant_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 /// TIER (b): REAL PIXELS, capability-driven sampling — every world carrying
 /// any non-default `RenderCaps` (today exactly Wagtail) plus one
 /// default-caps control world (Tawny, or whichever sorts first). This is the

@@ -386,7 +386,7 @@ impl TextPipeline {
         // whether or not Bars is also active.
         let strip_lh = lh + geom.header_gap;
         let mark_cy = geom.text_top + lh + strip_lh * 0.5;
-        let strip_text_lh = self.metrics.line_height * super::overlay::OVERLAY_UI_SCALE;
+        let strip_text_lh = self.metrics.line_height * crate::render::effective_overlay_scale();
         let chip_h = (strip_text_lh - 2.0 * CHIP_VPAD).max(1.0);
         // A PILL rect from an already-resolved (left, right) glyph-x pair (device
         // px): centered on the strip glyphs' vertical middle. The active band
@@ -519,7 +519,7 @@ impl TextPipeline {
         // LINE HEIGHTS stay the uniform UI row height (`overlay_lh`) so the plan line
         // offsets, the selected band, and the underline `y` never drift from a per-span
         // metric taller than the row.
-        let ui = super::overlay::OVERLAY_UI_SCALE;
+        let ui = crate::render::effective_overlay_scale();
         let lh = self.overlay_lh();
         let header_metrics = GlyphMetrics::new(m.font_size * ui * label, lh);
         let base = panel_attrs();

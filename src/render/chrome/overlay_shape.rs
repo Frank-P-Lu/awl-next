@@ -905,19 +905,50 @@ impl TextPipeline {
         // shaped run width, so once the modifier glyphs carry their REAL width the
         // chord column lands flush and `⌘⇧O` lines up with the `C-x` text chords.
         let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
+        // SECONDARY-INK FLIP (Potoroo taste-gate defect — the primary flip landed
+        // but the dim right column never followed, so the selected row's chord
+        // hints washed into a saturated band, invisible). The SELECTED display
+        // line's chord recolors to [`theme::selected_row_secondary_ink`] (the ONE
+        // derive owner) when the band would drop `muted` below the contrast floor;
+        // every OTHER line — and every world whose band already clears the floor —
+        // stays `muted`, byte-identical. The selected line is the SAME index the
+        // band uses ([`overlay_selected_display_line`]), so recolor and highlight
+        // can never disagree.
+        let sel_line = self.overlay_selected_display_line(geom);
+        // The flip is CORRECT only when the chord actually sits ON the band. Under a
+        // HUGGING plate (`HugLabel`) the bare right chord rides the GROUND, not the
+        // plate, so contrasting the band drives it into the ground — the chord stays
+        // `muted` there (legible, identical to the unselected rows). One owner:
+        // `selected_secondary_on_band`.
+        let sel_muted = if !super::selected_secondary_on_band() {
+            None
+        } else {
+            let band = crate::render::effective_overlay_selrow_band();
+            match theme::active().highlight_treatment(band) {
+                theme::HighlightTreatment::InverseFill { ink, .. } => Some(ink.to_glyphon()),
+                theme::HighlightTreatment::ValueBand(b) => {
+                    let flipped = theme::selected_row_secondary_ink(b);
+                    (flipped != theme::muted()).then(|| flipped.to_glyphon())
+                }
+            }
+        };
         let mut bind_spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
-        for s in bind_strs {
+        for (li, s) in bind_strs.iter().enumerate() {
+            let c = match (sel_line, sel_muted) {
+                (Some(sl), Some(flip)) if sl == li => flip,
+                _ => muted,
+            };
             let mut last = 0usize;
             for run in symbol_runs(s) {
                 if run.start > last {
-                    bind_spans.push((&s[last..run.start], mono(muted)));
+                    bind_spans.push((&s[last..run.start], mono(c)));
                 }
                 let end = run.end;
-                bind_spans.push((&s[run], sym(muted)));
+                bind_spans.push((&s[run], sym(c)));
                 last = end;
             }
             if last < s.len() {
-                bind_spans.push((&s[last..], mono(muted)));
+                bind_spans.push((&s[last..], mono(c)));
             }
         }
         let default_attrs = base.clone().color(ink);

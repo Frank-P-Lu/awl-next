@@ -246,6 +246,10 @@ pub(super) struct OverlayGeom {
 // owner, the sidecar report structs — plus the hit-test unit sweep.
 mod panel;
 mod overlay;
+// The shipped overlay UI scale, re-exported so the OVERLAY-EXPLORATION density
+// probe's default ([`crate::render::TypeDensity::shipped`]) can name it without
+// hand-copying the magic number (it stays the ONE owner in `overlay`).
+pub(in crate::render) use overlay::OVERLAY_UI_SCALE;
 // Re-export the card horizontal-box policy + its tokens so the width-sweep law
 // can reach them without naming the private `overlay` submodule (test-only).
 #[cfg(test)]
@@ -431,6 +435,26 @@ pub(super) fn bars_inline_shortcut() -> bool {
     )
 }
 
+/// Whether the SELECTED row's SECONDARY (right-column) chord sits ON the
+/// selected-row value band — the ONE reader [`TextPipeline::shape_overlay_right`]
+/// consults to decide whether the band-contrast ink FLIP
+/// ([`theme::selected_row_secondary_ink`]) applies. TRUE when the fill spans the
+/// whole row under the chord: [`theme::ListStyle::Pane`] (the band is the row) and
+/// FULL-WIDTH bars (the plate spans the card, chord included). FALSE for a HUGGING
+/// plate ([`theme::BarExtent::HugLabel`], the poster hybrid): its plate hugs the
+/// LABEL alone, leaving the bare right chord over the GROUND, where `muted` is
+/// already legible EXACTLY as on the unselected rows — flipping it to contrast the
+/// band there drives it INTO the ground (the slant-on-bars invisible-selected-chord
+/// regression: Firetail's selected `⌘O` washed to a background 13.5 maxlum while
+/// the unselected rows read 135). `HugText` composes its chord INLINE and never
+/// reaches this path (`bars_inline_shortcut`), so it is inert here.
+pub(super) fn selected_secondary_on_band() -> bool {
+    match crate::render::effective_list_style() {
+        theme::ListStyle::Bars { extent, .. } => !extent.hugs(),
+        theme::ListStyle::Pane => true,
+    }
+}
+
 /// PURE geometry — the FULL-WIDTH bar span `(x, w)` inside a card
 /// `[card_x, card_x+card_w]`, inset [`BAR_SIDE_INSET`] each side. The shipped v5
 /// bar ([`theme::BarExtent::FullWidth`]); the ONE owner every full-width bar
@@ -473,6 +497,25 @@ pub(super) fn grow_span(x: f32, w: f32, grow: f32, mirror: bool) -> (f32, f32) {
     } else {
         // Grow RIGHT: the LEFT edge stays put; the right edge juts `g` into the room.
         (x, w + g)
+    }
+}
+
+/// PURE geometry (SLANT-ON-BARS) — shift a bar's `(x, w)` right by the stair
+/// offset `dx` for its display row. A `hug` plate (never at the card's right
+/// edge) simply translates; a FULL-WIDTH plate keeps its RIGHT edge flush and
+/// sheds `dx` of width (mirroring the Pane band's `[card_x + dx, w - dx]`), so a
+/// slanted full-width bar can never paint past the card. `dx == 0.0` (the
+/// unslanted default, or a fan-in at rest) → the input span verbatim
+/// (byte-identical). The ONE owner both the unselected and selected slanted
+/// plates read, so the two extents cascade identically.
+pub(super) fn slant_bar_span(x: f32, w: f32, hug: bool, dx: f32) -> (f32, f32) {
+    if dx <= 0.0 {
+        return (x, w);
+    }
+    if hug {
+        (x + dx, w)
+    } else {
+        (x + dx, (w - dx).max(1.0))
     }
 }
 

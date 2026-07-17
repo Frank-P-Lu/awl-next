@@ -191,9 +191,12 @@ impl TextPipeline {
     /// reader shares — so shaping and geometry can never drift on the row size.
     pub(in crate::render) fn overlay_metrics(&self) -> GlyphMetrics {
         let m = self.metrics;
+        let scale = crate::render::effective_overlay_scale();
         GlyphMetrics::new(
-            m.font_size * OVERLAY_UI_SCALE,
-            m.line_height * OVERLAY_UI_SCALE + self.overlay_row_gap(),
+            m.font_size * scale,
+            m.line_height * scale
+                + crate::render::effective_overlay_leading()
+                + self.overlay_row_gap(),
         )
     }
 
@@ -233,7 +236,9 @@ impl TextPipeline {
     /// row-Y ([`overlay_row_top`]), the hit-test ([`overlay_row_of`]), and the
     /// selected-row band all read, so a click always lands on the row it highlights.
     pub(in crate::render) fn overlay_lh(&self) -> f32 {
-        self.metrics.line_height * OVERLAY_UI_SCALE + self.overlay_row_gap()
+        self.metrics.line_height * crate::render::effective_overlay_scale()
+            + crate::render::effective_overlay_leading()
+            + self.overlay_row_gap()
     }
 
     /// THE ONE OWNER of the summoned takeover card's horizontal BOX — its
@@ -597,7 +602,7 @@ impl TextPipeline {
         let label = crate::markdown::type_scale::LABEL;
         self.panel_bind_buffer.set_metrics(
             &mut self.font_system,
-            GlyphMetrics::new(m.font_size * OVERLAY_UI_SCALE * label, lh),
+            GlyphMetrics::new(m.font_size * crate::render::effective_overlay_scale() * label, lh),
         );
     }
 
@@ -1153,7 +1158,7 @@ impl TextPipeline {
                 // chords flush.
                 areas.push(panel_area);
             }
-            Some(s) => {
+            Some(_) => {
                 let lh = self.overlay_lh();
                 let n_lines = if geom.theme { geom.plan.len() } else { geom.visible };
                 let first_top =
@@ -1174,12 +1179,15 @@ impl TextPipeline {
                     default_color: ink,
                     custom_glyphs: &[],
                 });
-                // One shifted slice per candidate display row.
+                // One shifted slice per candidate display row. The per-row DRAW
+                // offset rides the ONE `overlay_slant_dx` owner (the fan-in
+                // progress folded in — motion choreography 3), so the text and the
+                // bar plates below cascade by the same amount every frame.
                 for k in 0..n_lines {
                     let row_top = first_top + k as f32 * lh;
                     areas.push(TextArea {
                         buffer: &self.panel_buffer,
-                        left: text_left + crate::render::slant_offset(&s, k),
+                        left: text_left + self.overlay_slant_dx(k),
                         top: text_top,
                         scale: 1.0,
                         bounds: clip(row_top, row_top + lh),
@@ -1229,6 +1237,37 @@ impl TextPipeline {
             )
             .map_err(|e| anyhow::anyhow!("glyphon overlay prepare failed: {e:?}"))?;
         Ok(())
+    }
+
+    /// THE ONE owner of the selected candidate's DISPLAY-line index (0-based
+    /// among the shown candidate lines, past the header). The selected-row band
+    /// ([`overlay_draw_card`]) and the secondary right-column recolor
+    /// ([`shape_overlay_right`]) both read it, so they can never disagree on which
+    /// row is highlighted. Two layout families: a faceted/theme plan's selected
+    /// world sits at its POSITION in the plan (section headers push it down); a
+    /// flat picker's selection is its offset in the visible window (saturated +
+    /// clamped defensively so a transient list-shrink can never over/underflow).
+    /// `None` iff there are no items.
+    pub(in crate::render) fn overlay_selected_display_line(
+        &self,
+        geom: &OverlayGeom,
+    ) -> Option<usize> {
+        if geom.n_items == 0 {
+            None
+        } else if geom.theme {
+            Some(
+                geom.plan
+                    .iter()
+                    .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
+                    .unwrap_or(0),
+            )
+        } else {
+            Some(
+                self.overlay_selected
+                    .saturating_sub(geom.top_idx)
+                    .min(geom.visible.saturating_sub(1)),
+            )
+        }
     }
 
     /// Upload the card behind everything + the muted selected-row highlight quad
@@ -1353,27 +1392,10 @@ impl TextPipeline {
         };
         self.overlay_rows.set_color(band_color.rgba_bytes());
         // The selected row's DISPLAY index + settled row-top, per layout family.
-        let sel_disp: Option<usize> = if geom.n_items == 0 {
-            None
-        } else if geom.theme {
-            // THEME PICKER: the selected world's DISPLAY row = its position in the plan
-            // (headers push it down), offset past the query + strip lines (`header_rows`).
-            Some(
-                geom.plan
-                    .iter()
-                    .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
-                    .unwrap_or(0),
-            )
-        } else {
-            // 0-based row among the visible window. `OverlayState` keeps the selection
-            // inside `[top_idx, top_idx+visible)`; saturate + clamp defensively so a
-            // transient mismatch (e.g. the list just shrank) can never underflow/overflow.
-            Some(
-                self.overlay_selected
-                    .saturating_sub(geom.top_idx)
-                    .min(geom.visible.saturating_sub(1)),
-            )
-        };
+        // The ONE owner (`overlay_selected_display_line`) also feeds the secondary
+        // (right-column) shaper's selected-row recolor, so band and hint can never
+        // disagree on WHICH row is selected.
+        let sel_disp: Option<usize> = self.overlay_selected_display_line(geom);
         // PER-ITEM LIST SURFACES round: `Pane` (default) draws the byte-identical
         // full-width selected BAND; `Bars` gives each candidate row its own
         // rounded surface (unselected → `overlay_bars`, quiet; selected →
@@ -1397,10 +1419,10 @@ impl TextPipeline {
                     (Some(disp), Some(top)) => {
                         // WILD-MENU SLANT PROBE (env-gated, `None` on every normal
                         // run): the band's left edge follows the selected row's own
-                        // stair offset so the highlight hugs its slanted row.
-                        let dx = crate::render::overlay_slant()
-                            .map(|s| crate::render::slant_offset(&s, disp))
-                            .unwrap_or(0.0);
+                        // stair offset (fan-in progress folded in via the ONE
+                        // `overlay_slant_dx` owner) so the highlight hugs its
+                        // slanted row.
+                        let dx = self.overlay_slant_dx(disp);
                         vec![[geom.card_x + dx, top, geom.card_w - dx, lh]]
                     }
                     _ => Vec::new(),
@@ -1490,6 +1512,13 @@ impl TextPipeline {
                                 lh,
                             );
                             let (x, w) = span_of(k);
+                            // SLANT-ON-BARS (choreography 2, fan-in folded in): the
+                            // plate cascades right with its row through the ONE
+                            // `overlay_slant_dx` owner. A full-width plate keeps its
+                            // right edge flush (width shed by dx, mirroring the Pane
+                            // band); a hug plate just slides. `0.0` unslanted →
+                            // byte-identical.
+                            let (x, w) = slant_bar_span(x, w, hug, self.overlay_slant_dx(k));
                             [x, top + bar_off, w, bar_h]
                         })
                         .collect(),
@@ -1535,7 +1564,15 @@ impl TextPipeline {
                 let sel = match (sel_disp, sel_top) {
                     (Some(disp), Some(top)) => {
                         let (bx, bw) = span_of(disp);
-                        let (x, w) = super::grow_span(bx, bw, grow_px, mirror);
+                        // SLANT-ON-BARS: the selected plate cascades with its row
+                        // too, THEN grows its ledge — so a slanted selected bar
+                        // still steps out of formation.
+                        let (bx, bw) = slant_bar_span(bx, bw, hug, self.overlay_slant_dx(disp));
+                        // GROW-POP (choreography 4): the `grow_px` ledge eases in on
+                        // each selection move via the ONE `overlay_grow_progress`
+                        // owner. Full `grow_px` in every capture (byte-identical).
+                        let grow = grow_px * self.overlay_grow_progress();
+                        let (x, w) = super::grow_span(bx, bw, grow, mirror);
                         vec![[x, top + bar_off, w.max(1.0), bar_h]]
                     }
                     _ => Vec::new(),

@@ -530,3 +530,308 @@ fn slanted_overlay_renders_and_differs_from_the_straight_one() {
         "a 12px/row slant must visibly move the rows (only {changed} pixels changed)"
     );
 }
+
+// =============================================================================
+// THE OVERLAY-EXPLORATION round — five INERT dials (byte-identical by default):
+//   1. DENSITY (`AWL_OVERLAY_DENSITY_FORCE`) — whole-menu scale + leading.
+//   2. SLANT-ON-BARS — the existing slant stair applied to the bar plates.
+//   3. FAN-IN motion — the stair unfurls as the card enters.
+//   4. GROW-POP motion — the selected-bar ledge juts out on a selection move.
+//   5. RIGHT-ANCHOR composition — the Inset dial (tested above) composed with
+//      bars + slant; the settled 3-position sweep is a gallery-capture concern,
+//      the composition's inertness is pinned by the progress-settle laws here.
+// =============================================================================
+
+// --- dial 1: overlay density -------------------------------------------------
+
+#[test]
+fn parse_overlay_density_force_grammar() {
+    assert_eq!(
+        parse_overlay_density_force("0.78"),
+        Some(TypeDensity { scale: 0.78, leading: 0.0 })
+    );
+    assert_eq!(
+        parse_overlay_density_force("1.0:6"),
+        Some(TypeDensity { scale: 1.0, leading: 6.0 })
+    );
+    assert_eq!(
+        parse_overlay_density_force(" 1.2 : 4.5 "),
+        Some(TypeDensity { scale: 1.2, leading: 4.5 })
+    );
+    for bad in ["", "0", "-0.5", "nan", "1.0:-2", "1.0:nan", "abc"] {
+        assert_eq!(parse_overlay_density_force(bad), None, "expected None for {bad:?}");
+    }
+}
+
+/// THE INERT LAW: with no probe / no override, the effective density is exactly
+/// the shipped `OVERLAY_UI_SCALE` with zero extra leading — so an unset run is
+/// byte-identical, and the default never silently drifts from the ONE owner.
+#[test]
+fn overlay_density_default_is_the_shipped_scale_and_no_leading() {
+    let _g = crate::testlock::serial();
+    set_overlay_density_test_override(None);
+    let d = effective_overlay_density();
+    assert_eq!(d, TypeDensity::shipped());
+    assert_eq!(d.scale, chrome::OVERLAY_UI_SCALE);
+    assert_eq!(d.leading, 0.0);
+    assert_eq!(effective_overlay_scale(), chrome::OVERLAY_UI_SCALE);
+    assert_eq!(effective_overlay_leading(), 0.0);
+}
+
+/// The density probe re-flows the ONE row-pitch owner: a bigger scale (or added
+/// leading) grows `overlay_lh` and `overlay_metrics`; the default matches the
+/// bare `OVERLAY_UI_SCALE` math. Because every geometry reader shares
+/// `overlay_lh`, the whole card changes texture together (card height, band,
+/// hit-test) — this pins that the dial actually moves the pitch owner.
+#[test]
+fn overlay_density_scales_the_row_pitch_owner() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping overlay_density_scales_the_row_pitch_owner: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_overlay_density_test_override(None);
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "commands";
+    v.overlay_items = vec!["Save".into(), "Undo".into()];
+    p.set_view(&v);
+    let base_lh = p.overlay_lh();
+
+    // A denser, larger menu: scale 1.2 must grow the row pitch.
+    set_overlay_density_test_override(Some(TypeDensity { scale: 1.2, leading: 0.0 }));
+    p.set_view(&v);
+    let big_lh = p.overlay_lh();
+    assert!(big_lh > base_lh + 1.0, "scale 1.2 must grow the row pitch ({big_lh} vs {base_lh})");
+
+    // Leading alone adds device px on top of the base scale.
+    set_overlay_density_test_override(Some(TypeDensity {
+        scale: chrome::OVERLAY_UI_SCALE,
+        leading: 10.0,
+    }));
+    p.set_view(&v);
+    let leaded_lh = p.overlay_lh();
+    assert!(
+        (leaded_lh - (base_lh + 10.0)).abs() < 0.5,
+        "10px leading adds ~10px to the pitch ({leaded_lh} vs {base_lh}+10)"
+    );
+
+    set_overlay_density_test_override(None);
+    p.set_view(&v);
+    assert!((p.overlay_lh() - base_lh).abs() < 0.001, "clearing the override restores the pitch");
+}
+
+// --- dial 2: slant-on-bars ---------------------------------------------------
+
+/// THE SLANT-ON-BARS geometry (pure): `dx == 0` is verbatim (byte-identical); a
+/// HUG plate just translates right; a FULL-WIDTH plate keeps its RIGHT edge
+/// flush and sheds `dx` of width, so a slanted full-width bar can never paint
+/// past the card's right edge (the width-tax guarantee, on the bar this time).
+#[test]
+fn slant_bar_span_cascades_without_overrunning_the_card() {
+    // No slant → the input span verbatim.
+    assert_eq!(chrome::slant_bar_span(30.0, 200.0, false, 0.0), (30.0, 200.0));
+    assert_eq!(chrome::slant_bar_span(30.0, 200.0, true, 0.0), (30.0, 200.0));
+
+    // HUG: translate right, width untouched.
+    assert_eq!(chrome::slant_bar_span(30.0, 120.0, true, 15.0), (45.0, 120.0));
+
+    // FULL: left edge steps right by dx, RIGHT edge stays flush.
+    let (x, w) = chrome::slant_bar_span(30.0, 200.0, false, 40.0);
+    assert_eq!(x, 70.0);
+    assert!(
+        (x + w - (30.0 + 200.0)).abs() < 0.001,
+        "the full-width plate's right edge stays flush at card-right ({} vs {})",
+        x + w,
+        230.0
+    );
+}
+
+/// Bars + slant renders end-to-end and the frame differs from straight bars —
+/// the plates genuinely cascade (not a silent no-op), checked at real pixels.
+#[test]
+fn slanted_bars_render_and_differ_from_straight_bars() {
+    use super::pixeldiff;
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping slanted_bars_render_and_differ: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_slant_test_override(None);
+    set_list_style_test_override(Some(theme::ListStyle::Bars {
+        radius: 6.0,
+        gap: 10.0,
+        grow_px: 24.0,
+        extent: theme::BarExtent::FullWidth,
+        coverage: theme::BarCoverage::All,
+    }));
+
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "commands";
+    v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into(), "Find".into()];
+    v.overlay_selected = 1;
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let straight = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    set_slant_test_override(Some(SlantProbe { px_per_row: 14.0, italic: false }));
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let slanted = pixeldiff::render_frame(&mut p, &device, &queue, 1200, 800);
+
+    set_slant_test_override(None);
+    set_list_style_test_override(None);
+
+    let changed = straight.iter().zip(slanted.iter()).filter(|(a, b)| a != b).count();
+    assert!(changed > 500, "a 14px/row bar slant must move the plates ({changed} px changed)");
+}
+
+// --- dials 3+4: the two motion choreographies --------------------------------
+
+/// THE FAN-IN + GROW-POP INERT LAW: with no probe/override and an UNARMED
+/// pipeline (every capture), both progresses read `1.0` (settled — the slant
+/// draws full, the ledge grows full), so a capture is byte-identical. The
+/// motion frame-dump probe is `None` by default.
+#[test]
+fn motion_progresses_are_settled_by_default_and_probe_is_none() {
+    let Some(p) = headless_pipeline() else {
+        eprintln!("skipping motion_progresses_are_settled_by_default: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_overlay_motion_test_override(None);
+    assert_eq!(overlay_motion_probe(), None, "no motion probe by default");
+    // Unarmed (a headless pipeline never arms) → settled.
+    assert_eq!(p.overlay_slant_progress(), 1.0, "fan-in settled when unarmed");
+    assert_eq!(p.overlay_grow_progress(), 1.0, "grow-pop settled when unarmed");
+}
+
+#[test]
+fn parse_overlay_motion_force_grammar() {
+    assert_eq!(
+        parse_overlay_motion_force("0.4"),
+        Some(OverlayMotionProbe { enter: 0.4, band: 0.4 })
+    );
+    assert_eq!(
+        parse_overlay_motion_force("0.2:0.9"),
+        Some(OverlayMotionProbe { enter: 0.2, band: 0.9 })
+    );
+    // Out-of-range clamps into [0,1] (not rejected — a pinned still frame).
+    assert_eq!(
+        parse_overlay_motion_force("2.0:-1"),
+        Some(OverlayMotionProbe { enter: 1.0, band: 0.0 })
+    );
+    for bad in ["", "abc", "0.5:xyz", "nan"] {
+        assert_eq!(parse_overlay_motion_force(bad), None, "expected None for {bad:?}");
+    }
+}
+
+/// THE FRAME-DUMP PROBE pins a mid-animation phase so a headless capture can
+/// WITNESS the choreographies partway through (the overlay's
+/// `--screenshot-motion`): the fan-in slant offset scales with the pinned enter
+/// phase (0 → no shift, 1 → full stair), and the effective probe survives
+/// round-trip. Also the reduce-motion + settled folds via the live timers.
+#[test]
+fn motion_frame_dump_probe_pins_phase_and_settles() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping motion_frame_dump_probe_pins_phase: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let saved_reduced = crate::motion::reduced();
+    crate::motion::set_reduced(false);
+    set_slant_test_override(Some(SlantProbe { px_per_row: 10.0, italic: false }));
+
+    // Pinned mid-frame: enter=0 → the stair is flush (dx == 0 on every row);
+    // enter=1 → full stair (row 3 = 3 steps = 30px). The probe wins even on an
+    // unarmed pipeline (it IS the capture-time evidence path).
+    set_overlay_motion_test_override(Some(OverlayMotionProbe { enter: 0.0, band: 0.0 }));
+    assert_eq!(p.overlay_slant_dx(3), 0.0, "enter=0 draws the stair flush");
+    assert_eq!(p.overlay_grow_progress(), 0.0, "band=0 collapses the grow ledge");
+
+    set_overlay_motion_test_override(Some(OverlayMotionProbe { enter: 1.0, band: 1.0 }));
+    assert!(
+        (p.overlay_slant_dx(3) - 30.0).abs() < 0.01,
+        "enter=1 draws the full 3-step stair ({})",
+        p.overlay_slant_dx(3)
+    );
+    assert_eq!(p.overlay_grow_progress(), 1.0, "band=1 extends the full ledge");
+
+    // A low phase sits strictly between flush and the full stair (enter=0.2 is
+    // pre-overshoot on the out_back spring, so it lands cleanly inside (0, 30)).
+    set_overlay_motion_test_override(Some(OverlayMotionProbe { enter: 0.2, band: 0.2 }));
+    let mid = p.overlay_slant_dx(3);
+    assert!(mid > 0.0 && mid < 30.0, "a partway phase is between flush and full ({mid})");
+    set_overlay_motion_test_override(None);
+
+    // With the probe cleared, the LIVE timers drive it: an armed SpringIn
+    // pipeline starts the fan-in near zero and settles to full after the spring.
+    set_motion_test_override(Some(theme::MotionJuice {
+        entrance: theme::OverlayEntrance::SpringIn,
+        band: theme::BandResponse::Snap,
+    }));
+    p.arm_live_juice();
+    let closed = view("hello\n", 0, 0);
+    p.set_view(&closed);
+    let mut open = view("hello\n", 0, 0);
+    open.overlay_active = true;
+    open.overlay_title = "commands";
+    open.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into(), "Find".into()];
+    p.set_view(&open);
+    let kicked = p.overlay_slant_progress();
+    assert!(kicked < 1.0, "the fan-in starts unfurling (progress {kicked})");
+    p.advance(1.0); // >> 200ms entrance
+    assert_eq!(p.overlay_slant_progress(), 1.0, "the fan-in settles to the full stair");
+
+    // REDUCE MOTION folds the fan-in to settled instantly.
+    crate::motion::set_reduced(true);
+    p.set_view(&closed);
+    p.set_view(&open);
+    assert_eq!(p.overlay_slant_progress(), 1.0, "Reduce Motion draws the settled stair");
+
+    crate::motion::set_reduced(saved_reduced);
+    set_motion_test_override(None);
+    set_slant_test_override(None);
+}
+
+/// GROW-POP rides the band-slide timer: an armed Slide pipeline collapses the
+/// ledge on a selection move (progress dips below 1) and grows it back after the
+/// spring; Reduce Motion + the default Snap world keep it full (byte-identical).
+#[test]
+fn grow_pop_rides_the_band_timer_and_folds() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping grow_pop_rides_the_band_timer: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let saved_reduced = crate::motion::reduced();
+    crate::motion::set_reduced(false);
+    set_overlay_motion_test_override(None);
+
+    // Default Snap, unarmed → full ledge always.
+    set_motion_test_override(None);
+    assert_eq!(p.overlay_grow_progress(), 1.0, "Snap keeps the ledge full");
+
+    // Armed + Slide: settle onto a row, then a fresh move dips the progress.
+    set_motion_test_override(Some(theme::MotionJuice {
+        entrance: theme::OverlayEntrance::Instant,
+        band: theme::BandResponse::Slide,
+    }));
+    p.arm_live_juice();
+    let _ = p.overlay_band_drawn(100.0);
+    p.advance(1.0);
+    assert_eq!(p.overlay_grow_progress(), 1.0, "settled ledge is full");
+    let _ = p.overlay_band_drawn(300.0); // a fresh move kicks the band timer
+    assert!(p.overlay_grow_progress() < 1.0, "a selection move collapses the ledge");
+    p.advance(1.0);
+    let _ = p.overlay_band_drawn(300.0);
+    assert_eq!(p.overlay_grow_progress(), 1.0, "the ledge grows back after the spring");
+
+    // REDUCE MOTION folds it to full.
+    crate::motion::set_reduced(true);
+    assert_eq!(p.overlay_grow_progress(), 1.0, "Reduce Motion keeps the ledge full");
+
+    crate::motion::set_reduced(saved_reduced);
+    set_motion_test_override(None);
+}
