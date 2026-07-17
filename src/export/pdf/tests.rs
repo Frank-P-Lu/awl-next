@@ -128,7 +128,7 @@ fn pdf_has_exact_classic_xref_object_plan_pages_and_a4_geometry() {
 }
 
 #[test]
-fn four_repository_fonts_are_exact_embedded_installable_subset_faces() {
+fn four_repository_fonts_are_exact_embedded_installable_full_faces() {
     let (_, bytes) = rich_bytes();
     let pdf = Pdf::parse(&bytes);
     let inventory = include_str!("../../../assets/fonts/LICENSES.md");
@@ -152,6 +152,10 @@ fn four_repository_fonts_are_exact_embedded_installable_subset_faces() {
             "exact FontFile2 bytes"
         );
 
+        // The embedded FontFile2 bytes are the EXACT, COMPLETE face (asserted above:
+        // `pdf.object(base + 3).stream() == asset.bytes`) — full-face embedding, not a
+        // subset. The permission checks below verify the license would even PERMIT
+        // subsetting (a queued follow-up); awl performs none today.
         let face = Face::parse(asset.bytes, 0).expect(asset.pdf_name);
         assert_eq!(face.permissions(), Some(Permissions::Installable));
         assert!(face.is_outline_embedding_allowed());

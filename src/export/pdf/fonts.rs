@@ -1,5 +1,8 @@
-//! The closed PDF font world: four repository-owned OFL subsets, and no system
-//! database. The exact files are embedded both in awl and in every PDF.
+//! The closed PDF font world: four repository-owned OFL faces embedded IN FULL
+//! (not subset), and no system database. The exact, complete font files are
+//! embedded both in awl and in every PDF — a ~1MB floor per export. Their
+//! licenses permit subsetting (verified below), but no glyph subsetting is
+//! performed today; per-document subsetting is a queued follow-up.
 
 use std::collections::BTreeMap;
 
@@ -186,9 +189,12 @@ mod tests {
                 "{} outline embedding",
                 face.pdf_name
             );
+            // License PERMISSION only: the face's fsType would even permit glyph
+            // subsetting. awl embeds these faces IN FULL (no subsetting today); this
+            // asserts the license is permissive enough for the queued subsetter.
             assert!(
                 parsed.is_subsetting_allowed(),
-                "{} subsetting",
+                "{} subsetting permitted by license",
                 face.pdf_name
             );
             assert!(parsed.tables().cmap.is_some(), "{} cmap", face.pdf_name);
