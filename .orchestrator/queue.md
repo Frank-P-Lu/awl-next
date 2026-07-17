@@ -10,6 +10,17 @@ Verified via `gh repo view`: visibility PUBLIC, Actions enabled. Standard-runner
 - theme-picker LENS RETIREMENT (themes only) per WORLD-ROLES.md DECIDED line: strip + cycle leave the THEME picker (flat browsable list; search/live-preview/Enter/Esc stay); ThemeTags KEPT as build-time coverage ruler; palette/Settings facet strips UNTOUCHED. ✅ LANDED @ 956c603 (feature 9cade2c).
 - 🧱 PALETTE-COMPOSITION round (the existing item ~line 243). ✅ LANDED @ 6cb3eaa (feature 91bcae9). Top-left card anchor as the global default (`RenderCaps::card_anchor` DATA dial, one owner `TextPipeline::overlay_card_x`; `TopCenter` a one-line revert, `AWL_OVERLAY_ANCHOR_FORCE` A/Bs), header gap after the `commands ›` title, stronger-but-calm selected-row band, defined card edge. Spell popup unaffected (not a takeover card). WAGTAIL names the field explicitly (no `..DEFAULT` spread). Full suite + forced-linux + wasm green.
 
+## 🎓 TASTE PRINCIPLES (user interview, 2026-07-17 — GATE BRIEFING MATERIAL: every taste-gate agent reads this section)
+1. **The flavor sentence is the contract.** A world's WORLDS.md sentence JUSTIFIES its menu treatments — derive from the sentence, never from a generic loudness dial. Every world earns ONE point it makes (Wagtail: one-bit purity; Mangrove: the dither).
+2. **Share mechanisms, never gestalts.** Signatures are NOT exclusive — slant may recur on another in-your-face world; dither may return as "stars in the night" — but two worlds must never read as the same ROOM. Curation = maximal difference across the roster (the showcase).
+3. **The P5 cursor is the motion spec.** The user's 10× direction verbatim: a LIVING SELECTION BAND — stretching/morphing between rows, two overlapping shapes making color where they cross, "mesmerizing… alive." Menu surfaces only; typing latency sacred; per-world choreography (Firetail flashiest ≠ only-alive). This SUPERSEDES spring-in-the-card as the motion round's target and legitimizes overlay-selection motion as a named per-world capability (DESIGN amendment to log when it ships).
+4. **Aliveness ≠ loudness.** Most worlds should feel ALIVE, including quiet ones (twinkling-stars: maximally quiet, unmistakably alive). Design for aliveness-in-the-world's-voice, not volume.
+5. **Potoroo has no concept** (user's own words) — merge-or-find-its-point list; near-pair merges (Quokka/Galah, Tawny/Currawong, Gumtree/Bilby) from the old WORLD-ROLES analysis remain OPEN roadmap items.
+6. **New world seeds (path-to-20):** EVANGELION-inspired (NERV register: warning-terminal oranges/greens on black, hard geometry) · TWINKLING STARS (quiet + alive; possibly the dither mechanism re-clothed). Fold into ROADMAP's path-to-20 at the next docs pass (docs-repair branch holds ROADMAP right now).
+7. **No new taste doc** — this board section + WORLDS.md per-world rationale are the homes.
+
+- 🐛 **WAGTAIL SELECTED-ROW SHORTCUT INVISIBLE** (user screenshot 2026-07-17): the white selected band leaves the shortcut ink unflipped — same class as the Potoroo secondary-ink defect the personality-v2 round is fixing NOW; its no-wildcard secondary-contrast law MUST catch Wagtail's InverseFill arm (verify when v2 reports; if the sweep missed Wagtail, that is a law-coverage bug in the fix).
+
 ## ⏰ REMINDERS (user-parked, 2026-07-17 — surface at natural checkpoints)
 - Laptop lid-close/wake test (GPU round's last human check).
 - FLY_API_TOKEN (`fly tokens create deploy -a awl-editor` + `gh secret set`) — un-breaks site deploys.
