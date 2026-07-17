@@ -662,7 +662,7 @@ pub const MANGROVE: Theme = Theme {
         // `BarExtent::HugLabel`) at the gate's MID radius (6), every row a bar;
         // and CHIPS facets. The calm worlds keep Pane/Text.
         list_style: POSTER_BARS,
-        facet_style: FacetStyle::Chips,
+        facet_style: FacetStyle::Text,
         ..RenderCaps::DEFAULT
     },
 };
@@ -725,7 +725,7 @@ pub const GALAH: Theme = Theme {
         elevation: Elevation::Bordered,
         // FLIP ROUND (2026-07-17): poster world → the Bars hug-all hybrid + Chips.
         list_style: POSTER_BARS,
-        facet_style: FacetStyle::Chips,
+        facet_style: FacetStyle::Text,
         ..RenderCaps::DEFAULT
     },
 };
@@ -791,7 +791,7 @@ pub const MAGPIE: Theme = Theme {
         elevation: Elevation::Bordered,
         // FLIP ROUND (2026-07-17): poster world → the Bars hug-all hybrid + Chips.
         list_style: POSTER_BARS,
-        facet_style: FacetStyle::Chips,
+        facet_style: FacetStyle::Text,
         ..RenderCaps::DEFAULT
     },
 };
@@ -1186,7 +1186,7 @@ pub const FIRETAIL: Theme = Theme {
         // FLIP ROUND (2026-07-17): the maximalist showcase world → the Bars
         // hug-all HYBRID (label-hug plate + bare right-aligned chords) + Chips.
         list_style: POSTER_BARS,
-        facet_style: FacetStyle::Chips,
+        facet_style: FacetStyle::Text,
         ..RenderCaps::DEFAULT
     },
 };

@@ -1826,7 +1826,7 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 elevation: Elevation::Bordered,
                 // FLIP ROUND (2026-07-17): poster world → the Bars hug-all hybrid + Chips.
                 list_style: poster_bars,
-                facet_style: FacetStyle::Chips,
+                facet_style: FacetStyle::Text,
                 ..RenderCaps::DEFAULT
             },
             "Magpie" => RenderCaps {
@@ -1834,7 +1834,7 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 card_anchor: model::CardAnchor::TopLeft,
                 elevation: Elevation::Bordered,
                 list_style: poster_bars,
-                facet_style: FacetStyle::Chips,
+                facet_style: FacetStyle::Text,
                 ..RenderCaps::DEFAULT
             },
             "Mangrove" => RenderCaps {
@@ -1842,7 +1842,7 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 card_anchor: model::CardAnchor::TopLeft,
                 elevation: Elevation::Bordered,
                 list_style: poster_bars,
-                facet_style: FacetStyle::Chips,
+                facet_style: FacetStyle::Text,
                 ..RenderCaps::DEFAULT
             },
             // CHROME-VOICES FLIP (2026-07-16): the loud-end world's own loud
@@ -1862,7 +1862,7 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 // FLIP ROUND (2026-07-17): the maximalist showcase world → the Bars
                 // hug-all hybrid + Chips (the poster surfaces the four share).
                 list_style: poster_bars,
-                facet_style: FacetStyle::Chips,
+                facet_style: FacetStyle::Text,
                 ..RenderCaps::DEFAULT
             },
             // C2: the iconic dark-technical statement world anchors TopLeft.
