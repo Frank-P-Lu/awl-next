@@ -55,12 +55,30 @@ impl App {
         crate::markdown::word_count(&self.buffer.text())
     }
 
-    /// Drop the word-delta ANCHOR across a BUFFER SWAP (file open / new note), so
-    /// the arriving document's existing words re-anchor on the next flush rather
-    /// than counting as freshly written. Mirrors [`Self::stats_reset_caret_anchor`].
+    /// Drop the word-delta ANCHOR to LAZY across a BUFFER SWAP into an OPENED
+    /// FILE, so the arriving document's existing words re-anchor on the next
+    /// flush rather than counting as freshly written. The first post-swap flush
+    /// anchors at whatever the file holds THEN — correct because a file's content
+    /// is already present at swap and (barring a rare open-then-type-within-1s)
+    /// unchanged before that flush. Mirrors [`Self::stats_reset_caret_anchor`].
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn streaks_reset_baseline(&mut self) {
         self.streaks_baseline = None;
+    }
+
+    /// Anchor the word-delta baseline EAGERLY at the active buffer's CURRENT word
+    /// count — the seam for an awl-CREATED buffer (a NEW NOTE, or the birth /
+    /// restored-stash SCRATCH), whose birth content must NOT count as freshly
+    /// written (0 for a new note; the restored stash's own words are yesterday's),
+    /// yet whose FIRST post-birth keystrokes — typed BEFORE the first idle flush —
+    /// MUST. This is the anchor-swallow fix: a lazy `None` anchor (see
+    /// [`Self::streaks_reset_baseline`]) would anchor at the already-typed count on
+    /// that first flush and lose everything written in the window, which is exactly
+    /// what a short new-note session hit. Eager-anchoring at 0 (or the restored
+    /// count) makes the first flush record the true delta instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn streaks_anchor_now(&mut self) {
+        self.streaks_baseline = Some(self.streaks_current_words());
     }
 
     /// Sample the active buffer's word count and fold the DELTA since the last
@@ -180,10 +198,15 @@ mod tests {
         crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
             let mut app = App::new(None, PathBuf::from("/n"), None, None, Config::empty());
             app.buffer.set_text("one two three four");
-            app.streaks_flush(); // anchors (None → Some(4)), records nothing
+            // The birth scratch is eager-anchored at 0, so this first flush records
+            // the 4 words typed into it (the anchor-swallow fix); `before` captures
+            // whatever the day total is now — this test then proves the SWAP below
+            // never ADDS the arriving doc's words to it.
+            app.streaks_flush();
             let today = app.streaks_local_today();
             let before = app.streaks.words_on(&today);
-            // Simulate a swap: reset the anchor, replace the buffer with a big doc.
+            // Simulate a swap into an OPENED file: reset the anchor LAZY, replace the
+            // buffer with a big doc.
             app.streaks_reset_baseline();
             app.buffer = crate::buffer::Buffer::from_str("a b c d e f g h i j");
             app.streaks_flush(); // must ANCHOR the arriving words, not count them
@@ -191,6 +214,83 @@ mod tests {
                 app.streaks.words_on(&today),
                 before,
                 "opening a doc's existing words is anchored, never counted as written"
+            );
+        });
+    }
+
+    #[test]
+    fn a_new_note_records_words_typed_before_the_first_flush() {
+        // THE ANCHOR-SWALLOW BUG: an awl-CREATED buffer is born EMPTY, and the
+        // user types into it BEFORE the first idle flush fires. A lazy first-flush
+        // anchor (`None` → anchor at the current count) would swallow everything
+        // typed in that window. A new note must anchor EAGERLY at birth (0 words),
+        // so the first flush records the delta from 0 — the words the user wrote.
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let mut app = App::new(None, PathBuf::from("/n"), None, None, Config::empty());
+            // Create a fresh note the REAL way (the C-x n path).
+            app.new_note();
+            let today = app.streaks_local_today();
+            // Type INTO the fresh note before any idle flush has fired.
+            app.buffer.set_text("brand new words typed today");
+            // The first idle flush of this awl-created note.
+            app.streaks_flush();
+            assert_eq!(
+                app.streaks.words_on(&today),
+                5,
+                "words typed into a fresh note BEFORE its first flush must be recorded, \
+                 not anchored away"
+            );
+        });
+    }
+
+    #[test]
+    fn a_fresh_scratch_records_words_typed_before_the_first_flush() {
+        // The same anchor-swallow, one layer up: the BIRTH scratch buffer awl
+        // opens on a no-argument launch is also awl-created + empty, so words
+        // typed into it before the first flush must count too.
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let mut app = App::new(None, PathBuf::from("/n"), None, None, Config::empty());
+            let today = app.streaks_local_today();
+            // Type into the birth scratch before any idle flush.
+            app.buffer.set_text("first words of the day");
+            app.streaks_flush();
+            assert_eq!(
+                app.streaks.words_on(&today),
+                5,
+                "words typed into the birth scratch before its first flush are recorded"
+            );
+        });
+    }
+
+    #[test]
+    fn summoning_the_card_flushes_so_today_is_live() {
+        // CARD-SUMMON FRESHNESS: opening the Writing streaks card must FLUSH the
+        // pending word-delta first, so "written today" reads LIVE rather than up
+        // to ~1s stale (the idle flush may not have fired since the last
+        // keystroke). Drives the REAL post-apply side effect the live app runs.
+        crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
+            let mut app = App::new(None, PathBuf::from("/n"), None, None, Config::empty());
+            let today = app.streaks_local_today();
+            // Type into the birth scratch, but DON'T let an idle flush fire.
+            app.buffer.set_text("live words not yet flushed today");
+            // The delta is still pending — the store hasn't seen it.
+            assert_eq!(
+                app.streaks.view(&today).today_words,
+                0,
+                "precondition: the pending delta is not yet in the store"
+            );
+            // Summoning the card runs the same post-`apply_core` side effect the
+            // live app dispatches for `Action::WritingStreaks`.
+            app.post_apply_effects(
+                &crate::keymap::Action::WritingStreaks,
+                false,
+                false,
+                crate::theme::background(),
+            );
+            assert_eq!(
+                app.streaks.view(&today).today_words,
+                6,
+                "summoning FLUSHED the pending delta — the card reads live, not stale"
             );
         });
     }

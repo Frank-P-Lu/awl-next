@@ -1269,6 +1269,19 @@ impl App {
         // whatever the scratch-stash restore above already picked.
         #[cfg(not(target_arch = "wasm32"))]
         app.apply_session_restore(file_arg_given);
+        // WRITING STREAKS: set the INITIAL word-delta anchor now that every startup
+        // buffer decision (scratch-stash restore + session restore, which can swap
+        // the active buffer) has settled. An awl-CREATED scratch (no path — fresh
+        // empty OR resumed stash) anchors EAGERLY at its birth word count, so words
+        // typed before the first idle flush are recorded rather than swallowed by a
+        // lazy first-flush anchor (the anchor-swallow bug); a resumed stash's own
+        // words are anchored, never miscounted as today's writing. An opened FILE
+        // (CLI arg or session-restored active) keeps the LAZY anchor — its
+        // pre-existing words are not "writing" — so `streaks_baseline` stays `None`.
+        #[cfg(not(target_arch = "wasm32"))]
+        if app.file.is_none() {
+            app.streaks_anchor_now();
+        }
         // A previous crash is passive state, not a startup interruption: retain
         // the marker for About + Settings, and acknowledge it only when the user
         // chooses Report a Problem.
@@ -4592,13 +4605,18 @@ mod tests {
             // the 2 added by the discoverability round: peek/footer ranking from a fake
             // ledger, and the fresh-ledger-empty case.)
             ("app/stats.rs", 9),
-            // 3 WRITING STREAKS tests, each inside its own `fs::with_fs(fake, ..)`
+            // 6 WRITING STREAKS tests, each inside its own `fs::with_fs(fake, ..)`
             // closure seeded with an `InMemoryFs` — they exist specifically to prove
             // what `streaks_flush` writes to / reads back from `streaks.toml` (and
             // that the kill switch never writes), so they need to CONTROL + INSPECT
             // the injected fs (which `new_hermetic`'s private fs hides). Same
-            // treatment as `app/stats.rs` above.
-            ("app/streaks.rs", 3),
+            // treatment as `app/stats.rs` above. `new_hermetic` also won't do here:
+            // it restores the real backend on construction return, but these tests
+            // keep driving the fs AFTER construction (`new_note`, the summon flush),
+            // so the fake must stay active across the whole closure. (The 3 added by
+            // the anchor-swallow fix: fresh-note + fresh-scratch record words typed
+            // before the first flush, and the card-summon-freshness flush.)
+            ("app/streaks.rs", 6),
             // input.rs's click tests all moved onto `App::new_hermetic` —
             // zero raw calls left.
         ];

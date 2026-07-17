@@ -1050,7 +1050,7 @@ impl App {
     /// OS-clipboard mirror after a cut/copy, and the delete-word caret streak. Keyed off
     /// `action` (the Save/clipboard pattern), never an interception that bypasses the
     /// core. Runs straight through with no early return.
-    fn post_apply_effects(
+    pub(super) fn post_apply_effects(
         &mut self,
         action: &Action,
         theme_overlay_before: bool,
@@ -1212,6 +1212,16 @@ impl App {
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();
                 }
+            }
+            // WRITING STREAKS: summoning the card FLUSHES the pending word-delta
+            // first, so "written today" reads LIVE rather than up to ~1s stale (the
+            // idle flush may not have fired since the last keystroke). The trailing
+            // `sync_view` in the caller then re-pushes the now-current year-view via
+            // `streaks_sync_card`. Native-only (the recording engine is); a no-op
+            // arm on wasm, which draws only the synthetic placeholder card.
+            Action::WritingStreaks => {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.streaks_flush();
             }
             _ => {}
         }
