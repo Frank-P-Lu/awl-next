@@ -201,8 +201,8 @@ mod tests {
             assert!(parsed.tables().glyf.is_some(), "{} glyf", face.pdf_name);
             assert!(parsed.tables().hmtx.is_some(), "{} hmtx", face.pdf_name);
         }
-        let inventory = include_str!("../../../assets/fonts/LICENSES.md");
-        let ofl = include_str!("../../../assets/fonts/OFL.txt");
+        let inventory = crate::embedded_docs::FONT_LICENSES_MD;
+        let ofl = crate::embedded_docs::FONT_OFL_TXT;
         for file in [
             "Bitter-Regular.ttf",
             "Bitter-Bold.ttf",

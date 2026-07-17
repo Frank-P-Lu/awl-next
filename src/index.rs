@@ -503,7 +503,7 @@ mod tests {
         assert!(is_env_file(".env.local"));
         assert!(is_env_file(".env.production"));
         assert!(!is_env_file("env"));
-        assert!(!is_env_file("README.md"));
+        assert!(!is_env_file("doc-fixture.md"));
     }
 
     #[test]
@@ -520,7 +520,7 @@ mod tests {
         // Ordinary files stay visible.
         assert!(!is_hidden_entry("normal.rs"));
         assert!(!is_hidden_entry("src/main.rs"));
-        assert!(!is_hidden_entry("README.md"));
+        assert!(!is_hidden_entry("doc-fixture.md"));
     }
 
     #[test]
@@ -537,15 +537,15 @@ mod tests {
         use std::sync::Arc;
         let root = std::path::PathBuf::from("/proj");
         let mem = crate::fs::InMemoryFs::new()
-            .with_file("/proj/README.md", "r")
+            .with_file("/proj/doc-fixture.md", "r")
             .with_dir("/proj/src")
             .with_file("/proj/docs/guide.md", "g")
             .with_dir("/proj/node_modules");
         crate::fs::with_fs(Arc::new(mem), || {
-            // Root level: dirs (docs, src) before files (README.md), junk skipped.
+            // Root level: dirs (docs, src) before files (doc-fixture.md), junk skipped.
             let lvl = list_dir_level(&root, None);
             let names: Vec<&str> = lvl.iter().map(|e| e.name.as_str()).collect();
-            assert_eq!(names, vec!["docs", "src", "README.md"], "got {names:?}");
+            assert_eq!(names, vec!["docs", "src", "doc-fixture.md"], "got {names:?}");
             assert!(lvl[0].is_dir && lvl[1].is_dir && !lvl[2].is_dir);
             // Descend into docs/: shows guide.md.
             let docs = list_dir_level(&root, Some("docs"));
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn goto_type_section_buckets_by_extension() {
-        assert_eq!(goto_type_section("README.md"), "Markdown");
+        assert_eq!(goto_type_section("doc-fixture.md"), "Markdown");
         assert_eq!(goto_type_section("src/main.rs"), "Code");
         assert_eq!(goto_type_section("notes.txt"), "Text");
         assert_eq!(goto_type_section("Cargo.toml"), "Data");
@@ -630,7 +630,7 @@ mod tests {
     fn goto_picker_lands_on_all_then_groups_by_folder_and_type() {
         use crate::overlay::{OverlayKind, OverlayState};
         let corpus = vec![
-            "README.md".to_string(),
+            "doc-fixture.md".to_string(),
             "src/main.rs".to_string(),
             "src/lib.rs".to_string(),
             "notes.txt".to_string(),
@@ -646,7 +646,7 @@ mod tests {
         ov.set_facet_lens(2);
         assert_eq!(ov.active_facet_id(), Some("folder"));
         let shown = ov.item_strings();
-        assert!(shown.iter().any(|s| s == "README.md"));
+        assert!(shown.iter().any(|s| s == "doc-fixture.md"));
         assert!(shown.iter().any(|s| s == "notes.txt"));
         assert!(!shown.iter().any(|s| s.contains('/')), "nested files opt out: {shown:?}");
         // "By type" (strip index 3): every row's section == its extension bucket.
@@ -668,13 +668,13 @@ mod tests {
     fn goto_recent_lens_shows_only_opened_files_in_mru_order() {
         use crate::overlay::{OverlayKind, OverlayState};
         let corpus = vec![
-            "README.md".to_string(),   // 0 — never opened
+            "doc-fixture.md".to_string(),   // 0 — never opened
             "src/main.rs".to_string(), // 1 — opened (2nd most recent)
             "src/lib.rs".to_string(),  // 2 — never opened
             "notes.txt".to_string(),   // 3 — opened (most recent)
         ];
         // The recently-opened MRU (most-recent FIRST) as corpus indices: notes.txt
-        // then src/main.rs. README + lib were never opened.
+        // then src/main.rs. doc-fixture + lib were never opened.
         let recent = vec![3usize, 1usize];
         let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], recent);
         ov.set_facet_lens(1);
@@ -692,7 +692,7 @@ mod tests {
     #[test]
     fn goto_recent_lens_is_empty_on_a_fresh_session() {
         use crate::overlay::{OverlayKind, OverlayState};
-        let corpus = vec!["README.md".to_string(), "src/main.rs".to_string()];
+        let corpus = vec!["doc-fixture.md".to_string(), "src/main.rs".to_string()];
         // Nothing opened yet → empty MRU → the Recent lens is EMPTY (shows the empty
         // state), NOT the whole corpus.
         let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
