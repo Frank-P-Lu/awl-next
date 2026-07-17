@@ -43,13 +43,15 @@ impl TextPipeline {
     ///
     /// The panel is a clear labeled card, not the old terse `/` pill:
     ///   * a **find** row — the `find` label, the query, the `N/M` match counter, and
-    ///     the `Aa` case indicator;
+    ///     the `Aa` case indicator (which is ALSO a click target — a press on it
+    ///     toggles case, `PanelHit::CaseToggle`);
     ///   * a **replace** row (shown whenever replace is active) — the `replace` label
     ///     and the replacement text;
     ///   * a dim **key-hint** line that TEACHES the actions (`↵ replace+next`,
-    ///     `⌘↵ all`, `⇥ switch`, `⌥c case`, `Esc done`) — the keycaps ride glyphs
+    ///     `⌘↵ all`, `⇥ switch`, `⌘⌥c case`, `Esc done`) — the keycaps ride glyphs
     ///     (↵ Return, ⇥ Tab) to match ⌘/⌥, informational muted ink, NOT clickable
-    ///     buttons (the button-free principle; PHILOSOPHY §2).
+    ///     buttons (the button-free principle; PHILOSOPHY §2). The case hint shows
+    ///     the MAC-REACHABLE ⌘⌥c chord (bare ⌥c composes to 'ç' on macOS).
     /// The labels are padded to one width so the two value columns line up.
     pub(in crate::render) fn panel_shape_text(&mut self, width: u32) -> PanelShape {
         let m = self.metrics;
@@ -98,7 +100,7 @@ impl TextPipeline {
         let editing_replacement = replace_active && self.search_editing_replacement;
         // The dim key-hint line that teaches the replace actions — muted ink, present
         // only once the replace row is up (a plain find keeps the terse counter panel).
-        let hint = "\u{21B5} replace+next   \u{2318}\u{21B5} all   \u{21E5} switch   \u{2325}c case   Esc done";
+        let hint = "\u{21B5} replace+next   \u{2318}\u{21B5} all   \u{21E5} switch   \u{2318}\u{2325}c case   Esc done";
 
         // Row 0 — the find field.
         let mut spans: Vec<(&str, Attrs)> = vec![
@@ -237,7 +239,9 @@ impl TextPipeline {
     /// panel, for CLICK-TO-SWITCH-FIELD. Reuses `panel_layout`'s card + row
     /// geometry — the SAME layout the caret/text draw from, no parallel geometry —
     /// so a click can never disagree with where a field is painted:
-    ///   * row 0 (`text_top .. +line_height`) → [`PanelHit::Find`];
+    ///   * row 0, within the `Aa` cell at the row's right edge →
+    ///     [`PanelHit::CaseToggle`] (the caller flips case sensitivity);
+    ///   * row 0 elsewhere (`text_top .. +line_height`) → [`PanelHit::Find`];
     ///   * row 1 (present only once the replace row is revealed) → [`PanelHit::Replace`];
     ///   * anywhere else INSIDE the card (the key-hint line, inter-row gaps, the
     ///     pad) → [`PanelHit::Elsewhere`] (the caller swallows it — a calm no-op,
@@ -251,17 +255,44 @@ impl TextPipeline {
             return None;
         }
         let width = self.window_w as u32;
-        let ([card_x, card_y, card_w, card_h], _text_left, text_top, _caret_x) =
+        let ([card_x, card_y, card_w, card_h], text_left, text_top, _caret_x) =
             self.panel_layout(width, 0, 0, 0.0);
         if px < card_x || px > card_x + card_w || py < card_y || py > card_y + card_h {
             return None;
         }
         let row = ((py - text_top) / self.metrics.line_height).floor() as i64;
         Some(match row {
-            0 => PanelHit::Find,
+            0 => match self.panel_case_toggle_span(text_left) {
+                Some((x0, x1)) if px >= x0 && px <= x1 => PanelHit::CaseToggle,
+                _ => PanelHit::Find,
+            },
             1 if self.search_replace_active => PanelHit::Replace,
             _ => PanelHit::Elsewhere,
         })
+    }
+
+    /// Physical x-span `[x0, x1]` of the `Aa` case indicator on the find row
+    /// (line 0), read from the SHAPED `panel_buffer` — the trailing two glyphs
+    /// of the row (`"Aa"` is always the LAST span shaped onto row 0, `panel_shape_text`).
+    /// Reading the real shaped advances keeps the click target in the SAME
+    /// coordinate system the indicator paints in (no hardcoded pitch drift, the
+    /// bug class `panel_layout` already guards for the caret). `text_left` is
+    /// `panel_layout`'s inner text origin. `None` when row 0 has fewer than two
+    /// glyphs (never in practice — `"Aa"` is always present).
+    fn panel_case_toggle_span(&self, text_left: f32) -> Option<(f32, f32)> {
+        for run in self.panel_buffer.layout_runs() {
+            if run.line_i != 0 {
+                continue;
+            }
+            let n = run.glyphs.len();
+            if n < 2 {
+                return None;
+            }
+            let a = &run.glyphs[n - 2]; // 'A'
+            let z = &run.glyphs[n - 1]; // 'a'
+            return Some((text_left + a.x, text_left + z.x + z.w));
+        }
+        None
     }
 
     /// Place the amber query caret: a resting block matching the document caret's

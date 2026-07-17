@@ -343,14 +343,15 @@ impl App {
         }
     }
 
-    /// A LEFT-CLICK inside the summoned find/replace panel: CLICK-TO-SWITCH-FIELD.
-    /// A press on the FIND row focuses the query (`editing_replacement = false`); a
-    /// press on the REPLACE row focuses the replacement (`editing_replacement =
-    /// true`) — the amber caret then rides the clicked field (Batch-1 fixed the
-    /// replace caret-x, so focusing via click places it correctly). A press
-    /// ELSEWHERE inside the card (the key-hint line, inter-row gaps) is a calm
-    /// no-op — swallowed, never dismissing the search or moving the document cursor
-    /// beneath the panel. Returns `true` when the press landed on/in the panel and
+    /// A LEFT-CLICK inside the summoned find/replace panel: CLICK-TO-SWITCH-FIELD
+    /// (plus the `Aa` case toggle). A press on the `Aa` cell flips case sensitivity
+    /// and re-anchors the caret; a press on the FIND row (off `Aa`) focuses the
+    /// query (`editing_replacement = false`); a press on the REPLACE row focuses
+    /// the replacement (`editing_replacement = true`) — the amber caret then rides
+    /// the clicked field (Batch-1 fixed the replace caret-x, so focusing via click
+    /// places it correctly). A press ELSEWHERE inside the card (the key-hint line,
+    /// inter-row gaps) is a calm no-op — swallowed, never dismissing the search or
+    /// moving the document cursor beneath the panel. Returns `true` when the press landed on/in the panel and
     /// was handled; `false` (off the card / panel down) lets the caller fall
     /// through to the normal document press. The find↔replace decision is the pure
     /// `TextPipeline::panel_hit` (unit-tested); this only wires the field state +
@@ -359,6 +360,20 @@ impl App {
         let (px, py) = self.cursor_px;
         let hit = self.gpu.as_ref().and_then(|g| g.pipeline.panel_hit(px, py));
         match hit {
+            // A press on the `Aa` cell toggles case sensitivity + re-anchors the
+            // caret on the recomputed current match — the CLICK driver for the
+            // affordance whose only keyboard door is ⌘⌥C (bare ⌥c composes to 'ç'
+            // on macOS). Recompute needs the haystack, so read it before borrowing.
+            Some(crate::render::PanelHit::CaseToggle) => {
+                let hay = self.buffer.text();
+                let target = self.search.as_mut().map(|st| {
+                    st.toggle_case(&hay);
+                    st.current_match()
+                });
+                if let Some(Some(m)) = target {
+                    self.buffer.set_cursor(m.start);
+                }
+            }
             Some(crate::render::PanelHit::Find) => {
                 if let Some(st) = self.search.as_mut() {
                     st.focus_query();
