@@ -112,6 +112,12 @@ mod reports;
 /// buffer / cursor / selection state, carved out verbatim. Byte-identical.
 mod rects;
 
+/// ARM B "LIVING SELECTION BAND" choreography PROBES (the P5-cursor motion spec).
+/// Pure phase math (morph stretch + two-shape crossing) plus the dev-only
+/// `AWL_OVERLAY_MOTION_FORCE` phase pin; ships nothing by default (env unset →
+/// the renderer's ordinary single-band path, every capture byte-identical).
+pub(crate) mod livingband;
+
 /// INLINE IMAGES — the decode + GPU-upload cache (native-only, PNG). Keyed by
 /// canonical path + mtime; decodes O(visible) and downscales to the display width.
 #[cfg(not(target_arch = "wasm32"))]
@@ -3119,6 +3125,13 @@ pub struct TextPipeline {
     /// under-the-text z-slot; parked empty for `Text`/`Band` and every non-theme
     /// card, so those render byte-identically.
     pub overlay_facet_ghost: SelectionPipeline,
+    /// ARM B LIVING-BAND PROBE only (`AWL_OVERLAY_MOTION_FORCE=twoshape…`): the
+    /// CROSSING quad the two-shape choreography fills at the world's brightest
+    /// value step where the leading band and its chasing echo overlap — colour
+    /// where they cross, by VALUE (never a hue). Parked EMPTY (zero instances →
+    /// byte-identical) on every ordinary run and every non-two-shape probe, so a
+    /// default capture never sees it. Drawn just ABOVE `overlay_rows`.
+    pub overlay_cross: SelectionPipeline,
     /// THE STIPPLE PLACARD (`theme::PlacardInk::Stipple`): the corner wordmark
     /// rendered as a Bayer-matrix stipple of individual full-ink pixels
     /// instead of ordinary antialiased glyphs. The SHAPING half is shared
@@ -3753,6 +3766,11 @@ impl TextPipeline {
         // parked empty for every other skin / card.
         let overlay_facet_ghost =
             SelectionPipeline::new(device, format, theme::muted().rgba_bytes());
+        // ARM B LIVING-BAND PROBE — the two-shape CROSSING quad (see the field's
+        // doc). Starts parked (zero instances → byte-identical); only a
+        // `twoshape` probe with an open Pane overlay ever uploads a rect.
+        let overlay_cross =
+            SelectionPipeline::new(device, format, theme::overlay_band_overlap().rgba_bytes());
         // THE STIPPLE PLACARD: the corner wordmark's Bayer-stipple renderer
         // (see the field's own doc). Ink + density re-read per re-tint; starts
         // parked (zero instances) — only a stipple-placard world with an open
@@ -3957,6 +3975,7 @@ impl TextPipeline {
             overlay_bars,
             overlay_lens_underline,
             overlay_facet_ghost,
+            overlay_cross,
             placard_stipple,
             overlay_theme_underline: None,
             overlay_theme_facet_ghosts: Vec::new(),
@@ -4194,6 +4213,11 @@ impl TextPipeline {
         // effective bar tokens; this keeps a parked pipeline coherent on a switch).
         self.overlay_bars
             .set_color(theme::surface_selected().rgba_bytes());
+        // ARM B LIVING-BAND PROBE — keep the two-shape crossing quad coherent on a
+        // world switch (its real per-frame color is re-read at draw time). Parked
+        // empty on every ordinary run, so this is inert there.
+        self.overlay_cross
+            .set_color(theme::overlay_band_overlap().rgba_bytes());
         // The theme picker's active-lens underline re-tints to the new world's ink (it
         // is drawn while the picker is up AND the world previews live, so the hairline
         // tracks the previewed world's ink).
@@ -4761,6 +4785,80 @@ impl TextPipeline {
         self.overlay_band_from + (target - self.overlay_band_from) * e
     }
 
+    /// ARM B LIVING-BAND PROBE — the band's TRAVEL (`from_top`, `to_top`) + PHASE
+    /// `t` for the morph / two-shape choreography this frame. Two modes:
+    ///
+    /// * PINNED (`force.phase` set — the capture frame-dump path): a synthetic
+    ///   travel from [`livingband::PIN_JUMP_ROWS`] rows BELOW the selected row,
+    ///   sliding up to it, held at the fixed phase. Deterministic (no clock), so
+    ///   `--screenshot` dumps a byte-stable mid-flight frame.
+    /// * LIVE (`force.phase` absent): reuses the SAME `overlay_band_from/last/t`
+    ///   tracking the ordinary slide uses (a fresh overlay settles; a selection
+    ///   move chains from the previous row). [`Self::step_overlay_juice`] advances
+    ///   `overlay_band_t`, and Reduce Motion folds it to `1.0` (settled) — so the
+    ///   whole choreography inherits the accessibility contract for free.
+    ///
+    /// Called ONLY from `overlay_draw_card`'s Pane arm when the probe is set; the
+    /// ordinary path never reaches it, so an unset-env run is byte-identical.
+    pub(in crate::render) fn living_band_phase(
+        &mut self,
+        force: livingband::MotionForce,
+        target: f32,
+        lh: f32,
+    ) -> (f32, f32, f32) {
+        if let Some(phase) = force.phase {
+            let from = target + livingband::PIN_JUMP_ROWS * lh;
+            return (from, target, phase.clamp(0.0, 1.0));
+        }
+        match self.overlay_band_last {
+            Some(last) if (last - target).abs() > 0.5 => {
+                self.overlay_band_from = last;
+                self.overlay_band_last = Some(target);
+                self.overlay_band_t = 0.0;
+            }
+            None => {
+                self.overlay_band_from = target;
+                self.overlay_band_last = Some(target);
+                self.overlay_band_t = 1.0;
+            }
+            _ => {}
+        }
+        (self.overlay_band_from, self.overlay_band_last.unwrap_or(target), self.overlay_band_t)
+    }
+
+    /// ARM B LIVING-BAND PROBE — the choreography's drawn rects this frame, from
+    /// the pure phase math ([`livingband`]). Returns `(primary, echo, cross)`
+    /// full-width row rects: `primary` for `overlay_rows` (the leading band),
+    /// `echo` for `overlay_bars` (the chasing echo — empty for the single-band
+    /// MORPH), and `cross` for `overlay_cross` (the brightest crossing — empty
+    /// unless a two-shape overlap exists this frame). Pure over its inputs (no
+    /// GPU, no clock); `&self` only.
+    pub(in crate::render) fn living_band_rects(
+        &self,
+        force: livingband::MotionForce,
+        from: f32,
+        to: f32,
+        t: f32,
+        card_x: f32,
+        card_w: f32,
+        lh: f32,
+    ) -> (Vec<[f32; 4]>, Vec<[f32; 4]>, Vec<[f32; 4]>) {
+        let params = force.choreo.params();
+        if force.choreo.is_two_shape() {
+            let s = livingband::two_shape_band(from, to, lh, t, &params);
+            let primary = vec![[card_x, s.primary_top, card_w, s.height]];
+            let echo = vec![[card_x, s.echo_top, card_w, s.height]];
+            let cross = s
+                .overlap
+                .map(|o| vec![[card_x, o.top, card_w, o.height]])
+                .unwrap_or_default();
+            (primary, echo, cross)
+        } else {
+            let b = livingband::morph_band(from, to, lh, t, &params);
+            (vec![[card_x, b.top, card_w, b.height]], Vec::new(), Vec::new())
+        }
+    }
+
     /// THE EFFECTIVE margin background this frame — the active world's own
     /// [`theme::Background`], UNLESS the dev gallery knob (`AWL_LAVA=...`) forces a
     /// [`Background::Lava`] over it (`crate::lava::env_override`). For every one of
@@ -5297,6 +5395,10 @@ impl TextPipeline {
         // world, so this is byte-identical there.
         self.overlay_bars.draw(pass);
         self.overlay_rows.draw(pass);
+        // ARM B LIVING-BAND PROBE — the two-shape CROSSING quad sits just ABOVE the
+        // leading band (`overlay_rows`) so the brightest value reads where the two
+        // shapes overlap. Parked empty on every ordinary run → byte-identical.
+        self.overlay_cross.draw(pass);
         // THEME PICKER: the active-lens hairline under the strip (content ink), UNDER
         // the overlay text so the glyphs sit on top. Parked empty for every other card.
         // V6 P5: the Chips ghost pills draw first (inactive, muted stroke), then the

@@ -401,6 +401,9 @@ impl TextPipeline {
         // PER-ITEM LIST SURFACES: the bar surfaces park empty too, so a closed
         // picker carries no stale bar quads into the next frame.
         self.overlay_bars.prepare(device, queue, width, height, &[]);
+        // ARM B LIVING-BAND PROBE: the two-shape crossing quad parks empty too, so
+        // a closed picker carries no stale crossing quad into the next frame.
+        self.overlay_cross.prepare(device, queue, width, height, &[]);
         self.overlay_lens_underline
             .prepare(device, queue, width, height, &[]);
         // V6 P5: the Chips ghost pills park empty too, so a closed picker carries
@@ -1383,29 +1386,72 @@ impl TextPipeline {
         // gap maps to the nearest row (no dead zones).
         // `list_style` computed once at the top of this fn (drives the pane-drop).
         let mirror = crate::render::effective_card_anchor().mirrors_growth();
-        // The selected row's drawn TOP, through the ONE row-y owner + the live-only
-        // band slide (verbatim `target` in capture / Snap worlds). Computed ONCE
-        // here so the animator runs once and both list styles read the same y.
-        let sel_top: Option<f32> = sel_disp.map(|disp| {
-            let target =
-                overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, disp, lh);
-            self.overlay_band_drawn(target)
-        });
+        // ARM B LIVING-BAND PROBE (`AWL_OVERLAY_MOTION_FORCE`, env-gated → `None`
+        // on every ordinary run, so the ordinary path below is byte-identical):
+        // the selection band's morph / two-shape choreography. Pane-only; when
+        // active it OWNS the band rects (the ordinary `overlay_band_drawn` slide
+        // is skipped for that frame).
+        let motion = *crate::render::livingband::overlay_motion_force();
+        // The selected row's settled TARGET top, through the ONE row-y owner —
+        // shared by the ordinary slide and the living-band choreography.
+        let sel_target: Option<f32> = sel_disp
+            .map(|disp| overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, disp, lh));
+        // The living-band travel + phase this frame (pinned for a capture dump,
+        // else the live animator), computed ONCE. `None` unless the probe is set
+        // AND the world draws a Pane list.
+        let living: Option<(crate::render::livingband::MotionForce, f32, f32, f32)> =
+            match (motion, sel_target) {
+                (Some(force), Some(target)) if matches!(list_style, theme::ListStyle::Pane) => {
+                    let (from, to, t) = self.living_band_phase(force, target, lh);
+                    Some((force, from, to, t))
+                }
+                _ => None,
+            };
+        // The selected row's drawn TOP for the ORDINARY path, through the ONE
+        // row-y owner + the live-only band slide (verbatim `target` in capture /
+        // Snap worlds). The living-band probe owns its own rects, so it skips this.
+        let sel_top: Option<f32> = match (living.is_some(), sel_target) {
+            (true, _) => None,
+            (false, Some(target)) => Some(self.overlay_band_drawn(target)),
+            (false, None) => None,
+        };
+        // The two-shape CROSSING quad's rect (probe only; stays empty on every
+        // ordinary run → `overlay_cross` draws nothing → byte-identical).
+        let mut cross_rects: Vec<[f32; 4]> = Vec::new();
         let (sel_rects, bar_rects): (Vec<[f32; 4]>, Vec<[f32; 4]>) = match list_style {
             theme::ListStyle::Pane => {
-                let rects = match (sel_disp, sel_top) {
-                    (Some(disp), Some(top)) => {
-                        // WILD-MENU SLANT PROBE (env-gated, `None` on every normal
-                        // run): the band's left edge follows the selected row's own
-                        // stair offset so the highlight hugs its slanted row.
-                        let dx = crate::render::overlay_slant()
-                            .map(|s| crate::render::slant_offset(&s, disp))
-                            .unwrap_or(0.0);
-                        vec![[geom.card_x + dx, top, geom.card_w - dx, lh]]
-                    }
-                    _ => Vec::new(),
-                };
-                (rects, Vec::new())
+                if let Some((force, from, to, t)) = living {
+                    // LIVING-BAND PROBE — the selected band becomes the morph /
+                    // two-shape choreography. `overlay_rows` carries the leading
+                    // band (its `band_color` primary, already set above),
+                    // `overlay_bars` the chasing ECHO (a quieter value step; Pane
+                    // leaves `overlay_bars` empty otherwise), and `overlay_cross`
+                    // the BRIGHTEST crossing. All value, never a hue (DESIGN §3).
+                    let (primary, echo, cross) = self
+                        .living_band_rects(force, from, to, t, geom.card_x, geom.card_w, lh);
+                    self.overlay_bars.set_corner(2.5);
+                    self.overlay_bars
+                        .set_color(theme::surface_selected().rgba_bytes());
+                    self.overlay_cross.set_corner(2.5);
+                    self.overlay_cross
+                        .set_color(theme::overlay_band_overlap().rgba_bytes());
+                    cross_rects = cross;
+                    (primary, echo)
+                } else {
+                    let rects = match (sel_disp, sel_top) {
+                        (Some(disp), Some(top)) => {
+                            // WILD-MENU SLANT PROBE (env-gated, `None` on every normal
+                            // run): the band's left edge follows the selected row's own
+                            // stair offset so the highlight hugs its slanted row.
+                            let dx = crate::render::overlay_slant()
+                                .map(|s| crate::render::slant_offset(&s, disp))
+                                .unwrap_or(0.0);
+                            vec![[geom.card_x + dx, top, geom.card_w - dx, lh]]
+                        }
+                        _ => Vec::new(),
+                    };
+                    (rects, Vec::new())
+                }
             }
             theme::ListStyle::Bars { radius, gap, grow_px, extent, coverage } => {
                 let r = radius.max(0.0);
@@ -1547,6 +1593,11 @@ impl TextPipeline {
             .prepare(device, queue, width, height, &bar_rects);
         self.overlay_rows
             .prepare(device, queue, width, height, &sel_rects);
+        // ARM B LIVING-BAND PROBE — the two-shape crossing quad (empty on every
+        // ordinary run → byte-identical; a non-empty rect only under a `twoshape`
+        // probe mid-flight where the leading band and echo overlap).
+        self.overlay_cross
+            .prepare(device, queue, width, height, &cross_rects);
         // FACETED STRIP active-lens mark: the rect the shaper recorded (its SHAPE
         // set by `facet_style` — hairline underline / band / active chip); a
         // non-theme card parks it empty (so a stale rect never lingers).
