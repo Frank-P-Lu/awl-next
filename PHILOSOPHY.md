@@ -240,6 +240,15 @@ in beats an infinite palette you'd never finish tuning. (The full contract each
 world is measured against — every law, and the test that enforces it — lives in
 `THEMES.md`.)
 
+**Amendment (settled 2026-07-14, the two-layer model):** the worlds got their
+organizing principle. awl is a **chameleon** — one *creature*, many *skins* —
+and every skin is two layers: **the Room** (the writing column, calm and
+identical in every world) and **the Frame** (ground, margins, chrome — where all
+of a world's personality lives). Every "is this too much?" question resolves to
+*Room or Frame?* And a chameleon is one simple system with rich pigment: the
+personality is **data, never machinery**. (`DESIGN.md` §1 carries the working
+detail.)
+
 ### What gets bundled — every MB earns its place
 
 awl ships as one binary with everything it needs to write, offline, from the
