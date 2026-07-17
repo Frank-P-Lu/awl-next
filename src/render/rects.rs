@@ -128,6 +128,11 @@ pub(super) struct WashCache {
     string_protos: std::cell::RefCell<Vec<UnderlineProto>>,
     highlight_protos: std::cell::RefCell<Vec<UnderlineProto>>,
     code_pill_protos: std::cell::RefCell<Vec<UnderlineProto>>,
+    /// `MdKind::Strikethrough` span segments — the per-visual-row x-extents the
+    /// strike LINE rides ([`TextPipeline::strike_lines`], positioned by the one
+    /// owner `super::spans::strike_line_band`). A fifth bucket of the SAME
+    /// cache/build walk, not a parallel cache.
+    strike_protos: std::cell::RefCell<Vec<UnderlineProto>>,
 }
 
 impl WashCache {
@@ -138,6 +143,7 @@ impl WashCache {
             string_protos: std::cell::RefCell::new(Vec::new()),
             highlight_protos: std::cell::RefCell::new(Vec::new()),
             code_pill_protos: std::cell::RefCell::new(Vec::new()),
+            strike_protos: std::cell::RefCell::new(Vec::new()),
         }
     }
 }
@@ -939,6 +945,10 @@ impl TextPipeline {
             Str,
             Highlight,
             CodePill,
+            /// `~~strikethrough~~` content — the thin strike LINE's x-extents
+            /// (not a background wash; the band geometry is the one owner
+            /// `super::spans::strike_line_band`'s at read time).
+            Strike,
         }
         // A GFM table renders as a drawn GRID (`prepare_table_grid`), which styles
         // each cell's inline code/highlight ITSELF; the raw table source is concealed
@@ -979,6 +989,12 @@ impl TextPipeline {
                     SynKind::CommentCode | SynKind::Constant | SynKind::Definition => {}
                 },
                 crate::markdown::MdKind::Highlight => spans.push((r.clone(), Bucket::Highlight)),
+                // `~~struck~~` content: the strike LINE's x-extents. NOT
+                // WYSIWYG-gated — like the muted text transform itself, the line
+                // is content styling (present whether or not markers conceal).
+                crate::markdown::MdKind::Strikethrough => {
+                    spans.push((r.clone(), Bucket::Strike));
+                }
                 // INLINE code gets a small value-step pill — gated on WYSIWYG (off
                 // reproduces the pre-round render: no pill, no panel, no conceal).
                 crate::markdown::MdKind::Code { inline: true } if wysiwyg => {
@@ -992,6 +1008,7 @@ impl TextPipeline {
             self.wash_cache.string_protos.borrow_mut().clear();
             self.wash_cache.highlight_protos.borrow_mut().clear();
             self.wash_cache.code_pill_protos.borrow_mut().clear();
+            self.wash_cache.strike_protos.borrow_mut().clear();
             self.wash_cache.version.set(Some(key));
             return;
         }
@@ -1039,6 +1056,7 @@ impl TextPipeline {
         let mut string_protos = Vec::new();
         let mut highlight_protos = Vec::new();
         let mut code_pill_protos = Vec::new();
+        let mut strike_protos = Vec::new();
         for (li, s_col, e_col, bucket) in segs {
             let Some(rows) = rows_by_line.get(&li) else {
                 continue; // unreachable: every requested line gets rows
@@ -1072,6 +1090,7 @@ impl TextPipeline {
                     Bucket::Str => string_protos.push(proto),
                     Bucket::Highlight => highlight_protos.push(proto),
                     Bucket::CodePill => code_pill_protos.push(proto),
+                    Bucket::Strike => strike_protos.push(proto),
                 }
             }
         }
@@ -1079,6 +1098,7 @@ impl TextPipeline {
         *self.wash_cache.string_protos.borrow_mut() = string_protos;
         *self.wash_cache.highlight_protos.borrow_mut() = highlight_protos;
         *self.wash_cache.code_pill_protos.borrow_mut() = code_pill_protos;
+        *self.wash_cache.strike_protos.borrow_mut() = strike_protos;
         self.wash_cache.version.set(Some(key));
     }
 
@@ -1172,6 +1192,55 @@ impl TextPipeline {
             out.push([x, y - inset_y, w, h + 2.0 * inset_y]);
         }
         merge_row_bands(out)
+    }
+
+    /// Build the `~~strikethrough~~` STRIKE LINES — one flat [`Squiggle`]
+    /// (`amp: 0.0`, the nit-underline trick) per visual-row segment of every
+    /// [`crate::markdown::MdKind::Strikethrough`] span, in pixels for the current
+    /// scroll + zoom, from the cached [`WashCache::strike_protos`] (the SAME
+    /// cache/build as [`Self::wash_rects`], a fifth bucket). The band's vertical
+    /// placement + stroke come from THE ONE STRIKE-LINE OWNER
+    /// (`super::spans::strike_line_band` over the row's caret-height glyph cell,
+    /// [`Self::row_band_for`]) — the same fn the format popover's `S` button
+    /// rides, so the two strikes can never drift. NOT caret-gated (content
+    /// styling, like the highlight wash — only the `~~` MARKER conceal is
+    /// reveal-on-cursor) and NOT WYSIWYG-gated (the muted text transform isn't
+    /// either). Empty for a strike-less / non-markdown buffer, keeping those
+    /// frames byte-identical.
+    pub(super) fn strike_lines(&self) -> Vec<Squiggle> {
+        if self.md_spans.is_empty() {
+            return Vec::new();
+        }
+        self.ensure_wash_protos();
+        let protos = self.wash_cache.strike_protos.borrow();
+        if protos.is_empty() {
+            return Vec::new();
+        }
+        let m = &self.metrics;
+        let doc_top = self.doc_top();
+        let text_left = self.text_left();
+        let mut out = Vec::with_capacity(protos.len());
+        for p in protos.iter() {
+            let line_top = doc_top + p.line_top;
+            if !self.proto_visible(line_top, p.line_height) {
+                continue; // off-screen: the quad would be clipped to nothing
+            }
+            let x = text_left + p.xs_s;
+            let w = (p.xs_e - p.xs_s).max(2.0 * m.zoom);
+            // The row's caret-height glyph cell, then THE owner's band over it.
+            let (band_y, cell_h) = self.row_band_for(p.line, p.line_height, line_top);
+            let (y, band_h, stroke) = super::spans::strike_line_band(band_y, cell_h, m.zoom);
+            out.push(Squiggle {
+                x,
+                y,
+                w,
+                h: band_h,
+                amp: 0.0,    // STRAIGHT — a strike is a calm flat line
+                period: 1.0, // unused when amp == 0 (kept > 0 so the shader div is safe)
+                thickness: stroke,
+            });
+        }
+        out
     }
 
     /// Rebuild the cached FENCE-PANEL row bands IF the shaped geometry / text

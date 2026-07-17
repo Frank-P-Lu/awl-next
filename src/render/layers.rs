@@ -2121,4 +2121,22 @@ impl TextPipeline {
         self.nit_pipeline
             .prepare(device, queue, width, height, &underlines);
     }
+
+    /// Build + upload the markdown `~~strikethrough~~` STRIKE LINES (one flat
+    /// band per visual-row segment of every struck span), positioned by THE ONE
+    /// strike-line owner (`super::spans::strike_line_band` — see
+    /// [`super::TextPipeline::strike_lines`]). Empty (nothing uploaded, nothing
+    /// drawn) for a strike-less / non-markdown buffer, so those frames stay
+    /// byte-identical.
+    pub(super) fn prepare_strike_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
+        let lines = self.strike_lines();
+        self.strike_pipeline
+            .prepare(device, queue, width, height, &lines);
+    }
 }

@@ -100,7 +100,7 @@ mod tests {
     fn plain_selection_lights_nothing_and_labels_h() {
         // "the quick fox", select "quick" (chars 4..9), unformatted.
         let m = plan("the quick fox", Some(4), 9, true).unwrap();
-        assert_eq!(labels(&m), vec!["B", "I", "==", "`", "~~", "H", "Link"]);
+        assert_eq!(labels(&m), vec!["B", "I", "A", "C", "S", "H", "Link"]);
         for b in &m.buttons {
             assert!(!b.active, "{:?} should be unlit on plain text", b.button);
         }

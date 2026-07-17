@@ -982,3 +982,142 @@ fn popover_card_hugs_the_button_row() {
     crate::popover::set_popover_on(saved);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// FORMAT POPOVER — SELF-DEMONSTRATING LABELS (the "a user would not know what
+/// ~~ or == means" round). Every button previews its own effect instead of
+/// leaking raw markdown syntax into chrome: `S` carries a REAL strike line from
+/// THE one strike-line owner (`render::spans::strike_line_band` — the same fn
+/// the document's `~~strike~~` quads read), `A` sits in the real
+/// `==highlight==` wash pill, `C` sits in the inline-code `base_200` pill.
+/// Asserted over the RENDERED PIXELS per the Wagtail tripwire (OUTCOMES, not
+/// mechanisms): the strike pixels CROSS the whole `S` glyph run at the band's
+/// middle (a bare letter always leaves gaps — the `Link` control proves it),
+/// and each pill paints beside its letter's ink where an unpilled button shows
+/// bare card. Runs on the default world (Tawny) — the cross-world legibility
+/// sweep is the round's capture-gallery audit, not this law.
+#[test]
+fn popover_labels_demonstrate_their_own_effects() {
+    if !adapter_available() {
+        eprintln!("skipping popover_labels_demonstrate_their_own_effects: no wgpu adapter");
+        return;
+    }
+    let _g = crate::testlock::serial();
+    let saved = crate::popover::popover_on();
+    crate::popover::set_popover_on(true);
+
+    let dir = std::env::temp_dir().join(format!("awl_popover_demo_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // Plain selection => every button UNLIT (no lit wash competing with the
+    // always-on demo pills). Same fixture as the card-hug law.
+    let buf = Buffer::from_str("# Hello world\n\nThis is some bold text.\n");
+    let mut opts = CaptureOpts::default();
+    opts.force_popover = true;
+    opts.selection = Some(((2, 13), (2, 17))); // "bold"
+
+    let png = dir.join("popover.png");
+    capture_with(&png, &buf, &opts).expect("popover capture renders");
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+            .unwrap();
+    let pop = &j["popover"];
+    assert_eq!(pop["shown"], serde_json::json!(true), "forced popover is shown: {pop}");
+
+    // The roster speaks LETTERS, never raw syntax.
+    let rows = pop["buttons"].as_array().expect("buttons array");
+    let labels: Vec<&str> = rows.iter().map(|b| b["label"].as_str().unwrap()).collect();
+    assert_eq!(labels, vec!["B", "I", "A", "C", "S", "H", "Link"], "self-demonstrating labels");
+    let span_of = |label: &str| -> (f32, f32) {
+        let b = rows.iter().find(|b| b["label"] == serde_json::json!(label)).unwrap();
+        (b["x0"].as_f64().unwrap() as f32, b["x1"].as_f64().unwrap() as f32)
+    };
+
+    let card = pop["card"].as_array().expect("card rect");
+    let cx = card[0].as_f64().unwrap() as f32;
+    let cy = card[1].as_f64().unwrap() as f32;
+    let ch = card[3].as_f64().unwrap() as f32;
+
+    let img = image::open(&png).expect("decode popover png").to_rgba8();
+    // Card-interior background: inside the pad, before any glyph/pill.
+    let bg = *img.get_pixel((cx + 4.0) as u32, (cy + ch * 0.5) as u32);
+    let diff_sum = |p: &image::Rgba<u8>| -> i32 {
+        (p[0] as i32 - bg[0] as i32).abs()
+            + (p[1] as i32 - bg[1] as i32).abs()
+            + (p[2] as i32 - bg[2] as i32).abs()
+    };
+
+    // Measure the buttons' GLYPH ink band (the hug-law scan, glyph threshold).
+    let all_spans: Vec<(f32, f32)> =
+        labels.iter().map(|l| span_of(l)).collect();
+    let (mut ink_top, mut ink_bot): (Option<u32>, Option<u32>) = (None, None);
+    for y in (cy + 1.0) as u32..=(cy + ch - 1.0) as u32 {
+        let hit = all_spans.iter().any(|(x0, x1)| {
+            (*x0 as u32..=*x1 as u32).any(|x| diff_sum(img.get_pixel(x, y)) > 40)
+        });
+        if hit {
+            ink_top.get_or_insert(y);
+            ink_bot = Some(y);
+        }
+    }
+    let (ink_top, ink_bot) = (ink_top.expect("ink present"), ink_bot.expect("ink present"));
+    let y_mid = (ink_top + ink_bot) / 2;
+
+    // (1) STRIKE: at the band middle, the line crosses the WHOLE `S` run —
+    // every x column is inked in at least one of the three middle rows.
+    let (sx0, sx1) = span_of("S");
+    for x in sx0 as u32..=sx1 as u32 {
+        let inked = (y_mid - 1..=y_mid + 1)
+            .any(|y| diff_sum(img.get_pixel(x, y)) > 40);
+        assert!(
+            inked,
+            "strike line must cross the S run: gap at x={x} (span {sx0}..{sx1}, y_mid {y_mid})"
+        );
+    }
+    // CONTROL — a bare multi-glyph label always has a gap at the same rows
+    // (letters do not touch), so the full crossing above proves a DRAWN line,
+    // not glyph ink.
+    let (lx0, lx1) = span_of("Link");
+    let link_gap = (lx0 as u32..=lx1 as u32).any(|x| {
+        (y_mid - 1..=y_mid + 1).all(|y| diff_sum(img.get_pixel(x, y)) <= 40)
+    });
+    assert!(link_gap, "the un-struck Link label must show a gap at the strike rows");
+
+    // (2) PILLS: 2px LEFT of a pilled letter's ink (inside the pill's 3px
+    // overhang) the card is tinted; the same offset beside an un-pilled letter
+    // is bare card. The pill threshold is lower than the glyph one (a value
+    // step / translucent wash, not full ink) but far above antialias noise.
+    let beside = |x0: f32, y: u32| -> i32 { diff_sum(img.get_pixel((x0 - 2.0) as u32, y)) };
+    let (ax0, _) = span_of("A");
+    let (cx0, _) = span_of("C");
+    let (bx0, _) = span_of("B");
+    assert!(
+        beside(ax0, y_mid) > 12,
+        "the A button's highlight wash pill paints beside its letter (got {})",
+        beside(ax0, y_mid)
+    );
+    assert!(
+        beside(cx0, y_mid) > 12,
+        "the C button's code pill paints beside its letter (got {})",
+        beside(cx0, y_mid)
+    );
+    assert!(
+        beside(bx0, y_mid) <= 12,
+        "no pill beside the B button — bare card (got {})",
+        beside(bx0, y_mid)
+    );
+
+    // (3) The demo elements stay INSIDE the hug-law band: the pills span
+    // exactly the ink band, so the measured pad still hugs the pad token
+    // (the card-hug law re-verifies this independently; here we only assert
+    // no demo pixel leaks ABOVE the band into the pad).
+    for x in [ax0 - 2.0, cx0 - 2.0] {
+        for y in (cy + 2.0) as u32..ink_top.saturating_sub(1) {
+            assert!(
+                diff_sum(img.get_pixel(x as u32, y)) <= 12,
+                "no demo pixel above the ink band at ({x}, {y})"
+            );
+        }
+    }
+
+    crate::popover::set_popover_on(saved);
+    let _ = std::fs::remove_dir_all(&dir);
+}

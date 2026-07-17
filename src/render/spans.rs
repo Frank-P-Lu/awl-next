@@ -383,6 +383,15 @@ pub(super) fn md_attrs(
             // a split-complementary of the world's accent, DECOUPLED from the warm
             // comment wash so it POPS), never a text color change. Never amber (DESIGN §3).
         }
+        MdKind::Strikethrough => {
+            // `~~struck~~` content RECEDES to the strike ink — [`strike_ink`], THE
+            // one owner the drawn strike LINE shares (`rects.rs`'s strike bucket +
+            // the format popover's `S` button), so text and line can never disagree
+            // on the register. The same muted rung the writer's-diff deletions
+            // recede to (their blockquoted form), never amber (DESIGN §3). The
+            // LINE itself is a quad (`strike_lines`), not a text transform.
+            natural = Some(strike_ink(&th).to_glyphon());
+        }
     }
     if let Some(c) = natural {
         a = a.color(c);
@@ -624,6 +633,9 @@ pub(super) fn wysiwyg_reveals(
         | ConcealKind::Emphasis
         | ConcealKind::Code
         | ConcealKind::Highlight
+        // A `~~strike~~` pair's tilde markers hide off their own line exactly
+        // like an emphasis run's `**` — the drawn strike LINE is the affordance.
+        | ConcealKind::Strikethrough
         | ConcealKind::Image
         // A link's `[`/`](url)` plumbing hides off its own line, leaving the
         // content-ink link TEXT (its separate `LinkText` span) visible; the whole
@@ -1154,6 +1166,67 @@ pub(super) fn search_match_rgba_bytes() -> [u8; 4] {
         }
         theme::HighlightTexture::Wash => theme::selection().rgba_bytes(),
     }
+}
+
+// --- THE STRIKE-LINE OWNER — one owner of strike geometry + ink --------------
+//
+// "The strike-line geometry over a text run" lives HERE and only here: the
+// thickness, the vertical position as a fraction of the run's text band, and
+// the ink derivation. Two consumers, both routing through these fns so they can
+// never drift: (1) the DOCUMENT renderer's `~~strike~~` quads
+// (`rects.rs::strike_lines`, one thin band per visual-row segment of every
+// `MdKind::Strikethrough` span), and (2) the format POPOVER's
+// self-demonstrating `S` button (`chrome/popover.rs`), which draws the same
+// line through its own glyph ink band. The struck TEXT's color rides
+// [`strike_ink`] too (`md_attrs`' `Strikethrough` arm), so text and line share
+// one register by construction.
+
+/// Strike-line stroke thickness (px at zoom 1.0). A hair heavier than the
+/// writing-nit hint ([`super::NIT_THICKNESS`], 1.3) is NOT wanted — a strike is
+/// content styling, not an annotation, and the muted ink already carries the
+/// receding register; the same fine weight reads as one family of quiet lines.
+pub(in crate::render) const STRIKE_THICKNESS: f32 = 1.3;
+
+/// Vertical position of the strike line's CENTER, as a fraction of the text
+/// band's height from its top. 0.5 — the middle of the band. For the document
+/// this is the caret-height glyph cell (`row_band_for`), whose middle crosses
+/// lowercase letters just above their waist; for the popover's `S` it is the
+/// measured cap-height ink band, whose middle bisects the glyph. Both read as
+/// the conventional struck-through look.
+pub(in crate::render) const STRIKE_V_FRAC: f32 = 0.5;
+
+/// THE strike-line geometry over a text band: given the band's `top`/`height`
+/// (the run's glyph cell — caret band in the document, measured ink band in the
+/// popover) and the current `zoom`, the line's `(band_top, band_h, stroke)` — a
+/// quad band centered at `STRIKE_V_FRAC` of the text band, just tall enough for
+/// the stroke plus a 2px antialiasing feather (the same `thickness + 2.0`
+/// envelope the nit underline uses), and the zoom-scaled stroke thickness
+/// itself. Pure + total; both call sites hand these straight to a
+/// [`crate::spellunderline::Squiggle`] with `amp: 0.0` (a flat line).
+pub(in crate::render) fn strike_line_band(top: f32, height: f32, zoom: f32) -> (f32, f32, f32) {
+    let stroke = STRIKE_THICKNESS * zoom;
+    let band_h = stroke + 2.0;
+    let center = top + height * STRIKE_V_FRAC;
+    (center - band_h * 0.5, band_h, stroke)
+}
+
+/// THE strike ink — the world's `muted` rung EXACTLY: the receding markup ink
+/// every dim syntax character already rides, so struck text (and its line)
+/// recede to a register the world is guaranteed to render legibly, with zero
+/// saturation risk toward the caret's amber (DESIGN §3 — `muted` is an ink-
+/// ladder rung, not a hue). On a 1-bit world this is an authored pure
+/// black/white token, so the strike stays lawful there by construction. Shared
+/// by `md_attrs` (the struck TEXT) and [`strike_srgba_bytes`] (the LINE
+/// pipelines) — one derivation, two surfaces.
+pub(in crate::render) fn strike_ink(th: &theme::Theme) -> theme::Srgb {
+    th.muted
+}
+
+/// The ACTIVE world's strike-line rgba for the two strike pipelines (document +
+/// popover), fed at construction and every `sync_theme_colors` re-tint — the
+/// sibling of [`highlight_wash_rgba_bytes`] for the strike stroke.
+pub(in crate::render) fn strike_srgba_bytes() -> [u8; 4] {
+    strike_ink(&theme::active()).rgba_bytes()
 }
 
 /// SYNTAX HIGHLIGHTING: lay the syntax spans that intersect ONE buffer line over

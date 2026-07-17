@@ -51,7 +51,7 @@ pub struct SpellUnderlinePipeline {
 /// One squiggle's geometry, in pixels. `x`,`y`,`w`,`h` is the band the wave is
 /// drawn into; `amp`/`period`/`thickness` are the wave params (already zoom-
 /// scaled by the caller).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Squiggle {
     pub x: f32,
     pub y: f32,

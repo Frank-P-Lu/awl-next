@@ -54,6 +54,27 @@ const SEP: &str = "   ";
 /// Breath between the card and the selection it points at.
 const ANCHOR_GAP: f32 = 8.0;
 
+/// SELF-DEMONSTRATING label attrs: the per-button `Attrs` transform that makes a
+/// button PREVIEW ITS OWN EFFECT — the same transforms the document's `md_attrs`
+/// applies to real content, minus color (lit/unlit ink stays the state signal,
+/// applied by the caller). `B` shapes in the world's real bundled 700 face, `I`
+/// in the italic style, `C` in the registered monospace family (the same
+/// `Family::Monospace` resolution the doc's inline code rides). Every other
+/// button keeps the plain panel face — `A`'s highlight wash, `S`'s strike line
+/// and `C`'s pill are QUADS built in [`TextPipeline::prepare_popover`], not text
+/// transforms. Pure (unit-tested below).
+fn demo_attrs(button: PopoverButton, base: &Attrs<'static>) -> Attrs<'static> {
+    match button {
+        PopoverButton::Bold => base.clone().weight(glyphon::Weight::BOLD),
+        PopoverButton::Italic => base.clone().style(glyphon::Style::Italic),
+        PopoverButton::Code => base.clone().family(Family::Monospace),
+        PopoverButton::Highlight
+        | PopoverButton::Strike
+        | PopoverButton::Heading
+        | PopoverButton::Link => base.clone(),
+    }
+}
+
 impl TextPipeline {
     /// Build + upload the format popover for this frame, or park it. Mirrors the
     /// which-key panel's shape (own float trio + text renderer), drawn in
@@ -85,7 +106,7 @@ impl TextPipeline {
                 // A value-step wash behind each LIT button (never amber) — a pill
                 // hugging the glyph ink band with a small halo (the card hugs the same
                 // band, so the wash never floats in dead space).
-                let washes: Vec<[f32; 4]> = geom
+                let mut washes: Vec<[f32; 4]> = geom
                     .buttons
                     .iter()
                     .filter(|b| b.active)
@@ -100,7 +121,49 @@ impl TextPipeline {
                         ]
                     })
                     .collect();
+                // SELF-DEMONSTRATING labels — the quad half (the FACE half is
+                // [`demo_attrs`]): `C` always sits in the inline-code pill wash
+                // (the SAME `base_200` value-step tint the doc pill carries —
+                // `popover_wash` shares it, so the pill rides that pipeline), `A`
+                // in the real `==highlight==` wash (`popover_hl_wash`, tinted by
+                // the doc wash's own derivation), and `S` carries a strike line
+                // from THE ONE OWNER (`strike_line_band` — the same fn the
+                // document's `~~strike~~` quads read, so the demo IS the
+                // effect). TRIPWIRE (`popover_card_hugs_the_button_row`): every
+                // demo quad stays INSIDE the measured glyph ink band — the pills
+                // span exactly `[band_top, band_top + band_h]` (no vertical
+                // halo, unlike the lit wash above, which the law excludes via
+                // its lit filter) and the strike band is centered within it, so
+                // the card-hug measurement never widens.
+                let band_pill = |b: &PopoverButtonGeom| {
+                    let hpad = CODE_PILL_INSET_X;
+                    [b.x0 - hpad, geom.band_top, (b.x1 - b.x0) + 2.0 * hpad, geom.band_h]
+                };
+                let mut hl_pills: Vec<[f32; 4]> = Vec::new();
+                let mut strikes: Vec<Squiggle> = Vec::new();
+                for b in &geom.buttons {
+                    match b.button {
+                        PopoverButton::Code => washes.push(band_pill(b)),
+                        PopoverButton::Highlight => hl_pills.push(band_pill(b)),
+                        PopoverButton::Strike => {
+                            let (y, h, stroke) =
+                                strike_line_band(geom.band_top, geom.band_h, self.metrics.zoom);
+                            strikes.push(Squiggle {
+                                x: b.x0 - 1.0,
+                                y,
+                                w: (b.x1 - b.x0) + 2.0,
+                                h,
+                                amp: 0.0,    // flat — a strike is a calm straight line
+                                period: 1.0, // unused at amp 0 (kept > 0, shader-safe)
+                                thickness: stroke,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
                 self.popover_wash.prepare(device, queue, width, height, &washes);
+                self.popover_hl_wash.prepare(device, queue, width, height, &hl_pills);
+                self.popover_strike.prepare(device, queue, width, height, &strikes);
                 self.popover_upload_text(device, queue, width, height, &geom)?;
                 self.popover_geom = Some(geom);
                 Ok(())
@@ -118,6 +181,8 @@ impl TextPipeline {
                     true,
                 );
                 self.popover_wash.prepare(device, queue, width, height, &[]);
+                self.popover_hl_wash.prepare(device, queue, width, height, &[]);
+                self.popover_strike.prepare(device, queue, width, height, &[]);
                 self.park_popover_text(device, queue, width, height)?;
                 self.popover_geom = None;
                 Ok(())
@@ -156,8 +221,13 @@ impl TextPipeline {
             row.push_str(&b.label);
             let end = row.len();
             ranges.push((start, end));
-            // Lit buttons draw full ink; unlit recede to muted (state without amber).
-            spans.push((b.label.clone(), base.clone().color(if b.active { ink } else { muted })));
+            // Lit buttons draw full ink; unlit recede to muted (state without
+            // amber). The FACE previews the button's own effect ([`demo_attrs`]:
+            // B bold, I italic, C mono).
+            spans.push((
+                b.label.clone(),
+                demo_attrs(b.button, &base).color(if b.active { ink } else { muted }),
+            ));
         }
 
         self.popover_buffer
@@ -432,5 +502,66 @@ impl TextPipeline {
             .map(|b| (b.label.clone(), b.active, [b.x0, b.x1]))
             .collect();
         Some((g.card, rows))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SELF-DEMONSTRATING labels, the FACE half at its purest seam: each button's
+    /// label attrs carry exactly the transform its Action applies to real content
+    /// — B a real 700 weight, I the italic style, C the monospace family — and
+    /// every other button keeps the base face untouched (their demos are QUADS,
+    /// not text transforms). No-wildcard over the roster, so a new button must
+    /// take a conscious stance here.
+    #[test]
+    fn demo_attrs_previews_each_buttons_own_effect() {
+        let base = panel_attrs();
+        for &b in crate::popover::ALL {
+            let a = demo_attrs(b, &base);
+            match b {
+                PopoverButton::Bold => {
+                    assert_eq!(a.weight, glyphon::Weight::BOLD, "B previews bold");
+                    assert_eq!(a.style, base.style);
+                }
+                PopoverButton::Italic => {
+                    assert_eq!(a.style, glyphon::Style::Italic, "I previews italic");
+                    assert_eq!(a.weight, base.weight);
+                }
+                PopoverButton::Code => {
+                    assert_eq!(a.family, Family::Monospace, "C previews mono");
+                    assert_eq!(a.weight, base.weight);
+                }
+                PopoverButton::Highlight
+                | PopoverButton::Strike
+                | PopoverButton::Heading
+                | PopoverButton::Link => {
+                    assert_eq!(a.weight, base.weight, "{b:?} keeps the panel face");
+                    assert_eq!(a.style, base.style, "{b:?} keeps the panel face");
+                    assert_eq!(a.family, base.family, "{b:?} keeps the panel face");
+                }
+            }
+        }
+    }
+
+    /// The `S` button's strike line rides THE ONE OWNER (`strike_line_band`) —
+    /// the same fn the document's `~~strike~~` quads read — so its band always
+    /// sits strictly INSIDE the glyph ink band the card hugs (the
+    /// `popover_card_hugs_the_button_row` tripwire: a demo element outside the
+    /// band would widen the measured pad and regress the law).
+    #[test]
+    fn strike_demo_band_stays_inside_the_ink_band() {
+        let (band_top, band_h) = (100.0_f32, 14.0_f32);
+        for zoom in [1.0_f32, 2.0] {
+            let (y, h, stroke) = strike_line_band(band_top, band_h, zoom);
+            assert!(y > band_top, "strike band starts below the ink top");
+            assert!(y + h < band_top + band_h, "strike band ends above the ink bottom");
+            assert!(stroke > 0.0 && stroke <= h, "stroke fits its band");
+            // Centered at the owner's fraction of the band.
+            let center = y + h * 0.5;
+            let expect = band_top + band_h * STRIKE_V_FRAC;
+            assert!((center - expect).abs() < 1e-4, "centered at STRIKE_V_FRAC");
+        }
     }
 }

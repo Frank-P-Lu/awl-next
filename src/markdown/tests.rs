@@ -1010,3 +1010,125 @@ fn is_thematic_break_matches_commonmark_breaks_only() {
     assert!(!is_thematic_break("plain prose"), "prose is not a break");
     assert!(!is_thematic_break(""), "empty line is not a break");
 }
+
+// --- strikethrough (`~~struck~~`, the strikethrough-render round) ------------
+
+#[test]
+fn strikethrough_basic_pair_conceals_markers_and_marks_content() {
+    let s = spans("~~struck~~");
+    let st_markup = MdKind::ConcealMarkup(ConcealKind::Strikethrough);
+    assert!(has(&s, 0, 2, st_markup), "opening ~~ dim + concealable: {s:?}");
+    assert!(has(&s, 8, 10, st_markup), "closing ~~ dim + concealable: {s:?}");
+    assert!(has(&s, 2, 8, MdKind::Strikethrough), "inner content struck: {s:?}");
+}
+
+#[test]
+fn strikethrough_mid_sentence_pair() {
+    let s = spans("keep ~~cut this~~ keep");
+    assert!(has(&s, 7, 15, MdKind::Strikethrough), "inner run struck: {s:?}");
+    assert_eq!(
+        s.iter().filter(|(_, k)| *k == MdKind::Strikethrough).count(),
+        1,
+        "exactly one struck span: {s:?}"
+    );
+}
+
+#[test]
+fn single_tilde_never_strikes() {
+    // pulldown's GFM option also accepts single-tilde `~x~`; awl deliberately
+    // keeps it INERT (the `==` exactly-two precedent — the format command and
+    // the writer's-diff serializer both speak `~~`). Prose like `2~3 weeks and
+    // 4~5 days` must never be silently struck.
+    let s = spans("2~3 weeks and 4~5 days");
+    assert!(
+        !s.iter().any(|(_, k)| matches!(
+            k,
+            MdKind::Strikethrough | MdKind::ConcealMarkup(ConcealKind::Strikethrough)
+        )),
+        "a single '~' must never strike: {s:?}"
+    );
+}
+
+#[test]
+fn strikethrough_ignored_inside_inline_code() {
+    // Inline code is literal: `~~x~~` inside backticks stays plain mono Code.
+    let s = spans("`~~x~~`");
+    assert!(has(&s, 1, 6, MdKind::Code { inline: true }), "inner text is plain Code: {s:?}");
+    assert!(
+        !s.iter().any(|(_, k)| *k == MdKind::Strikethrough),
+        "inline code must never strike: {s:?}"
+    );
+}
+
+#[test]
+fn strikethrough_ignored_inside_fenced_code() {
+    let s = spans("```\n~~x~~\n```\n");
+    assert!(
+        !s.iter().any(|(_, k)| matches!(
+            k,
+            MdKind::Strikethrough | MdKind::ConcealMarkup(ConcealKind::Strikethrough)
+        )),
+        "a fence body must never strike: {s:?}"
+    );
+}
+
+#[test]
+fn strikethrough_is_additive_over_context_spans() {
+    // Struck text inside a blockquote: the content carries BOTH the Quote
+    // context span and (pushed AFTER, last-wins for ink) the Strikethrough span
+    // — the `Highlight` lift precedent, but receding. The strike-line bucket
+    // reads the Strikethrough span, so a struck quote still draws its line.
+    let s = spans("> keep ~~cut~~\n");
+    assert!(
+        s.iter().any(|(_, k)| *k == MdKind::Strikethrough),
+        "struck-inside-quote still emits Strikethrough: {s:?}"
+    );
+    assert!(
+        s.iter().any(|(_, k)| *k == MdKind::Quote),
+        "the quote context span is still present: {s:?}"
+    );
+}
+
+#[test]
+fn strikethrough_inside_diff_deletion_blockquote_line() {
+    // Exactly the writer's-diff serializer's Deleted shape: `> ~~line~~` —
+    // the transcript's struck deletions route through THIS parse (one strike
+    // mechanism, no diff-only path).
+    let s = spans("> ~~Drop this whole paragraph entirely.~~\n");
+    assert!(
+        s.iter().any(|(_, k)| *k == MdKind::Strikethrough),
+        "the diff's deletion line parses as struck: {s:?}"
+    );
+    assert!(
+        s.iter()
+            .any(|(_, k)| *k == MdKind::ConcealMarkup(ConcealKind::Strikethrough)),
+        "its ~~ markers conceal off-caret: {s:?}"
+    );
+}
+
+#[test]
+fn tilde_run_of_three_is_a_fence_not_a_strike() {
+    // `~~~` opens a FENCED code block (the tilde-fence test elsewhere); it must
+    // never read as strikethrough markers.
+    let s = spans("~~~\nbody\n~~~\n");
+    assert!(
+        !s.iter().any(|(_, k)| matches!(
+            k,
+            MdKind::Strikethrough | MdKind::ConcealMarkup(ConcealKind::Strikethrough)
+        )),
+        "a tilde fence must never strike: {s:?}"
+    );
+    assert!(
+        s.iter().any(|(_, k)| matches!(k, MdKind::Code { inline: false })),
+        "the tilde fence still parses as a code block: {s:?}"
+    );
+}
+
+#[test]
+fn strikethrough_tag_strings_for_sidecar() {
+    // The sidecar `md_spans` gains the new tag VALUES in the existing field —
+    // a data change, not a shape change (no schema bump).
+    assert_eq!(MdKind::Strikethrough.tag(), "strikethrough");
+    assert_eq!(MdKind::ConcealMarkup(ConcealKind::Strikethrough).tag(), "markup");
+    assert_eq!(ConcealKind::Strikethrough.tag(), "strikethrough");
+}
