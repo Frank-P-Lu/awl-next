@@ -175,6 +175,45 @@ pub fn two_shape_band(from_top: f32, to_top: f32, h: f32, t: f32, p: &MorphParam
     TwoShape { primary_top, echo_top, height: h, overlap }
 }
 
+/// INK RIDES THE BAND, NOT THE STATE — which DISPLAY rows the living band
+/// currently COVERS, so their glyphs take the on-band (selected) ink while the
+/// band is over them, and the target row keeps its OFF-band ink until the band
+/// arrives. Rows lie at `first_top + k*lh` for `k in 0..n`; a row is "covered"
+/// when a band overlaps it by MORE THAN HALF its height (so the ink flips only
+/// once the fill predominantly owns the row — never a one-pixel graze). `bands`
+/// is the leading band (morph) or the leading band + chasing echo (two-shape);
+/// a row counts as covered if EITHER shape majority-covers it (the crossing is
+/// a subset of both). At rest exactly the target row is covered; mid-flight the
+/// band sits between rows, so 0, 1, or 2 rows can be — matching what the eye
+/// sees the fill sitting on. Pure; unit-tested over flight phases.
+///
+/// The OLD (state-tied) behaviour is recovered by passing the single settled
+/// target rect: `covered_rows(&[target_band], first_top, lh, n)` returns exactly
+/// `[target_disp]`, so the env-unset path stays byte-identical.
+pub fn covered_rows(bands: &[BandRect], first_top: f32, lh: f32, n: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    if lh <= 0.0 {
+        return out;
+    }
+    for k in 0..n {
+        let row_top = first_top + k as f32 * lh;
+        let row_bot = row_top + lh;
+        // Max single-band overlap: for two separated shapes each owns a
+        // different row, and where they cross the two coincide — so MAX (not
+        // sum) is the true covered depth for this row.
+        let mut cov = 0.0f32;
+        for b in bands {
+            let top = row_top.max(b.top);
+            let bot = row_bot.min(b.top + b.height);
+            cov = cov.max((bot - top).max(0.0));
+        }
+        if cov > lh * 0.5 {
+            out.push(k);
+        }
+    }
+    out
+}
+
 /// The parsed `AWL_OVERLAY_MOTION_FORCE` value: which [`Choreo`] to draw and,
 /// optionally, a PINNED phase for a deterministic mid-flight capture frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -330,6 +369,60 @@ mod tests {
         // Moving down, the leading (bottom) edge races; read progress off `top`
         // (the trailing edge) too — Slam's whole band is further along.
         assert!(slam_lead > soft_lead, "Slam leads harder than Soft ({slam_lead} vs {soft_lead})");
+    }
+
+    #[test]
+    fn covered_ink_rides_the_band_not_the_state() {
+        // Rows: 8 rows of `lh` from `first_top`; the SELECTED (target) row is #2.
+        let (first_top, lh, h) = (100.0f32, 24.0f32, 24.0f32);
+        let target_disp = 2usize;
+        let target_top = first_top + target_disp as f32 * lh; // 148
+        let params = Choreo::Morph.params();
+        // The band flies from PIN_JUMP_ROWS below the target, sliding UP to it.
+        let from = target_top + PIN_JUMP_ROWS * lh; // 3 rows below
+
+        // AT REST (t = 1): the covered set is EXACTLY the target row — the ink
+        // flip is byte-identical to the old state-tied `[sel_disp]`.
+        let b1 = morph_band(from, target_top, h, 1.0, &params);
+        assert_eq!(
+            covered_rows(&[b1], first_top, lh, 8),
+            vec![target_disp],
+            "settled band covers exactly the target row"
+        );
+
+        // EARLY (t = 0.1): the band is still down near its start row — the
+        // TARGET keeps its off-band ink (NOT covered), and a LOWER row is.
+        let b_early = morph_band(from, target_top, h, 0.1, &params);
+        let cov_early = covered_rows(&[b_early], first_top, lh, 8);
+        assert!(
+            !cov_early.contains(&target_disp),
+            "target keeps unselected ink until the band arrives (t=0.1: {cov_early:?})"
+        );
+        assert!(
+            cov_early.iter().any(|&k| k > target_disp),
+            "a row BELOW the target is under the moving band early (t=0.1: {cov_early:?})"
+        );
+
+        // The frontier climbs toward the target: the max covered row index never
+        // sits below the target early and lands ON it at rest (the band arrives).
+        let max_early = *cov_early.iter().max().unwrap();
+        assert!(max_early > target_disp, "early frontier is below (t=0.1)");
+    }
+
+    #[test]
+    fn two_shape_has_a_half_row_interpenetration_window() {
+        // TASK 3 — the crossing is a REAL window, not just the coincident
+        // endpoints: somewhere mid-flight the echo overlaps the lead by ROUGHLY
+        // half a row (a genuine interpenetration the renderer fills one ladder
+        // step brighter), distinct from the full-overlap ends and the
+        // fully-cleared gap of a wide jump.
+        let p = Choreo::TwoShape.params();
+        let h = 24.0;
+        let saw_half = (1..400)
+            .map(|i| i as f32 / 400.0)
+            .filter_map(|t| two_shape_band(0.0, PIN_JUMP_ROWS * h, h, t, &p).overlap)
+            .any(|o| (o.height - h * 0.5).abs() < h * 0.15);
+        assert!(saw_half, "two-shape crosses through a ~half-row overlap window");
     }
 
     #[test]

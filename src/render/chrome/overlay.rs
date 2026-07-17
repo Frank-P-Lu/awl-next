@@ -361,13 +361,64 @@ impl TextPipeline {
                 (flipped != theme::base_content()).then(|| flipped.to_glyphon())
             }
         };
-        let has_right = self.overlay_shape_text(&geom, ink, muted, selected_ink);
+        // ARM B — INK RIDES THE BAND, NOT THE STATE: when the living-band probe
+        // is flying (env-gated → `None` on every ordinary run, byte-identical),
+        // the rows the MOVING band currently covers take the on-band ink and the
+        // target row keeps its off-band ink until the band arrives. `None`
+        // recovers the old state-tied flip (the settled selected row).
+        let living_covered = self.living_covered_rows(&geom);
+        let has_right =
+            self.overlay_shape_text(&geom, ink, muted, selected_ink, living_covered.as_deref());
         self.overlay_upload_text(
             device, queue, width, height, &geom, has_right, ink, muted, placard,
         )?;
         self.overlay_draw_card(device, queue, width, height, &geom);
         self.overlay_place_caret(queue, width, height, &geom);
         Ok(())
+    }
+
+    /// ARM B LIVING-BAND PROBE — the DISPLAY rows the moving band covers THIS
+    /// frame (see [`livingband::covered_rows`]), so the shaper flips those rows'
+    /// ink to the on-band pole instead of the static selected row ("ink rides
+    /// the band, not the state"). `None` on every ordinary run (env unset, a
+    /// Bars/theme/empty picker, or no selection), where the shaper is
+    /// byte-identical (the old `overlay_selected` flip). Reads the SAME phase +
+    /// rects owner (`living_band_phase` / `living_band_rects`) `overlay_draw_card`
+    /// draws from, so the flipped rows can never disagree with the fill's
+    /// position — this is the exact phase-seam fix the outcome audit demands.
+    pub(in crate::render) fn living_covered_rows(&mut self, geom: &OverlayGeom) -> Option<Vec<usize>> {
+        let motion = (*crate::render::livingband::overlay_motion_force())?;
+        if geom.theme
+            || geom.n_items == 0
+            || !matches!(crate::render::effective_list_style(), theme::ListStyle::Pane)
+        {
+            return None;
+        }
+        let lh = self.overlay_lh();
+        let sel_disp = self
+            .overlay_selected
+            .saturating_sub(geom.top_idx)
+            .min(geom.visible.saturating_sub(1));
+        let target =
+            overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, sel_disp, lh);
+        let (from, to, t) = self.living_band_phase(motion, target, lh);
+        let (primary, echo, _cross) =
+            self.living_band_rects(motion, from, to, t, geom.card_x, geom.card_w, lh);
+        // Leading band + chasing echo as vertical extents (x/width irrelevant to
+        // row coverage). The morph voices carry no echo (`echo` empty).
+        let bands: Vec<crate::render::livingband::BandRect> = primary
+            .iter()
+            .chain(echo.iter())
+            .map(|r| crate::render::livingband::BandRect { top: r[1], height: r[3] })
+            .collect();
+        let first_top =
+            overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, 0, lh);
+        Some(crate::render::livingband::covered_rows(
+            &bands,
+            first_top,
+            lh,
+            geom.visible,
+        ))
     }
 
     /// PARK every overlay pipeline empty for a frame with NO active overlay —
