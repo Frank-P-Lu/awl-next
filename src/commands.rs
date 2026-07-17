@@ -292,6 +292,10 @@ static COMMAND_SEED: &[Command] = &[
     Command { name: "Numbered list",     action: Action::ToggleNumberedList, native: "",         emacs: ""        , native_only: false, web_only: false },
     Command { name: "Task list",         action: Action::ToggleTaskList,     native: "",  emacs: ""        , native_only: false, web_only: false },
     Command { name: "Heading",           action: Action::ToggleHeading,      native: "",         emacs: ""        , native_only: false, web_only: false },
+    // The format popover's ONE `H` button fires this — a LEVEL CYCLE (off→H1→H2→H3→off),
+    // distinct from "Heading" above (a single `# ` toggle). Palette-only, no native
+    // convention (like the other block toggles); rebindable via `[keys]`.
+    Command { name: "Cycle heading",     action: Action::HeadingCycle,       native: "",         emacs: ""        , native_only: false, web_only: false },
     Command { name: "Code block",        action: Action::ToggleCodeBlock,    native: "",         emacs: ""        , native_only: false, web_only: false },
     Command { name: "Bold",              action: Action::Bold,               native: "",    emacs: ""        , native_only: false, web_only: false },
     Command { name: "Italic",            action: Action::Italic,             native: "",    emacs: ""        , native_only: false, web_only: false },
@@ -1337,6 +1341,7 @@ mod tests {
             "Bullet list",
             "Numbered list",
             "Heading",
+            "Cycle heading",
             "Code block",
             "Highlight",
             "Strikethrough",
@@ -1357,6 +1362,24 @@ mod tests {
         // names()/bindings() stay parallel to the catalog.
         assert_eq!(names().len(), COMMANDS.len());
         assert_eq!(bindings().len(), COMMANDS.len());
+    }
+
+    #[test]
+    fn every_popover_button_fires_a_catalog_command() {
+        // THE FORMAT POPOVER's STRUCTURAL LAW (the menu-bar precedent): every button
+        // in the no-wildcard roster (`popover::ALL`) fires an EXISTING catalog
+        // Action — there is no popover-only edit path. A new button that forgot its
+        // catalog wiring fails HERE (and the roster is enumerated, so a new button
+        // can't dodge the check). The pure half (each maps to SOME formatting Action)
+        // lives in `popover::tests`; this is the catalog cross-check.
+        for &b in crate::popover::ALL {
+            let action = b.action();
+            assert!(
+                COMMANDS.iter().any(|c| c.action == action),
+                "format popover button {b:?} fires {action:?}, which is not a catalog \
+                 command — every popover button must route through an existing catalog Action"
+            );
+        }
     }
 
     #[test]

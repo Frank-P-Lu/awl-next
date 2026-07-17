@@ -309,6 +309,13 @@ pub enum Action {
     ToggleTaskList,
     /// HEADING toggle: prefix the caret/selected line(s) with one `# ` (cycle out of scope).
     ToggleHeading,
+    /// HEADING CYCLE: the state-reflective heading cycler behind the format
+    /// popover's ONE `H` button — off → H1 → H2 → H3 → off on the caret/selected
+    /// line(s). A real palette command ("Cycle heading"), markdown-only, applied as
+    /// one undoable edit (`actions::format::heading_cycle`). Distinct from
+    /// [`ToggleHeading`](Action::ToggleHeading) (a single `# ` on/off): the popover
+    /// wants a level cycle, so it fires THIS.
+    HeadingCycle,
     /// FENCED CODE BLOCK toggle: wrap the caret line / selected range in ``` fences.
     ToggleCodeBlock,
     /// BOLD toggle: wrap the selection / word under the caret in `**…**`.
@@ -521,6 +528,7 @@ impl Action {
                 | Action::ToggleNumberedList
                 | Action::ToggleTaskList
                 | Action::ToggleHeading
+                | Action::HeadingCycle
                 | Action::ToggleCodeBlock
                 | Action::Bold
                 | Action::Italic
@@ -1647,6 +1655,7 @@ bullet_list|||
 numbered_list|||
 task_list|Cmd-S-l|C-S-l|
 heading|||
+cycle_heading|||
 code_block|||
 bold|Cmd-B|C-b|
 italic|Cmd-I|C-i|

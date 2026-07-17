@@ -263,7 +263,16 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // `/169` — PASSIVE CRASH RECOVERY: the `about` block gains `pending_crash`.
 // False by default/headlessly; an explicit injected pending marker reports true
 // and adds the matching quiet About-card line. The startup center notice is gone.
-pub const SCHEMA_VERSION: u32 = 169;
+// `/170` — THE FORMAT POPOVER: a new top-level `popover` block (`{ on, shown,
+// card, buttons }`) reporting the reveal-on-select format toolbar — `on` mirrors
+// `crate::popover::popover_on()` (default ON), `shown` is whether it is up this
+// frame (a mouse selection live, or the `AWL_POPOVER` capture probe), and when
+// shown `card` is `[x,y,w,h]` + `buttons` is one `{label, active, x0, x1}` per
+// button (the SAME geometry the buttons draw + the click hit-test reads). Down by
+// default (no pointer in a capture), so a plain `--screenshot` reports
+// `shown: false, card: null, buttons: []` and is byte-identical apart from the
+// always-present block.
+pub const SCHEMA_VERSION: u32 = 170;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

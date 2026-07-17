@@ -557,6 +557,17 @@ pub struct App {
     /// editing normally; `Some` = isearch active, and every key is routed to
     /// `handle_search_key` instead of the keymap.
     search: Option<crate::search::SearchState>,
+    /// THE FORMAT POPOVER (`crate::popover`): `true` while the reveal-on-select
+    /// format toolbar is summoned. Set ONLY by a MOUSE selection gesture (a
+    /// drag-release with a non-empty selection / a double-click word-select) in a
+    /// markdown buffer — a KEYBOARD selection never summons it (the spec's
+    /// mouse-only rule). Cleared when the selection collapses, on Esc / a keyboard
+    /// selection extend / a click off its buttons / a buffer swap / a caret move
+    /// with no selection. The render MODEL (which buttons lit, the `H` level) is
+    /// recomputed each `sync_view` from the live selection (`actions::popover::plan`),
+    /// so it stays open + reflective across format applies. LIVE-ONLY: the headless
+    /// capture force-summons via the `AWL_POPOVER` probe instead of this flag.
+    popover_open: bool,
     /// The spell-check engine (bundled en_US Hunspell), loaded ONCE at startup.
     /// `None` if the dictionary failed to parse (reported to stderr); spell-check
     /// then no-ops rather than crashing the editor.
@@ -1097,6 +1108,7 @@ impl App {
             preedit: String::new(),
             ime_enabled: false,
             search: None,
+            popover_open: false,
             spell: match crate::spell::SpellChecker::new(crate::spell::active_variant()) {
                 Ok(sc) => Some(sc),
                 Err(e) => {
@@ -2746,7 +2758,7 @@ mod tests {
             .collect();
         assert_eq!(
             toggle_rows.len(),
-            14,
+            15,
             "the toggle roster changed size — update this sweep deliberately"
         );
 

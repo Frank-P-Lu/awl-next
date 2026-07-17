@@ -89,6 +89,15 @@ pub struct Config {
     /// CLI flag). OFF reproduces today's always-visible markup byte-identically
     /// (no conceal, no inline-code pill, no fenced-block panel — see `markdown/`).
     pub wysiwyg: Option<bool>,
+    /// `popover` — the FORMAT POPOVER on/off: a mouse selection (drag-release /
+    /// double-click word-select) in a markdown buffer floats a small format
+    /// toolbar (B · I · == · ` · ~~ · H · Link) over the selection; `None` = the
+    /// built-in default (ON, like wysiwyg — no CLI flag). OFF is a TOTAL no-op: no
+    /// gesture ever summons it (byte-identical to a build without the feature).
+    /// Applied at launch to the `crate::popover::POPOVER_ON` process-global
+    /// (`apply_sticky_globals`) and flipped live by the settings menu. Lenient
+    /// parse (a non-bool value is ignored → default), like every other sticky bool.
+    pub popover: Option<bool>,
     /// `inline_images` — render a markdown `![alt](path.png)` reference as the
     /// decoded IMAGE in a tall fit-to-column row (its source concealing off the
     /// caret's line), rather than plain source text; `None` = the built-in
@@ -236,6 +245,7 @@ impl Config {
             autosave: None,
             project_root: None,
             wysiwyg: None,
+            popover: None,
             inline_images: None,
             code_ligatures: None,
             cjk_priority: None,
@@ -419,6 +429,7 @@ impl Config {
             autosave: None,
             project_root: None,
             wysiwyg: None,
+            popover: None,
             inline_images: None,
             code_ligatures: None,
             cjk_priority: None,
@@ -508,6 +519,9 @@ impl Config {
             cfg.autosave = Some(b);
         }
         // WYSIWYG has no CLI flag either (like writing_nits/spellcheck): default on.
+        if let Some(b) = table.get("popover").and_then(|v| v.as_bool()) {
+            cfg.popover = Some(b);
+        }
         if let Some(b) = table.get("wysiwyg").and_then(|v| v.as_bool()) {
             cfg.wysiwyg = Some(b);
         }

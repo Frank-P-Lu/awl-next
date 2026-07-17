@@ -379,6 +379,13 @@ impl App {
                 return;
             }
         }
+        // FORMAT POPOVER: it is a MOUSE affordance (reveal-on-select) — any real
+        // (non-modifier) key press dismisses it, so a keyboard selection / edit
+        // never leaves it hanging and can never SUMMON it (the mouse-only rule).
+        // Inert when already down. A popover BUTTON click never routes through here
+        // (it fires its Action directly via `App::apply`), so the popover stays open
+        // across its own applies.
+        self.popover_open = false;
         // WEB/LINUX MENU BAR: a real (non-modifier) key press dismisses an open
         // dropdown — the awl bar's dropdown is mouse-driven (no keyboard nav in v1), so
         // any key closes it (and is otherwise processed normally, exactly like clicking

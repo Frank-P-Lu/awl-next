@@ -160,6 +160,7 @@ markers below, byte for byte).
 | Numbered list |  |  |
 | Task list | ⌘⇧L | Ctrl+Shift+L |
 | Heading |  |  |
+| Cycle heading |  |  |
 | Code block |  |  |
 | Bold | ⌘B | Ctrl+B |
 | Italic | ⌘I | Ctrl+I |

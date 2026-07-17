@@ -27,6 +27,7 @@ mod format; // the markdown formatting-command toggles (block + inline)
 mod link; // LINKS V2 — Cmd-K insert/edit-link (plan + commit, mirrors format.rs)
 mod motion; // the oracle-aware caret motions + page scroll + search open
 mod overlay_nav; // the modal overlay intercept + browse-path helpers + live preview
+pub(crate) mod popover; // the format-popover pure plan (reads format.rs's active-state)
 mod rebind; // the game-style rebind-menu key handling
 use edit::*;
 use flinch::*;
@@ -783,6 +784,9 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::ToggleNumberedList => apply_block_format(ctx, format::BlockKind::Numbered),
         Action::ToggleTaskList => apply_block_format(ctx, format::BlockKind::Task),
         Action::ToggleHeading => apply_block_format(ctx, format::BlockKind::Heading),
+        // The format popover's `H` button — a LEVEL CYCLE (off→H1→H2→H3→off), not the
+        // single `# ` toggle above; markdown-only, one undoable edit.
+        Action::HeadingCycle => format::apply_heading_cycle(ctx),
         Action::ToggleCodeBlock => apply_block_format(ctx, format::BlockKind::CodeBlock),
         Action::Bold => apply_inline_format(ctx, format::InlineKind::Bold),
         Action::Italic => apply_inline_format(ctx, format::InlineKind::Italic),

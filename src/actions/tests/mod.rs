@@ -535,6 +535,7 @@ pub(super) fn delete_flinch_fixture(
         | Action::ToggleNumberedList
         | Action::ToggleTaskList
         | Action::ToggleHeading
+        | Action::HeadingCycle
         | Action::ToggleCodeBlock
         | Action::Bold
         | Action::Italic
@@ -731,6 +732,7 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::ToggleNumberedList
             | Action::ToggleTaskList
             | Action::ToggleHeading
+            | Action::HeadingCycle
             | Action::ToggleCodeBlock
             | Action::Bold
             | Action::Italic
@@ -834,6 +836,7 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::ToggleNumberedList,
         Action::ToggleTaskList,
         Action::ToggleHeading,
+        Action::HeadingCycle,
         Action::ToggleCodeBlock,
         Action::Bold,
         Action::Italic,
@@ -970,6 +973,7 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::ToggleNumberedList
         | Action::ToggleTaskList
         | Action::ToggleHeading
+        | Action::HeadingCycle
         | Action::ToggleCodeBlock
         | Action::Bold
         | Action::Italic

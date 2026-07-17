@@ -229,7 +229,7 @@ fn every_settings_toggle_row_signals_its_own_setting_toggle_key() {
         .collect();
     assert_eq!(
         toggle_rows.len(),
-        14,
+        15,
         "the toggle roster changed size — update this sweep deliberately"
     );
     for row in toggle_rows {
