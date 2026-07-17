@@ -426,7 +426,7 @@ impl TextPipeline {
         // hit-test does, so the mark can never disagree with where a label is clicked.
         let mut ghosts: Vec<[f32; 4]> = Vec::new();
         // The inactive ghost PILLS, shared by every chip skin that outlines its
-        // inactive labels (Hairline / BoldStroke / Tinted). Filled per skin in overlay.rs.
+        // inactive labels (Hairline only, of the four). Filled per skin in overlay.rs.
         let inactive_pills = || -> Vec<[f32; 4]> {
             let mut v = Vec::new();
             for (r, active) in &label_ranges {
@@ -454,32 +454,25 @@ impl TextPipeline {
                 // A single active BAND is a FILLED value pill hugging the label.
                 theme::FacetStyle::Band => Some(pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD)),
                 theme::FacetStyle::Chips(v) => match v {
-                    // (1) HAIRLINE (baseline), (2) BOLD-STROKE, (3) FILLED-ACTIVE,
-                    // (5) TINTED — all a single pill hugging the active label; the
+                    // HAIRLINE (baseline, ships Galah) + FILLED-ACTIVE (ships
+                    // Firetail) — both a single pill hugging the active label; the
                     // FILL / STROKE / colour per skin is set in `prepare_overlay`.
-                    theme::ChipVariant::Hairline
-                    | theme::ChipVariant::BoldStroke
-                    | theme::ChipVariant::FilledActive
-                    | theme::ChipVariant::Tinted => {
-                        // Ghost pills for the skins that outline inactive labels.
-                        if matches!(
-                            v,
-                            theme::ChipVariant::Hairline
-                                | theme::ChipVariant::BoldStroke
-                                | theme::ChipVariant::Tinted
-                        ) {
+                    theme::ChipVariant::Hairline | theme::ChipVariant::FilledActive => {
+                        // Ghost pills only for HAIRLINE (it outlines inactive labels;
+                        // FilledActive leaves them bare).
+                        if matches!(v, theme::ChipVariant::Hairline) {
                             ghosts = inactive_pills();
                         }
                         Some(pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD))
                     }
-                    // (4) UNDERLINE-CHIP — no box; a THICK SHORT bar hugging the label
-                    // width, sitting just under the baseline. No inactive marks.
+                    // UNDERLINE-CHIP (ships Magpie) — no box; a THICK SHORT bar hugging
+                    // the label width, sitting just under the baseline. No inactive marks.
                     theme::ChipVariant::Underline => {
                         let y = geom.text_top + baseline + UNDERLINE_BASELINE_DROP;
                         Some([geom.text_left + min_x, y, max_x - min_x, 3.5])
                     }
-                    // (6) BRACKET — no box; corner ticks around the active label,
-                    // routed through the (otherwise idle) ghost pipeline as fills.
+                    // BRACKET (ships Mangrove) — no box; corner ticks around the active
+                    // label, routed through the (otherwise idle) ghost pipeline as fills.
                     theme::ChipVariant::Bracket => {
                         ghosts = corner_ticks(min_x - CHIP_HPAD, max_x + CHIP_HPAD);
                         None

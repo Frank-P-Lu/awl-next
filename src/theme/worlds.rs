@@ -9,8 +9,8 @@ use super::cjk::{
 };
 use super::color::Srgb;
 use super::model::{
-    Backdrop, Background, CardAnchor, CaretBlockStyle, ChromeFace, DecorativeWash, Elevation,
-    FacetStyle, HighlightTexture, ImageReveal, LavaEdge, ListStyle, MotionJuice, PageFrame,
+    Backdrop, Background, CardAnchor, CaretBlockStyle, ChipVariant, ChromeFace, DecorativeWash,
+    Elevation, FacetStyle, HighlightTexture, ImageReveal, LavaEdge, ListStyle, MotionJuice, PageFrame,
     PlacardCorner, PlacardInk, RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags,
     TitleStyle, WashOverride,
 };
@@ -659,10 +659,11 @@ pub const MANGROVE: Theme = Theme {
         elevation: Elevation::Bordered,
         // FLIP ROUND (user FINAL PICKS 2026-07-17): a poster/statement world →
         // the Bars HUG-ALL HYBRID (label-hug plate + bare right-aligned chords,
-        // `BarExtent::HugLabel`) at the gate's MID radius (6), every row a bar;
-        // and CHIPS facets. The calm worlds keep Pane/Text.
+        // `BarExtent::HugLabel`) at the gate's MID radius (6), every row a bar.
+        // Facet chips = BRACKET (the terminal-register corner ticks — the
+        // technical/cool voice's own frame; user's confirmed chip map 2026-07-17).
         list_style: POSTER_BARS,
-        facet_style: FacetStyle::Text,
+        facet_style: FacetStyle::Chips(ChipVariant::Bracket),
         ..RenderCaps::DEFAULT
     },
 };
@@ -723,9 +724,12 @@ pub const GALAH: Theme = Theme {
         // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries
         // the card edge off the pale ground.
         elevation: Elevation::Bordered,
-        // FLIP ROUND (2026-07-17): poster world → the Bars hug-all hybrid + Chips.
+        // FLIP ROUND (2026-07-17): poster world → the Bars hug-all hybrid.
+        // Facet chips = HAIRLINE (the landed baseline: filled active pill +
+        // 1.5px ghost-stroke inactive pills — the soft dawn room's quiet frame;
+        // user's confirmed chip map 2026-07-17, "Galah wears hairline").
         list_style: POSTER_BARS,
-        facet_style: FacetStyle::Text,
+        facet_style: FacetStyle::Chips(ChipVariant::Hairline),
         ..RenderCaps::DEFAULT
     },
 };
@@ -789,9 +793,12 @@ pub const MAGPIE: Theme = Theme {
         // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries
         // the card edge off the pale ground.
         elevation: Elevation::Bordered,
-        // FLIP ROUND (2026-07-17): poster world → the Bars hug-all hybrid + Chips.
+        // FLIP ROUND (2026-07-17): poster world → the Bars hug-all hybrid.
+        // Facet chips = UNDERLINE (no box; a thick short bar hugs the active
+        // label — the newsprint-headline nav idiom, stark like the slab;
+        // user's confirmed chip map 2026-07-17).
         list_style: POSTER_BARS,
-        facet_style: FacetStyle::Text,
+        facet_style: FacetStyle::Chips(ChipVariant::Underline),
         ..RenderCaps::DEFAULT
     },
 };
@@ -1184,9 +1191,12 @@ pub const FIRETAIL: Theme = Theme {
         chrome_face: ChromeFace::Named("Archivo Black"),
         elevation: Elevation::Bordered,
         // FLIP ROUND (2026-07-17): the maximalist showcase world → the Bars
-        // hug-all HYBRID (label-hug plate + bare right-aligned chords) + Chips.
+        // hug-all HYBRID (label-hug plate + bare right-aligned chords).
+        // Facet chips = FILLED (the active label a SOLID value-step fill with
+        // INVERTED ink, inactive bare text — the loudest chip for the loud-end
+        // world; user's confirmed chip map 2026-07-17).
         list_style: POSTER_BARS,
-        facet_style: FacetStyle::Text,
+        facet_style: FacetStyle::Chips(ChipVariant::FilledActive),
         ..RenderCaps::DEFAULT
     },
 };

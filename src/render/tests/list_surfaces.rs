@@ -126,11 +126,12 @@ fn parse_facet_style_force_grammar() {
     let chips = |v| Some(theme::FacetStyle::Chips(v));
     assert_eq!(parse_facet_style_force("chips"), chips(theme::ChipVariant::Hairline));
     assert_eq!(parse_facet_style_force("CHIPS"), chips(theme::ChipVariant::Hairline));
-    assert_eq!(parse_facet_style_force("chips:bold"), chips(theme::ChipVariant::BoldStroke));
     assert_eq!(parse_facet_style_force("chips:filled"), chips(theme::ChipVariant::FilledActive));
     assert_eq!(parse_facet_style_force("chips:underline"), chips(theme::ChipVariant::Underline));
-    assert_eq!(parse_facet_style_force("chips:tinted"), chips(theme::ChipVariant::Tinted));
     assert_eq!(parse_facet_style_force("chips:bracket"), chips(theme::ChipVariant::Bracket));
+    // The DROPPED variants (user's confirmed map) no longer parse — they fall to None.
+    assert_eq!(parse_facet_style_force("chips:bold"), None);
+    assert_eq!(parse_facet_style_force("chips:tinted"), None);
     // An unrelated typo — or an unknown chip suffix — falls back to None.
     assert_eq!(parse_facet_style_force("pill"), None);
     assert_eq!(parse_facet_style_force("chips:sparkle"), None);

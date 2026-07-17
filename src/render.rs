@@ -2387,10 +2387,11 @@ pub(crate) fn effective_list_style() -> theme::ListStyle {
 /// → `None` (the world's own `render_caps.facet_style`); a SET-but-unrecognized
 /// value is reported to stderr by [`read_forced_knob`] before it falls back.
 ///
-/// CHIP-VARIATIONS PROBE (2026-07-17) — the `chips` word now takes an OPTIONAL
-/// `:<variant>` suffix selecting one of the six [`theme::ChipVariant`] treatments;
-/// bare `chips` == `chips:hairline` (the landed baseline). An unknown suffix →
-/// `None` (loud fallback via [`read_forced_knob`]).
+/// CHIP-VARIATIONS PROBE → CONFIRMED MAP (2026-07-17) — the `chips` word takes an
+/// OPTIONAL `:<variant>` suffix selecting one of the four surviving
+/// [`theme::ChipVariant`] treatments; bare `chips` == `chips:hairline` (the landed
+/// baseline). An unknown suffix → `None` (loud fallback via [`read_forced_knob`]).
+/// `tinted`/`bold` were DROPPED with their variants (user's confirmed map).
 fn parse_facet_style_force(s: &str) -> Option<theme::FacetStyle> {
     let low = s.trim().to_ascii_lowercase();
     match low.as_str() {
@@ -2402,10 +2403,8 @@ fn parse_facet_style_force(s: &str) -> Option<theme::FacetStyle> {
     let variant = low.strip_prefix("chips:")?;
     let v = match variant {
         "hairline" => theme::ChipVariant::Hairline,
-        "bold" | "boldstroke" => theme::ChipVariant::BoldStroke,
         "filled" | "filledactive" => theme::ChipVariant::FilledActive,
         "underline" => theme::ChipVariant::Underline,
-        "tinted" | "tint" => theme::ChipVariant::Tinted,
         "bracket" => theme::ChipVariant::Bracket,
         _ => return None,
     };

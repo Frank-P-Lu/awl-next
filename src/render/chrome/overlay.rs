@@ -1580,9 +1580,9 @@ impl TextPipeline {
                 self.overlay_lens_underline.set_corner(FACET_CHIP_RADIUS);
                 self.overlay_lens_underline.set_stroke(0.0);
             }
-            // CHIP-VARIATIONS PROBE — the six chip TREATMENTS drive the two facet
-            // rect pipelines here (geometry is recorded in `overlay_shape_theme`;
-            // only the FILL / STROKE / colour differ). See [`theme::ChipVariant`].
+            // The FOUR chip TREATMENTS drive the two facet rect pipelines here
+            // (geometry is recorded in `overlay_shape_theme`; only the FILL /
+            // STROKE / colour differ). See [`theme::ChipVariant`].
             theme::FacetStyle::Chips(v) => {
                 use theme::ChipVariant as V;
                 let content = theme::base_content();
@@ -1591,18 +1591,11 @@ impl TextPipeline {
                 // The ACTIVE pill pipeline: (fill rgba, corner, stroke).
                 let (a_fill, a_corner, a_stroke): ([u8; 4], f32, f32) = match v {
                     V::Hairline => (band.rgba_bytes(), FACET_CHIP_RADIUS, 0.0),
-                    V::BoldStroke => (content.rgba_bytes(), FACET_CHIP_RADIUS, 2.0),
                     // Solid value-step fill; the active label already inverted to the
                     // card ground up in the shaper so it reads on the fill.
                     V::FilledActive => (content.rgba_bytes(), FACET_CHIP_RADIUS, 0.0),
                     // A thick short bar; small corner so it reads as a bar, not a pill.
                     V::Underline => (content.rgba_bytes(), 1.75, 0.0),
-                    // The world's selection hue, one value-step quieter toward the ground.
-                    V::Tinted => (
-                        theme::selection().lerp(theme::base_300(), 0.28).rgba_bytes(),
-                        FACET_CHIP_RADIUS,
-                        0.0,
-                    ),
                     // No active pill under Bracket (the ticks ride the ghost pipeline).
                     V::Bracket => (content.rgba_bytes(), 0.0, 0.0),
                 };
@@ -1613,8 +1606,7 @@ impl TextPipeline {
                 // fills (Bracket's corner ticks); a positive stroke outlines (the
                 // inactive ghost pills). Empty `ghosts` means these are unused.
                 let (g_color, g_corner, g_stroke): ([u8; 4], f32, f32) = match v {
-                    V::Hairline | V::Tinted => (muted.rgba_bytes(), FACET_CHIP_RADIUS, stroke),
-                    V::BoldStroke => (muted.rgba_bytes(), FACET_CHIP_RADIUS, 2.0),
+                    V::Hairline => (muted.rgba_bytes(), FACET_CHIP_RADIUS, stroke),
                     V::Bracket => (content.rgba_bytes(), 0.0, 0.0),
                     // FilledActive / Underline draw no inactive marks; keep sane defaults.
                     V::FilledActive | V::Underline => {
