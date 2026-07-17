@@ -46,6 +46,11 @@ Spec grammar — space-separated emacs chords:
 - Named keys: `Left Right Up Down Home End Enter Tab Backspace Delete Space Esc`.
 - Bare/shifted printable chars self-insert (`a`, `Z`, `<`, `>`).
 - `C-x` two-chord prefixes compose: `"C-x C-s"` → save.
+- `S-` on a motion chord is select-intent, exactly like a live held Shift:
+  `--keys "S-Right S-Right"` leaves a two-char selection (sidecar `selection`),
+  and the next unshifted motion collapses it. `C-Space` still sets the sticky
+  emacs mark. Shift-PageDown/PageUp deliberately do not extend (documented
+  non-movers), and `M-<`/`M->`'s Shift stays incidental (pure motion).
 
 Because replay drives the same keymap + `apply_core` seam as live editing, a
 capture exercises the real edit logic — not a parallel mock. The visual-line

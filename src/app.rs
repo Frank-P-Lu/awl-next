@@ -2198,8 +2198,12 @@ fn hud_mods_broken(summon: ModifiersState, now: ModifiersState) -> bool {
 /// `>` glyph, so that Shift is INCIDENTAL — Emacs treats them as pure motion
 /// (you select via the mark, `C-Space`), so it must NOT extend the selection.
 /// Every other action keeps Shift's normal select-extend meaning. Pure, so it's
-/// unit-testable without a window/event loop.
-fn motion_honors_shift_select(action: &Action) -> bool {
+/// unit-testable without a window/event loop. THE ONE OWNER of the rule: both
+/// the live key dispatch (`app/input/keys.rs`) and the headless `--keys` replay
+/// (`main/run.rs::ReplaySession::apply_chord`) derive their `apply_core` shift
+/// flag through this fn, so an `S-` chord in a spec signals select-intent
+/// exactly as a live held Shift does — never a parallel copy of the rule.
+pub(crate) fn motion_honors_shift_select(action: &Action) -> bool {
     !matches!(action, Action::BufferStart | Action::BufferEnd)
 }
 

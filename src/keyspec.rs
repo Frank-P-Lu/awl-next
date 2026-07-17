@@ -729,7 +729,10 @@ mod tests {
         assert_eq!(chords[2].key, Key::Named(NamedKey::Space));
         assert_eq!(chords[5].key, Key::Named(NamedKey::Enter));
         assert_eq!(chords[6].key, Key::Named(NamedKey::Tab));
-        // No modifiers on any typed char (replay is unshifted by design).
+        // No modifiers on any typed char — the char token itself carries its
+        // case ('H' self-inserts 'H'), so text chords never need `S-`. (Motion
+        // chords DO honor an explicit `S-` as select-intent; see
+        // `main/run.rs::ReplaySession::apply_chord`.)
         assert!(chords.iter().all(|c| c.mods.state().is_empty()));
         // And the chars resolve through the REAL keymap to self-inserts.
         let mut km = KeymapState::new_with_convention(crate::convention::Convention::Mac);
