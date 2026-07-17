@@ -239,7 +239,10 @@ pub enum Action {
     /// plus the current streak + today's words. A calm `apply_core`-routed card,
     /// mirroring About/Lifetime: stays open until dismissed by ANY key
     /// (`apply_core`'s top-of-function intercept while `streaks::streaks_open()`)
-    /// or mouse click. Render-only (no buffer change). See `streaks.rs`.
+    /// or mouse click — EXCEPT ←/→, which flip the card between its per-day
+    /// heatmap and cumulative running-total pages (`apply_core`'s streaks-view
+    /// intercept; every summon opens on the heatmap). Render-only (no buffer
+    /// change). See `streaks.rs`.
     WritingStreaks,
     /// Palette "Line endings…": TOGGLE the active buffer's line-ending
     /// discipline (`LF`↔`CRLF`, [`crate::buffer::Eol`]) — the rope is byte-identical
