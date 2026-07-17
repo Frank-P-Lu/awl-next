@@ -77,6 +77,22 @@ fn parse_list_style_force_grammar() {
             coverage: theme::BarCoverage::SelectedOnly,
         })
     );
+    // FLIP-ROUND HYBRID — the `huglabel`/`hybrid` extent keyword (label-hug plate
+    // + bare right-aligned chord). Both spellings parse; the rest of the axes keep
+    // their defaults.
+    for word in ["huglabel", "hybrid"] {
+        assert_eq!(
+            parse_list_style_force(&format!("bars:{word}")),
+            Some(theme::ListStyle::Bars {
+                radius: 6.0,
+                gap: 10.0,
+                grow_px: 24.0,
+                extent: theme::BarExtent::HugLabel,
+                coverage: theme::BarCoverage::All,
+            }),
+            "bars:{word} → the HugLabel hybrid extent"
+        );
+    }
     // Keyword order is free; `all`/`full` here are the defaults, so this is the
     // shipped-v5 look regardless of order. (The V7 taste-gate dropped the
     // outline-fill axis — `outline`/`filled` are no longer recognized keywords.)
@@ -1144,6 +1160,97 @@ fn hug_shortcut_rows_hug_inline_and_leave_room() {
     pixeldiff::assert_perceptibly_different(
         &full, &hug, w as i64, h as i64, region, pixeldiff::DistinguishFloor::DEFAULT,
         "hug shortcut rows leave room (not pinned full-width)",
+    );
+
+    set_list_style_test_override(None);
+    set_card_anchor_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// FLIP-ROUND HYBRID (`BarExtent::HugLabel`) — the user's FINAL PICK: each bar's
+/// PLATE hugs the row's LABEL ONLY, and the SHORTCUT chord renders as bare dim
+/// text in the RIGHT-ALIGNED column, OUTSIDE any plate. Proven three ways over a
+/// shortcut-bearing flat picker:
+///   1. The bare right column IS drawn (`overlay_right_shown == true`) — unlike
+///      `HugText`, which folds the chord INLINE and drops the column
+///      (`overlay_right_shown == false`). So the hybrid keeps the chord separate.
+///   2. The plate hugs the LABEL ALONE: a row's hug-width source
+///      (`overlay_row_primary_px`) under `HugLabel` is STRICTLY NARROWER than
+///      under `HugText` (whose name line additionally carries `gap + shortcut`).
+///      The plate therefore ends at the label, never swallowing the chord.
+///   3. The plate leaves ROOM on the right where `FullWidth` fills it — the
+///      chord floats in bare room past the plate (a perceptible pixel diff).
+#[test]
+fn huglabel_hybrid_hugs_label_and_keeps_chord_in_the_right_column() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping huglabel_hybrid_hugs_label: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+
+    // A FLAT picker with a right column: short names + a short chord each.
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = (0..6).map(|i| format!("Item {i}")).collect();
+    v.overlay_bindings = (0..6).map(|_| "C-x".to_string()).collect();
+    v.overlay_selected = 2;
+
+    let frame = |p: &mut TextPipeline, ext: theme::BarExtent| {
+        set_list_style_test_override(Some(theme::ListStyle::Bars {
+            radius: 6.0,
+            gap: 10.0,
+            grow_px: 0.0, // isolate the extent difference
+            extent: ext,
+            coverage: theme::BarCoverage::All,
+        }));
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        pixeldiff::render_frame(p, &device, &queue, w, h)
+    };
+
+    // --- HugText frame: chord inline, no right column, plate = label + chord ---
+    let _hugtext = frame(&mut p, theme::BarExtent::HugText);
+    assert!(
+        !p.overlay_right_shown,
+        "HugText folds the chord INLINE — no separate right column"
+    );
+    let geom = p.overlay_geometry(w);
+    let primary_hugtext = *p
+        .overlay_row_primary_px(&geom)
+        .get(&0)
+        .expect("row 0 primary width (HugText)");
+
+    // --- HugLabel frame: chord in the bare right column, plate = label alone ----
+    let huglabel = frame(&mut p, theme::BarExtent::HugLabel);
+    assert!(
+        p.overlay_right_shown,
+        "HugLabel keeps the chord in the BARE right-aligned column (the hybrid)"
+    );
+    let geom = p.overlay_geometry(w);
+    let primary_huglabel = *p
+        .overlay_row_primary_px(&geom)
+        .get(&0)
+        .expect("row 0 primary width (HugLabel)");
+
+    // (2) The hybrid plate hugs the LABEL ALONE — strictly narrower than HugText's
+    // name line (which additionally carries the inline `gap + shortcut`).
+    assert!(
+        primary_huglabel + 4.0 < primary_hugtext,
+        "HugLabel's plate hugs the label alone (primary {primary_huglabel:.1}px) — \
+         narrower than HugText's label+shortcut line ({primary_hugtext:.1}px)"
+    );
+
+    // (3) The plate leaves ROOM on the right where FullWidth fills it — the chord
+    // floats past the plate. Compare the right ~35% of the candidate area.
+    let full = frame(&mut p, theme::BarExtent::FullWidth);
+    let rect = p.overlay_card_rect().expect("overlay card rect");
+    let (card_x, card_y, cw, ch) = (rect[0], rect[1], rect[2], rect[3]);
+    let region = pixeldiff::Region::new(card_x + cw * 0.6, card_y, cw * 0.35, ch);
+    pixeldiff::assert_perceptibly_different(
+        &full, &huglabel, w as i64, h as i64, region, pixeldiff::DistinguishFloor::DEFAULT,
+        "HugLabel leaves room on the right (plate hugs the label, chord floats past it)",
     );
 
     set_list_style_test_override(None);

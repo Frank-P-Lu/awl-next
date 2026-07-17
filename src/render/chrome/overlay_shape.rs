@@ -12,6 +12,40 @@ use super::*;
 /// margin every other element does.
 const PLACARD_INSET: f32 = 12.0;
 
+/// PROPORTIONAL PLACARD SIZING (flip-round spec, user "yeah sounds good") — the
+/// reference canvas SHORT side the wordmark fraction is calibrated against (the
+/// capture's 1200×800 canvas → 800). The wordmark HEIGHT is
+/// `clamp(floor, scale · PLACARD_HEIGHT_PER_SCALE · window_short_side, ceiling)`
+/// — WINDOW-scaled (chrome is Frame, like the page column), never ZOOM-scaled
+/// (the old `metrics.font_size · TITLE · scale` rode zoom). At this reference
+/// short side the fraction reproduces exactly today's `FONT_SIZE · TITLE · scale`
+/// look, so every default-zoom capture (window 1200×800, zoom = dpi = 1) is
+/// byte-identical to before the round.
+const PLACARD_REFERENCE_SHORT_SIDE: f32 = crate::capture::CANVAS_HEIGHT as f32;
+
+/// PROPORTIONAL PLACARD SIZING — the wordmark height as a fraction of the window
+/// short side PER UNIT of a world's `scale` dial, chosen so that at the reference
+/// short side ([`PLACARD_REFERENCE_SHORT_SIDE`]) the height equals the old
+/// `FONT_SIZE · TITLE · scale`. Derivation: `FONT_SIZE · TITLE / REFERENCE` =
+/// `24 · 1.8 / 800` = `0.054`. So Firetail (`scale` 4.5) reproduces at `24.3%` of
+/// the short side, the `scale` 3.0 posters at `16.2%` — the board's "~20%" band.
+const PLACARD_HEIGHT_PER_SCALE: f32 =
+    crate::render::FONT_SIZE * crate::markdown::type_scale::TITLE / PLACARD_REFERENCE_SHORT_SIDE;
+
+/// PROPORTIONAL PLACARD SIZING — the clamp FLOOR (px): a wordmark never shapes
+/// smaller than this however small the window (below the card's narrow-fallback
+/// point it FOLDS to InlinePrefix entirely — see `OverlayGeom::card_narrow` — so
+/// this floor only bites in the mid band above the fold). Comfortably below every
+/// shipped world's reference height (`scale` 3.0 → 129.6, 4.5 → 194.4), so the
+/// clamp is inert at the reference canvas.
+const PLACARD_MIN_HEIGHT: f32 = 56.0;
+
+/// PROPORTIONAL PLACARD SIZING — the clamp CEILING (px): a wordmark never shapes
+/// larger than this however large the window (a 4K/5K short side would otherwise
+/// drive a `scale` 4.5 poster past ~500 px). Comfortably above every shipped
+/// world's reference height, so the clamp is inert at the reference canvas.
+const PLACARD_MAX_HEIGHT: f32 = 512.0;
+
 /// The glyph-coverage cut for a STIPPLE placard ([`theme::PlacardInk::Stipple`]):
 /// a rasterized wordmark pixel joins the stipple's candidate set iff its swash
 /// coverage clears this (≥ 50%). A HARD threshold, deliberately — the stipple's
@@ -155,10 +189,32 @@ impl TextPipeline {
             theme::TitleStyle::Placard { corner, scale, ink } => (corner, scale, ink),
             theme::TitleStyle::InlinePrefix => return None,
         };
+        // item 4 (NARROW FOLD): below the card's narrow-fallback regime the poster
+        // FOLDS to `InlinePrefix` — no partial/clipped wordmark at any width. The
+        // ONE owner (`OverlayGeom::card_narrow`, computed via
+        // `overlay_card_fill_regime` from the SAME geometry the card width fallback
+        // reads) is shared with the inline-prefix reader (`overlay_title_prefix`),
+        // so exactly one of the poster wordmark / inline `title › ` prefix ever
+        // fires. Zero placard pixels in the narrowest cells (the width-sweep law).
+        if geom.card_narrow {
+            return None;
+        }
         // Resolve an `Auto` corner COMPLEMENTARY to the card anchor (the ONE pure
         // owner) so the wordmark lands opposite the command surface, never under it.
         let corner = crate::render::derived_placard_corner(corner, crate::render::effective_card_anchor());
-        let font_size = self.metrics.font_size * crate::markdown::type_scale::TITLE * scale;
+        // PROPORTIONAL PLACARD SIZING (flip-round spec): the wordmark tracks the
+        // WINDOW short side (chrome is Frame — the page-column philosophy), NEVER
+        // the zoom-scaled `metrics.font_size` the old formula rode. `scale` stays
+        // the per-world LOUDNESS dial; the fraction is calibrated
+        // ([`PLACARD_HEIGHT_PER_SCALE`]) so that at the 1200×800 reference canvas
+        // (zoom = dpi = 1) this equals the old `metrics.font_size · TITLE · scale`
+        // exactly → every default capture is byte-identical. Clamped floor..ceiling
+        // so a tiny window never shrinks it to nothing (it FOLDS first, above) and a
+        // 4K/5K window never blows it up. `line_height = font_size · 1.1` below, so
+        // this drives the whole box.
+        let short_side = self.window_w.min(self.window_h);
+        let font_size = (scale * PLACARD_HEIGHT_PER_SCALE * short_side)
+            .clamp(PLACARD_MIN_HEIGHT, PLACARD_MAX_HEIGHT);
         // A generous plain leading — no body text ever sits inside a
         // single-line wordmark box to match against.
         let mut line_height = font_size * 1.1;
@@ -375,13 +431,15 @@ impl TextPipeline {
         } else {
             usize::MAX
         };
-        // V7 TASTE-GATE — TEXT-HUGGING bars with a right column: the shortcut rides
-        // its own name line (trailing the label, `INLINE_SHORTCUT_GAP` between) so
-        // EVERY row's bar hugs its own content; the ragged right derives from
-        // content length alone. The names shape at FULL budget (the pane is dropped
-        // under bars — no right column to reserve against), and the separate
-        // right-aligned column is NOT drawn (`overlay_right_shown` stays false).
-        if has_right && super::hug_bars() {
+        // V7 TASTE-GATE — TEXT-HUGGING (`HugText`) bars with a right column: the
+        // shortcut rides its own name line (trailing the label, `INLINE_SHORTCUT_GAP`
+        // between) so EVERY row's bar hugs its own content; the ragged right derives
+        // from content length alone. The names shape at FULL budget (the pane is
+        // dropped under bars — no right column to reserve against), and the separate
+        // right-aligned column is NOT drawn (`overlay_right_shown` stays false). The
+        // `HugLabel` HYBRID does NOT take this path — its chord stays in the
+        // right-aligned column below, so the plate hugs the label ALONE.
+        if has_right && super::bars_inline_shortcut() {
             let full = rowlayout::full_budget(total_chars);
             let rows: Vec<String> = (0..visible)
                 .map(|row| rowlayout::fit_primary(&self.overlay_items[top_idx + row], full))
@@ -484,12 +542,13 @@ impl TextPipeline {
             &self.overlay_git
         };
         let has_right = !right_labels.is_empty();
-        // V7 TASTE-GATE — under TEXT-HUGGING bars a right column rides INLINE on
-        // each ITEM row (trailing the label, `INLINE_SHORTCUT_GAP` between) so the
-        // bar hugs the whole content; the separate right-aligned column is dropped.
+        // V7 TASTE-GATE — under `HugText` bars a right column rides INLINE on each
+        // ITEM row (trailing the label, `INLINE_SHORTCUT_GAP` between) so the bar
+        // hugs the whole content; the separate right-aligned column is dropped.
         // One trailing string per PLAN line (a header line gets none). Empty on a
-        // non-hug frame or a picker with no right column → byte-identical.
-        let hug_inline = has_right && super::hug_bars();
+        // non-`HugText` frame (incl. the `HugLabel` hybrid, whose chord stays in
+        // the right column) or a picker with no right column → byte-identical.
+        let hug_inline = has_right && super::bars_inline_shortcut();
         // Both the INLINE trailing (hug) and the right-aligned bind lines (non-hug)
         // are materialized into OWNED `Vec<String>`s up front, so the `right_labels`
         // borrow of `self` ends before the `&mut self` shaper calls below.
@@ -544,16 +603,22 @@ impl TextPipeline {
     /// never diverge (`same behavior ⇒ same code`). Empty when:
     /// - this picker draws no title (`overlay_title` empty — Rename/InsertLink
     ///   orient via their own modal prompt), OR
-    /// - the active [`theme::TitleStyle`] is a `Placard`: the corner wordmark
-    ///   already announces the picker, so the inline prefix must NOT ALSO fire
-    ///   (both firing was the reported double-title bug). `InlinePrefix` (the
-    ///   default on every world) keeps the prefix — byte-identical to before.
-    pub(super) fn overlay_title_prefix(&self) -> String {
-        let placard = matches!(
+    /// - the active [`theme::TitleStyle`] is a `Placard` AND the placard is NOT
+    ///   folded (the corner wordmark already announces the picker, so the inline
+    ///   prefix must NOT ALSO fire — both firing was the reported double-title
+    ///   bug). `InlinePrefix` (the default on every world) keeps the prefix —
+    ///   byte-identical to before.
+    ///
+    /// item 4 (NARROW FOLD) — when the card is in its narrow-fallback regime
+    /// (`geom.card_narrow`, the SAME owner the placard shaper folds on), a
+    /// `Placard` world FOLDS to `InlinePrefix`: the wordmark is suppressed there,
+    /// so the prefix RETURNS here. Exactly one of the two fires at any width.
+    pub(super) fn overlay_title_prefix(&self, geom: &OverlayGeom) -> String {
+        let placard_drawn = matches!(
             crate::render::effective_title_style(),
             theme::TitleStyle::Placard { .. }
-        );
-        if self.overlay_title.is_empty() || placard {
+        ) && !geom.card_narrow;
+        if self.overlay_title.is_empty() || placard_drawn {
             String::new()
         } else {
             format!("{} › ", self.overlay_title)
@@ -641,8 +706,9 @@ impl TextPipeline {
         // muted, before the `› ` sigil — "<title> › query", so routing from the
         // palette into another picker always says where you landed. SUPPRESSED under
         // a `Placard` title style (the corner wordmark already names the picker) —
-        // `overlay_title_prefix` owns that ONE rule for both inline sites.
-        let title_prefix = self.overlay_title_prefix();
+        // `overlay_title_prefix` owns that ONE rule for both inline sites, and the
+        // NARROW FOLD (`geom.card_narrow`) brings the prefix back when the poster folds.
+        let title_prefix = self.overlay_title_prefix(geom);
         let sigil = "› ";
         // PALETTE-COMPOSITION round's HEADER GAP: inflate the query line's own
         // height by `header_gap`, so the extra negative space falls between the

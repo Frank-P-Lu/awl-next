@@ -659,6 +659,13 @@ fn light_worlds_carry_the_summoned_card_border() {
 
     // OUTCOME: the border actually draws on a light world, and a Flat dark world
     // keeps its border parked (byte-identical to before this round).
+    //
+    // FLIP ROUND (2026-07-17): the OUTCOME worlds must be PANE light worlds — a
+    // world that ships `ListStyle::Bars` (Galah / Magpie / Mangrove / Firetail
+    // now do) DROPS the pane entirely (bars float on the room), so its
+    // `panel_border` is legitimately parked even though its `elevation` DATA
+    // stays `Bordered` (inert under Bars). Saltpan + Bilby are calm PANE light
+    // worlds, so their card border still draws — the property under test.
     let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
         eprintln!("skipping light_worlds_carry_the_summoned_card_border: no wgpu adapter");
         return;
@@ -668,7 +675,7 @@ fn light_worlds_carry_the_summoned_card_border() {
     v.overlay_active = true;
     v.overlay_items = vec!["Save".into(), "Undo".into(), "Redo".into()];
     v.overlay_selected = 0;
-    for (world, want_border) in [("Saltpan", true), ("Galah", true), ("Tawny", false)] {
+    for (world, want_border) in [("Saltpan", true), ("Bilby", true), ("Tawny", false)] {
         theme::set_active_by_name(world).unwrap();
         p.sync_theme();
         p.set_view(&v);

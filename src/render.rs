@@ -2239,7 +2239,8 @@ pub(crate) const BAR_OUTLINE_STROKE_PX: f32 = 1.5;
 /// - any `:`-separated token after `bars` is either a NON-NEGATIVE FLOAT
 ///   (positional: the first fills `radius`, the second `gap`, the third `grow`)
 ///   or an AXIS KEYWORD flipping one of the three v6 axes:
-///     - extent:   `full` | `hug`      ([`theme::BarExtent`])
+///     - extent:   `full` | `hug` | `huglabel`|`hybrid`  ([`theme::BarExtent`] —
+///       `huglabel`/`hybrid` is the FLIP-ROUND label-hug + bare right-chord arm)
 ///     - coverage: `all`  | `selected` ([`theme::BarCoverage`])
 ///   So `"bars:0:12:0:hug:selected"`, `"bars:hug"`, `"bars:selected"`
 ///   all parse; floats and keywords may appear in any order. More than 3 floats,
@@ -2267,6 +2268,7 @@ fn parse_list_style_force(s: &str) -> Option<theme::ListStyle> {
             match tok {
                 "full" => extent = theme::BarExtent::FullWidth,
                 "hug" => extent = theme::BarExtent::HugText,
+                "huglabel" | "hybrid" => extent = theme::BarExtent::HugLabel,
                 "all" => coverage = theme::BarCoverage::All,
                 "selected" => coverage = theme::BarCoverage::SelectedOnly,
                 _ => {
@@ -2343,7 +2345,7 @@ fn awl_list_style_force() -> &'static Option<theme::ListStyle> {
     ONCE.get_or_init(|| {
         read_forced_knob(
             "AWL_OVERLAY_LIST_FORCE",
-            "pane | bars | bars:<radius>:<gap>:<grow>[:hug|full][:selected|all]",
+            "pane | bars | bars:<radius>:<gap>:<grow>[:hug|huglabel|full][:selected|all]",
             parse_list_style_force,
         )
     })
