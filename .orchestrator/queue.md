@@ -12,6 +12,8 @@ Verified via `gh repo view`: visibility PUBLIC, Actions enabled. Standard-runner
 
 ## 🔒 CLAIMS — 2026-07-16 OVERNIGHT BATCH (claude; five parallel worktree streams, one merge train; board writes orchestrator-only per README)
 
+- 🚂 **THE LAND-EVERYTHING TRAIN (2026-07-17)** — ✅ ALL SIX LANDED @ 43e63cb (user "land everything please"; pushed 8ab10d0..43e63cb; CI 29547862722 all green; suite 2282/0): suite trio 8a4071b · zoom-peek eb10e51 · find-panel 8e7a1d7 · C2 dd760de · bars machinery 6fd109c (C2×bars strip-shaper conflicts reconciled preserving both owners; one test premise pinned to TopLeft override — not a bug) · PDF 0c4e537 (Codex 38cae4b + truth-labeling 58f61bc; fix-forward: PDF tests gated for the wasm compile gate the review missed). FOLLOW-UPS QUEUED: per-document PDF glyph subsetting (S/M, Codex-suited); PDF styling-outcome stream assertions; blockquote rule across page breaks; has_glyph perf nit. NEXT: flip round (user picks) → chrome one-owner sweep → doc-sync.
+
 - ⌨️ **DATA-DRIVEN KEYMAP DISPATCH (Codex build)** — ✅ LANDED @ 99e9733 (user "yeah land the keymap branch!", 2026-07-16; pushed, CI 29474678692 green; suite 2240/0). Codex patch byte-identical + 3 review fixes (truthful TOML header, re-scoped tautology docs, frozen chord snapshot — mutation-proven). Review: reports/2026-07-16-codex-keymap-review.md.
 
 _Fast-follow d4ae64d (Wagtail InverseFill selected-row fix, f2cb656) landed + pushed ahead of the streams. Batch train landed 4/5 @ 9098be6, CI run 29440271295 fully green (linux job = canary-fix proof)._
