@@ -842,6 +842,12 @@ impl App {
         // (locked decision: save on file switch).
         self.flush_note();
         self.autosave_flush();
+        // WRITING STREAKS: sample the LEAVING buffer's word-delta BEFORE it is
+        // replaced below, so words written in it this session are recorded against
+        // the right document; the anchor is reset after the swap so the arriving
+        // buffer's existing words are never miscounted (native only; gated inside).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_flush();
         // If the flush we just ran raised the clobber-guard notice (the file we
         // are LEAVING changed on disk outside awl, so its unsaved edit could
         // not be safely autosaved), that notice must survive the switch below
@@ -920,6 +926,11 @@ impl App {
         // the cross-document coordinate jump as travel.
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_reset_caret_anchor();
+        // WRITING STREAKS: the buffer just swapped — drop the word-delta anchor so
+        // the arriving document's existing words re-anchor (never counted as
+        // freshly written) on its first flush.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_reset_baseline();
         // LIFETIME STATS: flush on the file-SWITCH trigger (the same door the
         // autosave flush above rides), so the just-recorded touch + any pending
         // keystroke/caret increments survive the switch (native only; gated).
@@ -1226,6 +1237,11 @@ impl App {
             return;
         }
         self.prev_file = self.file.take();
+        // WRITING STREAKS: sample the LEAVING buffer's word-delta before it is
+        // replaced by the fresh note (the anchor is reset below), so words written
+        // in it are recorded before the swap (native only; gated inside).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_flush();
         // PARK the buffer we are leaving (registered under its own identity if
         // it has one) exactly like `load_path`, so a later C-x b / reopen finds
         // it live rather than re-reading disk.
@@ -1245,6 +1261,10 @@ impl App {
         // anchor so its first caret sample re-anchors (see `load_path`).
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_reset_caret_anchor();
+        // WRITING STREAKS: a fresh note is a buffer swap — drop the word-delta
+        // anchor so the empty note re-anchors at 0 (see `load_path`).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_reset_baseline();
         self.update_title();
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {

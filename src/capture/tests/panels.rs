@@ -563,6 +563,73 @@ fn peek_card_absent_by_default_and_summoned_shows_the_starter_six() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// WRITING STREAKS CARD: absent from a default capture (`streaks.open=false`, a
+/// byte-identical frame between two runs), and when summoned (`--streaks` / setting
+/// the global) the sidecar reports `open=true` with the fixed synthetic
+/// `streaks::placeholder` figures (streak 12 / today 347 / 371 buckets spanning
+/// every level) — the year is LIVE-ONLY (no persisted store in a capture), so the
+/// summoned card is deterministic + byte-stable across two runs. Mirrors
+/// `lifetime_card_absent_by_default_and_summoned_shows_placeholders`.
+#[test]
+fn streaks_card_absent_by_default_and_summoned_shows_the_placeholder_year() {
+    if !adapter_available() {
+        eprintln!("skipping streaks_card_absent_by_default_and_summoned_shows_the_placeholder_year: no wgpu adapter");
+        return;
+    }
+    let _pg = crate::testlock::serial();
+    let dir = std::env::temp_dir().join(format!("awl_streaks_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let md = Buffer::from_str("hello\n");
+
+    // DEFAULT (card closed): the frame is BYTE-IDENTICAL across two runs (no live
+    // state reaches a capture), and the sidecar reports the card closed.
+    crate::streaks::set_open(false);
+    let off_a = dir.join("off_a.png");
+    let off_b = dir.join("off_b.png");
+    capture_with(&off_a, &md, &CaptureOpts::default()).expect("off capture a");
+    capture_with(&off_b, &md, &CaptureOpts::default()).expect("off capture b");
+    assert_eq!(
+        std::fs::read(&off_a).unwrap(),
+        std::fs::read(&off_b).unwrap(),
+        "a default (streaks-closed) capture is byte-identical across runs"
+    );
+    let off: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(off_a.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(off["streaks"]["open"], serde_json::json!(false), "default: Streaks card closed");
+
+    // SUMMONED: the settled card render is the fixed synthetic year — deterministic
+    // AND byte-stable across two runs (no live store).
+    crate::streaks::set_open(true);
+    let on_a = dir.join("on_a.png");
+    let on_b = dir.join("on_b.png");
+    capture_with(&on_a, &md, &CaptureOpts::default()).expect("on capture a");
+    capture_with(&on_b, &md, &CaptureOpts::default()).expect("on capture b");
+    assert_eq!(
+        std::fs::read(&on_a).unwrap(),
+        std::fs::read(&on_b).unwrap(),
+        "a summoned Streaks capture is deterministic + byte-identical across runs"
+    );
+    let on: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(on_a.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(on["streaks"]["open"], serde_json::json!(true), "summoned: Streaks card open");
+    // The synthetic placeholder figures (see `streaks::placeholder`).
+    assert_eq!(on["streaks"]["streak"], serde_json::json!(12));
+    assert_eq!(on["streaks"]["today_words"], serde_json::json!(347));
+    let cells = on["streaks"]["cells"].as_array().expect("cells array");
+    assert_eq!(cells.len(), crate::streaks::CELLS, "the full 53×7 grid");
+    for lvl in 0..crate::streaks::LEVELS as u64 {
+        assert!(
+            cells.iter().any(|c| c.as_u64() == Some(lvl)),
+            "the synthetic year lights intensity level {lvl}"
+        );
+    }
+
+    crate::streaks::set_open(false);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// CARET-STYLE PICKER: absent from a default capture (no overlay), and when the
 /// caret picker is left OPEN by a `--keys` replay the sidecar reflects it — mode
 /// "caret", the three style rows + descriptions, the selected style — and the

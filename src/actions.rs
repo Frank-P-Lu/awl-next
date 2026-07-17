@@ -737,6 +737,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             let _g = crate::testlock::serial();
             crate::lifetime::set_open(true);
         }
+        // OPEN the summoned Writing streaks card (the year-calendar heatmap). Stays
+        // open until this same function's top-of-function intercept consumes the
+        // next key (or the live App's mouse-press handler closes it on a click).
+        // Render-only (no buffer change). See `streaks.rs`.
+        Action::WritingStreaks => {
+            #[cfg(test)]
+            let _g = crate::testlock::serial();
+            crate::streaks::set_open(true);
+        }
         // Toggle the active buffer's line-ending discipline (LF <-> CRLF). The rope
         // is byte-identical (always pure `\n`); only the on-disk encoding a save
         // restores differs, so this is document-level METADATA, not an undoable

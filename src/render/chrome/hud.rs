@@ -21,6 +21,17 @@ impl TextPipeline {
         self.hud_stats = stats;
     }
 
+    /// WRITING STREAKS: push the live year-view (heatmap buckets + streak count +
+    /// today's words). The live App calls this every `sync_view`
+    /// (`App::streaks_sync_card`) from its persisted `streaks.toml`; the headless
+    /// capture never calls it, so the field stays `None` and the card renders the
+    /// fixed synthetic [`crate::streaks::placeholder`] — the determinism boundary
+    /// keeping a `--streaks` capture byte-stable (mirrors [`Self::set_hud_stats`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_streaks(&mut self, view: Option<crate::streaks::StreaksView>) {
+        self.streaks_view = view;
+    }
+
     /// NOTES VERBS round: push the SAVED stat's live state (dirty, or clean +
     /// elapsed seconds since the last successful write — manual save OR
     /// autosave, whichever landed most recently). The live App calls this every
@@ -138,6 +149,29 @@ impl TextPipeline {
         }
     }
 
+    /// The summoned WRITING STREAKS card's machine-readable state for the sidecar
+    /// (see [`StreaksReport`]). `open` mirrors the process-global; the view is the
+    /// pushed live year OR the fixed synthetic [`crate::streaks::placeholder`] in a
+    /// capture (no live store) — the SAME `streaks_effective_view` owner the pixels
+    /// use, so the sidecar can never claim a figure the card doesn't show.
+    pub fn streaks_report(&self) -> StreaksReport {
+        let view = self.streaks_effective_view();
+        StreaksReport {
+            open: crate::streaks::streaks_open(),
+            streak: view.streak,
+            today_words: view.today_words,
+            cells: view.cells.to_vec(),
+        }
+    }
+
+    /// The streaks view the card + sidecar actually render THIS frame: the pushed
+    /// live view, or the deterministic synthetic [`crate::streaks::placeholder`]
+    /// when none was pushed (a capture, which never runs the live App). ONE owner
+    /// shared by the pixels (`prepare_hud`) + the sidecar (`streaks_report`).
+    pub(in crate::render) fn streaks_effective_view(&self) -> crate::streaks::StreaksView {
+        self.streaks_view.clone().unwrap_or_else(crate::streaks::placeholder)
+    }
+
     /// The HOLD-⌘ SHORTCUT PEEK's machine-readable state for the sidecar (see
     /// [`PeekReport`]). `open` mirrors the process-global; `rows` is exactly what the
     /// card renders — the pushed personalized rows, or the curated starter six when
@@ -181,8 +215,20 @@ impl TextPipeline {
         let held = self.hud_showing();
         let about = crate::about::about_open();
         let lifetime = crate::lifetime::lifetime_open();
+        let streaks = crate::streaks::streaks_open();
         let peek = self.peek_showing();
-        let showing = held || about || lifetime || peek;
+        let showing = held || about || lifetime || streaks || peek;
+        // WRITING-STREAKS heatmap squares belong ONLY to the streaks card; park them
+        // (0 instances → byte-identical) for every other state, shown or not.
+        if !streaks {
+            self.streak_cells
+                .prepare_multicolor(device, queue, width, height, &[]);
+        } else {
+            // The streaks card has its own grid+text layout (not the shared stacked
+            // text column below); it uploads the card chrome, the heatmap squares,
+            // and the two stat lines itself.
+            return self.prepare_streaks_card(device, queue, width, height);
+        }
         // No scrim: while shown, the document recedes behind the shared FROSTED-BLUR
         // backdrop (the `render` blur branch), so the card draws only itself + its
         // content. The card rect (shadow -> raised border -> card) is uploaded once the
@@ -461,6 +507,153 @@ impl TextPipeline {
                 &mut self.swash_cache,
             )
             .map_err(|e| anyhow::anyhow!("glyphon hud prepare failed: {e:?}"))?;
+        Ok(())
+    }
+
+    /// Shape + upload the summoned WRITING STREAKS card: a year-calendar HEATMAP
+    /// (the contribution-graph shape — `WEEKS` columns × 7 day-rows) over two quiet
+    /// stat lines (current streak + words written today). Reuses the shared float-
+    /// card pipeline (`hud_shadow`/`hud_border`/`hud_card`) for the raised card, the
+    /// `streak_cells` pipeline for the per-square intensity tints
+    /// (`theme::heatmap_colors`, the one owner — NO amber, the caret's alone), and
+    /// the `hud_buffer`/`hud_renderer` for the stats text. The view is the pushed
+    /// live year OR the fixed synthetic [`crate::streaks::placeholder`] in a capture
+    /// (the SAME `streaks_effective_view` owner the sidecar reads), so a `--streaks`
+    /// capture is deterministic + byte-stable. Called ONLY from `prepare_hud` while
+    /// the card is open; every other state parks `streak_cells` empty there.
+    pub(in crate::render) fn prepare_streaks_card(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        use crate::streaks::{DAYS_PER_WEEK, LEVELS, WEEKS};
+        let view = self.streaks_effective_view();
+        let m = self.metrics;
+        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        let content = theme::base_content().to_glyphon();
+        let faint = theme::faint().to_glyphon();
+        let label = crate::markdown::type_scale::LABEL;
+        let body_metrics = GlyphMetrics::new(m.font_size, m.line_height);
+        let label_metrics = GlyphMetrics::new(m.font_size * label, m.line_height * label);
+
+        // ── Grid geometry: small soft squares on a regular pitch ──
+        let cell = (m.char_width * 0.85).max(4.0);
+        let gap = (cell * 0.30).max(1.0);
+        let step = cell + gap;
+        let grid_w = WEEKS as f32 * step - gap;
+        let grid_h = DAYS_PER_WEEK as f32 * step - gap;
+
+        // ── The two stat lines: a CAPTION (faint/LABEL) over its VALUE (content/BODY),
+        // the same ink×size spine the held HUD uses. NO amber. ──
+        let streak_val = if view.streak == 1 {
+            "1 day".to_string()
+        } else {
+            format!("{} days", crate::hud::group_thousands(view.streak))
+        };
+        let today_val = format!("{} words", crate::hud::group_thousands(view.today_words));
+        let owned: Vec<(String, u8)> = vec![
+            ("CURRENT STREAK\n".to_string(), 0),
+            (format!("{streak_val}\n\n"), 1),
+            ("WRITTEN TODAY\n".to_string(), 0),
+            (today_val, 1),
+        ];
+        let base = panel_attrs();
+        let spans: Vec<(&str, Attrs)> = owned
+            .iter()
+            .map(|(s, role)| {
+                let attrs = match role {
+                    0 => base.clone().color(faint).metrics(label_metrics),
+                    _ => base.clone().color(content).metrics(body_metrics),
+                };
+                (s.as_str(), attrs)
+            })
+            .collect();
+        self.hud_buffer
+            .set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+        let default_attrs = base.clone().color(content).metrics(body_metrics);
+        self.hud_buffer.set_rich_text(
+            &mut self.font_system,
+            spans,
+            &default_attrs,
+            Shaping::Advanced,
+            None,
+        );
+        self.hud_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+        let mut text_h = 0.0_f32;
+        let mut text_w = 0.0_f32;
+        for run in self.hud_buffer.layout_runs() {
+            text_h = text_h.max(run.line_top + run.line_height);
+            text_w = text_w.max(run.line_w);
+        }
+
+        // ── Card sizing: grid over the stats, generous padding, centered ──
+        let pad_x = m.char_width * 3.0;
+        let pad_y = m.line_height * 0.9;
+        let gap_between = m.line_height; // breathing room grid→stats
+        let content_w = grid_w.max(text_w);
+        let content_h = grid_h + gap_between + text_h;
+        let card_w = content_w + pad_x * 2.0;
+        let card_h = content_h + pad_y * 2.0;
+        let card_x = ((width as f32 - card_w) * 0.5).max(0.0);
+        let card_y = ((height as f32 - card_h) * 0.5).max(TEXT_TOP - pad_y);
+        let content_top = card_y + pad_y;
+        // Center the grid within the card; the stats spine left-aligns to the grid.
+        let grid_x = card_x + (card_w - grid_w) * 0.5;
+        let grid_y = content_top;
+        let text_top = grid_y + grid_h + gap_between;
+
+        // ── The heatmap squares: one per (week, day), tinted by intensity bucket ──
+        let colors = theme::heatmap_colors();
+        let mut quads: Vec<([f32; 4], [u8; 4])> = Vec::with_capacity(WEEKS * DAYS_PER_WEEK);
+        for col in 0..WEEKS {
+            for row in 0..DAYS_PER_WEEK {
+                let idx = col * DAYS_PER_WEEK + row;
+                let bucket = (view.cells[idx] as usize).min(LEVELS - 1);
+                let x = grid_x + col as f32 * step;
+                let y = grid_y + row as f32 * step;
+                quads.push(([x, y, cell, cell], colors[bucket].rgba_bytes()));
+            }
+        }
+        self.streak_cells
+            .prepare_multicolor(device, queue, width, height, &quads);
+
+        // ── The raised card behind everything (shadow → border → base_300 card) ──
+        set_float_quads(
+            &mut self.hud_shadow,
+            &mut self.hud_border,
+            &mut self.hud_card,
+            device,
+            queue,
+            width,
+            height,
+            Some([card_x, card_y, card_w, card_h]),
+            true,
+        );
+
+        // ── The stats text below the grid ──
+        let area = TextArea {
+            buffer: &self.hud_buffer,
+            left: grid_x,
+            top: text_top,
+            scale: 1.0,
+            bounds,
+            default_color: content,
+            custom_glyphs: &[],
+        };
+        self.hud_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [area],
+                &mut self.swash_cache,
+            )
+            .map_err(|e| anyhow::anyhow!("glyphon streaks prepare failed: {e:?}"))?;
         Ok(())
     }
 }

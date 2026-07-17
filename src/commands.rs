@@ -242,6 +242,12 @@ static COMMAND_SEED: &[Command] = &[
     // (like Settings/About); a real `Action`, independently rebindable via `[keys]
     // lifetime_stats`. See `lifetime.rs`.
     Command { name: "Lifetime stats",    action: Action::LifetimeStats,   native: "",        emacs: ""        , native_only: true, web_only: false },
+    // WRITING STREAKS: the summoned year-calendar HEATMAP of daily net words +
+    // the current streak. No default chord — the palette IS its entry point (like
+    // Settings/About/Lifetime); a real `Action`, independently rebindable via
+    // `[keys] writing_streaks`. Native-only (the recording engine + `streaks.toml`
+    // are native-only, same as the lifetime odometer). See `streaks.rs`.
+    Command { name: "Writing streaks",   action: Action::WritingStreaks,  native: "",        emacs: ""        , native_only: true, web_only: false },
     // LINE ENDINGS: toggle the active file's on-disk ending (LF <-> CRLF). No default
     // chord — the palette IS its entry point (a rare command, like Settings/About); a
     // real `Action` (`ConvertLineEndings`), independently rebindable via `[keys]`.
@@ -1314,6 +1320,7 @@ mod tests {
             "Credits",
             "Guide",
             "Lifetime stats",
+            "Writing streaks",
             "Line endings…",
             "Align table",
             "Report a Problem",
@@ -2149,6 +2156,7 @@ mod tests {
         "Version history…",
         "Keep version",
         "Lifetime stats",
+        "Writing streaks",
         "Clean unused assets…",
         "Recent projects…",
         "Check for Updates",

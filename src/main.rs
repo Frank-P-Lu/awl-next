@@ -116,6 +116,7 @@ mod spell;
 mod storyboard;
 mod spellunderline;
 mod stats;
+mod streaks;
 mod syntax;
 mod theme;
 #[cfg(test)]

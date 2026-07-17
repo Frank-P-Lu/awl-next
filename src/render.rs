@@ -3472,6 +3472,13 @@ pub struct TextPipeline {
     pub hud_shadow: SelectionPipeline,
     pub hud_border: SelectionPipeline,
     pub hud_card: SelectionPipeline,
+    /// WRITING-STREAKS HEATMAP: the calendar squares of the summoned Writing
+    /// streaks card, drawn ON the `hud_card` ground (between the card and its
+    /// text). Uses PER-INSTANCE colors (`SelectionPipeline::prepare_multicolor`)
+    /// so each square carries its own intensity tint off the world's value ladder
+    /// (`theme::heatmap_colors`). Empty (0 instances) whenever the card is closed,
+    /// so a default render is byte-identical.
+    pub streak_cells: SelectionPipeline,
     /// HELD STATS HUD: renderer + buffer for the centered stacked stats text (the big
     /// figures in CONTENT ink at BODY size over their captions in FAINT ink at LABEL
     /// size). Its own glyph buffer so it composes independently of the other chrome;
@@ -3485,6 +3492,13 @@ pub struct TextPipeline {
     /// renders the fixed placeholder — the determinism boundary that keeps a
     /// `--hud` capture byte-stable. Set via [`Self::set_hud_stats`].
     hud_stats: Option<crate::hud::HudStats>,
+    /// WRITING-STREAKS view snapshot: the live App pushes `Some` every `sync_view`
+    /// (`App::streaks_sync_card`) from its persisted `streaks.toml`; the headless
+    /// capture never calls that seam, so this stays `None` and the card renders the
+    /// fixed synthetic [`crate::streaks::placeholder`] year + streak numbers — the
+    /// determinism boundary keeping a `--streaks` capture byte-stable. Set via
+    /// [`Self::set_streaks`].
+    streaks_view: Option<crate::streaks::StreaksView>,
     /// NOTES VERBS round: the held HUD's SAVED stat state (dirty, or clean +
     /// elapsed seconds since the last successful write). The live App pushes
     /// `Some` every `sync_view` (`App::sync_hud_saved`); the headless capture
@@ -4082,6 +4096,12 @@ impl TextPipeline {
         let hud_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
         let hud_border = SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
         let hud_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        // WRITING-STREAKS heatmap squares: per-instance colored (the construction
+        // color is a placeholder overridden every draw), with a gentle corner so the
+        // small squares read as soft tiles, not hard pixels.
+        let mut streak_cells =
+            SelectionPipeline::new(device, format, theme::base_content().rgba_bytes());
+        streak_cells.set_corner(1.5);
         let hud_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let hud_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
@@ -4266,6 +4286,7 @@ impl TextPipeline {
             hud_shadow,
             hud_border,
             hud_card,
+            streak_cells,
             hud_renderer,
             hud_buffer,
             wk_shadow,
@@ -4282,6 +4303,7 @@ impl TextPipeline {
             popover_model: None,
             popover_geom: None,
             hud_stats: None,
+            streaks_view: None,
             hud_saved: None,
             hud_update_checked: None,
             hud_pending_crash: false,
@@ -5337,6 +5359,7 @@ impl TextPipeline {
         self.overlay_blur()
             || self.hud_showing()
             || crate::lifetime::lifetime_open()
+            || crate::streaks::streaks_open()
             || self.peek_showing()
     }
 
@@ -5703,6 +5726,9 @@ impl TextPipeline {
         self.hud_shadow.draw(pass);
         self.hud_border.draw(pass);
         self.hud_card.draw(pass);
+        // WRITING-STREAKS heatmap squares ride ON the card, under its text (empty
+        // unless the Writing streaks card is the summoned one this frame).
+        self.streak_cells.draw(pass);
         self.hud_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon hud render failed: {e:?}"))?;

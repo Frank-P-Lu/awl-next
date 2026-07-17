@@ -272,7 +272,14 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // default (no pointer in a capture), so a plain `--screenshot` reports
 // `shown: false, card: null, buttons: []` and is byte-identical apart from the
 // always-present block.
-pub const SCHEMA_VERSION: u32 = 170;
+// `/171` — WRITING STREAKS: a new top-level `streaks` block (`{ open, streak,
+// today_words, cells: [..] }`) — the summoned year-calendar heatmap card
+// (`streaks.rs`). `open` is false by default (a default capture is byte-identical
+// apart from the added block), true via the palette "Writing streaks" command /
+// the `--streaks` capture flag. The figures + `cells` intensity grid are the LIVE
+// year the App pushed OR the fixed synthetic `streaks::placeholder` in a capture
+// (no persisted store), so a `--streaks` capture is deterministic + byte-stable.
+pub const SCHEMA_VERSION: u32 = 171;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

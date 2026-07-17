@@ -186,6 +186,43 @@ fn rel_lum(c: Srgb) -> f32 {
     0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
 }
 
+/// WRITING-STREAKS HEATMAP: the [`crate::streaks::LEVELS`] intensity fills a
+/// calendar square can take, DERIVED from the active world's own value ladder —
+/// never a per-world hand palette, never amber (the caret's alone; the near-
+/// neutral base tokens keep every square well clear of `primary`'s hue). The
+/// ramp rides FROM `base_200` (level 0, the EMPTY-day well — a quiet rung just
+/// off the card's own `base_300` ground) UP TO `base_content` (level 4, a peak
+/// writing day at full ink), so it reads correctly on light AND dark grounds
+/// (the ink always climbs away from the ground, whichever direction that is).
+/// The interior stops are spaced so each filled rung is perceptibly brighter
+/// than the last. THE ONE owner of the square tint; the pixels (`render/chrome/
+/// hud.rs`) and the [`tests::streaks_heatmap_levels_are_distinguishable_every_
+/// world`] law both read it, so they can never drift.
+pub fn heatmap_colors() -> [Srgb; crate::streaks::LEVELS] {
+    let empty = base_200();
+    let ink = base_content();
+    // 1-BIT DEGRADATION (Wagtail): the ladder collapses to two values and no
+    // intermediate grey is permitted (the pixel law). The heatmap becomes BINARY
+    // — an empty day is the ground token; ANY writing day is full ink — a legible
+    // white-on-black contribution grid. (`is_one_bit` is read HERE in the theme
+    // layer, where it pins Wagtail's identity; the render layer never reads it.)
+    if active().is_one_bit() {
+        let mut out = [empty; crate::streaks::LEVELS];
+        for c in out.iter_mut().skip(1) {
+            *c = ink;
+        }
+        return out;
+    }
+    // t=0 is the empty well; the four filled rungs climb toward full ink with a
+    // slight ease so the low rungs stay quiet while the top rungs separate.
+    let stops = [0.0_f32, 0.34, 0.56, 0.78, 1.0];
+    let mut out = [empty; crate::streaks::LEVELS];
+    for (i, t) in stops.iter().enumerate() {
+        out[i] = empty.lerp(ink, *t);
+    }
+    out
+}
+
 /// The floor/ceiling a stipple placard's DENSITY may occupy — below the floor
 /// too few pixels survive to read as letterforms at all (the legibility floor
 /// the dark-ground taste note demands, asserted over Mangrove's lava ground by

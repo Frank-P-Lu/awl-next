@@ -66,6 +66,10 @@ const EXPECTED: &[(&str, usize)] = &[
     ("app/window.rs", 1),
     ("app/session.rs", 1),
     ("app/stats.rs", 1),
+    // WRITING STREAKS: the `streaks save failed: {e}` stderr line (a failed atomic
+    // write of `streaks.toml` must never disrupt the editor — it warns and moves on,
+    // mirroring `app/stats.rs`'s own `stats save failed` line).
+    ("app/streaks.rs", 1),
     // `--bench-typing`'s tabular CLI output.
     ("bench.rs", 4),
     // "buffer registry over cap" — an edge-case warning (every backgrounded
