@@ -26,7 +26,7 @@
 
 /* ---- Tokens ------------------------------------------------------------- */
 :root {
-  /* dark is the default room (the Undertow hero is dark) */
+  /* dark is the default room (the Bombora hero is dark) */
   --bg:        #16181D;  /* base_100 — the canvas */
   --raised:    #202228;  /* base_200 — one step forward */
   --border:    #2A2D34;  /* base_300 — the focused plane / hairline */
