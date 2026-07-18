@@ -10,13 +10,14 @@
 //!
 //! This module is the PURE CORE (fully unit-tested) plus a serializer that lays the
 //! diff into a marked-up-markdown transcript the EXISTING renderer draws with its
-//! real strike / `==highlight==` / blockquote-dim vocabulary — so the diff view
-//! adds ZERO render-path code. The live "Compare with version…" flow
-//! ([`crate::app`]) hands the CURRENT buffer + a chosen history version to
-//! [`render_markdown`]; the resulting transcript is shown read-only in the writing
-//! column (`App::diff_view`), and the capture harness renders the same transcript
-//! headlessly (`AWL_DIFF_OLD`/`AWL_DIFF_NEW`, see [`env_capture`]) so the view is
-//! pixel-verifiable.
+//! real strike / `==highlight==` / blockquote-dim vocabulary — so the diff adds
+//! ZERO render-path code. DIFF-AS-PREVIEW: the History picker's live preview hands
+//! the CURRENT buffer + the highlighted history version to [`diff_and_render`]
+//! (via [`crate::history::diff_preview`]); the resulting transcript is shown in the
+//! page column, dressed as a card, IN PLACE OF the buffer (read-only — the overlay
+//! owns every key). The capture harness renders the same transcript headlessly
+//! (both the History-preview fold and the `AWL_DIFF_OLD`/`AWL_DIFF_NEW` env probe,
+//! see [`env_capture`]) so the preview is pixel-verifiable.
 //!
 //! Two prose-native REQUIREMENTS the code diff can't express, both lived here:
 //!   * **Move detection** — a relocated paragraph reads as *moved*, never as a

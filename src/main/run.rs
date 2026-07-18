@@ -908,9 +908,9 @@ fn capture_screenshot(
                 // diff block) so NO line's WYSIWYG conceal reveals — the reveal is
                 // caret-line-scoped and line 1 carries no markup, so the title's `#`
                 // and every `==`/`>`/strike marker below stay concealed: the clean
-                // marked-up manuscript, never a revealed-raw line. Mirrors
-                // `App::diff_view` (the live read-only view parks the caret the same
-                // way — the ONE reveal-suppression rule, shared, so live == capture).
+                // marked-up manuscript, never a revealed-raw line. Mirrors the live
+                // History-preview fold (`sync_view` parks the caret the same way —
+                // the ONE reveal-suppression rule, shared, so live == capture).
                 buffer.set_cursor(buffer.line_col_to_char(1, 0));
                 opts.diff = Some(capture::DiffInfo {
                     active: true,
@@ -3016,9 +3016,12 @@ mod tests {
 
     #[test]
     fn history_preview_for_resolves_selected_row() {
-        // The capture-side preview resolver: the still-open History overlay's
-        // highlighted row resolves to (id, content) — the version the capture
-        // then shows in the document; another overlay kind resolves to None.
+        // DIFF-AS-PREVIEW: the capture-side preview resolver — the still-open
+        // History overlay's highlighted row resolves to (id, TRANSCRIPT, counts):
+        // the writer's diff of the current buffer vs that version, exactly what
+        // the live App renders (the shared `history::diff_preview` owner). The
+        // buffer here is "v2\n", so row 0 (v2, identical) is a titled folds-only
+        // transcript with NO change marks; row 1 (v1, older) carries them.
         with_seeded_history(|p| {
             let buffer = Buffer::from_file(&p);
             let rows = crate::history::timeline_rows(
@@ -3028,14 +3031,24 @@ mod tests {
             );
             assert_eq!(rows.len(), 2, "two seeded versions");
             let mut ov = crate::overlay::OverlayState::new_history(rows, None, None);
-            let (id, content, _counts) =
+            let (id, transcript, _counts) =
                 history_preview_for(&ov, &buffer).expect("the newest row resolves");
-            assert_eq!(content, "v2\n");
+            assert!(
+                transcript.starts_with("# Comparing with "),
+                "a titled diff transcript: {transcript}"
+            );
+            assert!(
+                !transcript.contains("~~") && !transcript.contains("=="),
+                "row 0 is identical to the buffer → no change marks: {transcript}"
+            );
             assert_eq!(Some(id.as_str()), ov.selected_history_id());
-            // Arrow down: the OLDER version previews.
+            // Arrow down: the OLDER version's diff previews — its marks present.
             ov.move_sel(1);
             let (_, older, _) = history_preview_for(&ov, &buffer).expect("row 1 resolves");
-            assert_eq!(older, "v1\n", "the highlighted row IS the previewed version");
+            assert!(
+                older.contains("~~") || older.contains("=="),
+                "the highlighted row's diff carries change marks: {older}"
+            );
             // A non-history overlay never previews.
             let goto = crate::overlay::OverlayState::new(
                 crate::overlay::OverlayKind::Goto,

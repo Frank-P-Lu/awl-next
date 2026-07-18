@@ -649,13 +649,6 @@ fn every_catalog_command_dispatches_without_panicking() {
                     Action::NewNote => eff == Effect::NewNote,
                     Action::OpenCredits => eff == Effect::OpenCredits,
                     Action::OpenGuide => eff == Effect::OpenGuide,
-                    // Markdown fixture: Compare with version… defers the latest-version
-                    // resolve + diff-view open to the live App.
-                    // DIFF-AS-PREVIEW: "Compare with version…" repoints to opening
-                    // the History picker (whose live preview IS the diff); with the
-                    // minimal make_overlay in this harness the open is a calm no-op
-                    // and no effect is emitted.
-                    Action::CompareVersion => eff == Effect::None,
                     Action::FinishBuffer => eff == Effect::FinishBuffer,
                     // Caret sits inside the fixture link, so a URL resolves.
                     Action::FollowLink => matches!(eff, Effect::FollowLink(_)),

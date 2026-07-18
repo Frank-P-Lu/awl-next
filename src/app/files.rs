@@ -943,7 +943,6 @@ impl App {
         // never open across a buffer swap in practice, but this is the same
         // defensive drop `history_overlay_closed` already does on a real close.
         self.history_preview = None;
-        self.diff_settle_at = None;
         // STICKY PAGE WIDTH: re-apply the measure for the ARRIVING buffer's own
         // kind (prose vs code — see `Config::measure_for`) BEFORE `sync_view`, so
         // its cursor-follow scroll math reads freshly re-wrapped row geometry

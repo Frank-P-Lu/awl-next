@@ -671,10 +671,11 @@ fn history_picker_lists_versions_navigates_and_carries_ids() {
     assert_eq!(ov.selected_history_id(), Some("100"));
     // No git / dir markers on the version rows.
     assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
-    // The hint teaches restore + compare + lens + close (informational, button-free).
+    // The hint teaches restore + diff + lens + close (informational, button-free) —
+    // DIFF-AS-PREVIEW: Tab shifts focus into the diff panel, so the cell reads "diff".
     assert_eq!(
         OverlayKind::History.hint(),
-        "type to filter   \u{21B5} restore   tab compare   \u{2190}/\u{2192} lens"
+        "type to filter   \u{21B5} restore   tab diff   \u{2190}/\u{2192} lens"
     );
     assert!(ov.foot_hint().contains("restore"));
 }

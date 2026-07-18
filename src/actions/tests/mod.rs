@@ -910,7 +910,12 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         // (unconditionally — the store's own gates decide at commit), so it is
         // an Opener now; the deferred Effect::KeepVersion fires at the
         // minibuffer's Enter, not at the summon.
-        | Action::KeepVersion => SmokeKind::Opener,
+        | Action::KeepVersion
+        // DIFF-AS-PREVIEW: "Compare with version…" now OPENS the History picker
+        // (whose live preview IS the writer's diff) — byte-identical dispatch to
+        // `OpenHistory`, so it is an Opener too. The old read-only-takeover
+        // `Effect::CompareLatest`/`CompareVersion` deferral is retired.
+        | Action::CompareVersion => SmokeKind::Opener,
 
         // Deferred effects (the pure core signals; the live App performs).
         Action::Quit
@@ -918,10 +923,6 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::NewNote
         | Action::OpenCredits
         | Action::OpenGuide
-        // THE WRITER'S DIFF: the smoke fixture is a markdown buffer, so
-        // "Compare with version…" signals `Effect::CompareLatest` for the live
-        // App to resolve the latest version + open the read-only diff view.
-        | Action::CompareVersion
         | Action::FinishBuffer
         | Action::FollowLink
         | Action::ReportProblem

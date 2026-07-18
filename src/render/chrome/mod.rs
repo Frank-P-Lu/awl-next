@@ -39,7 +39,9 @@ pub(in crate::render) const MARGIN_COLUMN_GAP_CHARS: f32 = 1.5;
 /// inside the card.
 const DIFF_PANEL_TOP: f32 = 8.0;
 /// DIFF-AS-PREVIEW panel: the card's reserve above the canvas BOTTOM (px) — room
-/// for the 1px rim + the shadow tail to read as an edge, not a bleed.
+/// for the raised rim (1px, 2px focused) to read as a clean edge, not a bleed off
+/// the canvas bottom. (No shadow tail: the panel is RIMMED, not Shadowed — see
+/// `prepare_diff_panel`.)
 const DIFF_PANEL_BOTTOM: f32 = 14.0;
 
 /// Upload the three FLOAT-PANEL elevation quads (drop `shadow` -> raised `border` ->
@@ -364,15 +366,24 @@ impl TextPipeline {
     /// picker's writer's-diff preview is up. "Visually it looks like a card, but
     /// it's actually a panel" (the user's spec): the transcript renders in the
     /// page column with the full measure + the existing row/scroll machinery, and
-    /// THIS gives that column the summoned-card visual language — the float
-    /// trio's drop shadow, the crisp raised border rim, and the opaque `base_300`
-    /// card face — via the ONE quad-shape owner [`set_float_quads`] on the
-    /// panel's own dedicated pipelines. Parked (all three empty) on every
-    /// ordinary frame, so a default capture is byte-identical.
+    /// THIS gives that column the summoned-card visual language — a crisp raised
+    /// border rim over an opaque `base_300` card face — via the ONE quad-shape
+    /// owner [`set_float_quads`] on the panel's own dedicated pipelines. Parked
+    /// (all three empty) on every ordinary frame, so a default capture is
+    /// byte-identical.
+    ///
+    /// RIMMED, NOT SHADOWED (the chin-round decision, mirroring the popover): a
+    /// large panel's ink-alpha drop-shadow slab composites LIGHTER than a dark
+    /// page — a bright bar hanging below the card that out-masses it (DESIGN §8,
+    /// depth by value, not drop-shadows). So the shadow pipeline stays PARKED and
+    /// the depth reads from the rim alone. `set_float_quads(elevated: false)`
+    /// draws just the card (shadow + its default rim empty); the rim is drawn
+    /// HERE so its focus cue lives in one place. (On main, where `set_float_quads`
+    /// takes `FloatElevation`, this call maps to `FloatElevation::Rimmed`.)
     ///
     /// FOCUS CUE: when Tab moved the keyboard focus INTO the panel
-    /// (`diff_panel_focus`), the border strengthens one value step
-    /// (`surface_selected` → content ink) AND its rim widens one px — the
+    /// (`diff_panel_focus`), the rim strengthens one value step
+    /// (`surface_selected` → content ink) AND widens one px (1 → 2) — the
     /// value-free half of the cue, so it still reads on a one-bit world where
     /// the ink ladder collapses. Never amber (DESIGN §3).
     pub(super) fn prepare_diff_panel(
@@ -392,26 +403,29 @@ impl TextPipeline {
             width,
             height,
             rect,
-            true, // the large-summoned-panel elevation class (shadow + rim + card)
+            false, // RIMMED: park the shadow slab (the chin-round decision)
         );
-        // The focus cue re-decides the border every frame: color (one value step
-        // up) + a 1px-wider rim, overriding the shape owner's default 1px ring.
-        let focused = self.diff_panel_focus;
-        self.diffpanel_border.set_color(if focused {
-            theme::base_content().rgba_bytes()
-        } else {
-            theme::surface_selected().rgba_bytes()
-        });
-        if focused {
-            if let Some([x, y, w, h]) = rect {
-                self.diffpanel_border.prepare(
-                    device,
-                    queue,
-                    width,
-                    height,
-                    &[[x - 2.0, y - 2.0, w + 4.0, h + 4.0]],
-                );
-            }
+        // The rim is drawn here for BOTH focus states (the shape owner parked it):
+        // a crisp raised edge one px past the card by default, TWO px + one value
+        // step up to content ink when Tab moved focus into the panel — the calm
+        // focus cue, value + value-free so it survives a one-bit world. The rect
+        // sits a touch larger than the card and draws BEHIND it (painter's order
+        // in `render.rs`: shadow → border → card), so only the rim peeks out.
+        if let Some([x, y, w, h]) = rect {
+            let focused = self.diff_panel_focus;
+            self.diffpanel_border.set_color(if focused {
+                theme::base_content().rgba_bytes()
+            } else {
+                theme::surface_selected().rgba_bytes()
+            });
+            let pad = if focused { 2.0 } else { 1.0 };
+            self.diffpanel_border.prepare(
+                device,
+                queue,
+                width,
+                height,
+                &[[x - pad, y - pad, w + 2.0 * pad, h + 2.0 * pad]],
+            );
         }
     }
 

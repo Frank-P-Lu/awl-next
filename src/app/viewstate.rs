@@ -485,12 +485,12 @@ impl App {
     /// into the `history_preview` cache, so an arrow/hover/wheel burst re-diffs
     /// nothing. Reads only; the buffer is never touched.
     ///
-    /// DEBOUNCE (the theme-font pattern, measured not guessed): when the LAST
-    /// render measured slow (`diff_slow` — a 5k-line draft costs ~15 ms; SCOPE.md
-    /// scale ~1 ms), a NEW highlight keeps showing the PREVIOUS transcript and
-    /// arms `diff_settle_at`; the fresh diff lands after `DIFF_SETTLE` of rest in
-    /// `about_to_wait`. A fast document never waits. LIVE-ONLY: the headless
-    /// capture path renders synchronously (`main/run.rs`), the determinism gate.
+    /// SYNCHRONOUS (no per-arrow debounce): the round's release perf probe measured
+    /// ~1-2 ms per diff at SCOPE.md scale — the diff FOLDS unchanged regions, so the
+    /// transcript stays tiny and the reshape stays cheap even against a large draft
+    /// (~15 ms of compute at 6k lines, still well inside a single stepped selection).
+    /// So no measured demand for the theme-font-style debounce; the cost is paid
+    /// straight, and live == the deterministic headless capture (`main/run.rs`).
     pub(super) fn history_preview_text(&mut self) -> Option<String> {
         let ov = self
             .overlay
@@ -501,26 +501,12 @@ impl App {
             if *cached_id == id {
                 return Some(transcript.clone());
             }
-            // A DIFFERENT id on a measured-slow document: defer the render to the
-            // settle, keeping the previous transcript on the page meanwhile.
-            if self.diff_slow {
-                self.diff_settle_at = Some(Instant::now());
-                return self.history_preview.as_ref().map(|(_, t)| t.clone());
-            }
         }
-        self.render_diff_preview_now()
-    }
-
-    /// Render the diff for the CURRENTLY highlighted History row right now — the
-    /// synchronous path AND the debounce's settle landing. Measures the render
-    /// cost (re-deciding `diff_slow` for the next arrow) and caches per id.
-    pub(super) fn render_diff_preview_now(&mut self) -> Option<String> {
         let current = self.view_text();
         let ov = self
             .overlay
             .as_ref()
             .filter(|o| o.kind == crate::overlay::OverlayKind::History)?;
-        let t0 = Instant::now();
         let (id, transcript, _counts) = crate::history::diff_preview(
             ov,
             self.buffer.path(),
@@ -528,7 +514,6 @@ impl App {
             self.buffer.is_note(),
             &current,
         )?;
-        self.diff_slow = t0.elapsed() > super::DIFF_SLOW_BUDGET;
         self.history_preview = Some((id, transcript.clone()));
         Some(transcript)
     }

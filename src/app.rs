@@ -136,18 +136,6 @@ const ZOOM_PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 /// (Enter), revert (Esc/C-g), and the headless capture all stay SYNCHRONOUS.
 const THEME_FONT_DEBOUNCE: Duration = Duration::from_millis(150);
 
-/// DIFF-AS-PREVIEW settle: how long the History picker's highlight must rest
-/// before a SLOW (see [`DIFF_SLOW_BUDGET`]) diff re-renders — the theme-font
-/// debounce pattern applied to the per-arrow writer's diff. Small documents
-/// (~1 ms per render) never wait; only a measured-slow document defers.
-const DIFF_SETTLE: Duration = Duration::from_millis(150);
-
-/// The per-render cost above which the DIFF-AS-PREVIEW switches to the debounced
-/// path: the round's release perf probe measured ~1 ms at SCOPE.md scale (stays
-/// synchronous) vs ~15 ms on a 5k-line draft (debounces). Measured, not guessed —
-/// re-sampled at every actual render.
-const DIFF_SLOW_BUDGET: Duration = Duration::from_millis(4);
-
 /// AMBIENT LAVA TICK period — the lava-lamp ground's slow drift cadence
 /// (`crate::lava::LAVA_TICK_MS`). A single `WaitUntil` this far out in
 /// `about_to_wait` advances the phase + requests one redraw + re-arms, so a lava
@@ -783,19 +771,6 @@ pub struct App {
     /// read-only Compare TAKEOVER that used to own the transcript is RETIRED —
     /// this preview override seam is the one surviving diff surface.)
     history_preview: Option<(String, String)>,
-    /// DIFF-AS-PREVIEW debounce: when a NEW version was highlighted while the last
-    /// measured diff render was SLOW (`diff_slow`), the settle deadline — the
-    /// theme-font-debounce pattern: the picker highlight moves instantly (and the
-    /// page keeps the PREVIOUS transcript), the fresh diff lands after
-    /// `DIFF_SETTLE` of rest via the single `WaitUntil` in `about_to_wait`.
-    /// `None` = nothing pending. LIVE-ONLY; headless computes synchronously.
-    diff_settle_at: Option<Instant>,
-    /// Whether the LAST measured diff render exceeded [`DIFF_SLOW_BUDGET`] — the
-    /// gate that turns per-arrow diffs from synchronous (small docs, ~1 ms) into
-    /// debounced (a 5k-line draft measures ~15 ms; see the round's perf probe).
-    /// Re-measured at every actual render, so it tracks the open document's real
-    /// cost and self-corrects when a smaller file is opened.
-    diff_slow: bool,
     /// The document scroll (visual rows) captured when the History timeline
     /// OPENED, restored on a close-without-restore — a shorter previewed version
     /// can destructively clamp `scroll_lines` against ITS max-scroll, and "Esc =
@@ -1234,8 +1209,6 @@ impl App {
             pending_crash: None,
             title_dirty: false,
             history_preview: None,
-            diff_settle_at: None,
-            diff_slow: false,
             history_scroll_before: None,
             zoom_persist_at: None,
             zoom_reflow: ZoomReflow::default(),
@@ -1922,27 +1895,6 @@ impl ApplicationHandler<AwlEvent> for App {
                 }
                 false if self.last_frame.is_none() => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + AUTOSAVE_IDLE));
-                }
-                false => {}
-            }
-        }
-        // DIFF-AS-PREVIEW settle: a measured-slow document deferred its per-arrow
-        // diff render; once the History highlight rests `DIFF_SETTLE`, the one
-        // deferred render lands here (the theme-font-debounce pattern — each
-        // further arrow re-stamps `diff_settle_at`, sliding the deadline; the
-        // overlay closing clears the stamp via `history_overlay_closed`).
-        if let Some(dirty) = self.diff_settle_at {
-            match debounce_due(dirty, DIFF_SETTLE, Instant::now()) {
-                true => {
-                    self.diff_settle_at = None;
-                    self.render_diff_preview_now();
-                    self.sync_view(false);
-                    if let Some(gpu) = self.gpu.as_ref() {
-                        gpu.window.request_redraw();
-                    }
-                }
-                false if self.last_frame.is_none() => {
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + DIFF_SETTLE));
                 }
                 false => {}
             }
@@ -4067,9 +4019,7 @@ mod tests {
         app.history_scroll_before = Some(42);
         app.scroll_lines = 3;
         app.history_preview = Some(("100".into(), "old\n".into()));
-        app.diff_settle_at = Some(Instant::now());
         app.history_overlay_closed(false);
-        assert!(app.diff_settle_at.is_none(), "a pending deferred diff dies with the picker");
         assert_eq!(app.scroll_lines, 42, "Esc restores the pre-open scroll");
         assert!(app.history_scroll_before.is_none());
         assert!(app.history_preview.is_none(), "the preview is dropped");
@@ -4087,9 +4037,12 @@ mod tests {
     // ── DIFF-AS-PREVIEW — the History picker's writer's-diff preview ────────
     //
     // The diff IS the picker's live preview now (the takeover Compare view is
-    // retired). These pin the transcript's shape, the read-only invariants on
+    // retired). These pin the transcript's shape and the read-only invariants on
     // the PREVIEW path (buffer / version / undo untouched — the successor of
-    // the old diff_view_gate suite), and the settle-debounce close contract.
+    // the old diff_view_gate suite). The render is SYNCHRONOUS: the round's
+    // release perf probe measured ~1-2 ms per diff at SCOPE.md scale (the diff
+    // folds unchanged regions, so the transcript stays tiny), so no per-arrow
+    // debounce is warranted; the old settle machinery was cut.
 
     #[test]
     fn diff_preview_renders_marked_up_transcript_without_touching_buffer() {

@@ -206,8 +206,8 @@ fn file_pickers_faceted_lens_render_and_report() {
             lens_strip: ov.lens_strip(),
             sections: ov.item_sections(),
             preview_id: None,
-        diff_focus: false,
-        diff_scroll: 0,
+            diff_focus: false,
+            diff_scroll: 0,
             empty: None,
             show_hidden: false,
         });
@@ -313,8 +313,8 @@ fn faceted_grouped_window_is_bounded_and_scrolls_to_selection() {
             lens_strip: ov.lens_strip(),
             sections: ov.item_sections(),
             preview_id: None,
-        diff_focus: false,
-        diff_scroll: 0,
+            diff_focus: false,
+            diff_scroll: 0,
             empty: ov.empty_notice(),
             show_hidden: false,
         });
@@ -442,8 +442,8 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
             lens_strip: ov.lens_strip(),
             sections: ov.item_sections(),
             preview_id: None,
-        diff_focus: false,
-        diff_scroll: 0,
+            diff_focus: false,
+            diff_scroll: 0,
             empty: None,
             show_hidden: false,
         });
@@ -729,6 +729,8 @@ fn history_preview_folds_text_and_reports_preview_id() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: Some("1700000000000".into()),
+        diff_focus: false,
+        diff_scroll: 0,
         empty: None,
         show_hidden: false,
     });

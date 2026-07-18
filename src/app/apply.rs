@@ -867,8 +867,6 @@ impl App {
             self.scroll_lines = s;
         }
         self.history_preview = None;
-        // DIFF-AS-PREVIEW: a pending deferred diff render dies with the picker.
-        self.diff_settle_at = None;
     }
 
     /// The PgDn/PgUp intercept: page the BUFFER via the GPU-measured viewport (a
