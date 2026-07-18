@@ -20,7 +20,7 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 | World          | Ground                     | Display             | Mono            | Ornament (`---`/`***`/`___`)                  | Time  | Register | Voice     | Temp    |
 | -------------- | -------------------------- | ------------------- | --------------- | --------------------------------------------- | ----- | -------- | --------- | ------- |
 | **Gumtree**    | pale eucalyptus-green      | Literata            | Monaspace Xenon | Junicode · botanical sprig / spray / fleur    | Day   | Refined  | Literary  | Cool    |
-| **Bilby**      | pale blue                  | Newsreader          | Monaspace Xenon | EB Garamond · ❧ ☙ ❦                           | Day   | Refined  | Literary  | Cool    |
+| **Bilby**      | palest rose-gold dawn      | Newsreader          | Monaspace Xenon | EB Garamond · ❧ ☙ ❦                           | Dawn  | Refined  | Literary  | Warm    |
 | **Magpie**     | paper-white, high-contrast | Bitter              | Monaspace Xenon | Junicode · quatrefoil / lattice / damask-tile | Day   | Everyday | Literary  | Neutral |
 | **Saltpan**    | warm ecru salt-flat        | Fraunces            | Monaspace Xenon | Junicode · running-vine / vine-scroll ×2      | Dawn  | Refined  | Literary  | Warm    |
 | **Quokka**     | warm peach reef            | Fira Sans           | IBM Plex Mono   | Awl Marks · ✿ ❀ ✽                             | Dawn  | Everyday | Modern    | Warm    |
@@ -61,9 +61,15 @@ Literata's easygoing book-serif on cool green paper; Shippori Mincho for Japanes
 Day · Refined · Literary · Cool.
 
 ### Bilby
-**A cool pale-blue page, refined and quiet in daylight.**
-Newsreader's editorial serif on soft blue; Shippori Mincho for Japanese; Monaspace Xenon for code.
-Day · Refined · Literary · Cool.
+**First light on the desert — the palest rose-gold page, the night's violet still in the ink.**
+Newsreader's editorial serif on a pale pre-sunrise horizon: warm rose-gold ground planes,
+a cool violet-grey ink ladder (dawn's complementary structure), one sunrise-gold caret,
+and a 1px ink hairline framing the writing column — the light pole's page frame,
+Wagtail's 2px white frame mirrored. The bilby is a dawn-active desert marsupial;
+its world is dawn itself (the 2026-07-18 differentiation round — it was the
+pale-blue near-pair of Gumtree before). Shippori Mincho for Japanese; Monaspace
+Xenon for code.
+Dawn · Refined · Literary · Warm.
 
 ### Magpie
 **A paper-white, high-contrast page — sharp black on white.**

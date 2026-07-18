@@ -941,6 +941,17 @@ fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
 /// inferred from sidecar state): force the toolbar, read the card rect from the
 /// sidecar, then scan the muted buttons' actual ink band in the PNG and require the
 /// top and bottom pads each equal the pad token within antialias tolerance.
+///
+/// THE RETINA LESSON (the chin that SURVIVED the first fix): the law now runs the
+/// same assertions at the 1x capture baseline, the live 2x retina scale
+/// (`--capture-dpi 2`, the `set_dpi` seam the real window drives), AND a 2x +
+/// non-default-zoom compound — and it measures OUTSIDE the card rect too. The first
+/// fix proved the CARD tight while the float drop-shadow quad still painted a
+/// hard-edged ~9px slab BELOW the rim (brighter than the page on a dark world) —
+/// dead mass no card-rect measurement could see. So each run also shoots a CONTROL
+/// capture (identical state, popover down) and requires the popover frame to match
+/// it pixel-for-pixel in the bands above and below the card beyond a 2px rim ring:
+/// beyond its border, the popover adds NOTHING to the page.
 #[test]
 fn popover_card_hugs_the_button_row() {
     if !adapter_available() {
@@ -959,80 +970,222 @@ fn popover_card_hugs_the_button_row() {
     // NON-heading line so all seven buttons render MUTED (pure glyph ink on the flat
     // card, no lit-button wash to widen the measured band).
     let buf = Buffer::from_str("# Hello world\n\nThis is some bold text.\n");
-    let mut opts = CaptureOpts::default();
-    opts.force_popover = true;
-    opts.selection = Some(((2, 13), (2, 17))); // "bold"
 
-    let png = dir.join("popover.png");
-    capture_with(&png, &buf, &opts).expect("popover capture renders");
-    let j: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
-            .unwrap();
-    let pop = &j["popover"];
-    assert_eq!(pop["shown"], serde_json::json!(true), "forced popover is shown: {pop}");
-    let card = pop["card"].as_array().expect("card rect");
-    let cx = card[0].as_f64().unwrap() as f32;
-    let cy = card[1].as_f64().unwrap() as f32;
-    let ch = card[3].as_f64().unwrap() as f32;
-    let card_top = cy;
-    let card_bottom = cy + ch;
-    // The muted buttons' x-spans (all seven are muted for this plain-text selection).
-    let spans: Vec<(f32, f32)> = pop["buttons"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|b| !b["active"].as_bool().unwrap())
-        .map(|b| (b["x0"].as_f64().unwrap() as f32, b["x1"].as_f64().unwrap() as f32))
-        .collect();
-    assert!(spans.len() >= 5, "expected the muted button roster, got {}", spans.len());
+    // (dpi, zoom, canvas): the byte-stable 1x default, the live retina surface, and
+    // retina with a user zoom — the scale sweep the chin regressed across.
+    let scales: [(Option<f32>, Option<f32>, Option<(u32, u32)>); 3] = [
+        (None, None, None),
+        (Some(2.0), None, Some((2400, 1600))),
+        (Some(2.0), Some(1.2), Some((2400, 1600))),
+    ];
+    for (dpi, zoom, canvas) in scales {
+        let label = format!("dpi {dpi:?} zoom {zoom:?}");
+        let mut opts = CaptureOpts::default();
+        opts.force_popover = true;
+        opts.selection = Some(((2, 13), (2, 17))); // "bold"
+        opts.dpi = dpi;
+        opts.zoom = zoom;
+        opts.canvas = canvas;
 
-    // Read the rendered pixels and find the glyph ink band strictly INSIDE the card
-    // interior (skip the 1px raised border at each edge).
-    let img = image::open(&png).expect("decode popover png").to_rgba8();
-    // Card-interior background: a gap column left of the first button (inside the
-    // horizontal pad, before any glyph).
-    let bg = *img.get_pixel((cx + 4.0) as u32, (cy + ch * 0.5) as u32);
-    let differs = |p: &image::Rgba<u8>| -> bool {
-        (p[0] as i32 - bg[0] as i32).abs()
-            + (p[1] as i32 - bg[1] as i32).abs()
-            + (p[2] as i32 - bg[2] as i32).abs()
-            > 40
-    };
-    let mut ink_top: Option<u32> = None;
-    let mut ink_bot: Option<u32> = None;
-    for y in (card_top + 1.0) as u32..=(card_bottom - 1.0) as u32 {
-        let mut hit = false;
-        'cols: for (bx0, bx1) in &spans {
-            for x in *bx0 as u32..=*bx1 as u32 {
-                if differs(img.get_pixel(x, y)) {
-                    hit = true;
-                    break 'cols;
+        let png = dir.join("popover.png");
+        capture_with(&png, &buf, &opts).expect("popover capture renders");
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+                .unwrap();
+        let pop = &j["popover"];
+        assert_eq!(pop["shown"], serde_json::json!(true), "forced popover is shown: {pop}");
+        let card = pop["card"].as_array().expect("card rect");
+        let cx = card[0].as_f64().unwrap() as f32;
+        let cy = card[1].as_f64().unwrap() as f32;
+        let cw = card[2].as_f64().unwrap() as f32;
+        let ch = card[3].as_f64().unwrap() as f32;
+        let card_top = cy;
+        let card_bottom = cy + ch;
+        // The muted buttons' x-spans (all seven are muted for this plain-text selection).
+        let spans: Vec<(f32, f32)> = pop["buttons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|b| !b["active"].as_bool().unwrap())
+            .map(|b| (b["x0"].as_f64().unwrap() as f32, b["x1"].as_f64().unwrap() as f32))
+            .collect();
+        assert!(spans.len() >= 5, "[{label}] expected the muted button roster, got {}", spans.len());
+
+        // Read the rendered pixels and find the glyph ink band strictly INSIDE the card
+        // interior (skip the 1px raised border at each edge).
+        let img = image::open(&png).expect("decode popover png").to_rgba8();
+        // Card-interior background: a gap column left of the first button (inside the
+        // horizontal pad, before any glyph).
+        let bg = *img.get_pixel((cx + 4.0) as u32, (cy + ch * 0.5) as u32);
+        let differs = |p: &image::Rgba<u8>| -> bool {
+            (p[0] as i32 - bg[0] as i32).abs()
+                + (p[1] as i32 - bg[1] as i32).abs()
+                + (p[2] as i32 - bg[2] as i32).abs()
+                > 40
+        };
+        let mut ink_top: Option<u32> = None;
+        let mut ink_bot: Option<u32> = None;
+        for y in (card_top + 1.0) as u32..=(card_bottom - 1.0) as u32 {
+            let mut hit = false;
+            'cols: for (bx0, bx1) in &spans {
+                for x in *bx0 as u32..=*bx1 as u32 {
+                    if differs(img.get_pixel(x, y)) {
+                        hit = true;
+                        break 'cols;
+                    }
+                }
+            }
+            if hit {
+                ink_top.get_or_insert(y);
+                ink_bot = Some(y);
+            }
+        }
+        let ink_top = ink_top.expect("button ink present in the card") as f32;
+        let ink_bot = ink_bot.expect("button ink present in the card") as f32;
+
+        let pad_above = ink_top - card_top;
+        let pad_below = card_bottom - ink_bot;
+        // OUTCOME: the card hugs the row -- a uniform pad token above and below the glyph
+        // ink, within antialias tolerance. (Pre-fix this was ~12 above / ~14 below -- the
+        // lopsided slab of dead card that was the "fat chin".)
+        let pad = crate::render::POPOVER_VPAD;
+        let tol = 2.5_f32;
+        assert!(
+            (pad_above - pad).abs() <= tol,
+            "[{label}] top pad {pad_above:.2} must hug within {tol} of the pad token {pad} (card {card:?})"
+        );
+        assert!(
+            (pad_below - pad).abs() <= tol,
+            "[{label}] bottom pad {pad_below:.2} (the CHIN) must hug within {tol} of the pad token {pad} (card {card:?})"
+        );
+
+        // NO CHIN OUTSIDE THE CARD: beyond the 1px rim, the popover leaves the page
+        // untouched. The CONTROL frame (same state, popover down) must match the
+        // popover frame in the bands above and below the card — a 2px ring excluded
+        // for the rim + its antialiasing. This is the assertion that catches a
+        // shadow/wash slab painting outside the measured card rect (the live chin).
+        let control_png = dir.join("control.png");
+        let mut copts = opts.clone();
+        copts.force_popover = false;
+        capture_with(&control_png, &buf, &copts).expect("control capture renders");
+        let ctl = image::open(&control_png).expect("decode control png").to_rgba8();
+        let x0 = (cx - 4.0).max(0.0) as u32;
+        let x1 = ((cx + cw + 4.0) as u32).min(img.width() - 1);
+        let bands = [
+            ((card_top - 12.0).max(0.0) as u32, (card_top - 3.0).max(0.0) as u32),
+            ((card_bottom + 3.0) as u32, ((card_bottom + 12.0) as u32).min(img.height() - 1)),
+        ];
+        for (y0, y1) in bands {
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let a = img.get_pixel(x, y);
+                    let b = ctl.get_pixel(x, y);
+                    let d = (a[0] as i32 - b[0] as i32).abs()
+                        + (a[1] as i32 - b[1] as i32).abs()
+                        + (a[2] as i32 - b[2] as i32).abs();
+                    assert!(
+                        d <= 6,
+                        "[{label}] popover painted OUTSIDE its rim at ({x}, {y}): \
+                         {a:?} vs control {b:?} (diff {d}) — a chin slab beyond the card"
+                    );
                 }
             }
         }
-        if hit {
-            ink_top.get_or_insert(y);
-            ink_bot = Some(y);
-        }
     }
-    let ink_top = ink_top.expect("button ink present in the card") as f32;
-    let ink_bot = ink_bot.expect("button ink present in the card") as f32;
 
-    let pad_above = ink_top - card_top;
-    let pad_below = card_bottom - ink_bot;
-    // OUTCOME: the card hugs the row -- a uniform pad token above and below the glyph
-    // ink, within antialias tolerance. (Pre-fix this was ~12 above / ~14 below -- the
-    // lopsided slab of dead card that was the "fat chin".)
-    let pad = crate::render::POPOVER_VPAD;
-    let tol = 2.5_f32;
-    assert!(
-        (pad_above - pad).abs() <= tol,
-        "top pad {pad_above:.2} must hug within {tol} of the pad token {pad} (card {card:?})"
-    );
-    assert!(
-        (pad_below - pad).abs() <= tol,
-        "bottom pad {pad_below:.2} (the CHIN) must hug within {tol} of the pad token {pad} (card {card:?})"
-    );
+    crate::popover::set_popover_on(saved);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// FORMAT POPOVER — the LIT-BUTTON WASH PILL sits INSIDE the card, vertically
+/// centered (the third chin suspect, pinned as a law): the pill hugs the glyph
+/// ink band with a small halo, so a uniform gap of card must show above AND below
+/// it — a pill hanging low (or a card slack under it) reads as chin even when the
+/// card itself hugs. Select inside `**bold**` so `B` LIGHTS, then scan the pill's
+/// own wash column (left of the glyph ink, inside the pill's horizontal halo) at
+/// 1x and the live 2x retina scale. Pixel arithmetic per the Wagtail tripwire.
+#[test]
+fn popover_lit_wash_pill_sits_inside_the_card() {
+    if !adapter_available() {
+        eprintln!("skipping popover_lit_wash_pill_sits_inside_the_card: no wgpu adapter");
+        return;
+    }
+    let _g = crate::testlock::serial();
+    let saved = crate::popover::popover_on();
+    crate::popover::set_popover_on(true);
+
+    let dir = std::env::temp_dir().join(format!("awl_popover_pill_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let buf = Buffer::from_str("# Hello world\n\nThis is some **bold** text.\n");
+
+    let scales: [(Option<f32>, Option<(u32, u32)>); 2] =
+        [(None, None), (Some(2.0), Some((2400, 1600)))];
+    for (dpi, canvas) in scales {
+        let label = format!("dpi {dpi:?}");
+        let mut opts = CaptureOpts::default();
+        opts.force_popover = true;
+        opts.selection = Some(((2, 15), (2, 19))); // "bold" inside the ** markers
+        opts.dpi = dpi;
+        opts.canvas = canvas;
+
+        let png = dir.join("popover.png");
+        capture_with(&png, &buf, &opts).expect("popover capture renders");
+        let j: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+                .unwrap();
+        let pop = &j["popover"];
+        assert_eq!(pop["shown"], serde_json::json!(true), "forced popover is shown: {pop}");
+        let card = pop["card"].as_array().expect("card rect");
+        let cx = card[0].as_f64().unwrap() as f32;
+        let cy = card[1].as_f64().unwrap() as f32;
+        let ch = card[3].as_f64().unwrap() as f32;
+        let b = pop["buttons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["label"] == serde_json::json!("B"))
+            .expect("B button");
+        assert_eq!(b["active"], serde_json::json!(true), "[{label}] B lights inside **bold**");
+        let bx0 = b["x0"].as_f64().unwrap() as f32;
+
+        let img = image::open(&png).expect("decode popover png").to_rgba8();
+        // Card-interior background: left of the FIRST pill's own halo (the lit wash
+        // extends 4px left of `B`'s ink; sample 4px further left, inside the HPAD gap).
+        let bg = *img.get_pixel((cx + 4.0) as u32, (cy + ch * 0.5) as u32);
+        // The pill's wash column: inside its horizontal halo, LEFT of the glyph ink,
+        // so every differing row is pure wash (never letter ink).
+        let px = (bx0 - 2.0) as u32;
+        let mut pill_top: Option<u32> = None;
+        let mut pill_bot: Option<u32> = None;
+        for y in (cy + 2.0) as u32..=(cy + ch - 2.0) as u32 {
+            let p = img.get_pixel(px, y);
+            let d = (p[0] as i32 - bg[0] as i32).abs()
+                + (p[1] as i32 - bg[1] as i32).abs()
+                + (p[2] as i32 - bg[2] as i32).abs();
+            if d > 40 {
+                pill_top.get_or_insert(y);
+                pill_bot = Some(y);
+            }
+        }
+        let pill_top = pill_top.expect("lit wash pill paints in B's column") as f32;
+        let pill_bot = pill_bot.expect("lit wash pill paints in B's column") as f32;
+
+        let gap_top = pill_top - cy;
+        let gap_bot = (cy + ch) - pill_bot;
+        // INSIDE the card (a real gap each side — the pill never touches the rim) ...
+        assert!(
+            gap_top >= 1.5 && gap_bot >= 1.5,
+            "[{label}] pill [{pill_top}, {pill_bot}] must sit inside card [{cy}, {}] \
+             (gaps {gap_top:.2}/{gap_bot:.2})",
+            cy + ch
+        );
+        // ... and vertically CENTERED: the gap above equals the gap below within
+        // antialias tolerance (an off-center pill reads as chin/forelock).
+        assert!(
+            (gap_top - gap_bot).abs() <= 2.5,
+            "[{label}] pill gaps must be symmetric: {gap_top:.2} above vs {gap_bot:.2} below"
+        );
+    }
 
     crate::popover::set_popover_on(saved);
     let _ = std::fs::remove_dir_all(&dir);
@@ -1080,7 +1233,7 @@ fn popover_labels_demonstrate_their_own_effects() {
     // The roster speaks LETTERS, never raw syntax.
     let rows = pop["buttons"].as_array().expect("buttons array");
     let labels: Vec<&str> = rows.iter().map(|b| b["label"].as_str().unwrap()).collect();
-    assert_eq!(labels, vec!["B", "I", "A", "C", "S", "H", "Link"], "self-demonstrating labels");
+    assert_eq!(labels, vec!["B", "I", "A", "code", "S", "H", "Link"], "self-demonstrating labels");
     let span_of = |label: &str| -> (f32, f32) {
         let b = rows.iter().find(|b| b["label"] == serde_json::json!(label)).unwrap();
         (b["x0"].as_f64().unwrap() as f32, b["x1"].as_f64().unwrap() as f32)
@@ -1142,7 +1295,7 @@ fn popover_labels_demonstrate_their_own_effects() {
     // step / translucent wash, not full ink) but far above antialias noise.
     let beside = |x0: f32, y: u32| -> i32 { diff_sum(img.get_pixel((x0 - 2.0) as u32, y)) };
     let (ax0, _) = span_of("A");
-    let (cx0, _) = span_of("C");
+    let (cx0, _) = span_of("code");
     let (bx0, _) = span_of("B");
     assert!(
         beside(ax0, y_mid) > 12,
@@ -1151,7 +1304,7 @@ fn popover_labels_demonstrate_their_own_effects() {
     );
     assert!(
         beside(cx0, y_mid) > 12,
-        "the C button's code pill paints beside its letter (got {})",
+        "the code button's pill paints beside its first glyph (got {})",
         beside(cx0, y_mid)
     );
     assert!(
@@ -1334,6 +1487,10 @@ fn diff_panel_card_dressing_is_visible_around_the_column_in_every_world() {
         );
     }
 
-    crate::theme::set_active_by_name("Tawny");
+    // Leave the process-global active world as found — DEFAULT_THEME, NOT Tawny.
+    // The loop ends on Wagtail; restoring the wrong world leaks it to whatever
+    // serial()-ordered test runs next (it broke `popover_lit_wash_pill…`, whose
+    // pill-contrast threshold clears on the default world but not on Tawny).
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
     let _ = std::fs::remove_dir_all(&dir);
 }

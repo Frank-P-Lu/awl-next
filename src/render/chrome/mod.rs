@@ -44,18 +44,38 @@ const DIFF_PANEL_TOP: f32 = 8.0;
 /// `prepare_diff_panel`.)
 const DIFF_PANEL_BOTTOM: f32 = 14.0;
 
+/// How much of the float trio draws around a summoned card's opaque fill — the
+/// ONE elevation vocabulary every [`set_float_quads`] caller names explicitly
+/// (no bare bool a new panel can pass without thinking).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::render) enum FloatElevation {
+    /// Drop shadow + raised border + card — the large summoned panels
+    /// (overlay cards, which-key, HUD, menus, the caret/spell float).
+    Shadowed,
+    /// Raised border + card, NO shadow — the FORMAT POPOVER's shape (and the
+    /// DIFF-AS-PREVIEW panel). Its card is barely two line-heights tall, so the
+    /// hard-edged shadow quad hanging ~9px below the rim OUT-MASSED the card's
+    /// own 7px pad and read as a "fat chin" under the button row (on a dark
+    /// world the ink-alpha "shadow" composites LIGHTER than the page — a bright
+    /// slab, not depth). The 1px rim + the `base_300` value step carry a
+    /// micro-strip's elevation alone (DESIGN §5: depth by value, not
+    /// drop-shadows).
+    Rimmed,
+    /// Card fill alone — a caller whose OWN backdrop (blur/scrim) already
+    /// carries the card's contrast, so only a TRUE 1-BIT world (where that
+    /// backdrop is disabled outright) needs the crisp border to read at all.
+    Flat,
+}
+
 /// Upload the three FLOAT-PANEL elevation quads (drop `shadow` -> raised `border` ->
 /// opaque `card`) for `rect`, or PARK all three empty when `rect` is `None`. Shared by
 /// the reusable [`TextPipeline::prepare_float_panel`] (the caret-preview / spell
 /// panels), the which-key panel, and the centered-overlay card (`overlay.rs`) — each
 /// passes ITS OWN three pipelines, so summoned micro-panels never race the same
 /// quads. `card` is drawn last (on top of its shadow + border), matching the
-/// painter's-order draw in `render.rs`. `elevated = false` still draws the CARD at
-/// `rect` (the fill always shows) but parks the shadow + border empty — the shape a
-/// caller uses when its OWN backdrop (blur/scrim) already carries the card's
-/// contrast, so only a TRUE 1-BIT world (where that backdrop is disabled outright)
-/// needs the crisp white border to read at all. Every EXISTING caller passes
-/// `elevated: true` (unconditional elevation, its pre-existing behaviour).
+/// painter's-order draw in `render.rs`. `elevation` picks how much of the trio
+/// draws ([`FloatElevation`]); the quads a shape omits are prepared EMPTY, never
+/// left stale from a previous frame.
 #[allow(clippy::too_many_arguments)]
 fn set_float_quads(
     shadow: &mut SelectionPipeline,
@@ -66,20 +86,23 @@ fn set_float_quads(
     width: u32,
     height: u32,
     rect: Option<[f32; 4]>,
-    elevated: bool,
+    elevation: FloatElevation,
 ) {
     match rect {
         Some([x, y, w, h]) => {
-            if elevated {
+            if elevation == FloatElevation::Shadowed {
                 // Drop SHADOW: offset DOWN + a touch wider, translucent ink, so the
                 // card reads as risen a step above the document (depth by value,
                 // DESIGN §8).
                 shadow.prepare(device, queue, width, height, &[[x - 2.0, y + 4.0, w + 4.0, h + 6.0]]);
+            } else {
+                shadow.prepare(device, queue, width, height, &[]);
+            }
+            if elevation != FloatElevation::Flat {
                 // Crisp raised BORDER edge: a slightly larger surface-step rect whose
                 // 1px rim peeks past the card, giving the box a clean, present edge.
                 border.prepare(device, queue, width, height, &[[x - 1.0, y - 1.0, w + 2.0, h + 2.0]]);
             } else {
-                shadow.prepare(device, queue, width, height, &[]);
                 border.prepare(device, queue, width, height, &[]);
             }
             card.prepare(device, queue, width, height, &[[x, y, w, h]]);
@@ -358,7 +381,7 @@ impl TextPipeline {
             width,
             height,
             rect,
-            true, // this primitive's every use wants unconditional elevation
+            FloatElevation::Shadowed, // this primitive's every use wants full elevation
         );
     }
 
@@ -375,17 +398,16 @@ impl TextPipeline {
     /// RIMMED, NOT SHADOWED (the chin-round decision, mirroring the popover): a
     /// large panel's ink-alpha drop-shadow slab composites LIGHTER than a dark
     /// page — a bright bar hanging below the card that out-masses it (DESIGN §8,
-    /// depth by value, not drop-shadows). So the shadow pipeline stays PARKED and
-    /// the depth reads from the rim alone. `set_float_quads(elevated: false)`
-    /// draws just the card (shadow + its default rim empty); the rim is drawn
-    /// HERE so its focus cue lives in one place. (On main, where `set_float_quads`
-    /// takes `FloatElevation`, this call maps to `FloatElevation::Rimmed`.)
+    /// depth by value, not drop-shadows). So this rides the ONE elevation owner's
+    /// [`FloatElevation::Rimmed`] arm — shadow pipeline PARKED, the depth reads
+    /// from the rim + card alone (the SAME vocabulary the format popover names).
     ///
-    /// FOCUS CUE: when Tab moved the keyboard focus INTO the panel
-    /// (`diff_panel_focus`), the rim strengthens one value step
-    /// (`surface_selected` → content ink) AND widens one px (1 → 2) — the
-    /// value-free half of the cue, so it still reads on a one-bit world where
-    /// the ink ladder collapses. Never amber (DESIGN §3).
+    /// FOCUS CUE: `Rimmed` draws a default 1px rim at the pipeline's stored tint;
+    /// this panel then REFINES that rim in place — its own value
+    /// (`surface_selected`), stepped up one value step to content ink AND widened
+    /// one px (1 → 2) when Tab moved keyboard focus INTO the panel
+    /// (`diff_panel_focus`). The value-free half (the width bump) still reads on a
+    /// one-bit world where the ink ladder collapses. Never amber (DESIGN §3).
     pub(super) fn prepare_diff_panel(
         &mut self,
         device: &wgpu::Device,
@@ -403,14 +425,15 @@ impl TextPipeline {
             width,
             height,
             rect,
-            false, // RIMMED: park the shadow slab (the chin-round decision)
+            FloatElevation::Rimmed, // shadow parked; rim + card carry the depth
         );
-        // The rim is drawn here for BOTH focus states (the shape owner parked it):
-        // a crisp raised edge one px past the card by default, TWO px + one value
-        // step up to content ink when Tab moved focus into the panel — the calm
-        // focus cue, value + value-free so it survives a one-bit world. The rect
-        // sits a touch larger than the card and draws BEHIND it (painter's order
-        // in `render.rs`: shadow → border → card), so only the rim peeks out.
+        // FOCUS CUE — refine the rim `set_float_quads` just drew: the panel's own
+        // value by default, stepped up to content ink AND widened 1→2px when Tab
+        // moved focus in. The color is baked per-instance at `prepare` time, so
+        // `set_color` needs the following `prepare` (which also re-tints the rim
+        // the shared owner drew with the pipeline's stale color). The rect sits a
+        // touch larger than the card and draws BEHIND it (painter's order in
+        // `render.rs`: shadow → border → card), so only the rim peeks out.
         if let Some([x, y, w, h]) = rect {
             let focused = self.diff_panel_focus;
             self.diffpanel_border.set_color(if focused {
@@ -486,8 +509,13 @@ impl TextPipeline {
         // dev probe (the PALETTE-COMPOSITION round's light-world-border A/B; no
         // world's data flips). Composes with the new anchor + header gap freely —
         // the rim just traces the card rect, wherever it sits.
-        let elevated = rect.is_some()
-            && crate::render::effective_card_elevation() == theme::Elevation::Bordered;
+        let elevation = if rect.is_some()
+            && crate::render::effective_card_elevation() == theme::Elevation::Bordered
+        {
+            FloatElevation::Shadowed
+        } else {
+            FloatElevation::Flat
+        };
         set_float_quads(
             &mut self.panel_shadow,
             &mut self.panel_border,
@@ -497,7 +525,7 @@ impl TextPipeline {
             width,
             height,
             rect,
-            elevated,
+            elevation,
         );
     }
 }

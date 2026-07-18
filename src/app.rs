@@ -4716,8 +4716,17 @@ mod tests {
             // (`persist_cjk_priority_writes_the_whole_ordered_ladder_to_config`),
             // inside its own `fs::with_fs(fake, ..)` closure with an `InMemoryFs`
             // handle — proves what `App::persist_cjk_priority` writes to
-            // `config.path` on disk, same CONTROL + INSPECT need.
-            ("app/files.rs", 7),
+            // `config.path` on disk, same CONTROL + INSPECT need. Plus 2
+            // SPELLCHECK x CONFIG-RELOAD tests (the spell-toggle-x-theme
+            // investigation, 2026-07-18:
+            // `reload_config_absent_spellcheck_key_leaves_global_untouched` +
+            // `reload_config_reapplies_a_persisted_spellcheck_value_immediately`),
+            // each inside its own `fs::with_fs(fake, ..)` closure with an
+            // `InMemoryFs` handle — they exist specifically to prove what
+            // `App::reload_config` reads back from `config.path` on disk (and,
+            // for the absent-key case, that it must NOT force a default), same
+            // CONTROL + INSPECT need `new_hermetic` hides.
+            ("app/files.rs", 9),
             // 9 LIFETIME STATS + USAGE LEDGER + DISCOVERABILITY tests, each inside its own
             // `fs::with_fs(fake, ..)` closure seeded with an `InMemoryFs` — they exist
             // specifically to prove what the tracking hooks / the ledger's

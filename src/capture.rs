@@ -309,7 +309,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // NAMED row also re-shapes its existing cells (name as the primary `items` text,
 // "when · +N −M" in `bindings`); unnamed rows and a default capture are
 // byte-identical.
-// `/176` — DIFF-AS-PREVIEW: the History picker's live preview IS the writer's
+// `/176` — PER-WORLD HEADING WEIGHT (+ Ladder J): the `theme` block gains
+// `heading_bold` — the EFFECTIVE section-heading weight bit this capture rendered
+// with (the active world's `Theme::heading_bold` folded through the ONE owner
+// `markdown::heading_weight_bold`, so the `AWL_HEADING_BOLD_FORCE` gallery knob is
+// reflected honestly). `true` ⇒ `##`/`###`+ shaped at the world's real bundled
+// Bold; the TITLE (`#`) never bolds regardless. The size ladder also retuned
+// (Ladder J: TITLE 1.6 / SECTION 1.3 / SUBHEAD 1.15), so markdown captures'
+// heading geometry changes everywhere — expected, not a schema matter.
+// `/177` — DIFF-AS-PREVIEW: the History picker's live preview IS the writer's
 // diff now (the page below the card renders the marked-up-manuscript transcript
 // of the current buffer vs the highlighted version, dressed as a card — the old
 // plain-content preview is a logged v1 trim, and the separate Compare TAKEOVER
@@ -322,7 +330,7 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // harness. `overlay.preview_id` keeps its meaning (the compared version's id);
 // the previewed `text` is now the transcript. A default capture is
 // byte-identical apart from the two new always-present overlay keys.
-pub const SCHEMA_VERSION: u32 = 176;
+pub const SCHEMA_VERSION: u32 = 177;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

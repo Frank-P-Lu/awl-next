@@ -104,7 +104,9 @@ mod spans;
 mod tables;
 
 pub use conceal::ConcealKind;
-pub use headings::{headings, headings_from_spans, heading_scale, type_scale, Heading};
+pub use headings::{
+    heading_scale, heading_weight_bold, headings, headings_from_spans, type_scale, Heading,
+};
 #[allow(unused_imports)] // ImageRef: public API surface, no in-crate caller outside tests
 pub use refs::{image_refs, image_width_hint_edit, link_at, link_at_full, parse_image_source, ImageRef, LinkAt};
 #[allow(unused_imports)] // ListItem/READING_WPM: public API surface, no in-crate caller today
