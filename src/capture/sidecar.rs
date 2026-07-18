@@ -155,7 +155,7 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"popover\": {popover},\n  \"tables\": {tables},\n  \"xray\": {xray},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"streaks\": {streaks},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers},\n  \"diff\": {diff}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp}, \"heading_bold\": {thb} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"popover\": {popover},\n  \"tables\": {tables},\n  \"xray\": {xray},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"streaks\": {streaks},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers},\n  \"diff\": {diff}{caret_extra}\n}}\n",
         schema_json = json_string(&schema),
         caret_extra = caret_extra,
         cjk = cjk_json(pipeline),
@@ -198,6 +198,13 @@ pub(super) fn write_sidecar(
         tm = json_string(if active.dark { "dark" } else { "light" }),
         tb100 = json_string(&active.base_100.hex()),
         tp = json_string(&active.primary.hex()),
+        // The EFFECTIVE heading-weight bit this capture rendered with: the active
+        // world's `Theme::heading_bold` folded through THE one owner
+        // (`markdown::heading_weight_bold`, at the SECTION level — the first rung
+        // the bit can reach; the TITLE never bolds), so the sidecar honestly
+        // reflects the `AWL_HEADING_BOLD_FORCE` gallery knob too and can never
+        // drift from the renderer's own gate.
+        thb = crate::markdown::heading_weight_bold(active.heading_bold, 2),
         cm = json_string(caret_mode),
         left = pipeline.text_left(),
         top = render::TEXT_TOP + pipeline.menubar_reserve(),
@@ -425,7 +432,7 @@ fn overlay_json(opts: &CaptureOpts, pipeline: &TextPipeline) -> String {
                 .map(|m| json_string(m))
                 .unwrap_or_else(|| "null".into());
             format!(
-                "{{ \"active\": {}, \"mode\": {}, \"title\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"return_to\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"preview_id\": {}, \"show_hidden\": {}, \"capture\": {}, \"empty\": {}, \"window\": {}, \"items\": [{}], \"bindings\": [{}], \"git\": [{}] }}",
+                "{{ \"active\": {}, \"mode\": {}, \"title\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"return_to\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"preview_id\": {}, \"diff_focus\": {}, \"diff_scroll\": {}, \"show_hidden\": {}, \"capture\": {}, \"empty\": {}, \"window\": {}, \"items\": [{}], \"bindings\": [{}], \"git\": [{}] }}",
                 o.active,
                 json_string(o.mode),
                 json_string(o.title),
@@ -440,6 +447,8 @@ fn overlay_json(opts: &CaptureOpts, pipeline: &TextPipeline) -> String {
                 lens_strip,
                 sections,
                 preview_id,
+                o.diff_focus,
+                o.diff_scroll,
                 o.show_hidden,
                 capture,
                 empty,
@@ -449,7 +458,7 @@ fn overlay_json(opts: &CaptureOpts, pipeline: &TextPipeline) -> String {
                 git
             )
         }
-        None => "{ \"active\": false, \"mode\": null, \"title\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"return_to\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"preview_id\": null, \"show_hidden\": false, \"capture\": null, \"empty\": null, \"window\": null, \"items\": [], \"bindings\": [], \"git\": [] }".to_string(),
+        None => "{ \"active\": false, \"mode\": null, \"title\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"return_to\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"preview_id\": null, \"diff_focus\": false, \"diff_scroll\": 0, \"show_hidden\": false, \"capture\": null, \"empty\": null, \"window\": null, \"items\": [], \"bindings\": [], \"git\": [] }".to_string(),
     }
 }
 
@@ -927,17 +936,21 @@ fn about_json(pipeline: &TextPipeline) -> String {
 /// The summoned WRITING STREAKS card's state (`streaks.rs`): `open` is false by
 /// default (a default capture is byte-identical), true when opened via the palette
 /// "Writing streaks" command / the `--streaks` capture flag / `--keys` replaying
-/// it. The figures (`streak`/`today_words`) + the `cells` intensity grid are the
-/// LIVE year the App pushed OR the fixed synthetic `streaks::placeholder` in a
-/// capture (no persisted store), via the SAME `streaks_effective_view` owner the
-/// pixels use — so a `--streaks` capture is deterministic + byte-stable and the
-/// sidecar can never claim a figure the card doesn't draw.
+/// it. `view` is which PAGE is showing — `"heatmap"` (the default on every
+/// summon) or `"cumulative"` (flipped by a `--keys "Left"`/`"Right"` replay
+/// while the card is open, the same `apply_core` intercept the live keys ride).
+/// The figures (`streak`/`today_words`/`total_words`) + the `cells` intensity
+/// grid are the LIVE year the App pushed OR the fixed synthetic
+/// `streaks::placeholder` in a capture (no persisted store), via the SAME
+/// `streaks_effective_view` + `card_view` owners the pixels use — so a
+/// `--streaks` capture is deterministic + byte-stable and the sidecar can never
+/// claim a figure (or a page) the card doesn't draw.
 fn streaks_json(pipeline: &TextPipeline) -> String {
     let s = pipeline.streaks_report();
     let cells = s.cells.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",");
     format!(
-        "{{ \"open\": {}, \"streak\": {}, \"today_words\": {}, \"cells\": [{}] }}",
-        s.open, s.streak, s.today_words, cells
+        "{{ \"open\": {}, \"view\": \"{}\", \"streak\": {}, \"today_words\": {}, \"total_words\": {}, \"cells\": [{}] }}",
+        s.open, s.view, s.streak, s.today_words, s.total_words, cells
     )
 }
 

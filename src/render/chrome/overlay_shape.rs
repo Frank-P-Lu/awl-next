@@ -23,14 +23,24 @@ const PLACARD_INSET: f32 = 12.0;
 /// byte-identical to before the round.
 const PLACARD_REFERENCE_SHORT_SIDE: f32 = crate::capture::CANVAS_HEIGHT as f32;
 
+/// PROPORTIONAL PLACARD SIZING — the FROZEN calibration anchor: the value of the
+/// markdown TITLE rung at the moment the placard fractions were calibrated by eye
+/// (pre-Ladder-J `type_scale::TITLE`, 1.8). Deliberately a LITERAL, decoupled from
+/// the live document ladder: the per-world placard look is a user-picked identity,
+/// and a later document-ladder retune (Ladder J moved TITLE to 1.6) must never
+/// silently resize every world's wordmark. Chrome reads THIS anchor; only the
+/// document reads the live rung.
+const PLACARD_CALIBRATION_TITLE: f32 = 1.8;
+
 /// PROPORTIONAL PLACARD SIZING — the wordmark height as a fraction of the window
 /// short side PER UNIT of a world's `scale` dial, chosen so that at the reference
 /// short side ([`PLACARD_REFERENCE_SHORT_SIDE`]) the height equals the old
-/// `FONT_SIZE · TITLE · scale`. Derivation: `FONT_SIZE · TITLE / REFERENCE` =
+/// `FONT_SIZE · TITLE · scale` (TITLE as calibrated —
+/// [`PLACARD_CALIBRATION_TITLE`]). Derivation: `FONT_SIZE · TITLE / REFERENCE` =
 /// `24 · 1.8 / 800` = `0.054`. So Firetail (`scale` 4.5) reproduces at `24.3%` of
 /// the short side, the `scale` 3.0 posters at `16.2%` — the board's "~20%" band.
 const PLACARD_HEIGHT_PER_SCALE: f32 =
-    crate::render::FONT_SIZE * crate::markdown::type_scale::TITLE / PLACARD_REFERENCE_SHORT_SIDE;
+    crate::render::FONT_SIZE * PLACARD_CALIBRATION_TITLE / PLACARD_REFERENCE_SHORT_SIDE;
 
 /// PROPORTIONAL PLACARD SIZING — the clamp FLOOR (px): a wordmark never shapes
 /// smaller than this however small the window (below the card's narrow-fallback
@@ -170,8 +180,8 @@ impl TextPipeline {
     /// empty for the two kinds that orient via their own modal prompt
     /// instead) as a large, corner-anchored, DIM wordmark into
     /// `placard_buffer` — sized by `scale` over the document body's own font
-    /// size × the markdown heading TITLE rung
-    /// (`markdown::type_scale::TITLE`), so a world dials how loud its
+    /// size × the frozen calibration TITLE anchor
+    /// ([`PLACARD_CALIBRATION_TITLE`]), so a world dials how loud its
     /// wordmark reads with ONE number, never a second magic constant — and
     /// CAPPED by the canvas itself (the fit-to-canvas shrink below): the
     /// window's own width is the ceiling the dial can never shout past.
@@ -419,6 +429,13 @@ impl TextPipeline {
         // where the selected row keeps its content ink and the shaper is
         // byte-identical to before.
         selected_ink: Option<glyphon::Color>,
+        // ARM B LIVING-BAND PROBE — the DISPLAY rows the moving band COVERS this
+        // frame (whose ink flips instead of the static selected row). `None` on
+        // every ordinary run: the shaper flips exactly `overlay_selected`
+        // (byte-identical). Threaded through BOTH the flat AND the FACETED path
+        // (the demo surface is the Cmd-P palette, which is faceted) so the ink
+        // rides the band wherever the fill animates it.
+        covered: Option<&[usize]>,
     ) -> bool {
         // FACETED (lens-strip) pickers — the theme worlds AND the Cmd-P command
         // palette / Settings / Browse / … once a lens strip is populated — lay out
@@ -426,10 +443,12 @@ impl TextPipeline {
         // shaper, which also records the active-lens underline rect) PLUS, when the
         // picker fills a right column (chords / times / git), that column aligned to
         // the plan's item rows. `shape_faceted` owns both halves and returns whether
-        // a right column was built.
+        // a right column was built. It ALSO threads `covered` through to the
+        // section-grouped shaper, so the living-band ink flip works on the palette
+        // (the demo surface) exactly like the flat pickers.
         self.overlay_right_shown = false;
         if geom.theme {
-            return self.shape_faceted(geom, ink, muted, selected_ink);
+            return self.shape_faceted(geom, ink, muted, selected_ink, covered);
         }
         let visible = geom.visible;
         let top_idx = geom.top_idx;
@@ -494,7 +513,7 @@ impl TextPipeline {
                     _ => String::new(),
                 })
                 .collect();
-            self.shape_overlay_names(geom, ink, muted, selected_ink, &rows, &trailing);
+            self.shape_overlay_names(geom, ink, muted, selected_ink, covered, &rows, &trailing);
             return false;
         }
         let widest_right = if has_right {
@@ -515,7 +534,7 @@ impl TextPipeline {
                 }
             })
             .collect();
-        self.shape_overlay_names(geom, ink, muted, selected_ink, &rows, &[]);
+        self.shape_overlay_names(geom, ink, muted, selected_ink, covered, &rows, &[]);
         if !has_right {
             return false;
         }
@@ -538,7 +557,7 @@ impl TextPipeline {
         let rows: Vec<String> = (0..visible)
             .map(|row| rowlayout::fit_primary(&self.overlay_items[top_idx + row], full))
             .collect();
-        self.shape_overlay_names(geom, ink, muted, selected_ink, &rows, &[]);
+        self.shape_overlay_names(geom, ink, muted, selected_ink, covered, &rows, &[]);
         false
     }
 
@@ -574,6 +593,11 @@ impl TextPipeline {
         ink: glyphon::Color,
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
+        // ARM B LIVING-BAND PROBE — the DISPLAY (plan-line) rows the moving band
+        // covers this frame; their ink flips instead of the static selected item.
+        // `None` on every ordinary run → the theme shaper flips exactly the
+        // selected item (byte-identical).
+        covered: Option<&[usize]>,
     ) -> bool {
         // The dim RIGHT column through the SAME one-owner precedence the flat path
         // reads (bindings → times → git; only one is ever populated). Empty on the
@@ -625,7 +649,7 @@ impl TextPipeline {
         };
         // The section-grouped name column + the active-lens underline (unchanged,
         // save the inline shortcuts composed onto the ITEM rows under hug bars).
-        self.overlay_shape_theme(geom, ink, muted, selected_ink, &trailing);
+        self.overlay_shape_theme(geom, ink, muted, selected_ink, covered, &trailing);
         if !has_right || hug_inline {
             return false;
         }
@@ -708,6 +732,11 @@ impl TextPipeline {
         ink: glyphon::Color,
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
+        // ARM B LIVING-BAND PROBE — the DISPLAY rows the moving band covers this
+        // frame; their ink flips instead of the static selected row ("ink rides
+        // the band"). `None` on every ordinary run → the shaper flips exactly
+        // `sel_vis` (byte-identical). See [`livingband::covered_rows`].
+        covered: Option<&[usize]>,
         rows: &[String],
         // V7 TASTE-GATE — one trailing INLINE-SHORTCUT string per candidate row
         // (already `INLINE_SHORTCUT_GAP`-prefixed; empty = none). Non-empty ONLY
@@ -812,8 +841,15 @@ impl TextPipeline {
             if !(!has_query && row == 0) {
                 spans.push(("\n", mk(ink)));
             }
+            // INK RIDES THE BAND: under the living-band probe (`covered` set) the
+            // flip follows whichever rows the MOVING band covers this frame;
+            // otherwise it flips exactly the settled selected row (byte-identical).
+            let flip = match covered {
+                Some(rows) => rows.contains(&row),
+                None => row == sel_vis,
+            };
             let (name_c, dir_c) = match selected_ink {
-                Some(c) if row == sel_vis => (c, c),
+                Some(c) if flip => (c, c),
                 _ => (ink, muted),
             };
             let split = if content.ends_with('/') {

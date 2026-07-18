@@ -16,13 +16,20 @@ use std::ops::Range;
 /// rungs (rather than scattering bare `1.8`/`1.5` literals) makes the ladder
 /// explicit and keeps the ratios tunable in ONE place.
 pub mod type_scale {
-    /// h1 — the document / top TITLE (the biggest rung).
-    pub const TITLE: f32 = 1.8;
-    /// h2 — a SECTION head.
-    pub const SECTION: f32 = 1.5;
-    /// h3+ — a SUBHEAD. Nudged from the old 1.3 to 1.25 so the steps down the
-    /// ladder ease evenly (it sits closer to body, smoothing the ratio bump).
-    pub const SUBHEAD: f32 = 1.25;
+    /// h1 — the document / top TITLE (the biggest rung). LADDER J (the
+    /// heading-probe pick, user-decided 2026-07-18, superseding the original
+    /// 1.8/1.5/1.25 ladder): the title stays Regular WEIGHT always (see
+    /// [`super::heading_weight_bold`] — `#` never bolds, on any world), so it
+    /// spends SIZE alone; 1.6 buys clear daylight over the SECTION rung below
+    /// it (which may carry per-world bold) without shouting the way 1.8 did.
+    pub const TITLE: f32 = 1.6;
+    /// h2 — a SECTION head. LADDER J: 1.3 — size spends less here than the old
+    /// 1.5; on the worlds whose [`crate::theme::Theme::heading_bold`] bit is
+    /// set, WEIGHT backfills the difference.
+    pub const SECTION: f32 = 1.3;
+    /// h3+ — a SUBHEAD. LADDER J: 1.15 — one quiet step over body, weight
+    /// (where the world's bit grants it) doing the rest.
+    pub const SUBHEAD: f32 = 1.15;
     /// BODY prose / code — the baseline rung (no scaling).
     pub const BODY: f32 = 1.0;
     /// LABEL — UI metadata that should read SMALLER than body: a future gutter's
@@ -57,6 +64,68 @@ pub fn heading_scale(level: u8) -> f32 {
         2 => SECTION,
         _ => SUBHEAD,
     }
+}
+
+/// THE ONE OWNER of "does THIS heading level shape at real BOLD weight?" —
+/// the weight half of the heading ladder, beside [`heading_scale`]'s size
+/// half. Two facts compose here and nowhere else:
+///
+///  - **The per-world ONE BIT** (`theme_bit`, the caller passes its world's
+///    [`crate::theme::Theme::heading_bold`]): whether this world's display
+///    face wants weight in its hierarchy at all. Serif worlds lean `false`
+///    (a serif's stroke contrast carries hierarchy structurally); the
+///    mono-display worlds lean `true` (uniform strokes need weight); see the
+///    per-world reasoning in `theme/worlds.rs`.
+///  - **The level gate**: TITLE (`#`) NEVER bolds, on any world, under any
+///    override — Ladder J spends pure SIZE there (1.6x) — so only SECTION
+///    (`##`) and SUBHEAD (`###`+) take the world's bit. `0` (a non-heading
+///    line) is always `false`.
+///
+/// The render seam is `render/spans.rs::md_attrs`'s `MdKind::Heading` arm
+/// (mirroring `MdKind::Bold`'s real bundled-700-face request — every display
+/// family ships a genuine Bold under its own family name, so this is a real
+/// weight change, never synthetic); the capture sidecar reports the same
+/// composition (`theme.heading_bold`), so renderer and oracle can't drift.
+///
+/// The dev knob `AWL_HEADING_BOLD_FORCE=on|off` (env, CLI-invisible — the
+/// `AWL_CJK_FORCE` precedent) overrides the BIT (never the level gate) so the
+/// A/B galleries shoot both states without data edits; unset, it is a total
+/// no-op and a default capture is a pure function of the world's own bit.
+pub fn heading_weight_bold(theme_bit: bool, level: u8) -> bool {
+    heading_weight_bold_with(heading_bold_force(), theme_bit, level)
+}
+
+/// [`heading_weight_bold`]'s PURE core, with the (memoized, process-wide) env
+/// force injected as a plain argument so unit tests can exercise all three
+/// force states without touching the environment: `Some(v)` replaces the
+/// world's bit with `v`; `None` (the shipping default) respects it. The
+/// TITLE-never-bold gate applies in every arm.
+fn heading_weight_bold_with(force: Option<bool>, theme_bit: bool, level: u8) -> bool {
+    let bit = force.unwrap_or(theme_bit);
+    bit && level >= 2
+}
+
+/// The `AWL_HEADING_BOLD_FORCE` dev knob, read ONCE and memoized (the
+/// `AWL_CJK_FORCE` read-once precedent): `"on"` → `Some(true)`, `"off"` →
+/// `Some(false)`, anything else / unset → `None` (a total no-op — the
+/// determinism promise: a capture with the env unset is a pure function of
+/// the active world's data).
+fn heading_bold_force() -> Option<bool> {
+    static V: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+    *V.get_or_init(|| match std::env::var("AWL_HEADING_BOLD_FORCE").ok().as_deref() {
+        Some("on") => Some(true),
+        Some("off") => Some(false),
+        _ => None,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn heading_weight_bold_with_for_tests(
+    force: Option<bool>,
+    theme_bit: bool,
+    level: u8,
+) -> bool {
+    heading_weight_bold_with(force, theme_bit, level)
 }
 
 /// One document HEADING, distilled for the summoned outline picker: its `level`

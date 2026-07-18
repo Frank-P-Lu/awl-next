@@ -114,6 +114,12 @@ mod reports;
 /// buffer / cursor / selection state, carved out verbatim. Byte-identical.
 mod rects;
 
+/// ARM B "LIVING SELECTION BAND" choreography PROBES (the P5-cursor motion spec).
+/// Pure phase math (morph stretch + two-shape crossing) plus the `AWL_LIVING_BAND`
+/// override/phase-pin knob. Ships ON by default (calm MORPH voice); SETTLES to a
+/// byte-identical single band in every capture / under Reduce Motion.
+pub(crate) mod livingband;
+
 /// INLINE IMAGES — the decode + GPU-upload cache (native-only, PNG). Keyed by
 /// canonical path + mtime; decodes O(visible) and downscales to the display width.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1177,6 +1183,17 @@ pub struct ViewState {
     /// `None` parks every popover quad/glyph empty, so a default capture is
     /// byte-identical.
     pub popover: Option<crate::popover::PopoverModel>,
+    /// DIFF-AS-PREVIEW: true while the History picker's writer's-diff preview is
+    /// what the document shows — the page column dresses as a CARD (the float-panel
+    /// border + elevation around the column, content clipped to the panel band; see
+    /// `prepare_diff_panel` / `doc_clip_band`). False for every ordinary frame, so a
+    /// default capture is byte-identical.
+    pub diff_panel: bool,
+    /// DIFF-AS-PREVIEW focus cue: true when Tab moved the keyboard focus INTO the
+    /// diff panel — its card border strengthens one value step (content ink) and
+    /// widens a px (the value-free half of the cue, so it survives a one-bit
+    /// world). Never amber. Inert unless `diff_panel`.
+    pub diff_panel_focus: bool,
 }
 
 impl ViewState {
@@ -1241,6 +1258,8 @@ impl ViewState {
             cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
             eol: crate::buffer::Eol::Lf,
             popover: None,
+            diff_panel: false,
+            diff_panel_focus: false,
         }
     }
 }
@@ -3093,6 +3112,15 @@ pub struct TextPipeline {
     pub float_shadow: SelectionPipeline,
     pub float_border: SelectionPipeline,
     pub float_card: SelectionPipeline,
+    /// DIFF-AS-PREVIEW panel dressing — its OWN elevation trio (the established
+    /// per-surface pattern: popover/hud/which-key each own theirs), because the
+    /// `float_*` trio belongs to the spell/caret panels and `panel_*` to the very
+    /// picker card floating over this panel the SAME frame. Shadow + border ride
+    /// `set_float_quads`' one shape; the card is the opaque fill the transcript
+    /// draws on. All parked empty unless a History diff preview is up.
+    pub diffpanel_shadow: SelectionPipeline,
+    pub diffpanel_border: SelectionPipeline,
+    pub diffpanel_card: SelectionPipeline,
     /// Text renderer + buffer for the caret-preview panel's sample line (drawn on the
     /// float card). Parked off-screen unless the caret-style picker is open.
     pub preview_renderer: TextRenderer,
@@ -3356,6 +3384,13 @@ pub struct TextPipeline {
     /// under-the-text z-slot; parked empty for `Text`/`Band` and every non-theme
     /// card, so those render byte-identically.
     pub overlay_facet_ghost: SelectionPipeline,
+    /// ARM B LIVING-BAND PROBE only (`AWL_LIVING_BAND=twoshape…`): the
+    /// CROSSING quad the two-shape choreography fills at the world's brightest
+    /// value step where the leading band and its chasing echo overlap — colour
+    /// where they cross, by VALUE (never a hue). Parked EMPTY (zero instances →
+    /// byte-identical) on every ordinary run and every non-two-shape probe, so a
+    /// default capture never sees it. Drawn just ABOVE `overlay_rows`.
+    pub overlay_cross: SelectionPipeline,
     /// THE STIPPLE PLACARD (`theme::PlacardInk::Stipple`): the corner wordmark
     /// rendered as a Bayer-matrix stipple of individual full-ink pixels
     /// instead of ordinary antialiased glyphs. The SHAPING half is shared
@@ -3722,6 +3757,9 @@ pub struct TextPipeline {
     /// `None`. `Some` renders the overlay as a small floating panel anchored at the
     /// word (no blur, no scrim) instead of the centered takeover card.
     overlay_spell: Option<(usize, usize, usize)>,
+    /// DIFF-AS-PREVIEW: mirrors [`ViewState::diff_panel`] / [`ViewState::diff_panel_focus`].
+    diff_panel: bool,
+    diff_panel_focus: bool,
     /// The widest SHAPED suggestion-row width (logical px) for the open SPELL panel,
     /// measured whenever the overlay syncs (0.0 when the panel is closed / empty). The
     /// float panel sizes its card to fit THIS — the longest correction — plus padding,
@@ -4044,6 +4082,12 @@ impl TextPipeline {
         let float_border =
             SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
         let float_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        // DIFF-AS-PREVIEW panel dressing (same float tokens; parked until summoned).
+        let diffpanel_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
+        let diffpanel_border =
+            SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
+        let diffpanel_card =
+            SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
         // The caret-preview panel's sample-line text renderer + buffer.
         let preview_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
@@ -4067,6 +4111,11 @@ impl TextPipeline {
         // parked empty for every other skin / card.
         let overlay_facet_ghost =
             SelectionPipeline::new(device, format, theme::muted().rgba_bytes());
+        // ARM B LIVING-BAND PROBE — the two-shape CROSSING quad (see the field's
+        // doc). Starts parked (zero instances → byte-identical); only a
+        // `twoshape` probe with an open Pane overlay ever uploads a rect.
+        let overlay_cross =
+            SelectionPipeline::new(device, format, theme::overlay_band_overlap().rgba_bytes());
         // THE STIPPLE PLACARD: the corner wordmark's Bayer-stipple renderer
         // (see the field's own doc). Ink + density re-read per re-tint; starts
         // parked (zero instances) — only a stipple-placard world with an open
@@ -4243,6 +4292,9 @@ impl TextPipeline {
             float_shadow,
             float_border,
             float_card,
+            diffpanel_shadow,
+            diffpanel_border,
+            diffpanel_card,
             preview_renderer,
             preview_buffer,
             spell_pipeline,
@@ -4309,6 +4361,7 @@ impl TextPipeline {
             overlay_bars,
             overlay_lens_underline,
             overlay_facet_ghost,
+            overlay_cross,
             placard_stipple,
             overlay_theme_underline: None,
             overlay_theme_facet_ghosts: Vec::new(),
@@ -4408,6 +4461,8 @@ impl TextPipeline {
             overlay_lens: Vec::new(),
             overlay_sections: Vec::new(),
             overlay_spell: None,
+            diff_panel: false,
+            diff_panel_focus: false,
             overlay_spell_w: 0.0,
             caret_preview: None,
             caret_demo: crate::caret::CaretDemo::new(),
@@ -4570,12 +4625,21 @@ impl TextPipeline {
         self.float_border
             .set_color(theme::surface_selected().rgba_bytes());
         self.float_card.set_color(theme::base_300().rgba_bytes());
+        // DIFF-AS-PREVIEW panel: shadow/card re-tint here; the BORDER color is
+        // re-decided every `prepare_diff_panel` (it carries the focus cue).
+        self.diffpanel_shadow.set_color(float_shadow_srgba());
+        self.diffpanel_card.set_color(theme::base_300().rgba_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());
         // PER-ITEM LIST SURFACES: the bar surfaces re-tint to the new world's
         // quiet value step (their real per-frame color is set at draw time from the
         // effective bar tokens; this keeps a parked pipeline coherent on a switch).
         self.overlay_bars
             .set_color(theme::surface_selected().rgba_bytes());
+        // ARM B LIVING-BAND PROBE — keep the two-shape crossing quad coherent on a
+        // world switch (its real per-frame color is re-read at draw time). Parked
+        // empty on every ordinary run, so this is inert there.
+        self.overlay_cross
+            .set_color(theme::overlay_band_overlap().rgba_bytes());
         // The theme picker's active-lens underline re-tints to the new world's ink (it
         // is drawn while the picker is up AND the world previews live, so the hairline
         // tracks the previewed world's ink).
@@ -4911,6 +4975,8 @@ impl TextPipeline {
         self.overlay_lens = view.overlay_lens.clone();
         self.overlay_sections = view.overlay_sections.clone();
         self.overlay_spell = view.overlay_spell;
+        self.diff_panel = view.diff_panel;
+        self.diff_panel_focus = view.diff_panel_focus;
         // Measure the widest suggestion NOW (a `&mut FontSystem` is in hand) so the
         // contextual spell panel can size its card to the longest correction, not the
         // anchor word. Cheap + gated: only shaped when the SPELL panel is the open
@@ -5150,6 +5216,92 @@ impl TextPipeline {
         self.overlay_band_from + (target - self.overlay_band_from) * e
     }
 
+    /// ARM B LIVING-BAND PROBE — the band's TRAVEL (`from_top`, `to_top`) + PHASE
+    /// `t` for the morph / two-shape choreography this frame. Two modes:
+    ///
+    /// * PINNED (`force.phase` set — the capture frame-dump path): a synthetic
+    ///   travel from [`livingband::PIN_JUMP_ROWS`] rows BELOW the selected row,
+    ///   sliding up to it, held at the fixed phase. Deterministic (no clock), so
+    ///   `--screenshot` dumps a byte-stable mid-flight frame.
+    /// * LIVE (`force.phase` absent): reuses the SAME `overlay_band_from/last/t`
+    ///   tracking the ordinary slide uses (a fresh overlay settles; a selection
+    ///   move chains from the previous row). [`Self::step_overlay_juice`] advances
+    ///   `overlay_band_t`, and Reduce Motion folds it to `1.0` (settled) — so the
+    ///   whole choreography inherits the accessibility contract for free.
+    ///
+    /// Called ONLY from `overlay_draw_card`'s Pane arm when the probe is set; the
+    /// ordinary path never reaches it, so an unset-env run is byte-identical.
+    pub(in crate::render) fn living_band_phase(
+        &mut self,
+        force: livingband::MotionForce,
+        target: f32,
+        lh: f32,
+    ) -> (f32, f32, f32) {
+        if let Some(phase) = force.phase {
+            let from = target + livingband::PIN_JUMP_ROWS * lh;
+            return (from, target, phase.clamp(0.0, 1.0));
+        }
+        // SETTLE in every unarmed pipeline (every capture) and under Reduce Motion —
+        // mirrors [`Self::overlay_band_drawn`]. A settled frame is `morph_band(target,
+        // target, .., 1.0)` = the exact target rect, so with MORPH (the shipped live
+        // default) a settled capture is BYTE-IDENTICAL to the ordinary single band;
+        // the choreography only breathes in the live app. This is what makes the
+        // on-by-default flip safe, and gives the whole choreography the accessibility
+        // contract (Reduce Motion → no motion) for free.
+        if !self.juice_live || crate::motion::reduced() {
+            self.overlay_band_last = Some(target);
+            self.overlay_band_t = 1.0;
+            return (target, target, 1.0);
+        }
+        match self.overlay_band_last {
+            Some(last) if (last - target).abs() > 0.5 => {
+                self.overlay_band_from = last;
+                self.overlay_band_last = Some(target);
+                self.overlay_band_t = 0.0;
+            }
+            None => {
+                self.overlay_band_from = target;
+                self.overlay_band_last = Some(target);
+                self.overlay_band_t = 1.0;
+            }
+            _ => {}
+        }
+        (self.overlay_band_from, self.overlay_band_last.unwrap_or(target), self.overlay_band_t)
+    }
+
+    /// ARM B LIVING-BAND PROBE — the choreography's drawn rects this frame, from
+    /// the pure phase math ([`livingband`]). Returns `(primary, echo, cross)`
+    /// full-width row rects: `primary` for `overlay_rows` (the leading band),
+    /// `echo` for `overlay_bars` (the chasing echo — empty for the single-band
+    /// MORPH), and `cross` for `overlay_cross` (the brightest crossing — empty
+    /// unless a two-shape overlap exists this frame). Pure over its inputs (no
+    /// GPU, no clock); `&self` only.
+    pub(in crate::render) fn living_band_rects(
+        &self,
+        force: livingband::MotionForce,
+        from: f32,
+        to: f32,
+        t: f32,
+        card_x: f32,
+        card_w: f32,
+        lh: f32,
+    ) -> (Vec<[f32; 4]>, Vec<[f32; 4]>, Vec<[f32; 4]>) {
+        let params = force.choreo.params();
+        if force.choreo.is_two_shape() {
+            let s = livingband::two_shape_band(from, to, lh, t, &params);
+            let primary = vec![[card_x, s.primary_top, card_w, s.height]];
+            let echo = vec![[card_x, s.echo_top, card_w, s.height]];
+            let cross = s
+                .overlap
+                .map(|o| vec![[card_x, o.top, card_w, o.height]])
+                .unwrap_or_default();
+            (primary, echo, cross)
+        } else {
+            let b = livingband::morph_band(from, to, lh, t, &params);
+            (vec![[card_x, b.top, card_w, b.height]], Vec::new(), Vec::new())
+        }
+    }
+
     /// The slant FAN-IN progress this frame (motion choreography 3): the fraction
     /// of the diagonal stair currently drawn. `1.0` (full stagger) in EVERY
     /// capture and on every unarmed / CALM pipeline (byte-identical to the settled
@@ -5374,6 +5526,10 @@ impl TextPipeline {
         // THE PAGE FRAME: the thin writing-column frame (zero rects for every
         // PageFrame::None world, so those stay byte-identical).
         self.prepare_page_frame(device, queue, width, height);
+        // DIFF-AS-PREVIEW: the page-column card dressing (parked on every
+        // ordinary frame). Prepared before the washes/text so its quads sit
+        // under them in the document band (painter's order is the draw fn's).
+        self.prepare_diff_panel(device, queue, width, height);
         self.prepare_wash_layer(device, queue, width, height);
         self.prepare_wysiwyg_wash_layer(device, queue, width, height);
         self.prepare_text_layer(device, queue, width, height)?;
@@ -5627,6 +5783,12 @@ impl TextPipeline {
         // shouldn't: the frame straddles the column boundary, in the margin).
         // Zero instances (draws nothing) for every PageFrame::None world.
         self.page_frame_pipeline.draw(pass);
+        // DIFF-AS-PREVIEW panel dressing: shadow -> border -> card, UNDER every
+        // wash/text layer (the transcript draws ON the card, clipped to it via
+        // `doc_clip_band`). Zero instances on every ordinary frame.
+        self.diffpanel_shadow.draw(pass);
+        self.diffpanel_border.draw(pass);
+        self.diffpanel_card.draw(pass);
         // WYSIWYG value-step panel/pill sit directly ON the ground, BEFORE the
         // syntax washes — so a fenced block's comment/string wash composites over
         // the panel exactly as it does over the bare ground, and a selection over
@@ -5765,6 +5927,10 @@ impl TextPipeline {
         // world, so this is byte-identical there.
         self.overlay_bars.draw(pass);
         self.overlay_rows.draw(pass);
+        // ARM B LIVING-BAND PROBE — the two-shape CROSSING quad sits just ABOVE the
+        // leading band (`overlay_rows`) so the brightest value reads where the two
+        // shapes overlap. Parked empty on every ordinary run → byte-identical.
+        self.overlay_cross.draw(pass);
         // THEME PICKER: the active-lens hairline under the strip (content ink), UNDER
         // the overlay text so the glyphs sit on top. Parked empty for every other card.
         // V6 P5: the Chips ghost pills draw first (inactive, muted stroke), then the

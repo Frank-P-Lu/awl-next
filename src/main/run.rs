@@ -421,7 +421,7 @@ impl<'a> ReplaySession<'a> {
         // gather. `now` stamps the relative labels. History is an explicitly-summoned
         // overlay, so this never runs in a default capture.
         let history_entries: Vec<crate::history::TimelineRow> =
-            if matches!(action, Action::OpenHistory) {
+            if matches!(action, Action::OpenHistory | Action::CompareVersion) {
                 match crate::history::source_path(self.buffer.path(), None, self.buffer.is_note()) {
                     Some(path) => crate::history::timeline_rows(
                         &path,
@@ -720,19 +720,14 @@ impl<'a> ReplaySession<'a> {
             | actions::Effect::SettingValueCommit { .. }
             | actions::Effect::SettingPathPick { .. }
             | actions::Effect::FinishBuffer
-            // KEEP THIS VERSION: pinning a snapshot writes the local-history store,
-            // a live-App-only concern (`App::keep_version`) — the history determinism
-            // gate keeps every store write off the capture path, so this is a no-op
-            // here (the pin/exemption logic is unit-tested in `history/` instead).
-            | actions::Effect::KeepVersion
-            // THE WRITER'S DIFF (Compare with version…): entering the read-only diff
-            // view resolves a history version + renders the transcript, a live-App-only
-            // concern (`App::enter_diff_view_for` / `compare_with_latest`). The capture
-            // renders the diff VIEW through its own env harness (`AWL_DIFF_OLD`/`_NEW`)
-            // instead, so both compare effects are no-ops here; the transcript's pure
-            // serializer + the view's read-only enforcement are unit-tested.
-            | actions::Effect::CompareVersion(_)
-            | actions::Effect::CompareLatest
+            // KEEP THIS VERSION: pinning a (possibly NAMED) snapshot writes the
+            // local-history store, a live-App-only concern (`App::keep_version`) —
+            // the history determinism gate keeps every store write off the capture
+            // path, so this is a no-op here (the pin/name/exemption logic is
+            // unit-tested in `history/` instead; the naming MINIBUFFER's
+            // open/type/cancel flow IS core-driven and stays fully
+            // `--keys`-drivable, mirroring Rename — only the commit is inert).
+            | actions::Effect::KeepVersion { .. }
             // FollowLink (C-c C-o): opening the OS browser is a live-App-only
             // handoff (`App::follow_link`) — a capture must never spawn a browser,
             // so it is a no-op here (the URL extraction itself is unit-tested pure).
@@ -913,9 +908,9 @@ fn capture_screenshot(
                 // diff block) so NO line's WYSIWYG conceal reveals — the reveal is
                 // caret-line-scoped and line 1 carries no markup, so the title's `#`
                 // and every `==`/`>`/strike marker below stay concealed: the clean
-                // marked-up manuscript, never a revealed-raw line. Mirrors
-                // `App::diff_view` (the live read-only view parks the caret the same
-                // way — the ONE reveal-suppression rule, shared, so live == capture).
+                // marked-up manuscript, never a revealed-raw line. Mirrors the live
+                // History-preview fold (`sync_view` parks the caret the same way —
+                // the ONE reveal-suppression rule, shared, so live == capture).
                 buffer.set_cursor(buffer.line_col_to_char(1, 0));
                 opts.diff = Some(capture::DiffInfo {
                     active: true,
@@ -1031,9 +1026,19 @@ fn capture_screenshot(
             // Reflect any still-open overlay in the capture opts (and thus the
             // sidecar `overlay` block).
             if let Some(ov) = &res.overlay {
-                let (info, preview_text) = overlay_capture_info(ov, &buffer);
+                let (info, preview_text, diff) = overlay_capture_info(ov, &buffer);
                 opts.overlay = Some(info);
                 opts.preview_text = preview_text;
+                // DIFF-AS-PREVIEW: surface the preview's diff STATE in the
+                // top-level `diff` block (the AWL_DIFF harness's env request, if
+                // any, was set earlier and wins), and honor the overlay's diff
+                // scroll as the capture's scroll unless the spec pinned one.
+                if opts.diff.is_none() {
+                    opts.diff = diff;
+                }
+                if opts.scroll.is_none() && opts.preview_text.is_some() {
+                    opts.scroll = Some(ov.diff_scroll);
+                }
             }
             // If a selection is requested (or one came from --keys), move the
             // buffer cursor to its END so the caret renders at the cursor end of
@@ -1084,13 +1089,26 @@ fn capture_screenshot(
 pub(crate) fn overlay_capture_info(
     ov: &crate::overlay::OverlayState,
     buffer: &Buffer,
-) -> (capture::OverlayInfo, Option<String>) {
-    // HISTORY timeline: the highlighted row's VERSION previews in the
-    // document itself — resolve it here so the capture folds it over
-    // the snapshot text and the sidecar reports `preview_id` + the
-    // previewed `text` (exactly what the live preview shows).
+) -> (capture::OverlayInfo, Option<String>, Option<capture::DiffInfo>) {
+    // HISTORY timeline (DIFF-AS-PREVIEW): the highlighted row's writer's-DIFF
+    // previews in the document itself — resolve it here so the capture folds
+    // the transcript over the snapshot text and the sidecar reports
+    // `preview_id` + the previewed `text` + the `diff` counts block (exactly
+    // what the live preview shows).
     let preview = history_preview_for(ov, buffer);
-    let preview_text = preview.as_ref().map(|(_, content)| content.clone());
+    let preview_text = preview.as_ref().map(|(_, transcript, _)| transcript.clone());
+    // The sidecar's top-level `diff` block now ALSO reports a History preview's
+    // counts (the same DiffInfo shape the `AWL_DIFF_*` harness fills) — the
+    // label is the picker row the user is looking at.
+    let diff = preview.as_ref().map(|(_, _, c)| capture::DiffInfo {
+        active: true,
+        label: ov.selected_value().unwrap_or("an earlier version").to_string(),
+        struck: c.struck,
+        washed: c.washed,
+        modified: c.modified,
+        moved: c.moved,
+        folds: c.folds,
+    });
     let info = capture::OverlayInfo {
         active: true,
         mode: ov.kind.as_str(),
@@ -1104,7 +1122,9 @@ pub(crate) fn overlay_capture_info(
         browse_dir: ov.browse_dir.clone(),
         return_to: ov.return_to.map(|k| k.as_str()),
         spell_target: ov.spell_target,
-        preview_id: preview.map(|(id, _)| id),
+        preview_id: preview.map(|(id, _, _)| id),
+        diff_focus: ov.diff_focus,
+        diff_scroll: ov.diff_scroll,
         show_hidden: ov.show_hidden,
         capture: ov.capture.as_ref().map(|c| capture::CaptureInfo {
             command: c.cmd_name.clone(),
@@ -1126,7 +1146,7 @@ pub(crate) fn overlay_capture_info(
         sections: ov.item_sections(),
         title: ov.kind.title(),
     };
-    (info, preview_text)
+    (info, preview_text, diff)
 }
 
 /// The HISTORY timeline's headless live preview: when the replay left the History
@@ -1140,14 +1160,12 @@ pub(crate) fn overlay_capture_info(
 fn history_preview_for(
     ov: &crate::overlay::OverlayState,
     buffer: &Buffer,
-) -> Option<(String, String)> {
-    if ov.kind != crate::overlay::OverlayKind::History {
-        return None;
-    }
-    let id = ov.selected_history_id()?.to_string();
-    let path = crate::history::source_path(buffer.path(), None, buffer.is_note())?;
-    let content = crate::history::load(&path, &id)?;
-    Some((id, content))
+) -> Option<(String, String, crate::prosediff::DiffCounts)> {
+    // DIFF-AS-PREVIEW: the preview IS the writer's diff of the current buffer vs
+    // the highlighted version — built by the SAME one owner the live App renders
+    // through (`history::diff_preview`), synchronously (the live debounce is a
+    // wall-clock concern the deterministic capture never has).
+    crate::history::diff_preview(ov, buffer.path(), None, buffer.is_note(), &buffer.text())
 }
 
 /// Execute the resolved [`Mode`]: render a headless capture, run the typing
@@ -2031,6 +2049,54 @@ mod tests {
         let root = PathBuf::from("/proj");
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         assert!(res.overlay.is_none(), "nothing to rename on a pathless buffer");
+    }
+
+    // ── NAMED SAVE POINTS: the Keep-version minibuffer stays --keys-drivable ──
+
+    #[test]
+    fn replay_keys_drives_the_keep_version_minibuffer_prompt_and_sidecar_reflects_typing() {
+        // Cmd-P → "keep" → Enter opens the naming minibuffer (empty — a fresh
+        // point has no old name); typing builds the optional name live — all
+        // through the shared core, so both the overlay STATE and its
+        // sidecar-facing `foot_hint()` (the same seam Rename/InsertLink ride)
+        // reflect the in-progress edit with zero live App involved.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e e p RET d r a f t").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("Keep version… opens the naming minibuffer");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::KeepName);
+        assert_eq!(ov.corpus, vec!["draft".to_string()], "typing builds the name from empty");
+        assert_eq!(
+            ov.foot_hint(),
+            "name this version: draft   Enter keep   Esc cancel",
+            "the live prompt is sidecar-visible via the same foot_hint seam Rename uses"
+        );
+    }
+
+    #[test]
+    fn replay_keys_keep_version_minibuffer_esc_cancels_with_no_overlay_left() {
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e e p RET x Esc").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "Esc closes the minibuffer outright, nothing kept");
+    }
+
+    #[test]
+    fn replay_keys_keep_version_commit_closes_and_defers_the_store_write() {
+        // Enter commits through the REAL keymap: the overlay closes and the
+        // deferred Effect::KeepVersion { name } is the documented headless no-op
+        // (the history determinism gate — a capture never touches the store), so
+        // the buffer and fs stay untouched.
+        use crate::fs::InMemoryFs;
+        let _g = crate::fs::FsGuard::install(std::sync::Arc::new(InMemoryFs::new()));
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("h i s-p k e e p RET d r a f t RET").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "commit closes the minibuffer");
+        assert_eq!(buffer.text(), "hi", "the keep never edits the buffer");
     }
 
     // ── LINKS V2: Cmd-K stays --keys-drivable through the shared core ──
@@ -2956,9 +3022,12 @@ mod tests {
 
     #[test]
     fn history_preview_for_resolves_selected_row() {
-        // The capture-side preview resolver: the still-open History overlay's
-        // highlighted row resolves to (id, content) — the version the capture
-        // then shows in the document; another overlay kind resolves to None.
+        // DIFF-AS-PREVIEW: the capture-side preview resolver — the still-open
+        // History overlay's highlighted row resolves to (id, TRANSCRIPT, counts):
+        // the writer's diff of the current buffer vs that version, exactly what
+        // the live App renders (the shared `history::diff_preview` owner). The
+        // buffer here is "v2\n", so row 0 (v2, identical) is a titled folds-only
+        // transcript with NO change marks; row 1 (v1, older) carries them.
         with_seeded_history(|p| {
             let buffer = Buffer::from_file(&p);
             let rows = crate::history::timeline_rows(
@@ -2968,14 +3037,24 @@ mod tests {
             );
             assert_eq!(rows.len(), 2, "two seeded versions");
             let mut ov = crate::overlay::OverlayState::new_history(rows, None, None);
-            let (id, content) =
+            let (id, transcript, _counts) =
                 history_preview_for(&ov, &buffer).expect("the newest row resolves");
-            assert_eq!(content, "v2\n");
+            assert!(
+                transcript.starts_with("# Comparing with "),
+                "a titled diff transcript: {transcript}"
+            );
+            assert!(
+                !transcript.contains("~~") && !transcript.contains("=="),
+                "row 0 is identical to the buffer → no change marks: {transcript}"
+            );
             assert_eq!(Some(id.as_str()), ov.selected_history_id());
-            // Arrow down: the OLDER version previews.
+            // Arrow down: the OLDER version's diff previews — its marks present.
             ov.move_sel(1);
-            let (_, older) = history_preview_for(&ov, &buffer).expect("row 1 resolves");
-            assert_eq!(older, "v1\n", "the highlighted row IS the previewed version");
+            let (_, older, _) = history_preview_for(&ov, &buffer).expect("row 1 resolves");
+            assert!(
+                older.contains("~~") || older.contains("=="),
+                "the highlighted row's diff carries change marks: {older}"
+            );
             // A non-history overlay never previews.
             let goto = crate::overlay::OverlayState::new(
                 crate::overlay::OverlayKind::Goto,

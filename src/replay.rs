@@ -162,17 +162,9 @@ pub fn classify(effect: &Effect) -> Classified {
             "finish_buffer",
             unsupported("the daemon notify + switch-away are live-App-only (the save itself already ran)"),
         ),
-        Effect::KeepVersion => c(
+        Effect::KeepVersion { .. } => c(
             "keep_version",
-            unsupported("pinning writes the local-history store, gated off the capture path"),
-        ),
-        Effect::CompareVersion(_) => c(
-            "compare_version",
-            unsupported("entering the read-only diff view is live-App-only; the capture renders it via the AWL_DIFF_* harness"),
-        ),
-        Effect::CompareLatest => c(
-            "compare_latest",
-            unsupported("resolving the latest version + rendering the diff view are live-App-only; the capture uses the AWL_DIFF_* harness"),
+            unsupported("pinning (and naming) writes the local-history store, gated off the capture path"),
         ),
         Effect::RebindCommit { .. } => c(
             "rebind_commit",
@@ -242,7 +234,8 @@ fn accept_class(kind: OverlayKind) -> EffectClass {
         | OverlayKind::Settings
         | OverlayKind::Assets
         | OverlayKind::Rename
-        | OverlayKind::InsertLink => EffectClass::Unsupported {
+        | OverlayKind::InsertLink
+        | OverlayKind::KeepName => EffectClass::Unsupported {
             why: "this picker is not expected to emit an accept effect; classify it in replay::accept_class before strict replay can pass it",
         },
     }
@@ -326,7 +319,7 @@ mod tests {
             Effect::Gulp,
             Effect::LineLand,
             Effect::FinishBuffer,
-            Effect::KeepVersion,
+            Effect::KeepVersion { name: Some("draft A".into()) },
             Effect::FollowLink("https://example.com".into()),
             Effect::ReportProblem,
             Effect::DownloadFile,

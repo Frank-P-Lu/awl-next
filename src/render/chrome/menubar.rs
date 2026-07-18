@@ -304,7 +304,7 @@ impl TextPipeline {
             width,
             height,
             Some(rect),
-            true,
+            super::FloatElevation::Shadowed,
         );
 
         // Separator hairlines (one thin quad centered in each separator row).
@@ -403,7 +403,7 @@ impl TextPipeline {
             width,
             height,
             None,
-            true,
+            super::FloatElevation::Shadowed,
         );
         self.menu_drop_sep.prepare(device, queue, width, height, &[]);
         for buf in [&mut self.menu_drop_buffer, &mut self.menu_chord_buffer] {

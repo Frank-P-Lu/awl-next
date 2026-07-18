@@ -49,7 +49,10 @@ impl CardFlag {
 /// handler both call this instead of duplicating a per-card check+close. They are
 /// mutually exclusive (each opens only after the palette that summoned it closed,
 /// and each dismisses on the first key), so closing "the open one" is the whole
-/// contract. The
+/// contract. One carve-out lives UPSTREAM of this door: while the streaks card
+/// is open, `apply_core` intercepts ←/→ to flip its heatmap⇄cumulative page
+/// (`streaks::toggle_view`) before ever reaching here — every other key still
+/// dismisses. The
 /// hold-⌘ peek is deliberately absent — it is not modal (it closes when the hold
 /// breaks, via `peek::PeekArm`).
 pub fn dismiss_summoned_card() -> bool {

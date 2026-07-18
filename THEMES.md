@@ -705,7 +705,7 @@ RenderCaps`):
 | `image_reveal` | `Translucent` \| `Opaque` | The inline-image reveal caption scrim (`image_reveal_scrim`) — translucent veil vs. full opaque occlusion. | Wagtail (`Opaque`) |
 | `highlight_texture` | `Wash` \| `Stipple { color, density }` | THE ONE emphasis texture `==highlight==` spans and search matches share (`highlight_wash`, `wagtail_dither_density`) — a hue-derived translucent wash vs. a fixed-color Bayer-ordered dither stipple at `density`. | Wagtail (`Stipple { white, 0.25 }`) |
 | `title_style` | `InlinePrefix` \| `Placard { corner, scale, ink }` | How a summoned overlay card announces its title: the quiet inline `"<title> › "` prefix, or a large corner-anchored dim WORDMARK behind the rows (the P3R watermark; **bleed is the contract** — it anchors to the CANVAS corner and may bleed past the card; rows always composite over it; the inline prefix is suppressed so titles never double). `ink` ∈ Faint / Ghost / **Stipple** (Bayer pixel-stipple of the wordmark — see the personality section below). | Galah, Magpie (`BL 3.0 Ghost` — the gallery reference), Mangrove (`BL 3.0 Stipple` — the dither is its own language), Firetail (`BL 3.0 Faint`, deliberately smooth — the foil) |
-| `page_frame` | `None` \| `Line { weight_px }` | A thin FRAME around the WRITING COLUMN (distinct from the card border) — four hard-edged quads straddling the column boundary over the document's vertical extent, ink always `theme::page_frame_ink()` = the world's own `base_content` (the "dark-line page-frame" idea, recorded in the roster-decisions note below; graduated from the `AWL_PAGE_BORDER` probe). | Wagtail (`Line { 2.0 }`, its ladder white — the 2px pick from the probe gallery) |
+| `page_frame` | `None` \| `Line { weight_px }` | A thin FRAME around the WRITING COLUMN (distinct from the card border) — four hard-edged quads straddling the column boundary over the document's vertical extent, ink always `theme::page_frame_ink()` = the world's own `base_content` (the "dark-line page-frame" idea, recorded in the roster-decisions note below; graduated from the `AWL_PAGE_BORDER` probe). | Wagtail (`Line { 2.0 }`, its ladder white — the 2px pick from the probe gallery); Bilby (`Line { 1.0 }`, its night-violet ink — the DAWN round's light-pole assignment, the reserved dark-line-on-light variant landed) |
 | `card_anchor` | `TopLeft` \| `TopCenter` \| `Inset { x_frac }` \| `TopRight` | Where the summoned overlay card anchors horizontally (one owner `render::effective_card_anchor` → `overlay_card_x`). `TopRight` is more than placement — it also mirrors the selected-BAR growth direction toward the anchored edge under `Bars` (never text alignment). | Currawong, Mangrove, Galah, Magpie, Wagtail, Firetail (`TopLeft`; the GLOBAL DEFAULT is `TopCenter`) |
 | `chrome_face` | `Body` \| `Named(family)` | Which FACE the overlay chrome (placard wordmark / title prefix / strip labels) shapes in — `Body` (the world's own display face) everywhere, byte-identical, until a world names another family. | Firetail (`Named("Archivo Black")`) |
 | `motion` | `MotionJuice { entrance, band }` | Live-only overlay ENTRANCE + selection-band response. `CALM` (zero animators, settled state byte-identical in capture) on every world today. | none ship non-`CALM` yet |
@@ -864,9 +864,27 @@ the hue gaps) moved to `ROADMAP.md`.
 - **The dark-line page-frame is a world capability, not a per-world code path.**
   The "page reads as a deliberate object" idea — a thin full-ink frame around
   the writing column — graduated from the `AWL_PAGE_BORDER` gallery probe into
-  the `page_frame` `RenderCaps` field above (Wagtail's 2px ladder-white frame is
-  its first and only assignment; the dark-line-on-light variant is reserved for
-  a future light-silent pole world).
+  the `page_frame` `RenderCaps` field above (Wagtail's 2px ladder-white frame
+  was its first assignment; the reserved dark-line-on-light variant landed in
+  the DAWN round, 2026-07-18 — Bilby, retuned into the light pole ("first
+  light": palest rose-gold ground, night-violet ink), carries a 1px frame of
+  its own ink — the two poles now mirror each other's frames).
+
+### Per-world heading weight (`Theme::heading_bold` — the HEADING-WEIGHT round, 2026-07-18)
+
+One BIT of world data: does this world's face need WEIGHT to carry markdown
+heading hierarchy? `true` ⇒ `##`/`###` shape at the family's real bundled Bold;
+the TITLE (`#`) never bolds in any world (Ladder J carries it by size alone —
+1.6/1.3/1.15, `markdown/headings.rs::type_scale`). The assignment is taste
+derived from the FACE, one line of reasoning per world in `worlds.rs`: serif
+display faces (Gumtree, Bilby, Saltpan, Undertow, Outback, Magpie) carry
+hierarchy structurally → regular; monospace + sans faces (the other ten) need
+the weight → bold. Its laws: `heading_bold_worlds_shape_bold_in_their_own_family`
+(a bold world's heading resolves the SAME family at weight ≥ 600 — the guard
+against the foreign-face fallback bug class) and
+`heading_levels_stay_measurably_distinct_from_body_in_every_world` (pixel row
+heights, strictly descending, all 16 under their own bit). Sidecar:
+`theme.heading_bold` (the effective bit, force-knob honest).
 
 ### Per-script font resolution (i18n round — `FontId`; Chinese round — the zh-Hans/ko floors)
 

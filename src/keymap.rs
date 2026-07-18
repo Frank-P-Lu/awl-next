@@ -239,7 +239,10 @@ pub enum Action {
     /// plus the current streak + today's words. A calm `apply_core`-routed card,
     /// mirroring About/Lifetime: stays open until dismissed by ANY key
     /// (`apply_core`'s top-of-function intercept while `streaks::streaks_open()`)
-    /// or mouse click. Render-only (no buffer change). See `streaks.rs`.
+    /// or mouse click — EXCEPT ←/→, which flip the card between its per-day
+    /// heatmap and cumulative running-total pages (`apply_core`'s streaks-view
+    /// intercept; every summon opens on the heatmap). Render-only (no buffer
+    /// change). See `streaks.rs`.
     WritingStreaks,
     /// Palette "Line endings…": TOGGLE the active buffer's line-ending
     /// discipline (`LF`↔`CRLF`, [`crate::buffer::Eol`]) — the rope is byte-identical
@@ -452,14 +455,19 @@ pub enum Action {
     /// rebindable via `[keys] clean_unused_assets`. See `overlay/`
     /// (`OverlayKind::Assets`) + `assets.rs`.
     OpenAssetClean,
-    /// THE CONSCIOUS MARK ("Keep version"): record the CURRENT buffer state as
+    /// THE CONSCIOUS MARK ("Keep version…"): record the CURRENT buffer state as
     /// a PINNED local-history snapshot — the deliberate "I care about this one"
-    /// action. A pinned snapshot is prune-EXEMPT (it survives the aged retention
-    /// ladder / the cap unconditionally; see [`crate::history::prune_ladder`]). The
-    /// pure core only SIGNALS it ([`crate::actions::Effect::KeepVersion`]); the
-    /// live App does the actual store write (needs the buffer path + config + fs),
-    /// so the headless replay no-ops it (the history determinism gate). No default
-    /// chord — a palette command ("Keep version"), rebindable via `[keys]`.
+    /// action — via a MINIBUFFER PROMPT for an optional NAME (the NAMED SAVE
+    /// POINT; the Rename/InsertLink precedent, `OverlayKind::KeepName`). Enter
+    /// with text keeps a NAMED point; a blank Enter is the plain keep (zero
+    /// friction preserved); Esc cancels. A pinned/named snapshot is prune-EXEMPT
+    /// (it survives the aged retention ladder / the cap unconditionally; see
+    /// [`crate::history::prune_ladder`]). The core owns the whole prompt flow
+    /// (drivable under `--keys`) and only SIGNALS the commit
+    /// ([`crate::actions::Effect::KeepVersion`]); the live App does the actual
+    /// store write (needs the buffer path + config + fs), so the headless replay
+    /// no-ops the commit (the history determinism gate). No default chord — a
+    /// palette command ("Keep version…"), rebindable via `[keys] keep_version`.
     KeepVersion,
     /// FINISH the active buffer (the emacsclient "server-edit" convention; the emacs
     /// `C-x #` default is retired, so it is palette-only now): save it, notify any

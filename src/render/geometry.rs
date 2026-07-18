@@ -1672,7 +1672,7 @@ impl TextPipeline {
     }
 
     /// The cursor row's height as a MULTIPLE of the base line height: `1.0` on body
-    /// text, the heading scale (e.g. 1.8) when the caret sits on a heading line. The
+    /// text, the heading scale (e.g. 1.6, the title rung) when the caret sits on a heading line. The
     /// resting block caret multiplies its height by this so it COVERS the whole big
     /// glyph (its width already tracks the real advance, and the descender-aware
     /// bottom already reads the real glyph), keeping the "the caret possesses the
@@ -1697,7 +1697,7 @@ impl TextPipeline {
     /// builders ([`super::TextPipeline::row_band_for`]), so the highlight over a
     /// character is always the SAME height the caret would draw there.
     ///
-    /// `1.0` on body text; the heading scale (`row_height / line_height`, e.g. 1.8)
+    /// `1.0` on body text; the heading scale (`row_height / line_height`, e.g. 1.6)
     /// on a heading row so a heading's selection is as tall as its glyphs. IMAGE
     /// LINE (the caption model, WYSIWYG on): `1.0` — a BODY-height band, NOT the
     /// tall reserved row. The revealed source is body-size and the caret sizes to

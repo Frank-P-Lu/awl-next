@@ -51,28 +51,42 @@ pub(super) const MAX_TOTAL: usize = 150;
 /// only the un-pinned prunable set, so kept versions never force the ladder to
 /// thin more or get FIFO'd away. A file with more pins than the cap keeps all of
 /// them (deliberately — a pin means "keep this, always").
+///
+/// NAMED SAVE POINTS (the cap-semantics rule, settled): exemption =
+/// `pinned || name.is_some()` — a NAME is the user saying "keep this", so a
+/// named entry is prune-exempt exactly like a pin, and like a pin it does NOT
+/// count against [`MAX_TOTAL`] (the cap governs only the unnamed, un-pinned
+/// prunable set — the simpler honest rule: the ladder's cap loop still
+/// converges no matter how many points are named, because named points ride
+/// outside the counted set entirely). In practice every named entry is also
+/// pinned (the only creation door is `record_pinned` with a name), so the
+/// `name` clause is BELT to the pin's suspenders: a name can never be pruned
+/// away even if some future path minted one without the pin flag.
 pub(crate) fn prune_ladder(entries: &mut Vec<Entry>, now_ms: u64) {
     let ts: Vec<u64> = entries.iter().map(|e| e.ts).collect();
-    let pinned: Vec<bool> = entries.iter().map(|e| e.pinned).collect();
+    // The EXEMPT mask: pinned OR named (see the cap-semantics rule above).
+    let exempt: Vec<bool> = entries.iter().map(|e| e.pinned || e.name.is_some()).collect();
     let mut chosen = ladder_keep(&ts, now_ms, 0);
     for level in 1..=32u32 {
-        // Count only the UN-PINNED survivors against the cap — pins are exempt and
-        // ride along free, so climbing the ladder only thins the prunable set.
-        let unpinned_kept = chosen
+        // Count only the NON-EXEMPT survivors against the cap — pins/names are
+        // exempt and ride along free, so climbing the ladder only thins the
+        // prunable set.
+        let prunable_kept = chosen
             .iter()
-            .zip(&pinned)
-            .filter(|(keep, p)| **keep && !**p)
+            .zip(&exempt)
+            .filter(|(keep, ex)| **keep && !**ex)
             .count();
-        if unpinned_kept <= MAX_TOTAL {
+        if prunable_kept <= MAX_TOTAL {
             break;
         }
         chosen = ladder_keep(&ts, now_ms, level);
     }
-    // Retain a row iff it is PINNED (the conscious mark, unconditional) OR the
-    // ladder chose it. `i` walks the parallel masks in the retained order.
+    // Retain a row iff it is EXEMPT (the conscious mark / a named point,
+    // unconditional) OR the ladder chose it. `i` walks the parallel masks in the
+    // retained order.
     let mut i = 0;
     entries.retain(|_| {
-        let keep = pinned.get(i).copied().unwrap_or(false)
+        let keep = exempt.get(i).copied().unwrap_or(false)
             || chosen.get(i).copied().unwrap_or(true);
         i += 1;
         keep

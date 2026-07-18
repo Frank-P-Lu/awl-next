@@ -389,11 +389,18 @@ impl TextPipeline {
         width: u32,
         height: u32,
     ) -> anyhow::Result<()> {
+        // DIFF-AS-PREVIEW: while the page column wears its card dressing, the
+        // document glyphs clip to the panel's interior band, so a scrolled
+        // transcript slides UNDER the card edge instead of over the margin.
+        let (clip_top, clip_bottom) = match self.doc_clip_band(height as f32) {
+            Some((t, b)) => (t as i32, b as i32),
+            None => (0, height as i32),
+        };
         let bounds = TextBounds {
             left: 0,
-            top: 0,
+            top: clip_top,
             right: width as i32,
-            bottom: height as i32,
+            bottom: clip_bottom,
         };
         let doc_top = self.doc_top();
 
@@ -467,6 +474,18 @@ impl TextPipeline {
         // drawing. Only `prepare_caret_block`, when it runs on a one-bit
         // world, repopulates it with this frame's real rect.
         self.caret_invert.prepare(device, queue, width, height, &[]);
+        // DIFF-AS-PREVIEW: the caret is parked on the transcript's line 1; once
+        // the diff scrolls, that row leaves the panel band — park every caret
+        // quad rather than let it paint over the card's rim / the margin above
+        // (quads don't clip to `TextBounds` the way glyphs do).
+        if let Some((band_top, band_bottom)) = self.doc_clip_band(height as f32) {
+            let (_, cy, _, ch) = self.caret_pixel_rect();
+            if cy < band_top || cy + ch > band_bottom {
+                self.caret_pipeline.prepare_empty();
+                self.caret_glyph_pipeline.clear();
+                return;
+            }
+        }
         let caret_invert_on =
             theme::active().render_caps.caret_block_style == theme::CaretBlockStyle::InverseVideo;
         // MORPH-IN-ONE-BIT FALLS BACK TO THE INVERTED BLOCK (documented
@@ -960,7 +979,13 @@ impl TextPipeline {
             );
         }
 
-        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        // DIFF-AS-PREVIEW: ornament glyphs are document content — clip to the
+        // panel band exactly like the text layer.
+        let (o_top, o_bottom) = match self.doc_clip_band(height as f32) {
+            Some((t, b)) => (t as i32, b as i32),
+            None => (0, height as i32),
+        };
+        let bounds = TextBounds { left: 0, top: o_top, right: width as i32, bottom: o_bottom };
         let mut areas: Vec<TextArea> =
             Vec::with_capacity(rule_marks.len() + bullet_marks.len() + quote_tops.len());
         for (top, ch) in &rule_marks {

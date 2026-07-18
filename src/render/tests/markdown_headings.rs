@@ -274,6 +274,58 @@ fn heading_rows_are_taller_and_gated_to_markdown() {
     assert_eq!(p.visual_row_of(2, 0), 2);
 }
 
+/// PER-WORLD HEADING WEIGHT — the DISTINGUISHABILITY law: in EVERY world,
+/// under its OWN proposed `heading_bold` bit (no force, the shipped data),
+/// each heading level stays measurably distinct from body at the shaped-pixel
+/// outcome — the Ladder-J rungs (1.6/1.3/1.15) must survive as three strictly
+/// descending row heights above body, whatever the world's face or weight bit
+/// does. Outcome, not mechanism: the assertion is over the real pipeline's
+/// per-row pixel heights, never the consts (a future ladder retune that
+/// collapses two rungs — or a face whose metrics swallow a step — fails here,
+/// not in a mirror of the arithmetic).
+#[test]
+fn heading_levels_stay_measurably_distinct_from_body_in_every_world() {
+    // Row-height math folds the page wrap globals AND the active theme —
+    // hold both locks (theme, then page).
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping heading_levels_stay_measurably_distinct_from_body_in_every_world: no wgpu adapter");
+        return;
+    };
+    // h1 / h2 / h3 / body, one per line; caret parked on the body line so the
+    // heading rows sit in their settled (marker-concealed) state.
+    let text = "# word\n## word\n### word\nword\n";
+    for t in crate::theme::THEMES.iter() {
+        crate::theme::set_active_by_name(t.name).unwrap();
+        p.sync_theme();
+        let mut md = view(text, 3, 0);
+        md.is_markdown = true;
+        p.set_view(&md);
+        let (h1, h2, h3, body) = (
+            p.row_height_px(0),
+            p.row_height_px(1),
+            p.row_height_px(2),
+            p.row_height_px(3),
+        );
+        assert!(body > 0.0, "{}: body row must have height", t.name);
+        for (name, h) in [("h1", h1), ("h2", h2), ("h3", h3)] {
+            assert!(
+                h > body + 1.0,
+                "{}: {name} row ({h}px) must read measurably taller than body ({body}px)",
+                t.name
+            );
+        }
+        assert!(
+            h1 > h2 + 1.0 && h2 > h3 + 1.0,
+            "{}: the ladder must descend strictly — h1 {h1} > h2 {h2} > h3 {h3}",
+            t.name
+        );
+    }
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    p.sync_theme();
+}
+
 #[test]
 fn thematic_break_row_grows_by_the_active_worlds_ornament_scale_and_refits_on_theme_switch() {
     // Row-height math folds the page wrap globals AND reads the active theme's

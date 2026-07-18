@@ -4,7 +4,7 @@
 //! item's path is unchanged (`overlay::OverlayState`) -- only the file it
 //! lives in moved.
 
-use super::{Capture, LinkEdit, OverlayKind, RenameEdit, ValueEdit, PIN_TAG};
+use super::{Capture, KeepEdit, LinkEdit, OverlayKind, RenameEdit, ValueEdit, PIN_TAG};
 
 /// Live overlay state. `corpus` is the full candidate list (the RAW accept
 /// values — root-relative paths for Goto, child names for Project, entry names
@@ -173,6 +173,11 @@ pub struct OverlayState {
     /// [`Self::new_link_edit`] — mirrors `rename_edit`'s shape exactly). `None`
     /// for every other kind.
     pub link_edit: Option<LinkEdit>,
+    /// NAMED SAVE POINTS: the "Keep version…" minibuffer's live typed-name
+    /// sub-state (`Some` only for `OverlayKind::KeepName`, armed the instant the
+    /// overlay is built by [`Self::new_keep_name`] — mirrors `rename_edit`/
+    /// `link_edit`'s shape exactly). `None` for every other kind.
+    pub keep_edit: Option<KeepEdit>,
     /// THE UNION ROUND: Command palette only — parallel to `corpus`, `true` for the
     /// appended SETTINGS rows (mirrors Go-to's `heading` flag exactly), `false` for
     /// the ordinary command rows. Drives the marker glyph ([`Self::display_of`]) and
@@ -181,6 +186,20 @@ pub struct OverlayState {
     /// menu itself, never a second copy). EMPTY for every other kind and for a
     /// Command palette with no settings attached (`attach_settings_rows` never called).
     pub is_setting: Vec<bool>,
+    /// DIFF-AS-PREVIEW (History only): whether the keyboard FOCUS sits in the DIFF
+    /// PANEL below the picker card (Tab shifts it there; Tab/Esc return it to the
+    /// version list). While `true`, ↑/↓ scroll the diff step-wise instead of moving
+    /// the version selection, and the panel's card border strengthens one value
+    /// step (the calm focus cue). Always `false` for every other kind.
+    pub diff_focus: bool,
+    /// DIFF-AS-PREVIEW (History only): the diff panel's scroll, in VISUAL ROWS off
+    /// the transcript's top — mutated by PgUp/PgDn (both focus states), by ↑/↓
+    /// under panel focus, and by the wheel over the page; clamped against the
+    /// shaped transcript at ViewState-build (the core can't measure). RESET to 0
+    /// whenever the highlighted version changes (a new transcript starts at its
+    /// top) — see the reset lines in `move_sel`/`hover_select`/`set_facet_lens`/
+    /// `refilter`. Inert (always 0) for every other kind.
+    pub diff_scroll: usize,
 }
 
 impl OverlayState {
@@ -250,9 +269,14 @@ impl OverlayState {
             rename_edit: None,
             // No link edit on a fresh summon; `new_link_edit` arms it right after.
             link_edit: None,
+            // No keep-name edit on a fresh summon; `new_keep_name` arms it right after.
+            keep_edit: None,
             // No settings rows attached on a fresh summon; `attach_settings_rows`
             // (Command palette only) arms it right after.
             is_setting: Vec::new(),
+            // DIFF-AS-PREVIEW: focus opens on the version LIST, diff at its top.
+            diff_focus: false,
+            diff_scroll: 0,
         };
         s.refilter();
         s
@@ -538,11 +562,26 @@ impl OverlayState {
         if let Some(le) = &self.link_edit {
             return le.prompt();
         }
+        if let Some(ke) = &self.keep_edit {
+            return ke.prompt();
+        }
         if let Some(cap) = &self.capture {
             return cap.prompt();
         }
         if !self.notice.is_empty() {
             return self.notice.clone();
+        }
+        // DIFF-AS-PREVIEW panel focus (History, Tab pressed): the foot line teaches
+        // the PANEL's keys instead of the list's. Deliberately WITHOUT the universal
+        // "type to filter" lead — typing is swallowed while the panel holds focus,
+        // so advertising it here would lie. Esc (back to the list) goes unadvertised
+        // per the plain-close precedent; ↵ still restores, so it keeps its cell.
+        if self.diff_focus {
+            return super::format_hint(&[
+                super::HintAction { glyph: "\u{2191}/\u{2193}", label: "scroll" },
+                super::HintAction { glyph: "\u{21B5}", label: "restore" },
+                super::HintAction { glyph: "tab", label: "back" },
+            ]);
         }
         self.kind.hint()
     }
@@ -679,21 +718,34 @@ impl OverlayState {
         let mut ids = Vec::with_capacity(n);
         let mut ts = Vec::with_capacity(n);
         for row in rows {
-            corpus.push(if row.which.is_empty() {
-                row.when
+            // NAMED SAVE POINT: a NAMED version's NAME is the PRIMARY cell (the
+            // user's own word for the direction, full body ink — and the fuzzy
+            // corpus, so typing the name finds it), with the timestamp DEMOTED to
+            // the faint secondary column beside the changed-count (`"when ·
+            // +N −M"`). Calm, ink/value distinction only — never amber; no new
+            // layout path (the same corpus + bindings columns every row rides).
+            // The redundant "pinned" tag is dropped for a named row — the name
+            // IS the conscious mark. Unnamed rows are byte-identical to before.
+            if let Some(name) = row.name {
+                corpus.push(name);
+                diffs.push(format!("{} · {}", row.when, row.counts));
             } else {
-                format!("{} · {}", row.when, row.which)
-            });
-            // THE CONSCIOUS MARK: a KEPT (pinned) version wears a calm, dim
-            // "pinned" tag in the faint secondary column, ahead of its changed-count
-            // (`"pinned · +N −M"`) — no amber, no new column; it rides the existing
-            // `bindings` right-column the diff-count already uses, so a pin is
-            // findable at a glance AND assertable from the sidecar's `overlay.bindings`.
-            diffs.push(if row.pinned {
-                format!("{PIN_TAG} · {}", row.counts)
-            } else {
-                row.counts
-            });
+                corpus.push(if row.which.is_empty() {
+                    row.when
+                } else {
+                    format!("{} · {}", row.when, row.which)
+                });
+                // THE CONSCIOUS MARK: a KEPT (pinned) version wears a calm, dim
+                // "pinned" tag in the faint secondary column, ahead of its changed-count
+                // (`"pinned · +N −M"`) — no amber, no new column; it rides the existing
+                // `bindings` right-column the diff-count already uses, so a pin is
+                // findable at a glance AND assertable from the sidecar's `overlay.bindings`.
+                diffs.push(if row.pinned {
+                    format!("{PIN_TAG} · {}", row.counts)
+                } else {
+                    row.counts
+                });
+            }
             ids.push(row.id);
             ts.push(row.timestamp);
         }

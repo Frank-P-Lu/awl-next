@@ -421,6 +421,7 @@ fn history_arrows_cycle_the_lens() {
         id: id.to_string(),
         timestamp: id.parse().unwrap_or(0),
         pinned: false,
+        name: None,
     };
     let mut overlay = Some(OverlayState::new_history(
         vec![row("300"), row("200"), row("100")],
@@ -810,6 +811,63 @@ fn theme_cancel_reverts_to_starting_world() {
     assert!(overlay.is_none(), "Cancel closes the picker");
     assert_eq!(crate::theme::active().name, "Tawny", "reverted to the opening world");
     crate::theme::set_active(0);
+}
+
+/// THEME x SPELLCHECK (the user's own question: "does changing theme somehow
+/// affect the [spellcheck] toggle?"): a theme picker PREVIEW / COMMIT / CANCEL
+/// must never touch the spell-check global — the two are unrelated process-
+/// globals sharing no writer (`spell::set_spellcheck_on` has exactly three real
+/// call sites: `App::setting_toggle`, `App::reload_config`, and
+/// `Config::apply_sticky_globals` — none in theme/overlay code). Swept over
+/// EVERY world via the picker's own live-preview arrow-through, both starting
+/// states of the toggle, and all three picker exits.
+#[test]
+fn theme_picker_preview_commit_cancel_never_touch_spellcheck_global() {
+    let _g = crate::testlock::serial();
+    let _sp = crate::testlock::serial();
+    let saved_theme = crate::theme::active().name.to_string();
+    let saved_spell = crate::spell::spellcheck_on();
+
+    for &start_on in &[true, false] {
+        crate::spell::set_spellcheck_on(start_on);
+        crate::theme::set_active(0);
+        let mut overlay = theme_overlay();
+        let mut accept = None;
+        // Arrow through EVERY world, previewing each in turn.
+        for _ in 0..crate::theme::THEMES.len() {
+            drive(&mut overlay, &mut accept, &Action::NextLine);
+            assert_eq!(
+                crate::spell::spellcheck_on(),
+                start_on,
+                "world {:?}: a theme PREVIEW step must never touch spellcheck",
+                crate::theme::active().name
+            );
+        }
+        // COMMIT.
+        drive(&mut overlay, &mut accept, &Action::Newline);
+        assert!(overlay.is_none(), "Enter closes the picker");
+        assert_eq!(
+            crate::spell::spellcheck_on(),
+            start_on,
+            "a theme COMMIT must never touch spellcheck"
+        );
+
+        // CANCEL path: open again, preview away, Esc reverts the WORLD but must
+        // leave spellcheck alone too.
+        let mut overlay2 = theme_overlay();
+        let mut accept2 = None;
+        drive(&mut overlay2, &mut accept2, &Action::NextLine);
+        drive(&mut overlay2, &mut accept2, &Action::Cancel);
+        assert!(overlay2.is_none(), "Esc closes the picker");
+        assert_eq!(
+            crate::spell::spellcheck_on(),
+            start_on,
+            "a theme CANCEL/revert must never touch spellcheck"
+        );
+    }
+
+    crate::theme::set_active_by_name(&saved_theme);
+    crate::spell::set_spellcheck_on(saved_spell);
 }
 
 /// BREADCRUMB POP — a Theme picker opened FROM the palette (return_to = Command)

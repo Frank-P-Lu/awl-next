@@ -39,25 +39,41 @@ pub struct Snapshot {
     /// git-backed entry (a commit is git's to keep, not awl's to pin). Carried into
     /// the timeline's [`TimelineRow::pinned`] so the picker can mark it.
     pub pinned: bool,
+    /// NAMED SAVE POINT: the user's optional NAME for a kept version ("draft A",
+    /// "before the rewrite") — the intent marker "this is a direction I might want
+    /// to come back to". `None` for a plain keep and for every git-backed entry (a
+    /// commit's name is its subject). Carried into [`TimelineRow::name`] so the
+    /// timeline renders the named point distinctly (name as the primary cell).
+    pub name: Option<String>,
 }
 
 /// ONE stored snapshot in a file's awl log: a millis timestamp, the FULL
-/// content captured, and the CONSCIOUS-MARK `pinned` flag. This is the store's
-/// own record type (the log-file rows [`serialize_log`]/[`parse_log`] frame,
-/// the ladder prunes); [`Snapshot`] is the read-back view [`list`] hands the
-/// timeline. `pinned` rides through the store so a KEPT version survives a
-/// prune AND round-trips across launches.
+/// content captured, the CONSCIOUS-MARK `pinned` flag, and the optional NAMED
+/// SAVE POINT `name`. This is the store's own record type (the log-file rows
+/// [`serialize_log`]/[`parse_log`] frame, the ladder prunes); [`Snapshot`] is
+/// the read-back view [`list`] hands the timeline. `pinned`/`name` ride through
+/// the store so a KEPT version survives a prune AND round-trips across launches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Entry {
     pub ts: u64,
     pub content: String,
     pub pinned: bool,
+    pub name: Option<String>,
 }
 
 /// The on-disk log's magic first line — a version tag so the format can evolve.
 /// `awlhist2` adds a PER-ENTRY pinned flag (a third header token). A pre-pin
 /// `awlhist1` log still loads (its entries read `pinned = false`); the parser
 /// tolerates either magic + a 2-or-3-token header, so old stores degrade cleanly.
+///
+/// NAMED SAVE POINTS did NOT bump this magic — a name is an OPTIONAL FOURTH
+/// header token ([`encode_name`], percent-encoded so it stays whitespace-free),
+/// absent for an unnamed entry. Deliberately BIDIRECTIONALLY compatible:
+/// a nameless awlhist2 log parses with `name = None` here, and an OLDER awl
+/// binary reading a NAMED log simply never consumes the fourth token (its
+/// `split_whitespace` header walk stops at the pin flag) — a new magic would
+/// instead make the old binary distrust the whole store (preserve-corrupt +
+/// empty), stranding the timeline.
 const MAGIC: &str = "awlhist2";
 
 /// The pre-pin log magic ([`MAGIC`]'s predecessor) — still ACCEPTED on read (its
@@ -77,40 +93,61 @@ const MAGIC_V1: &str = "awlhist1";
 /// [`crate::fs::active`], so it works on native AND web. Best-effort: any store
 /// error is swallowed (a failed history write must never disrupt a save).
 pub fn record(path: &Path, content: &str, cfg: &Config) {
-    record_at(path, content, cfg, now_millis(), false);
+    record_at(path, content, cfg, now_millis(), false, None);
 }
 
 /// THE CONSCIOUS MARK's save-hook: record `content` as a PINNED snapshot — the
-/// deliberate "keep this version" action. Identical to [`record`] but the stored
-/// entry is prune-EXEMPT (see [`prune_ladder`]); if `content` already matches the
-/// newest snapshot (a pin right after a save), that existing entry is PINNED in
-/// place rather than skipped, so the mark always lands. Same git / history-off
-/// gates as [`record`] (a git-managed file's timeline is git log — awl pins
-/// nothing there). Best-effort; any store error is swallowed.
-pub fn record_pinned(path: &Path, content: &str, cfg: &Config) {
-    record_at(path, content, cfg, now_millis(), true);
+/// deliberate "keep this version" action — with an optional NAME (the NAMED SAVE
+/// POINT: `Some("draft A")` from the Keep-version minibuffer, `None` for a plain
+/// keep). Identical to [`record`] but the stored entry is prune-EXEMPT (see
+/// [`prune_ladder`]); if `content` already matches the newest snapshot (a pin
+/// right after a save), that existing entry is PINNED — and, when a name is
+/// given, NAMED — in place rather than skipped, so the mark always lands. Same
+/// git / history-off gates as [`record`] (a git-managed file's timeline is git
+/// log — awl pins nothing there, named or not: the existing silent-no-op story).
+/// Best-effort; any store error is swallowed.
+pub fn record_pinned(path: &Path, content: &str, cfg: &Config, name: Option<&str>) {
+    record_at(path, content, cfg, now_millis(), true, name);
 }
 
-/// [`record`] with an INJECTED clock (`now_ms`) + an explicit `pinned` flag, so
-/// the ladder prune + the pin path are exercised deterministically in tests — the
-/// wall-clock read lives only in the thin `record`/`record_pinned` shells. Same
-/// gates, dedup, store.
-pub(crate) fn record_at(path: &Path, content: &str, cfg: &Config, now_ms: u64, pinned: bool) {
+/// [`record`] with an INJECTED clock (`now_ms`) + explicit `pinned`/`name`, so
+/// the ladder prune + the pin/name paths are exercised deterministically in tests
+/// — the wall-clock read lives only in the thin `record`/`record_pinned` shells.
+/// Same gates, dedup, store. A whitespace-only `name` normalizes to `None` (a
+/// blank minibuffer Enter is exactly the plain keep).
+pub(crate) fn record_at(
+    path: &Path,
+    content: &str,
+    cfg: &Config,
+    now_ms: u64,
+    pinned: bool,
+    name: Option<&str>,
+) {
     if !cfg.history_on() {
         return; // history switched off for loose files
     }
     if is_git_managed(path) {
         return; // git owns versioning; awl stays out of its way — always
     }
+    let name: Option<String> = name
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_string);
     let mut entries = read_log(path);
     // DEDUP: an unchanged buffer re-saved (or autosaved on a pause) adds nothing —
     // EXCEPT a pin of the already-newest version, which upgrades that entry's mark
-    // in place (so "Keep version" right after a save still pins something).
+    // in place (so "Keep version" right after a save still pins something). A NAMED
+    // keep of the newest also lands (or RENAMES) its name in place; a plain
+    // (nameless) re-pin never erases an existing name.
     if entries.first().map(|e| e.content == content).unwrap_or(false) {
         if pinned {
             if let Some(first) = entries.first_mut() {
-                if !first.pinned {
+                let rename = name.is_some() && first.name != name;
+                if !first.pinned || rename {
                     first.pinned = true;
+                    if rename {
+                        first.name = name;
+                    }
                     prune_ladder(&mut entries, now_ms);
                     write_log(path, &entries);
                 }
@@ -126,7 +163,7 @@ pub(crate) fn record_at(path: &Path, content: &str, cfg: &Config, now_ms: u64, p
             ts = first.ts + 1;
         }
     }
-    entries.insert(0, Entry { ts, content: content.to_string(), pinned });
+    entries.insert(0, Entry { ts, content: content.to_string(), pinned, name });
     prune_ladder(&mut entries, now_ms);
     write_log(path, &entries);
 }
@@ -152,6 +189,7 @@ pub fn list(path: &Path) -> Vec<Snapshot> {
             timestamp: e.ts,
             subject: None,
             pinned: e.pinned,
+            name: e.name,
         })
         .collect()
 }
@@ -297,21 +335,78 @@ pub(super) fn write_log(path: &Path, entries: &[Entry]) {
 }
 
 /// Frame `entries` into the log format: a `MAGIC` line, then per snapshot a
-/// `"<millis> <bytelen> <pin>\n"` header (`pin` = `1` for a KEPT/pinned entry,
-/// else `0`), the exact `bytelen` content bytes, and a trailing `\n` separator.
-/// The explicit byte length makes content with embedded newlines (every
-/// multi-line note) round-trip losslessly.
+/// `"<millis> <bytelen> <pin>[ <name>]\n"` header (`pin` = `1` for a KEPT/pinned
+/// entry, else `0`; `<name>` = the OPTIONAL percent-encoded NAMED-SAVE-POINT name
+/// via [`encode_name`], omitted entirely for an unnamed entry — so a name-free
+/// log is byte-identical to the pre-name format), the exact `bytelen` content
+/// bytes, and a trailing `\n` separator. The explicit byte length makes content
+/// with embedded newlines (every multi-line note) round-trip losslessly.
 pub(super) fn serialize_log(entries: &[Entry]) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC.as_bytes());
     out.push(b'\n');
     for e in entries {
         let pin = if e.pinned { 1 } else { 0 };
-        out.extend_from_slice(format!("{} {} {pin}\n", e.ts, e.content.len()).as_bytes());
+        match &e.name {
+            Some(n) => out.extend_from_slice(
+                format!("{} {} {pin} {}\n", e.ts, e.content.len(), encode_name(n)).as_bytes(),
+            ),
+            None => {
+                out.extend_from_slice(format!("{} {} {pin}\n", e.ts, e.content.len()).as_bytes())
+            }
+        }
         out.extend_from_slice(e.content.as_bytes());
         out.push(b'\n');
     }
     out
+}
+
+/// Percent-encode a NAMED SAVE POINT's name into a single WHITESPACE-FREE header
+/// token: `%` and every whitespace/control CHAR (the same `char::is_whitespace`
+/// predicate `split_whitespace` splits on — so U+3000 ideographic space is
+/// covered too, not just ASCII space) become `%XX` per UTF-8 byte (two uppercase
+/// hex digits); every other char passes verbatim, so a CJK name stays readable
+/// in the log. Keeping the token whitespace-free is what lets the header stay a
+/// `split_whitespace` parse (and what keeps an OLDER binary's 3-token parser
+/// safely ignoring it). Pure; inverse of [`decode_name`].
+pub(super) fn encode_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut buf = [0u8; 4];
+    for c in name.chars() {
+        if c == '%' || c.is_whitespace() || c.is_control() {
+            for b in c.encode_utf8(&mut buf).bytes() {
+                out.push('%');
+                out.push_str(&format!("{b:02X}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Decode [`encode_name`]'s token back to the name: `%XX` → the byte, everything
+/// else verbatim; the byte string reads back as (lossy) UTF-8. A malformed `%`
+/// escape passes through literally rather than failing — a name is display text,
+/// and the store must never distrust a whole log over one odd byte. Pure.
+pub(super) fn decode_name(token: &str) -> String {
+    let bytes = token.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if let Some(hex) = bytes.get(i + 1..i + 3) {
+                if let Ok(b) = u8::from_str_radix(std::str::from_utf8(hex).unwrap_or(""), 16) {
+                    out.push(b);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Parse the log format [`serialize_log`] writes back into an [`Entry`] list,
@@ -375,11 +470,14 @@ pub(super) fn parse_log_checked(bytes: &[u8]) -> (Vec<Entry>, bool) {
         // The pin flag is the OPTIONAL third token (absent in an awlhist1 header →
         // false); any value other than "1" reads as un-pinned.
         let pinned = parts.next() == Some("1");
+        // The NAMED SAVE POINT's name is the OPTIONAL fourth token (percent-
+        // encoded, see `encode_name`); absent — every pre-name log — reads `None`.
+        let name = parts.next().map(decode_name).filter(|n| !n.is_empty());
         if i + len > body.len() {
             return (out, false); // truncated content: stop cleanly, untrusted
         }
         let content = String::from_utf8_lossy(&body[i..i + len]).into_owned();
-        out.push(Entry { ts, content, pinned });
+        out.push(Entry { ts, content, pinned, name });
         i += len;
         // Skip the single '\n' separator after the content, if present.
         if i < body.len() && body[i] == b'\n' {
@@ -449,8 +547,10 @@ pub(super) fn parse_git_log_line(line: &str) -> Option<Snapshot> {
         timestamp: secs * 1000,
         subject,
         // A git commit is git's to keep; awl never pins one (only loose-file awl
-        // snapshots carry the conscious mark).
+        // snapshots carry the conscious mark) — and never names one either (a
+        // commit's name is its subject, already carried above).
         pinned: false,
+        name: None,
     })
 }
 

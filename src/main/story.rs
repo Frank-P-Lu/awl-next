@@ -221,9 +221,18 @@ fn step_opts(session: &crate::run::ReplaySession, project: &capture::ProjectInfo
         opts.search_editing_replacement = s.is_editing_replacement();
     }
     if let Some(ov) = session.overlay() {
-        let (info, preview_text) = crate::run::overlay_capture_info(ov, session.buffer());
+        let (info, preview_text, diff) = crate::run::overlay_capture_info(ov, session.buffer());
         opts.overlay = Some(info);
         opts.preview_text = preview_text;
+        // DIFF-AS-PREVIEW: mirror the one-shot capture's fold (diff state block
+        // + the overlay-owned diff scroll), so a storyboard step reports the
+        // same preview the single-frame path would.
+        if opts.diff.is_none() {
+            opts.diff = diff;
+        }
+        if opts.scroll.is_none() && opts.preview_text.is_some() {
+            opts.scroll = Some(ov.diff_scroll);
+        }
     }
     opts.buffers = Some(capture::BuffersInfo {
         open: session.buffers_open(),

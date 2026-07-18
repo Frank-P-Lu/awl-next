@@ -54,6 +54,7 @@ fn history_picker_enter_emits_restore_id_of_the_highlighted_version() {
         id: id.to_string(),
         timestamp: id.parse().unwrap_or(0),
         pinned: false,
+        name: None,
     };
     let rows = vec![
         row("just now", "edited \"A\"", "+0 −0", "300"),
@@ -69,10 +70,14 @@ fn history_picker_enter_emits_restore_id_of_the_highlighted_version() {
 }
 
 #[test]
-fn history_picker_tab_emits_compare_version_of_the_highlighted_row() {
-    // THE WRITER'S DIFF from the picker: TAB over a highlighted version emits
-    // Effect::CompareVersion(<id>) (not a restore) and CLOSES the picker — the
-    // caller resolves the id via history::load + renders the read-only diff view.
+fn history_picker_tab_shifts_focus_into_the_diff_panel() {
+    // DIFF-AS-PREVIEW: TAB over a highlighted version shifts keyboard FOCUS into
+    // the diff PANEL (the picker STAYS OPEN — the old Tab-takeover into a
+    // separate view is retired). Under panel focus ↑/↓ scroll the diff
+    // step-wise, PgUp/PgDn page it, and Tab returns focus to the list.
+    // The highlighted (middle) row is a NAMED SAVE POINT here, deliberately:
+    // a named row rides the same parallel `history_ids`, so the diff panel
+    // works on it exactly like any snapshot — this pins that law.
     let row = |id: &str| crate::history::TimelineRow {
         when: "just now".into(),
         which: String::new(),
@@ -80,9 +85,15 @@ fn history_picker_tab_emits_compare_version_of_the_highlighted_row() {
         id: id.to_string(),
         timestamp: id.parse().unwrap_or(0),
         pinned: false,
+        name: None,
+    };
+    let named = crate::history::TimelineRow {
+        name: Some("draft A".into()),
+        pinned: true,
+        ..row("200")
     };
     let mut overlay = Some(OverlayState::new_history(
-        vec![row("300"), row("200"), row("100")],
+        vec![row("300"), named, row("100")],
         None,
         None,
     ));
@@ -106,9 +117,81 @@ fn history_picker_tab_emits_compare_version_of_the_highlighted_row() {
         oracle: None,
     };
     let eff = apply_core(&mut ctx, &Action::InsertTab, false);
-    assert_eq!(eff, Effect::CompareVersion("200".to_string()), "Tab compares the highlighted row");
-    assert!(overlay.is_none(), "compare closes the picker (you navigated into the diff)");
-    assert_eq!(buffer.text(), "", "compare never touches the buffer in the core");
+    assert_eq!(eff, Effect::None, "the focus shift is picker-internal");
+    {
+        let ov = ctx.overlay.as_ref().expect("Tab keeps the picker open");
+        assert!(ov.diff_focus, "focus moved INTO the diff panel");
+    }
+    // Panel focus: ↑/↓ scroll the diff (never the version selection), PgDn pages.
+    apply_core(&mut ctx, &Action::NextLine, false);
+    apply_core(&mut ctx, &Action::NextLine, false);
+    assert_eq!(ctx.overlay.as_ref().unwrap().diff_scroll, 2, "arrow-scrolls the diff");
+    assert_eq!(ctx.overlay.as_ref().unwrap().selected, 1, "the version selection held");
+    apply_core(&mut ctx, &Action::PageScrollDown, false);
+    assert_eq!(
+        ctx.overlay.as_ref().unwrap().diff_scroll,
+        2 + ctx.scroll_page_lines.max(1),
+        "PgDn pages the diff under panel focus"
+    );
+    // Typing is swallowed under panel focus (a list affordance; the panel holds
+    // the keys) — the query stays empty and the buffer is untouched.
+    apply_core(&mut ctx, &Action::InsertChar('q'), false);
+    assert_eq!(ctx.overlay.as_ref().unwrap().query, "", "typing swallowed in panel focus");
+    // Tab again returns focus to the LIST; ↑/↓ move the selection once more
+    // (and the selection move re-tops the diff scroll).
+    apply_core(&mut ctx, &Action::InsertTab, false);
+    assert!(!ctx.overlay.as_ref().unwrap().diff_focus, "Tab toggles back to the list");
+    apply_core(&mut ctx, &Action::PreviousLine, false);
+    assert_eq!(ctx.overlay.as_ref().unwrap().selected, 0, "list focus moves versions again");
+    assert_eq!(ctx.overlay.as_ref().unwrap().diff_scroll, 0, "a new version tops the diff");
+    assert_eq!(buffer.text(), "", "the whole flow never touches the buffer");
+}
+
+#[test]
+fn history_picker_pgdn_scrolls_the_diff_from_list_focus_too() {
+    // DIFF-AS-PREVIEW: PgUp/PgDn are REASSIGNED from list-paging for
+    // History-with-diff (paging a version list is near-worthless; type-to-filter
+    // covers jumps) — they scroll the DIFF even while the LIST holds focus.
+    // Every OTHER picker keeps its page-the-selection arms (pinned by
+    // `pgdn_pages_selection_in_other_pickers` below).
+    let row = |id: &str| crate::history::TimelineRow {
+        when: "just now".into(),
+        which: String::new(),
+        counts: "+0 −0".into(),
+        id: id.to_string(),
+        timestamp: id.parse().unwrap_or(0),
+        pinned: false,
+        name: None,
+    };
+    let mut overlay = Some(OverlayState::new_history(
+        vec![row("300"), row("200"), row("100")],
+        None,
+        None,
+    ));
+    let mut buffer = Buffer::scratch();
+    let (mut shift, mut zoom, mut search) = (false, 1.0f32, None);
+    let mut make_overlay = |_k: OverlayKind| None;
+    let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
+    let mut ctx = ActionCtx {
+        buffer: &mut buffer,
+        shift_selecting: &mut shift,
+        zoom: &mut zoom,
+        search: &mut search,
+        scroll_page_lines: 20,
+        overlay: &mut overlay,
+        make_overlay: &mut make_overlay,
+        browse_to: &mut browse_to,
+        oracle: None,
+    };
+    apply_core(&mut ctx, &Action::PageScrollDown, false);
+    {
+        let ov = ctx.overlay.as_ref().unwrap();
+        assert_eq!(ov.diff_scroll, 20, "PgDn scrolls the DIFF, list focus or not");
+        assert_eq!(ov.selected, 0, "the version selection never paged");
+        assert!(!ov.diff_focus, "list focus retained");
+    }
+    apply_core(&mut ctx, &Action::PageScrollUp, false);
+    assert_eq!(ctx.overlay.as_ref().unwrap().diff_scroll, 0, "PgUp scrolls back (floored)");
 }
 
 #[test]
@@ -181,6 +264,66 @@ fn lifetime_stats_opens_and_any_key_dismisses_it() {
     assert_eq!(b.cursor_char(), cursor0 + 1, "ForwardChar works again once the card is closed");
 
     crate::lifetime::set_open(false);
+}
+
+#[test]
+fn streaks_card_arrows_flip_the_view_and_any_other_key_dismisses() {
+    // THE VIEW-TOGGLE LAWS, through the REAL `apply_core` seam a `--keys
+    // "Left Right"` replay rides: while the Writing-streaks card is open, ←/→
+    // FLIP its page (heatmap ⇄ cumulative) — consumed, the card stays open, the
+    // caret never moves; ← then → lands back on the heatmap (the round-trip
+    // law); any OTHER key still dismisses like About/Lifetime; and a re-summon
+    // always opens on the heatmap (the ephemeral-view law — no stickiness).
+    let _g = crate::testlock::serial();
+    crate::streaks::set_open(false);
+    let mut b = Buffer::from_str("alpha beta");
+    let mut sel = false;
+    let cursor0 = b.cursor_char();
+
+    drive_shift(&mut b, &mut sel, &Action::WritingStreaks, false);
+    assert!(crate::streaks::streaks_open(), "Action::WritingStreaks opens the card");
+    assert_eq!(
+        crate::streaks::card_view(),
+        crate::streaks::CardView::Heatmap,
+        "a summon opens on the heatmap (the default page)"
+    );
+    assert_eq!(b.cursor_char(), cursor0, "opening the card never touches the buffer");
+
+    // ← flips to the cumulative page — consumed, the card stays open.
+    drive_shift(&mut b, &mut sel, &Action::BackwardChar, false);
+    assert!(crate::streaks::streaks_open(), "an arrow never dismisses the card");
+    assert_eq!(crate::streaks::card_view(), crate::streaks::CardView::Cumulative);
+    assert_eq!(b.cursor_char(), cursor0, "the arrow is consumed, not applied");
+
+    // → flips back: the round trip lands on the heatmap, card still open, and
+    // the ForwardChar that would have moved the caret is fully consumed.
+    drive_shift(&mut b, &mut sel, &Action::ForwardChar, false);
+    assert!(crate::streaks::streaks_open());
+    assert_eq!(
+        crate::streaks::card_view(),
+        crate::streaks::CardView::Heatmap,
+        "← then → returns to the heatmap (the round-trip law)"
+    );
+    assert_eq!(b.cursor_char(), cursor0, "the flip consumes the motion entirely");
+
+    // Leave it on the cumulative page, then dismiss with a NON-arrow key — the
+    // any-key contract still holds for everything but ←/→.
+    drive_shift(&mut b, &mut sel, &Action::ForwardChar, false); // → cumulative again
+    assert_eq!(crate::streaks::card_view(), crate::streaks::CardView::Cumulative);
+    drive_shift(&mut b, &mut sel, &Action::NextLine, false);
+    assert!(!crate::streaks::streaks_open(), "any non-arrow key dismisses the card");
+    assert_eq!(b.cursor_char(), cursor0, "the dismissing key is consumed, not applied");
+
+    // Re-summon: the page reset to the heatmap (ephemeral per-summon, by design).
+    drive_shift(&mut b, &mut sel, &Action::WritingStreaks, false);
+    assert_eq!(
+        crate::streaks::card_view(),
+        crate::streaks::CardView::Heatmap,
+        "a fresh summon never remembers the previous page"
+    );
+    drive_shift(&mut b, &mut sel, &Action::NextLine, false); // dismiss, leave clean
+    assert!(!crate::streaks::streaks_open());
+    crate::streaks::set_open(false);
 }
 
 #[test]
@@ -506,10 +649,6 @@ fn every_catalog_command_dispatches_without_panicking() {
                     Action::NewNote => eff == Effect::NewNote,
                     Action::OpenCredits => eff == Effect::OpenCredits,
                     Action::OpenGuide => eff == Effect::OpenGuide,
-                    Action::KeepVersion => eff == Effect::KeepVersion,
-                    // Markdown fixture: Compare with version… defers the latest-version
-                    // resolve + diff-view open to the live App.
-                    Action::CompareVersion => eff == Effect::CompareLatest,
                     Action::FinishBuffer => eff == Effect::FinishBuffer,
                     // Caret sits inside the fixture link, so a URL resolves.
                     Action::FollowLink => matches!(eff, Effect::FollowLink(_)),

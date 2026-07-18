@@ -238,32 +238,18 @@ pub enum Effect {
     /// Headless replay treats this exactly like `LastBuffer` — a no-op (no daemon,
     /// no 2-deep history in a one-shot replay).
     FinishBuffer,
-    /// THE CONSCIOUS MARK ("Keep version"): record the current buffer as a
-    /// PINNED, prune-EXEMPT local-history snapshot. The pure core can't reach the
-    /// store (no fs / config / buffer path), so it signals this for the live App to
-    /// perform ([`crate::app::App::keep_version`] → [`crate::history::record_pinned`]).
-    /// LIVE-APP-ONLY: the headless `--keys` replay no-ops it (the history determinism
-    /// gate — a capture never touches the store), so a settled frame stays
-    /// byte-identical.
-    KeepVersion,
-    /// THE WRITER'S DIFF, from the HISTORY picker: open the read-only prose-diff view
-    /// comparing the current buffer against the version whose restore `id` is carried
-    /// here (the highlighted row's — the same opaque id [`crate::history::load`]
-    /// resolves). The pure core can't reach the store or render the transcript
-    /// (no fs / no prosediff render seam in `ActionCtx`), so it signals this for the
-    /// live App to perform ([`crate::app::App::enter_diff_view_for`]). LIVE-APP-ONLY:
-    /// the headless `--keys` replay no-ops it (a capture renders the diff via the
-    /// `AWL_DIFF_*` harness instead), so a settled frame stays byte-identical.
-    CompareVersion(String),
-    /// THE WRITER'S DIFF, from the BUFFER (palette "Compare with version…", no
-    /// overlay): open the read-only prose-diff view comparing the current buffer
-    /// against its MOST-RECENT version — a loose file's newest history snapshot, or a
-    /// git-managed file's HEAD (`git show`). The core can't list the store, so it
-    /// signals this bare request for the live App to resolve the latest id + enter the
-    /// view ([`crate::app::App::compare_with_latest`]); a buffer with no history is a
-    /// calm no-op there. Only produced for a markdown buffer (a `.rs`/`.txt`/scratch
-    /// buffer is a calm no-op in the core). LIVE-APP-ONLY: headless replay no-ops it.
-    CompareLatest,
+    /// THE CONSCIOUS MARK ("Keep version…"): the naming minibuffer COMMITTED —
+    /// record the current buffer as a PINNED, prune-EXEMPT local-history snapshot,
+    /// optionally NAMED (`Some("draft A")` when the user typed a name, `None` for
+    /// a blank Enter — the plain, zero-friction keep). The pure core can't reach
+    /// the store (no fs / config / buffer path), so it signals this for the live
+    /// App to perform ([`crate::app::App::keep_version`] →
+    /// [`crate::history::record_pinned`]). LIVE-APP-ONLY: the headless `--keys`
+    /// replay no-ops it (the history determinism gate — a capture never touches
+    /// the store), so a settled frame stays byte-identical; the naming
+    /// minibuffer's open/type/cancel flow itself IS core-driven and fully
+    /// `--keys`-drivable (see `overlay_nav`'s `keep_edit` block).
+    KeepVersion { name: Option<String> },
     /// C-c C-o (follow-link-at-point): the caret sat inside a markdown link, whose
     /// destination URL is carried here for the caller to open in the OS default
     /// browser (a user-initiated handoff — the app never fetches it, so the
@@ -460,15 +446,33 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         return Effect::None;
     }
 
-    // MODAL CARD DISMISSAL (About / Lifetime stats). While either summoned card is
-    // open it OWNS the very next key — ANY key closes it and is otherwise consumed
-    // (no other effect), mirroring the "any key/click dismisses" spec rather than
-    // the navigation overlay's narrower Esc/Enter contract (a card has nothing to
-    // navigate). ONE owner of the check+close (`card::dismiss_summoned_card`),
-    // shared verbatim with the live App's mouse-press handler. Checked BEFORE the
-    // overlay intercept: the two cards are never open at once, nor with an overlay
-    // (each opens via `Effect::RunAction` after the palette that summoned it has
-    // already closed).
+    // WRITING-STREAKS VIEW TOGGLE. While the streaks card is open, ←/→ FLIP it
+    // between its two pages (per-day heatmap ⇄ cumulative running total —
+    // `streaks::toggle_view`, a pure view flip over the same records) instead of
+    // dismissing — the overlay's Right/Left lens precedent, applied to the one
+    // summoned card with a second page. Consumed entirely (the caret never
+    // moves, the card stays open); every OTHER key still falls through to the
+    // modal dismiss just below, so the arrows are that door's ONE exception,
+    // and — sitting here in the shared core — the flip is `--keys "Left"`-
+    // drivable headlessly like everything else.
+    if crate::streaks::streaks_open()
+        && matches!(action, Action::ForwardChar | Action::BackwardChar)
+    {
+        crate::streaks::toggle_view();
+        return Effect::None;
+    }
+
+    // MODAL CARD DISMISSAL (About / Lifetime stats / Writing streaks). While a
+    // summoned card is open it OWNS the very next key — ANY key closes it and is
+    // otherwise consumed (no other effect; the streaks card's ←/→ page flip
+    // above is the one carve-out), mirroring the "any key/click dismisses" spec
+    // rather than the navigation overlay's narrower Esc/Enter contract (a card
+    // has nothing to navigate). ONE owner of the check+close
+    // (`card::dismiss_summoned_card`), shared verbatim with the live App's
+    // mouse-press handler. Checked BEFORE the overlay intercept: the cards are
+    // never open at once, nor with an overlay (each opens via
+    // `Effect::RunAction` after the palette that summoned it has already
+    // closed).
     if crate::card::dismiss_summoned_card() {
         return Effect::None;
     }
@@ -962,24 +966,26 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenAssetClean => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Assets);
         }
-        // "Keep version": THE CONSCIOUS MARK — record the current buffer as a
-        // PINNED, prune-exempt snapshot. The core can't reach the store (fs/config/
-        // path), so it signals the caller; the live App writes it, the headless
-        // replay no-ops it (history determinism gate). See `Effect::KeepVersion`.
+        // "Keep version…": THE CONSCIOUS MARK — summon the NAMED-SAVE-POINT
+        // minibuffer (an optional name for the kept version, the Rename/InsertLink
+        // precedent: a single editable row whose modal `keep_edit` sub-state owns
+        // every key). Enter commits `Effect::KeepVersion { name }` — a blank Enter
+        // is the plain keep, so today's zero-friction path is one extra Enter; Esc
+        // cancels with nothing recorded. Opened unconditionally, mirroring the old
+        // always-fire arm: the store's own gates (git-managed / history-off / no
+        // history key yet) still decide at commit, exactly as they always did.
         Action::KeepVersion => {
-            effect = Effect::KeepVersion;
+            *ctx.overlay = Some(OverlayState::new_keep_name());
         }
-        // THE WRITER'S DIFF ("Compare with version…" from the BUFFER): open the
-        // read-only prose-diff view against the most-recent version. Markdown buffers
-        // only (a `.rs`/`.txt`/scratch buffer is a calm no-op, mirroring the format
-        // toggles); the core can't list the store, so it signals the caller to resolve
-        // the latest id + render the transcript. From the open HISTORY picker this
-        // action is intercepted earlier (`overlay_nav`, comparing the highlighted row)
-        // and never reaches here. See `Effect::CompareLatest`.
+        // DIFF-AS-PREVIEW ("Compare with version…" from the BUFFER): the palette
+        // command REPOINTS to opening the HISTORY picker — whose live preview IS
+        // the writer's diff now (arrowing the versions shows each one's marked-up
+        // manuscript in the page below the card). ONE behavior, no orphaned second
+        // mode: the old read-only takeover view is retired. From an OPEN History
+        // picker this action is intercepted earlier (`overlay_nav`'s Tab arm — the
+        // focus shift into the diff panel) and never reaches here.
         Action::CompareVersion => {
-            if ctx.buffer.is_markdown() {
-                effect = Effect::CompareLatest;
-            }
+            *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::History);
         }
         // Summon the one-level browse navigator at the ROOT level (browse_dir =
         // None). Descend/ascend then rebuild it via `browse_to`.

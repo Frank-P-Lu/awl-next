@@ -150,16 +150,20 @@ impl TextPipeline {
     }
 
     /// The summoned WRITING STREAKS card's machine-readable state for the sidecar
-    /// (see [`StreaksReport`]). `open` mirrors the process-global; the view is the
-    /// pushed live year OR the fixed synthetic [`crate::streaks::placeholder`] in a
-    /// capture (no live store) — the SAME `streaks_effective_view` owner the pixels
-    /// use, so the sidecar can never claim a figure the card doesn't show.
+    /// (see [`StreaksReport`]). `open` and `view` (which PAGE — heatmap or
+    /// cumulative) mirror the process-globals; the figures are the pushed live
+    /// year OR the fixed synthetic [`crate::streaks::placeholder`] in a capture
+    /// (no live store) — the SAME `streaks_effective_view` + `card_view` owners
+    /// the pixels use, so the sidecar can never claim a figure (or a page) the
+    /// card doesn't show.
     pub fn streaks_report(&self) -> StreaksReport {
         let view = self.streaks_effective_view();
         StreaksReport {
             open: crate::streaks::streaks_open(),
+            view: crate::streaks::card_view().label(),
             streak: view.streak,
             today_words: view.today_words,
+            total_words: view.cumulative.last().copied().unwrap_or(0),
             cells: view.cells.to_vec(),
         }
     }
@@ -243,7 +247,7 @@ impl TextPipeline {
                 width,
                 height,
                 None,
-                true,
+                FloatElevation::Shadowed,
             );
         }
 
@@ -485,7 +489,7 @@ impl TextPipeline {
             width,
             height,
             Some([card_x, card_y, card_w, card_h]),
-            true,
+            FloatElevation::Shadowed,
         );
         let area = TextArea {
             buffer: &self.hud_buffer,
@@ -510,17 +514,27 @@ impl TextPipeline {
         Ok(())
     }
 
-    /// Shape + upload the summoned WRITING STREAKS card: a year-calendar HEATMAP
-    /// (the contribution-graph shape — `WEEKS` columns × 7 day-rows) over two quiet
-    /// stat lines (current streak + words written today). Reuses the shared float-
-    /// card pipeline (`hud_shadow`/`hud_border`/`hud_card`) for the raised card, the
-    /// `streak_cells` pipeline for the per-square intensity tints
-    /// (`theme::heatmap_colors`, the one owner — NO amber, the caret's alone), and
-    /// the `hud_buffer`/`hud_renderer` for the stats text. The view is the pushed
-    /// live year OR the fixed synthetic [`crate::streaks::placeholder`] in a capture
-    /// (the SAME `streaks_effective_view` owner the sidecar reads), so a `--streaks`
-    /// capture is deterministic + byte-stable. Called ONLY from `prepare_hud` while
-    /// the card is open; every other state parks `streak_cells` empty there.
+    /// Shape + upload the summoned WRITING STREAKS card — TWO PAGES over the same
+    /// records (`streaks::card_view`, flipped with ←/→, ephemeral per-summon):
+    /// the year-calendar HEATMAP (the contribution-graph shape — `WEEKS` columns
+    /// × 7 day-rows; the habit view, the default) or the CUMULATIVE running-total
+    /// AREA CHART (the progress view: a quiet rising line over the same date
+    /// window, axis-free — [`crate::streaks::chart_bars`], a quiet fill + a thin
+    /// full-ink cap). Both pages share the SAME body rect, so the card never
+    /// jumps on a flip, and both sit over two quiet stat lines (current streak +
+    /// words written today, or + the window's running total on the cumulative
+    /// page). A two-dot PAGE INDICATOR between body and stats — quads only, size
+    /// + tint encoding (size survives the 1-bit ramp) — is the calm hint that
+    /// ←/→ has somewhere to go. Reuses the shared float-card pipeline
+    /// (`hud_shadow`/`hud_border`/`hud_card`) for the raised card, the
+    /// `streak_cells` pipeline for every square/bar/dot tint
+    /// (`theme::heatmap_colors`, the one owner — NO amber, the caret's alone),
+    /// and the `hud_buffer`/`hud_renderer` for the stats text. The view is the
+    /// pushed live year OR the fixed synthetic [`crate::streaks::placeholder`]
+    /// in a capture (the SAME `streaks_effective_view` owner the sidecar reads),
+    /// so a `--streaks` capture is deterministic + byte-stable. Called ONLY from
+    /// `prepare_hud` while the card is open; every other state parks
+    /// `streak_cells` empty there.
     pub(in crate::render) fn prepare_streaks_card(
         &mut self,
         device: &wgpu::Device,
@@ -528,8 +542,9 @@ impl TextPipeline {
         width: u32,
         height: u32,
     ) -> anyhow::Result<()> {
-        use crate::streaks::{DAYS_PER_WEEK, LEVELS, WEEKS};
+        use crate::streaks::{CardView, DAYS_PER_WEEK, LEVELS, WEEKS};
         let view = self.streaks_effective_view();
+        let page = crate::streaks::card_view();
         let m = self.metrics;
         let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
         let content = theme::base_content().to_glyphon();
@@ -546,18 +561,33 @@ impl TextPipeline {
         let grid_h = DAYS_PER_WEEK as f32 * step - gap;
 
         // ── The two stat lines: a CAPTION (faint/LABEL) over its VALUE (content/BODY),
-        // the same ink×size spine the held HUD uses. NO amber. ──
+        // the same ink×size spine the held HUD uses. NO amber. The first stat is
+        // the streak on both pages; the second is the page's own figure — today's
+        // words under the heatmap (the habit view), the window's running total
+        // under the chart (the progress view: the number the line tops out at). ──
         let streak_val = if view.streak == 1 {
             "1 day".to_string()
         } else {
             format!("{} days", crate::hud::group_thousands(view.streak))
         };
-        let today_val = format!("{} words", crate::hud::group_thousands(view.today_words));
+        let (second_caption, second_val) = match page {
+            CardView::Heatmap => (
+                "WRITTEN TODAY",
+                format!("{} words", crate::hud::group_thousands(view.today_words)),
+            ),
+            CardView::Cumulative => (
+                "PAST YEAR",
+                format!(
+                    "{} words",
+                    crate::hud::group_thousands(view.cumulative.last().copied().unwrap_or(0))
+                ),
+            ),
+        };
         let owned: Vec<(String, u8)> = vec![
             ("CURRENT STREAK\n".to_string(), 0),
             (format!("{streak_val}\n\n"), 1),
-            ("WRITTEN TODAY\n".to_string(), 0),
-            (today_val, 1),
+            (format!("{second_caption}\n"), 0),
+            (second_val, 1),
         ];
         let base = panel_attrs();
         let spans: Vec<(&str, Attrs)> = owned
@@ -589,12 +619,16 @@ impl TextPipeline {
             text_w = text_w.max(run.line_w);
         }
 
-        // ── Card sizing: grid over the stats, generous padding, centered ──
+        // ── Card sizing: body (grid/chart) over dots over stats, generous padding,
+        // centered. The body rect is the SAME on both pages (the chart draws into
+        // the grid's own extent), so a page flip never resizes or jumps the card. ──
         let pad_x = m.char_width * 3.0;
         let pad_y = m.line_height * 0.9;
-        let gap_between = m.line_height; // breathing room grid→stats
+        let dot = (cell * 0.55).max(3.0); // the page-dot square (echoes a heatmap cell)
+        let gap_dots = m.line_height * 0.5; // breathing room body→dots
+        let gap_between = m.line_height * 0.75; // and dots→stats
         let content_w = grid_w.max(text_w);
-        let content_h = grid_h + gap_between + text_h;
+        let content_h = grid_h + gap_dots + dot + gap_between + text_h;
         let card_w = content_w + pad_x * 2.0;
         let card_h = content_h + pad_y * 2.0;
         let card_x = ((width as f32 - card_w) * 0.5).max(0.0);
@@ -603,19 +637,65 @@ impl TextPipeline {
         // Center the grid within the card; the stats spine left-aligns to the grid.
         let grid_x = card_x + (card_w - grid_w) * 0.5;
         let grid_y = content_top;
-        let text_top = grid_y + grid_h + gap_between;
+        let dots_y = grid_y + grid_h + gap_dots;
+        let text_top = dots_y + dot + gap_between;
 
-        // ── The heatmap squares: one per (week, day), tinted by intensity bucket ──
+        // ── The body: heatmap squares OR the cumulative area chart, per page.
+        // Both ride the same `streak_cells` quad pipeline + the same
+        // `heatmap_colors` ladder, so every world's tint law covers both. ──
         let colors = theme::heatmap_colors();
-        let mut quads: Vec<([f32; 4], [u8; 4])> = Vec::with_capacity(WEEKS * DAYS_PER_WEEK);
-        for col in 0..WEEKS {
-            for row in 0..DAYS_PER_WEEK {
-                let idx = col * DAYS_PER_WEEK + row;
-                let bucket = (view.cells[idx] as usize).min(LEVELS - 1);
-                let x = grid_x + col as f32 * step;
-                let y = grid_y + row as f32 * step;
-                quads.push(([x, y, cell, cell], colors[bucket].rgba_bytes()));
+        let mut quads: Vec<([f32; 4], [u8; 4])> =
+            Vec::with_capacity(WEEKS * DAYS_PER_WEEK * 2 + 2);
+        match page {
+            CardView::Heatmap => {
+                // One square per (week, day), tinted by intensity bucket.
+                for col in 0..WEEKS {
+                    for row in 0..DAYS_PER_WEEK {
+                        let idx = col * DAYS_PER_WEEK + row;
+                        let bucket = (view.cells[idx] as usize).min(LEVELS - 1);
+                        let x = grid_x + col as f32 * step;
+                        let y = grid_y + row as f32 * step;
+                        quads.push(([x, y, cell, cell], colors[bucket].rgba_bytes()));
+                    }
+                }
             }
+            CardView::Cumulative => {
+                // The AREA CHART: one bar per day of the running total
+                // (`chart_bars`, the pure in-bounds-law owner), filled at the
+                // quietest FILLED rung (law-tested distinguishable from the
+                // card's own ground in every world) with a thin full-ink cap
+                // riding each bar's top — the rising line. On a 1-bit world the
+                // ramp collapses fill and cap to ink: a solid area chart, the
+                // declared monochrome degradation.
+                let bars =
+                    crate::streaks::chart_bars(&view.cumulative, [grid_x, grid_y, grid_w, grid_h]);
+                for b in &bars {
+                    quads.push((*b, colors[1].rgba_bytes()));
+                    quads.push(([b[0], b[1], b[2], b[3].min(2.0)], colors[LEVELS - 1].rgba_bytes()));
+                }
+            }
+        }
+
+        // ── The two-page indicator: two small squares under the body, the active
+        // page's dot FULL SIZE at full ink, the other SMALLER at a mid rung —
+        // SIZE carries the state even where the 1-bit ramp collapses both tints
+        // to ink (Wagtail). Quads only (ink × value, no glyph → no tofu risk),
+        // echoing the heatmap's own square voice: the calm hint that ←/→ has
+        // somewhere to go. ──
+        let active_idx = match page {
+            CardView::Heatmap => 0usize,
+            CardView::Cumulative => 1,
+        };
+        let dot_gap = dot * 1.25;
+        let dots_w = dot * 2.0 + dot_gap;
+        let dots_x = card_x + (card_w - dots_w) * 0.5;
+        for i in 0..2usize {
+            let on = i == active_idx;
+            let d = if on { dot } else { (dot * 0.6).max(2.0) };
+            let slot_x = dots_x + i as f32 * (dot + dot_gap);
+            let inset = (dot - d) * 0.5;
+            let tint = if on { colors[LEVELS - 1] } else { colors[2] };
+            quads.push(([slot_x + inset, dots_y + inset, d, d], tint.rgba_bytes()));
         }
         self.streak_cells
             .prepare_multicolor(device, queue, width, height, &quads);
@@ -630,7 +710,7 @@ impl TextPipeline {
             width,
             height,
             Some([card_x, card_y, card_w, card_h]),
-            true,
+            FloatElevation::Shadowed,
         );
 
         // ── The stats text below the grid ──

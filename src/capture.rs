@@ -294,7 +294,43 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // twinkle phase (the FIXED 0.0 in every headless capture, the determinism
 // law; the dev `AWL_STARS_PHASE` gallery knob pins another). A state oracle
 // only — star PLACEMENT/brightness are asserted over the PNG's pixels.
-pub const SCHEMA_VERSION: u32 = 173;
+// `/174` — STREAKS VIEW TOGGLE: the `streaks` block gains `view` — which PAGE
+// of the summoned card is showing (`"heatmap"`, the default on every summon, or
+// `"cumulative"`, the running-total chart reached with ←/→ while the card is
+// open — a `--keys "Left"` replay flips it) — and `total_words`, the cumulative
+// window's final running total (the figure the chart tops out at; the fixed
+// synthetic placeholder total in a capture). Same `streaks_effective_view` +
+// `card_view` owners the pixels read.
+// `/175` — NAMED SAVE POINTS: "Keep version…" now opens a naming MINIBUFFER
+// (`OverlayKind::KeepName`, `overlay.mode == "keep_version"`, the Rename shape:
+// single editable row, prompt via `overlay.hint`). No new sidecar field — the
+// existing `overlay` block carries it; the version bumps because a new overlay
+// mode string is now reachable (the `/148`/`/157` precedent). A History picker's
+// NAMED row also re-shapes its existing cells (name as the primary `items` text,
+// "when · +N −M" in `bindings`); unnamed rows and a default capture are
+// byte-identical.
+// `/176` — PER-WORLD HEADING WEIGHT (+ Ladder J): the `theme` block gains
+// `heading_bold` — the EFFECTIVE section-heading weight bit this capture rendered
+// with (the active world's `Theme::heading_bold` folded through the ONE owner
+// `markdown::heading_weight_bold`, so the `AWL_HEADING_BOLD_FORCE` gallery knob is
+// reflected honestly). `true` ⇒ `##`/`###`+ shaped at the world's real bundled
+// Bold; the TITLE (`#`) never bolds regardless. The size ladder also retuned
+// (Ladder J: TITLE 1.6 / SECTION 1.3 / SUBHEAD 1.15), so markdown captures'
+// heading geometry changes everywhere — expected, not a schema matter.
+// `/177` — DIFF-AS-PREVIEW: the History picker's live preview IS the writer's
+// diff now (the page below the card renders the marked-up-manuscript transcript
+// of the current buffer vs the highlighted version, dressed as a card — the old
+// plain-content preview is a logged v1 trim, and the separate Compare TAKEOVER
+// view is retired; "Compare with version…" repoints to opening this picker). The
+// `overlay` block gains `diff_focus` (Tab moved keyboard focus into the diff
+// panel) and `diff_scroll` (the panel's scroll in visual rows — PgUp/PgDn /
+// panel ↑/↓ / the wheel over the page). The top-level `diff` block — same shape
+// as `/172` — is now ALSO reported for a History-picker preview capture (its
+// `label` is the highlighted row's display text), not only the `AWL_DIFF_*`
+// harness. `overlay.preview_id` keeps its meaning (the compared version's id);
+// the previewed `text` is now the transcript. A default capture is
+// byte-identical apart from the two new always-present overlay keys.
+pub const SCHEMA_VERSION: u32 = 177;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

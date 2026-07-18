@@ -7,7 +7,8 @@
 use super::picker::{append_clock_when_shared, civil_date, history_bucket, same_utc_day, EXCERPT_CHARS};
 use super::prune::{DAY_MS, MAX_TOTAL};
 use super::store::{
-    log_path, parse_git_log_line, parse_log, parse_log_checked, read_log, serialize_log, write_log,
+    decode_name, encode_name, log_path, parse_git_log_line, parse_log, parse_log_checked,
+    read_log, serialize_log, write_log,
 };
 use super::*;
 use crate::config::Config;
@@ -90,7 +91,7 @@ fn history_bucket_is_inert_without_a_clock_the_determinism_gate() {
 
 #[test]
 fn timeline_row_carries_the_snapshot_timestamp() {
-    let snaps = vec![Snapshot { id: "42".into(), timestamp: 42, subject: None, pinned: false }];
+    let snaps = vec![Snapshot { id: "42".into(), timestamp: 42, subject: None, pinned: false, name: None }];
     let rows = rows_from(&snaps, &["hi\n".to_string()], "hi\n", 1_000);
     assert_eq!(rows[0].timestamp, 42, "the row carries its stamp for bucketing");
 }
@@ -147,7 +148,7 @@ fn unchanged_content_is_not_re_snapshotted() {
 fn entries_aged(now: u64, ages: &[u64]) -> Vec<Entry> {
     let mut v: Vec<Entry> = ages
         .iter()
-        .map(|a| Entry { ts: now - a, content: format!("v@{a}"), pinned: false })
+        .map(|a| Entry { ts: now - a, content: format!("v@{a}"), pinned: false, name: None })
         .collect();
     v.sort_by(|a, b| b.ts.cmp(&a.ts)); // newest first
     v
@@ -284,9 +285,9 @@ fn ladder_exempts_a_pinned_snapshot_its_unpinned_peer_would_lose() {
     let hr = 3_600_000u64;
     let base = || {
         vec![
-            Entry { ts: now - (5 * day - 2 * hr), content: "A-newest".into(), pinned: false },
-            Entry { ts: now - (5 * day - hr), content: "B-middle".into(), pinned: false },
-            Entry { ts: now - 5 * day, content: "C-oldest".into(), pinned: false },
+            Entry { ts: now - (5 * day - 2 * hr), content: "A-newest".into(), pinned: false, name: None },
+            Entry { ts: now - (5 * day - hr), content: "B-middle".into(), pinned: false, name: None },
+            Entry { ts: now - 5 * day, content: "C-oldest".into(), pinned: false, name: None },
         ]
     };
     // Un-pinned: the daily band keeps A (bucket newest) + C (protected oldest);
@@ -320,6 +321,7 @@ fn ladder_pins_do_not_count_against_the_150_cap() {
             ts: now - (2 * day + i * 3 * day),
             content: format!("v{i}"),
             pinned: true,
+            name: None,
         })
         .collect();
     prune_ladder(&mut pinned, now);
@@ -331,7 +333,7 @@ fn record_pinned_marks_the_snapshot_as_the_conscious_mark() {
     // "Keep version" records a PINNED snapshot the store reports as pinned.
     let p = PathBuf::from("/notes/kept.md");
     crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
-        record_pinned(&p, "keep me", &cfg_on());
+        record_pinned(&p, "keep me", &cfg_on(), None);
         let snaps = list(&p);
         assert_eq!(snaps.len(), 1, "one snapshot recorded");
         assert!(snaps[0].pinned, "record_pinned lands the conscious mark");
@@ -346,7 +348,7 @@ fn record_pinned_upgrades_the_already_newest_version_in_place() {
     crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
         record(&p, "steady", &cfg_on()); // an ordinary save
         assert!(!list(&p)[0].pinned, "the plain save is un-pinned");
-        record_pinned(&p, "steady", &cfg_on()); // pin the same content
+        record_pinned(&p, "steady", &cfg_on(), None); // pin the same content
         let snaps = list(&p);
         assert_eq!(snaps.len(), 1, "no duplicate — the newest is upgraded in place");
         assert!(snaps[0].pinned, "the existing newest is now pinned");
@@ -360,7 +362,7 @@ fn pinned_flag_round_trips_across_a_store_write_and_reload() {
     let p = PathBuf::from("/notes/persist.md");
     crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
         record(&p, "v1", &cfg_on());
-        record_pinned(&p, "v2", &cfg_on());
+        record_pinned(&p, "v2", &cfg_on(), None);
         let snaps = list(&p);
         // Newest (v2) pinned, older (v1) not.
         assert!(snaps[0].pinned && !snaps[1].pinned, "pin state persists per entry");
@@ -374,9 +376,246 @@ fn an_awlhist1_log_loads_with_every_entry_unpinned() {
     let bytes = b"awlhist1\n1000 5\nhello\n";
     assert_eq!(
         parse_log(bytes),
-        vec![Entry { ts: 1000, content: "hello".into(), pinned: false }],
+        vec![Entry { ts: 1000, content: "hello".into(), pinned: false, name: None }],
         "an old two-token header reads pinned = false"
     );
+}
+
+// ── NAMED SAVE POINTS: the optional name on a kept version ──────────────
+
+#[test]
+fn record_pinned_with_a_name_lands_a_named_point_that_round_trips() {
+    // "Keep version…" with a typed name records a PINNED + NAMED snapshot the
+    // store reports back — across a full write→read round trip (the log file,
+    // not just memory).
+    let p = PathBuf::from("/notes/named.md");
+    crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
+        record_pinned(&p, "keep me", &cfg_on(), Some("draft A — the spicy opening"));
+        let snaps = list(&p);
+        assert_eq!(snaps.len(), 1);
+        assert!(snaps[0].pinned, "a named point is also pinned");
+        assert_eq!(
+            snaps[0].name.as_deref(),
+            Some("draft A — the spicy opening"),
+            "the name round-trips through the on-disk log"
+        );
+        // And the content still loads byte-for-byte.
+        assert_eq!(load(&p, &snaps[0].id).as_deref(), Some("keep me"));
+    });
+}
+
+#[test]
+fn blank_or_whitespace_name_normalizes_to_the_plain_keep() {
+    // A blank minibuffer Enter IS the plain keep: `Some("")`/whitespace-only
+    // normalize to no name at the record seam, so the store never holds an
+    // empty-string name (which would render an empty primary cell).
+    let p = PathBuf::from("/notes/blank-name.md");
+    crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
+        record_pinned(&p, "keep me", &cfg_on(), Some("   "));
+        let snaps = list(&p);
+        assert!(snaps[0].pinned);
+        assert_eq!(snaps[0].name, None, "whitespace-only names normalize to None");
+    });
+}
+
+#[test]
+fn name_encoding_round_trips_spaces_percent_and_unicode_as_one_token() {
+    // The pure encode/decode pair: spaces, %, control bytes, and multi-byte
+    // UTF-8 all survive — and the encoded form is a single whitespace-free
+    // header token (the property the split_whitespace parser depends on).
+    for name in [
+        "draft A",
+        "100% done (almost)",
+        "before/after the rewrite",
+        "夜のドラフト — 2026",
+        "tab\there newline\nthere",
+    ] {
+        let tok = encode_name(name);
+        assert!(
+            !tok.contains(|c: char| c.is_whitespace()),
+            "encoded name must be whitespace-free: {tok:?}"
+        );
+        assert_eq!(decode_name(&tok), name, "encode→decode round-trips {name:?}");
+    }
+    // A malformed escape degrades to literal text, never a parse failure
+    // ("of"/"zz" are not hex digits, so the `%` passes through verbatim).
+    assert_eq!(decode_name("50%off"), "50%off");
+    assert_eq!(decode_name("%zz"), "%zz");
+}
+
+#[test]
+fn named_entries_round_trip_through_the_log_format() {
+    // serialize→parse is lossless with names present, absent, and mixed —
+    // including a name with spaces and a `%`.
+    let entries = vec![
+        Entry { ts: 3_000, content: "v3".into(), pinned: true, name: Some("draft A v2".into()) },
+        Entry { ts: 2_000, content: "v2".into(), pinned: true, name: None },
+        Entry { ts: 1_000, content: "v1".into(), pinned: false, name: None },
+    ];
+    let bytes = serialize_log(&entries);
+    assert_eq!(parse_log(&bytes), entries, "named + unnamed entries round-trip together");
+    let (parsed, trusted) = parse_log_checked(&bytes);
+    assert!(trusted, "a named log parses to the end cleanly");
+    assert_eq!(parsed, entries);
+}
+
+#[test]
+fn a_pre_name_awlhist2_log_loads_with_every_entry_unnamed() {
+    // BACK-COMPAT LAW: a store written BEFORE named points (awlhist2,
+    // three-token headers, byte-literal here — never via today's serializer)
+    // still loads fine, every entry reading `name = None`. The magic did NOT
+    // bump for names, so this is the exact bytes an old binary wrote.
+    let bytes = b"awlhist2\n1000 5 1\nhello\n";
+    assert_eq!(
+        parse_log(bytes),
+        vec![Entry { ts: 1000, content: "hello".into(), pinned: true, name: None }],
+        "a pre-name three-token header reads name = None"
+    );
+    // And the trust flag holds — an old store is not corruption.
+    let (_, trusted) = parse_log_checked(bytes);
+    assert!(trusted, "a pre-name log is trusted, never preserved-as-corrupt");
+}
+
+#[test]
+fn record_pinned_names_or_renames_the_already_newest_version_in_place() {
+    // Naming right after a save (identical content) lands the name IN PLACE —
+    // no duplicate; a second named keep RENAMES the point; a plain (nameless)
+    // re-pin never erases an existing name.
+    let p = PathBuf::from("/notes/rename-point.md");
+    crate::fs::with_fs(Arc::new(InMemoryFs::new()), || {
+        record(&p, "steady", &cfg_on());
+        record_pinned(&p, "steady", &cfg_on(), Some("first name"));
+        let snaps = list(&p);
+        assert_eq!(snaps.len(), 1, "named in place — no duplicate");
+        assert_eq!(snaps[0].name.as_deref(), Some("first name"));
+        // A later named keep of the same content RENAMES the point.
+        record_pinned(&p, "steady", &cfg_on(), Some("better name"));
+        assert_eq!(list(&p)[0].name.as_deref(), Some("better name"), "renamed in place");
+        // A plain re-pin (no name) keeps the existing name.
+        record_pinned(&p, "steady", &cfg_on(), None);
+        assert_eq!(
+            list(&p)[0].name.as_deref(),
+            Some("better name"),
+            "a nameless keep never erases a name"
+        );
+    });
+}
+
+#[test]
+fn ladder_exempts_a_named_snapshot_its_unnamed_peer_would_lose() {
+    // THE LAW: prune NEVER eats a named point. Same A/B/C daily-bucket scenario
+    // as the pinned-exemption test, but the middle entry is NAMED and — belt to
+    // the pin's suspenders — deliberately NOT pinned: the name ALONE exempts it.
+    let now = 20_000 * DAY_MS;
+    let day = DAY_MS;
+    let hr = 3_600_000u64;
+    let base = || {
+        vec![
+            Entry { ts: now - (5 * day - 2 * hr), content: "A-newest".into(), pinned: false, name: None },
+            Entry { ts: now - (5 * day - hr), content: "B-middle".into(), pinned: false, name: None },
+            Entry { ts: now - 5 * day, content: "C-oldest".into(), pinned: false, name: None },
+        ]
+    };
+    // Sanity: the unnamed middle is exactly what the daily band prunes.
+    let mut unnamed = base();
+    prune_ladder(&mut unnamed, now);
+    assert_eq!(unnamed.len(), 2, "the unnamed middle is pruned");
+    // Name the middle (no pin): it survives the same prune.
+    let mut named = base();
+    named[1].name = Some("the direction I liked".into());
+    prune_ladder(&mut named, now);
+    let kept: Vec<&str> = named.iter().map(|e| e.content.as_str()).collect();
+    assert_eq!(
+        kept,
+        vec!["A-newest", "B-middle", "C-oldest"],
+        "a name alone is prune-exempt: {kept:?}"
+    );
+}
+
+#[test]
+fn ladder_named_points_survive_every_band_and_the_cap_still_converges() {
+    // MULTI-SCENARIO LAW: a named point survives in the fresh window, the
+    // session band, the daily band, the weekly band, AND under heavy cap
+    // pressure — while the unnamed prunable set still converges to MAX_TOTAL
+    // (named points are exempt from the cap AND don't count against it).
+    let now = 1_700_000_000_000u64;
+    let day = DAY_MS;
+    // 400 unnamed snapshots over ~3 years (cap pressure) + one NAMED point in
+    // each age band (offset by +1ms so they never collide with an unnamed ts).
+    let named_ages =
+        [60_000u64, 3 * 3_600_000, 5 * day + 3_600_000, 45 * day + 3_600_000, 500 * day];
+    let mut e: Vec<Entry> = (0..400u64)
+        .map(|i| Entry {
+            ts: now - (2 * day + i * 3 * day),
+            content: format!("v{i}"),
+            pinned: false,
+            name: None,
+        })
+        .collect();
+    for (i, age) in named_ages.iter().enumerate() {
+        e.push(Entry {
+            ts: now - age + 1,
+            content: format!("named{i}"),
+            pinned: true, // the real creation shape: named ⇒ pinned
+            name: Some(format!("point {i}")),
+        });
+    }
+    e.sort_by(|a, b| b.ts.cmp(&a.ts));
+    prune_ladder(&mut e, now);
+    for i in 0..named_ages.len() {
+        let want = format!("point {i}");
+        assert!(
+            e.iter().any(|x| x.name.as_deref() == Some(want.as_str())),
+            "named point {i} must survive its band"
+        );
+    }
+    let unnamed_kept = e.iter().filter(|x| x.name.is_none()).count();
+    assert!(
+        unnamed_kept <= MAX_TOTAL,
+        "the unnamed prunable set still converges under the cap: {unnamed_kept}"
+    );
+    // Idempotence holds with names in the mix.
+    let once = e.clone();
+    prune_ladder(&mut e, now);
+    assert_eq!(e, once, "prune of pruned stays a no-op with named points");
+}
+
+#[test]
+fn many_named_points_all_survive_the_cap() {
+    // 200 NAMED points spread over years: every one survives (mirroring the
+    // pinned-cap law — a name means "keep this, always").
+    let now = 1_700_000_000_000u64;
+    let day = DAY_MS;
+    let mut named: Vec<Entry> = (0..200u64)
+        .map(|i| Entry {
+            ts: now - (2 * day + i * 3 * day),
+            content: format!("v{i}"),
+            pinned: true,
+            name: Some(format!("point {i}")),
+        })
+        .collect();
+    prune_ladder(&mut named, now);
+    assert_eq!(named.len(), 200, "every named point survives the cap: {}", named.len());
+}
+
+#[test]
+fn timeline_row_carries_the_name() {
+    // rows_from carries the snapshot's name straight into the row (the picker
+    // then renders it as the primary cell).
+    let snaps = vec![
+        Snapshot {
+            id: "42".into(),
+            timestamp: 42,
+            subject: None,
+            pinned: true,
+            name: Some("draft A".into()),
+        },
+        Snapshot { id: "41".into(), timestamp: 41, subject: None, pinned: false, name: None },
+    ];
+    let contents = vec!["hi\n".to_string(), "h\n".to_string()];
+    let rows = rows_from(&snaps, &contents, "hi\n", 1_000);
+    assert_eq!(rows[0].name.as_deref(), Some("draft A"));
+    assert_eq!(rows[1].name, None);
 }
 
 #[test]
@@ -389,7 +628,7 @@ fn record_at_prunes_with_injected_clock() {
         let t0 = 1_700_000_000_000u64;
         // A 40-minute session of one save per minute, clock injected.
         for i in 0..40u64 {
-            record_at(&p, &format!("v{i}"), &cfg_on(), t0 + i * 60_000, false);
+            record_at(&p, &format!("v{i}"), &cfg_on(), t0 + i * 60_000, false, None);
         }
         let snaps = list(&p);
         // Everything older than the last 15 min belongs to the SAME session
@@ -437,7 +676,7 @@ fn record_inside_git_repo_writes_nothing_ever() {
     crate::fs::with_fs(Arc::new(fs), || {
         assert!(is_git_managed(&p), "the seeded `.git` ancestor is detected");
         record(&p, "v1", &cfg_on());
-        record_at(&p, "v2", &cfg_on(), 1_700_000_000_000, false);
+        record_at(&p, "v2", &cfg_on(), 1_700_000_000_000, false, None);
         assert!(
             crate::fs::active().read(&log_path(&p)).is_err(),
             "no awl snapshot log for a git-managed file, from any path"
@@ -504,8 +743,8 @@ fn log_round_trips_content_with_newlines_and_spaces() {
     // The framed format survives embedded newlines + the header-delimiter space,
     // and the per-entry pinned flag round-trips (one kept, one not).
     let entries = vec![
-        Entry { ts: 1_000, content: "line one\nline two\n".to_string(), pinned: true },
-        Entry { ts: 999, content: "a b  c\nd".to_string(), pinned: false },
+        Entry { ts: 1_000, content: "line one\nline two\n".to_string(), pinned: true, name: None },
+        Entry { ts: 999, content: "a b  c\nd".to_string(), pinned: false, name: None },
     ];
     let bytes = serialize_log(&entries);
     assert_eq!(parse_log(&bytes), entries, "serialize→parse is lossless");
@@ -677,9 +916,10 @@ fn rows_from_composes_when_which_counts_ids() {
             timestamp: now - 60_000,
             subject: Some("fix: the engine".into()),
             pinned: false,
+            name: None,
         },
-        Snapshot { id: "1000".into(), timestamp: now - 2 * day, subject: None, pinned: false },
-        Snapshot { id: "999".into(), timestamp: now - 40 * day, subject: None, pinned: false },
+        Snapshot { id: "1000".into(), timestamp: now - 2 * day, subject: None, pinned: false, name: None },
+        Snapshot { id: "999".into(), timestamp: now - 40 * day, subject: None, pinned: false, name: None },
     ];
     let contents = vec![
         "a\nb\nc".to_string(),
@@ -765,7 +1005,7 @@ fn ladder_clock_rewind_overshoot_self_heals_once_time_advances() {
     let now = 1_700_000_000_000u64;
     let mut e: Vec<Entry> = (0..200u64)
         // newest-first, all "future"
-        .map(|i| Entry { ts: now + 200 - i, content: format!("v{i}"), pinned: false })
+        .map(|i| Entry { ts: now + 200 - i, content: format!("v{i}"), pinned: false, name: None })
         .collect();
     prune_ladder(&mut e, now);
     assert_eq!(
@@ -808,7 +1048,7 @@ fn source_path_prefers_buffer_then_file_then_scratch_stash() {
 
 #[test]
 fn parse_log_checked_trusts_a_clean_log_including_an_empty_body() {
-    let entries = vec![Entry { ts: 1, content: "x".into(), pinned: false }];
+    let entries = vec![Entry { ts: 1, content: "x".into(), pinned: false, name: None }];
     let (parsed, trusted) = parse_log_checked(&serialize_log(&entries));
     assert!(trusted, "a well-formed log is trusted");
     assert_eq!(parsed, entries);
@@ -836,9 +1076,9 @@ fn parse_log_checked_distrusts_a_truncated_entry_but_still_returns_prior_survivo
     // correctly flagged untrusted so it gets backed up rather than silently
     // rewritten short on the next save.
     let full = vec![
-        Entry { ts: 3, content: "third".into(), pinned: false },
-        Entry { ts: 2, content: "second".into(), pinned: false },
-        Entry { ts: 1, content: "first".into(), pinned: false },
+        Entry { ts: 3, content: "third".into(), pinned: false, name: None },
+        Entry { ts: 2, content: "second".into(), pinned: false, name: None },
+        Entry { ts: 1, content: "first".into(), pinned: false, name: None },
     ];
     let bytes = serialize_log(&full);
     let torn = &bytes[..bytes.len() - 3]; // chop off the tail of the LAST entry's content

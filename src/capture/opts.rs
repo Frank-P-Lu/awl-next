@@ -123,12 +123,21 @@ pub struct OverlayInfo {
     /// FACETING pickers only: the SECTION label per `items` row (parallel), so the
     /// grouping is drawable + assertable. Empty for a flat picker / the All lens.
     pub sections: Vec<String>,
-    /// HISTORY timeline only: the restore id of the highlighted row whose VERSION
-    /// the capture is previewing in the document (paired with
-    /// [`CaptureOpts::preview_text`]), or `None` for every other mode / the
-    /// empty-state row. Emitted as `overlay.preview_id` so a `--keys`-driven
-    /// history preview is assertable from the sidecar.
+    /// HISTORY timeline only: the restore id of the highlighted row whose
+    /// writer's-DIFF the capture is previewing in the document (paired with
+    /// [`CaptureOpts::preview_text`] — DIFF-AS-PREVIEW: the previewed text is the
+    /// marked-up-manuscript transcript, not the raw version), or `None` for every
+    /// other mode / the empty-state row. Emitted as `overlay.preview_id` so a
+    /// `--keys`-driven history preview is assertable from the sidecar.
     pub preview_id: Option<String>,
+    /// DIFF-AS-PREVIEW (History only): whether keyboard FOCUS sits in the diff
+    /// PANEL (Tab pressed — ↑/↓ then scroll the diff; the panel border
+    /// strengthens). Emitted as `overlay.diff_focus`; always false elsewhere.
+    pub diff_focus: bool,
+    /// DIFF-AS-PREVIEW (History only): the diff panel's scroll in VISUAL ROWS
+    /// (PgUp/PgDn / panel ↑/↓ / the wheel over the page). Emitted as
+    /// `overlay.diff_scroll`; always 0 elsewhere.
+    pub diff_scroll: usize,
     /// File pickers only (go-to / browse): whether dot-prefixed entries are REVEALED
     /// (`Cmd-Shift-.` toggled them on). Default `false` for a fresh summon; `items`
     /// already reflects the filtering, so this is the explicit flag to assert. Emitted

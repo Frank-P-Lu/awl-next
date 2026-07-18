@@ -323,6 +323,19 @@ fn surface_step_band(extra_steps: i32) -> Srgb {
     )
 }
 
+/// ARM B LIVING-BAND PROBE — the BRIGHTEST value step the two-shape
+/// choreography fills WHERE its leading band and chasing echo cross
+/// ([`crate::render::livingband`]). ONE ladder step past the selected-row band
+/// (which the leading band already wears), on the SAME surface ramp — so the
+/// crossing reads exactly one calm step brighter than the lead (echo `+0`, lead
+/// `+1`, crossing `+2` past `surface_selected`: a clean monotone value climb),
+/// colour where they cross by VALUE only, never a hue / never amber (DESIGN §3).
+/// Consumed only when `AWL_LIVING_BAND=twoshape…` is set; inert on
+/// every ordinary run.
+pub fn overlay_band_overlap() -> Srgb {
+    surface_step_band(OVERLAY_SELROW_EXTRA_STEPS + 1)
+}
+
 /// The PICKER'S selected-row VALUE band — [`surface_selected`] climbed
 /// [`OVERLAY_SELROW_EXTRA_STEPS`] further up the SAME surface ramp (value only,
 /// never a hue). The `overlay_draw_card` band reads this; the shared borders

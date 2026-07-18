@@ -100,7 +100,7 @@ mod tests {
     fn plain_selection_lights_nothing_and_labels_h() {
         // "the quick fox", select "quick" (chars 4..9), unformatted.
         let m = plan("the quick fox", Some(4), 9, true).unwrap();
-        assert_eq!(labels(&m), vec!["B", "I", "A", "C", "S", "H", "Link"]);
+        assert_eq!(labels(&m), vec!["B", "I", "A", "code", "S", "H", "Link"]);
         for b in &m.buttons {
             assert!(!b.active, "{:?} should be unlit on plain text", b.button);
         }
@@ -108,13 +108,13 @@ mod tests {
 
     #[test]
     fn bold_selection_lights_the_b_button() {
-        // "the **quick** fox": select the inner "quick" (chars 6..11). B lights.
-        // (I is DELIBERATELY not asserted here: `**` contains a single `*`, so the
-        // italic toggle would strip it too — the popover reflects that toggle
-        // behavior verbatim, so both can legitimately light. `==` has no such
-        // overlap, so it is the clean negative.)
+        // "the **quick** fox": select the inner "quick" (chars 6..11). B lights,
+        // and — the lit-I-inside-bold fix — I stays DARK: `**` is bold's fence,
+        // not two italic markers, so the italic toggle would WRAP (not strip)
+        // here and the popover must mirror that. `==` is the clean negative too.
         let m = plan("the **quick** fox", Some(6), 11, true).unwrap();
         assert!(active(&m, PopoverButton::Bold), "B lit inside **…**");
+        assert!(!active(&m, PopoverButton::Italic), "I dark inside plain bold (not two * markers)");
         assert!(!active(&m, PopoverButton::Highlight), "== unlit on bold text");
     }
 

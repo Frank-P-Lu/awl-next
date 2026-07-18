@@ -277,9 +277,12 @@ pub enum PlacardInk {
 /// `Placard` is the OVERLAY-PERSONALITY-AS-DATA round's capability: a
 /// large, corner-anchored, DIM wordmark of the SAME title text drawn BEHIND
 /// the card's rows (Persona 3 Reload's CONFIG-screen watermark is the
-/// reference) — `scale` multiplies the markdown heading TITLE type rung
-/// (`markdown::headings::type_scale::TITLE`) over the document's own body
-/// font size, so a world can dial how loud its wordmark reads without a
+/// reference) — `scale` multiplies the FROZEN placard calibration anchor
+/// (`render::chrome::overlay_shape::PLACARD_CALIBRATION_TITLE`, the TITLE
+/// rung as it stood when the wordmark fractions were picked by eye —
+/// deliberately decoupled from the live document ladder, so a heading-ladder
+/// retune never silently resizes a world's wordmark) over the document's own
+/// body font size, so a world can dial how loud its wordmark reads without a
 /// second magic number; `ink` picks how it draws off the ink ladder (see
 /// [`PlacardInk`]). **BLEED IS THE CONTRACT** (the user-settled semantics,
 /// pinned by `render::tests::overlay_personality`'s corner-placement tests):
@@ -1115,6 +1118,20 @@ pub struct Theme {
     /// each world's doc). Code needs the true fixed grid a proportional face can't
     /// give; the mono is selected in `render.rs::doc_attrs` when the buffer is code.
     pub mono: &'static str,
+    /// ONE BIT of per-world HEADING-WEIGHT data (the heading-weight round,
+    /// user-decided shape): `true` ⇒ a markdown SECTION (`##`) and SUBHEAD
+    /// (`###`+) heading shapes at real `Weight::BOLD` — the world's own bundled
+    /// 700 companion face (`render::FONT_THEME_BOLD_FACES`), never synthetic;
+    /// `false` ⇒ every heading stays Regular and reads by SIZE alone. The TITLE
+    /// (`#`) NEVER bolds on any world — Ladder J spends pure size there — and
+    /// that gate lives with the bit's ONE composition owner,
+    /// [`crate::markdown::heading_weight_bold`] (the render seam + the capture
+    /// sidecar both route through it). Assignment leans on the display face's
+    /// own construction: serif worlds `false` (stroke contrast carries
+    /// hierarchy structurally), mono-display worlds `true` (uniform strokes
+    /// need weight), sans worlds judged by eye — the per-world call is a
+    /// one-line comment on each world literal in `worlds.rs`.
+    pub heading_bold: bool,
     /// PRIORITIZED CJK fallback family list for this world (bundled Noto JP
     /// first, then mac primary, then linux fallback). The bundled Latin/display
     /// faces carry NO Japanese glyphs, so Japanese text resolves through this

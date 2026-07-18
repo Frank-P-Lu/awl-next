@@ -34,18 +34,48 @@ const PREFIX_HEADER: &str = "C-x";
 /// top [`outline`] so BOTH hug the column by the exact same amount and move with it.
 pub(in crate::render) const MARGIN_COLUMN_GAP_CHARS: f32 = 1.5;
 
+/// DIFF-AS-PREVIEW panel: the card's inset from the canvas TOP (px). Sits above
+/// the document's `TEXT_TOP` (16px), so the transcript's title row starts 8px
+/// inside the card.
+const DIFF_PANEL_TOP: f32 = 8.0;
+/// DIFF-AS-PREVIEW panel: the card's reserve above the canvas BOTTOM (px) — room
+/// for the raised rim (1px, 2px focused) to read as a clean edge, not a bleed off
+/// the canvas bottom. (No shadow tail: the panel is RIMMED, not Shadowed — see
+/// `prepare_diff_panel`.)
+const DIFF_PANEL_BOTTOM: f32 = 14.0;
+
+/// How much of the float trio draws around a summoned card's opaque fill — the
+/// ONE elevation vocabulary every [`set_float_quads`] caller names explicitly
+/// (no bare bool a new panel can pass without thinking).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::render) enum FloatElevation {
+    /// Drop shadow + raised border + card — the large summoned panels
+    /// (overlay cards, which-key, HUD, menus, the caret/spell float).
+    Shadowed,
+    /// Raised border + card, NO shadow — the FORMAT POPOVER's shape (and the
+    /// DIFF-AS-PREVIEW panel). Its card is barely two line-heights tall, so the
+    /// hard-edged shadow quad hanging ~9px below the rim OUT-MASSED the card's
+    /// own 7px pad and read as a "fat chin" under the button row (on a dark
+    /// world the ink-alpha "shadow" composites LIGHTER than the page — a bright
+    /// slab, not depth). The 1px rim + the `base_300` value step carry a
+    /// micro-strip's elevation alone (DESIGN §5: depth by value, not
+    /// drop-shadows).
+    Rimmed,
+    /// Card fill alone — a caller whose OWN backdrop (blur/scrim) already
+    /// carries the card's contrast, so only a TRUE 1-BIT world (where that
+    /// backdrop is disabled outright) needs the crisp border to read at all.
+    Flat,
+}
+
 /// Upload the three FLOAT-PANEL elevation quads (drop `shadow` -> raised `border` ->
 /// opaque `card`) for `rect`, or PARK all three empty when `rect` is `None`. Shared by
 /// the reusable [`TextPipeline::prepare_float_panel`] (the caret-preview / spell
 /// panels), the which-key panel, and the centered-overlay card (`overlay.rs`) — each
 /// passes ITS OWN three pipelines, so summoned micro-panels never race the same
 /// quads. `card` is drawn last (on top of its shadow + border), matching the
-/// painter's-order draw in `render.rs`. `elevated = false` still draws the CARD at
-/// `rect` (the fill always shows) but parks the shadow + border empty — the shape a
-/// caller uses when its OWN backdrop (blur/scrim) already carries the card's
-/// contrast, so only a TRUE 1-BIT world (where that backdrop is disabled outright)
-/// needs the crisp white border to read at all. Every EXISTING caller passes
-/// `elevated: true` (unconditional elevation, its pre-existing behaviour).
+/// painter's-order draw in `render.rs`. `elevation` picks how much of the trio
+/// draws ([`FloatElevation`]); the quads a shape omits are prepared EMPTY, never
+/// left stale from a previous frame.
 #[allow(clippy::too_many_arguments)]
 fn set_float_quads(
     shadow: &mut SelectionPipeline,
@@ -56,20 +86,23 @@ fn set_float_quads(
     width: u32,
     height: u32,
     rect: Option<[f32; 4]>,
-    elevated: bool,
+    elevation: FloatElevation,
 ) {
     match rect {
         Some([x, y, w, h]) => {
-            if elevated {
+            if elevation == FloatElevation::Shadowed {
                 // Drop SHADOW: offset DOWN + a touch wider, translucent ink, so the
                 // card reads as risen a step above the document (depth by value,
                 // DESIGN §8).
                 shadow.prepare(device, queue, width, height, &[[x - 2.0, y + 4.0, w + 4.0, h + 6.0]]);
+            } else {
+                shadow.prepare(device, queue, width, height, &[]);
+            }
+            if elevation != FloatElevation::Flat {
                 // Crisp raised BORDER edge: a slightly larger surface-step rect whose
                 // 1px rim peeks past the card, giving the box a clean, present edge.
                 border.prepare(device, queue, width, height, &[[x - 1.0, y - 1.0, w + 2.0, h + 2.0]]);
             } else {
-                shadow.prepare(device, queue, width, height, &[]);
                 border.prepare(device, queue, width, height, &[]);
             }
             card.prepare(device, queue, width, height, &[[x, y, w, h]]);
@@ -186,13 +219,18 @@ pub(super) struct OverlayGeom {
     /// the hit-test / selected-row band (which only span the candidate rows above) are
     /// untouched.
     footer_rows: usize,
-    /// THEME PICKER only: `true` when this card is the faceted theme picker (drives the
-    /// strip + section-header layout branch). `false` for every other overlay.
+    /// FACETED card: `true` when this card takes the faceted (lens-strip +
+    /// section-header) layout branch — the Switch-theme picker AND every other
+    /// picker once a lens strip is populated (the Cmd-P command palette, Settings,
+    /// Browse, …; `overlay_geometry` routes to `theme_overlay_geometry` whenever
+    /// `overlay_lens` is non-empty, not just for the literal Theme kind). `false`
+    /// for the flat pickers. (The field name predates the faceted UNION; it now
+    /// means "faceted layout", not "the Theme kind".)
     theme: bool,
-    /// THEME PICKER only: the lens strip (label + active flag), drawn on display line 1.
+    /// FACETED card: the lens strip (label + active flag), drawn on display line 1.
     strip: Vec<(String, bool)>,
-    /// THEME PICKER only: the candidate-area display sequence (headers + world rows),
-    /// starting at display line 2 (below the query line 0 + strip line 1).
+    /// FACETED card: the candidate-area display sequence (section headers + item
+    /// rows), starting at display line 2 (below the query line 0 + strip line 1).
     plan: Vec<ThemeLine>,
     /// Rows occupied ABOVE the candidate list: `1` for the query line the flat/nav
     /// pickers show at the top (`› query`), `0` for the contextual SPELL panel (no
@@ -348,8 +386,106 @@ impl TextPipeline {
             width,
             height,
             rect,
-            true, // this primitive's every use wants unconditional elevation
+            FloatElevation::Shadowed, // this primitive's every use wants full elevation
         );
+    }
+
+    /// DIFF-AS-PREVIEW — the PAGE COLUMN dressed as a CARD while the History
+    /// picker's writer's-diff preview is up. "Visually it looks like a card, but
+    /// it's actually a panel" (the user's spec): the transcript renders in the
+    /// page column with the full measure + the existing row/scroll machinery, and
+    /// THIS gives that column the summoned-card visual language — a crisp raised
+    /// border rim over an opaque `base_300` card face — via the ONE quad-shape
+    /// owner [`set_float_quads`] on the panel's own dedicated pipelines. Parked
+    /// (all three empty) on every ordinary frame, so a default capture is
+    /// byte-identical.
+    ///
+    /// RIMMED, NOT SHADOWED (the chin-round decision, mirroring the popover): a
+    /// large panel's ink-alpha drop-shadow slab composites LIGHTER than a dark
+    /// page — a bright bar hanging below the card that out-masses it (DESIGN §8,
+    /// depth by value, not drop-shadows). So this rides the ONE elevation owner's
+    /// [`FloatElevation::Rimmed`] arm — shadow pipeline PARKED, the depth reads
+    /// from the rim + card alone (the SAME vocabulary the format popover names).
+    ///
+    /// FOCUS CUE: `Rimmed` draws a default 1px rim at the pipeline's stored tint;
+    /// this panel then REFINES that rim in place — its own value
+    /// (`surface_selected`), stepped up one value step to content ink AND widened
+    /// one px (1 → 2) when Tab moved keyboard focus INTO the panel
+    /// (`diff_panel_focus`). The value-free half (the width bump) still reads on a
+    /// one-bit world where the ink ladder collapses. Never amber (DESIGN §3).
+    pub(super) fn prepare_diff_panel(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
+        let rect = self.diff_panel_rect(height as f32);
+        set_float_quads(
+            &mut self.diffpanel_shadow,
+            &mut self.diffpanel_border,
+            &mut self.diffpanel_card,
+            device,
+            queue,
+            width,
+            height,
+            rect,
+            FloatElevation::Rimmed, // shadow parked; rim + card carry the depth
+        );
+        // FOCUS CUE — refine the rim `set_float_quads` just drew: the panel's own
+        // value by default, stepped up to content ink AND widened 1→2px when Tab
+        // moved focus in. The color is baked per-instance at `prepare` time, so
+        // `set_color` needs the following `prepare` (which also re-tints the rim
+        // the shared owner drew with the pipeline's stale color). The rect sits a
+        // touch larger than the card and draws BEHIND it (painter's order in
+        // `render.rs`: shadow → border → card), so only the rim peeks out.
+        if let Some([x, y, w, h]) = rect {
+            let focused = self.diff_panel_focus;
+            self.diffpanel_border.set_color(if focused {
+                theme::base_content().rgba_bytes()
+            } else {
+                theme::surface_selected().rgba_bytes()
+            });
+            let pad = if focused { 2.0 } else { 1.0 };
+            self.diffpanel_border.prepare(
+                device,
+                queue,
+                width,
+                height,
+                &[[x - pad, y - pad, w + 2.0 * pad, h + 2.0 * pad]],
+            );
+        }
+    }
+
+    /// The diff panel's card RECT (`[x, y, w, h]`), or `None` when no diff
+    /// preview is up — the ONE geometry owner [`Self::prepare_diff_panel`] (the
+    /// dressing) and [`Self::doc_clip_band`] (the content clip) both read, so the
+    /// border and the clipped content can never disagree. Horizontally it IS the
+    /// page column (`column_left`/`column_width` — the full measure, adaptive
+    /// placement composing for free); vertically it is inset from the canvas so
+    /// the card reads as a card ([`DIFF_PANEL_TOP`]/[`DIFF_PANEL_BOTTOM`] — the
+    /// bottom reserve leaves room for the shadow tail). The document's TEXT_TOP
+    /// (16px) lands the transcript's title 8px inside the card's top edge.
+    pub(in crate::render) fn diff_panel_rect(&self, height: f32) -> Option<[f32; 4]> {
+        if !self.diff_panel {
+            return None;
+        }
+        let x = self.column_left();
+        let w = self.column_width();
+        let h = (height - DIFF_PANEL_TOP - DIFF_PANEL_BOTTOM).max(1.0);
+        Some([x, DIFF_PANEL_TOP, w, h])
+    }
+
+    /// The vertical band (`(top, bottom)` in px) DOCUMENT CONTENT may paint into
+    /// while the diff panel is up, or `None` on an ordinary frame (no clipping).
+    /// Derived from [`Self::diff_panel_rect`] inset by the rim, and applied at
+    /// every content emitter — the text layer's `TextBounds`, the wash / pill /
+    /// fence-panel quads, the strike / squiggle lines, the ornament glyphs, and
+    /// the caret quad — so a scrolled transcript clips AT the card's edge instead
+    /// of sliding over the margin band above/below it.
+    pub(in crate::render) fn doc_clip_band(&self, height: f32) -> Option<(f32, f32)> {
+        self.diff_panel_rect(height)
+            .map(|[_, y, _, h]| (y + 2.0, y + h - 2.0))
     }
 
     /// The CENTERED-OVERLAY family's card elevation (go-to / command / theme /
@@ -378,8 +514,13 @@ impl TextPipeline {
         // dev probe (the PALETTE-COMPOSITION round's light-world-border A/B; no
         // world's data flips). Composes with the new anchor + header gap freely —
         // the rim just traces the card rect, wherever it sits.
-        let elevated = rect.is_some()
-            && crate::render::effective_card_elevation() == theme::Elevation::Bordered;
+        let elevation = if rect.is_some()
+            && crate::render::effective_card_elevation() == theme::Elevation::Bordered
+        {
+            FloatElevation::Shadowed
+        } else {
+            FloatElevation::Flat
+        };
         set_float_quads(
             &mut self.panel_shadow,
             &mut self.panel_border,
@@ -389,7 +530,7 @@ impl TextPipeline {
             width,
             height,
             rect,
-            elevated,
+            elevation,
         );
     }
 }
@@ -854,12 +995,18 @@ pub struct PeekReport {
 /// synthetic [`crate::streaks::placeholder`] in a headless capture (no persisted
 /// store), via the SAME `streaks_effective_view` owner the pixels use — so the
 /// sidecar can never claim a figure the card doesn't show, and a `--streaks`
-/// capture is deterministic + byte-stable across machines. `cells` is the row-major
-/// (`col*7 + row`) intensity-bucket grid.
+/// capture is deterministic + byte-stable across machines. `view` is which PAGE
+/// is showing (`"heatmap"`, the default on every summon, or `"cumulative"` —
+/// flipped with ←/→ while the card is open, `crate::streaks::card_view`);
+/// `total_words` is the cumulative window's final running total (the figure the
+/// progress chart tops out at); `cells` is the row-major (`col*7 + row`)
+/// intensity-bucket grid.
 pub struct StreaksReport {
     pub open: bool,
+    pub view: &'static str,
     pub streak: u64,
     pub today_words: u64,
+    pub total_words: u64,
     pub cells: Vec<u8>,
 }
 

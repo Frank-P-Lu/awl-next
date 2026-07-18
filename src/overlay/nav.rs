@@ -110,6 +110,9 @@ impl OverlayState {
             self.selected = self.items.len().saturating_sub(1);
         }
         self.scroll_to_selected();
+        // DIFF-AS-PREVIEW: the row set changed under the highlight — whatever
+        // version is now selected gets a fresh transcript, scrolled to its top.
+        self.diff_scroll = 0;
     }
 
     /// THEME picker: the SECTION label for each filtered row, in the same order as
@@ -202,6 +205,8 @@ impl OverlayState {
         }
         self.selected = s as usize;
         self.scroll_to_selected();
+        // DIFF-AS-PREVIEW: a selection move means a NEW transcript — top it out.
+        self.diff_scroll = 0;
     }
 
     /// JUMP the selection to the FIRST visible item (the Home/End-in-picker jump — see
@@ -212,6 +217,7 @@ impl OverlayState {
     pub fn select_first(&mut self) {
         self.selected = 0;
         self.scroll_to_selected();
+        self.diff_scroll = 0;
     }
 
     /// JUMP the selection to the LAST visible item (the End/Home-in-picker jump — the
@@ -220,6 +226,7 @@ impl OverlayState {
     pub fn select_last(&mut self) {
         self.selected = self.items.len().saturating_sub(1);
         self.scroll_to_selected();
+        self.diff_scroll = 0;
     }
 
     /// A HOVER re-highlights the row `target` ONLY when it is already within the current
@@ -232,6 +239,9 @@ impl OverlayState {
         let last = (self.scroll + window).min(self.items.len());
         if target >= self.scroll && target < last && target != self.selected {
             self.selected = target;
+            // DIFF-AS-PREVIEW: hovering a different version previews ITS diff,
+            // fresh from the top (the same reset every selection move takes).
+            self.diff_scroll = 0;
             true
         } else {
             false

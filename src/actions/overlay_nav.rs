@@ -100,6 +100,41 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             _ => return Effect::None,
         }
     }
+    // NAMED SAVE POINTS — "Keep version…" MINIBUFFER: while the KeepName overlay's
+    // typed-name sub-state is active (armed the instant the overlay is BUILT — see
+    // `OverlayState::new_keep_name`), it OWNS every key modally: ANY printable char
+    // extends the typed name (no filter — a name is free display text), Backspace
+    // deletes, Enter COMMITS (closes the overlay itself and signals
+    // `Effect::KeepVersion { name }` — `Some(trimmed)` for real text, `None` for a
+    // blank Enter, the plain zero-friction keep), Esc CANCELS (closes, nothing
+    // recorded). Checked alongside the Rename/InsertLink blocks above — never open
+    // together with either.
+    if ctx.overlay.as_ref().unwrap().keep_edit.is_some() {
+        match action {
+            Action::InsertChar(c) => {
+                ctx.overlay.as_mut().unwrap().keep_edit_push(*c);
+                return Effect::None;
+            }
+            Action::DeleteBackward | Action::DeleteWordBackward => {
+                ctx.overlay.as_mut().unwrap().keep_edit_pop();
+                return Effect::None;
+            }
+            Action::Newline => {
+                let target = ctx.overlay.as_ref().unwrap().keep_edit_target();
+                *ctx.overlay = None;
+                return match target {
+                    Some(name) => Effect::KeepVersion { name },
+                    None => Effect::None,
+                };
+            }
+            Action::Cancel => {
+                *ctx.overlay = None;
+                return Effect::None;
+            }
+            // Every other key is swallowed (the edit is modal to the one row).
+            _ => return Effect::None,
+        }
+    }
     // SETTINGS VALUE EDIT: while an inline numeric edit is active (Enter landed on a
     // page-width / zoom row), the Settings menu OWNS every key modally — digits (plus
     // `.`/`%` for zoom) build the value in the row's own cell, Backspace deletes, Enter
@@ -141,6 +176,71 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
     if ctx.overlay.as_ref().unwrap().kind == crate::overlay::OverlayKind::Keybindings {
         if let Some(eff) = keybindings_intercept(ctx, action) {
             return eff;
+        }
+    }
+    // DIFF-AS-PREVIEW — the HISTORY picker's diff-panel keys, before the generic
+    // list nav so History can reassign them. Two layers:
+    //   * PANEL FOCUS (Tab pressed, `diff_focus`): ↑/↓ scroll the diff STEP-WISE,
+    //     PgUp/PgDn page it, Tab/Esc return focus to the version list (Esc goes
+    //     back to LIST focus, not home — two Escs total from panel to closed),
+    //     ↵ falls through to the ordinary restore accept below. Everything else
+    //     is swallowed (typing is a LIST affordance; the panel holds the keys).
+    //   * LIST FOCUS: PgUp/PgDn SCROLL THE DIFF anyway (reassigned from
+    //     list-paging — History paging is near-worthless, type-to-filter covers
+    //     jumps; every OTHER picker keeps the page-the-selection arms below).
+    // The scroll unit is `ctx.scroll_page_lines` (the live App intercepts these
+    // two keys with its GPU-measured screenful BEFORE the core — the existing
+    // PageScroll precedent; headless uses the fixed deterministic page).
+    // Gated on a REAL highlighted version (`selected_history_id`): an empty
+    // history has no diff, so the generic arms keep their meaning there.
+    {
+        let ov = ctx.overlay.as_ref().unwrap();
+        if ov.kind == crate::overlay::OverlayKind::History && ov.selected_history_id().is_some() {
+            let page = ctx.scroll_page_lines.max(1);
+            let focused = ov.diff_focus;
+            match action {
+                Action::PageScrollDown => {
+                    let ov = ctx.overlay.as_mut().unwrap();
+                    ov.diff_scroll = ov.diff_scroll.saturating_add(page);
+                    return Effect::None;
+                }
+                Action::PageScrollUp => {
+                    let ov = ctx.overlay.as_mut().unwrap();
+                    ov.diff_scroll = ov.diff_scroll.saturating_sub(page);
+                    return Effect::None;
+                }
+                // Tab TOGGLES the focus between list and panel (the takeover
+                // Compare this replaces is retired — see `Action::CompareVersion`).
+                Action::CompareVersion | Action::InsertTab => {
+                    let ov = ctx.overlay.as_mut().unwrap();
+                    ov.diff_focus = !ov.diff_focus;
+                    return Effect::None;
+                }
+                _ if focused => match action {
+                    Action::NextLine => {
+                        let ov = ctx.overlay.as_mut().unwrap();
+                        ov.diff_scroll = ov.diff_scroll.saturating_add(1);
+                        return Effect::None;
+                    }
+                    Action::PreviousLine => {
+                        let ov = ctx.overlay.as_mut().unwrap();
+                        ov.diff_scroll = ov.diff_scroll.saturating_sub(1);
+                        return Effect::None;
+                    }
+                    // Esc from panel focus returns to LIST focus (never home).
+                    Action::Cancel => {
+                        ctx.overlay.as_mut().unwrap().diff_focus = false;
+                        return Effect::None;
+                    }
+                    // ↵ restores the highlighted version — fall through to the
+                    // ordinary History accept arm below.
+                    Action::Newline => {}
+                    // The panel holds the keys: typing/backspace/lens moves are
+                    // list affordances, swallowed while focus sits in the panel.
+                    _ => return Effect::None,
+                },
+                _ => {}
+            }
         }
     }
     match action {
@@ -561,28 +661,10 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             ctx.overlay.as_mut().unwrap().toggle_hidden();
             return Effect::None;
         }
-        Action::CompareVersion | Action::InsertTab => {
-            // THE WRITER'S DIFF from the HISTORY picker: open the read-only prose-diff
-            // view comparing the current buffer against the HIGHLIGHTED version. Reached
-            // by TAB (the picker's own "compare" affordance, taught in the foot hint —
-            // spending no global chord) or by a `[keys]`-rebound Compare chord. Emit the
-            // highlighted row's opaque restore id (which the caller resolves via
-            // `history::load` + renders through `prosediff`, exactly as the buffer-path
-            // Compare does) and CLOSE the stack — you've navigated into the diff, not
-            // configured the picker. The synthetic "no history yet" row has an empty id,
-            // so it is a calm no-op. In ANY OTHER picker Tab stays inert (it was already
-            // a no-op there), so nothing else changes.
-            let ov = ctx.overlay.as_ref().unwrap();
-            if ov.kind == crate::overlay::OverlayKind::History {
-                let eff = match ov.selected_history_id() {
-                    Some(id) => Effect::CompareVersion(id.to_string()),
-                    None => Effect::None,
-                };
-                dispose_after_accept(ctx);
-                return eff;
-            }
-            return Effect::None;
-        }
+        // NOTE (DIFF-AS-PREVIEW): Tab in the HISTORY picker is handled ABOVE (the
+        // focus shift into the diff panel — the old Tab-TAKEOVER into a separate
+        // read-only view is RETIRED; the diff IS the picker's live preview now).
+        // In every other picker Tab stays inert, exactly as before.
         Action::Cancel => {
             // REVERT the live preview: the Theme picker restores the world, and
             // the Caret picker restores the LOOK, that was active when it opened.
