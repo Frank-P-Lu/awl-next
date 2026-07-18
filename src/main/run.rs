@@ -3561,6 +3561,8 @@ mod tests {
             bv, bl,
             "non-wrapped short-line doc: visual + logical captures are byte-identical"
         );
+        let _ = std::fs::remove_file(&pv);
+        let _ = std::fs::remove_file(&pl);
     }
 
     // ---- FRESH LAYOUT ORACLE PER ACTION (Phase 2) --------------------------
