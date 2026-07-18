@@ -45,11 +45,14 @@ const EXPECTED: &[(&str, usize)] = &[
     // early, and each is a one-time, non-recurring condition.
     ("app.rs", 6),
     // LIVE PROBE harness protocol/diagnostic lines (fate (c), CLI harness
-    // output): the driver's ready-timeout warning (`probe.rs`), the per-shot
-    // `LIVE-PROBE shot …` protocol lines the wrapping script asserts on
-    // (`app/probe.rs`), and `app.rs`'s shots-dir creation failure (counted in
-    // the row above).
-    ("probe.rs", 1),
+    // output): the driver's ready-timeout warning + the ONE `PROBE-TRACE …`
+    // owner (`probe.rs::trace`, the single stderr print site every present /
+    // crossing / move trace routes through, so the scattered call sites in
+    // `app/apply.rs` / `app/gpu.rs` / `app/window.rs` carry no print macro of
+    // their own), the per-shot `LIVE-PROBE shot …` protocol lines the wrapping
+    // script asserts on (`app/probe.rs`), and `app.rs`'s shots-dir creation
+    // failure (counted in the row above).
+    ("probe.rs", 2),
     ("app/probe.rs", 5),
     // "follow link: could not open …" — a rare OS-handoff failure
     // (C-c C-o). Flagged as a future notice-routing candidate, not fixed

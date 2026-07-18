@@ -118,6 +118,34 @@ pub fn live_active() -> bool {
     LIVE_ACTIVE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The LIVE PROBE window's fixed LOGICAL size (px): small + corner-anchored (see
+/// the window-attrs branch in `App::resumed`), so a probe window never sits
+/// center-stage stealing the eye — the companion to the Accessory activation
+/// policy (`crate::app::run`) that keeps it from stealing keyboard FOCUS. The
+/// wrapping script (`scripts/live-probe.sh`) renders its HEADLESS references at
+/// this exact `--capture-size`, so the pixel comparison stays dpi-agnostic: the
+/// live LOGICAL size equals the ref LOGICAL size, and the display's real scale
+/// factor is absorbed as the integer block-compare scale. KEEP IN LOCKSTEP with
+/// that script's `PROBE_CANVAS`.
+#[cfg(not(target_arch = "wasm32"))]
+pub const PROBE_LOGICAL_W: f64 = 900.0;
+#[cfg(not(target_arch = "wasm32"))]
+pub const PROBE_LOGICAL_H: f64 = 600.0;
+
+/// ONE owner of the `PROBE-TRACE …` diagnostic line — the present/crossing/move
+/// trace the vanish hunt reads (stamped with a wall-clock `Instant` so the
+/// ordering of retint → present-txn → present → settle is legible in the log).
+/// Call sites guard on [`live_active`] BEFORE building the `format_args!` (so a
+/// normal launch pays nothing), then route the actual print through here — which
+/// keeps every trace print in THIS file, so the println-audit (`println_audit`)
+/// has exactly one site to account for instead of a scatter across the app
+/// modules. stderr, so it never mixes with the `LIVE-PROBE …` stdout protocol
+/// the wrapping script asserts on.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn trace(args: std::fmt::Arguments) {
+    eprintln!("PROBE-TRACE {args} t={:?}", std::time::Instant::now());
+}
+
 /// Parse the `--live-script` grammar. A malformed step names itself in the
 /// error (this is our own harness input — fail fast, the lenient-user-config
 /// posture does not apply). Appends a trailing [`Step::Quit`] when absent so a
@@ -365,6 +393,24 @@ mod tests {
         let steps = parse_script("keys Down; quit").expect("parses");
         assert_eq!(steps.len(), 2);
         assert_eq!(steps.last(), Some(&Step::Quit));
+    }
+
+    #[test]
+    fn probe_window_is_smaller_than_the_center_stage_default() {
+        // The "small + cornered" contract: the probe window must be strictly
+        // smaller than the 1200x800 default the normal editor opens at (so it
+        // never reads as the main window), yet comfortably above any degenerate
+        // floor (it still has to render a real page + the theme picker for the
+        // vanish repro to mean anything). Pure over the constants, so a future
+        // resize can't silently make the probe window center-stage again.
+        assert!(
+            PROBE_LOGICAL_W < 1200.0 && PROBE_LOGICAL_H < 800.0,
+            "probe window {PROBE_LOGICAL_W}x{PROBE_LOGICAL_H} must be smaller than the 1200x800 default"
+        );
+        assert!(
+            PROBE_LOGICAL_W >= 640.0 && PROBE_LOGICAL_H >= 400.0,
+            "probe window must stay large enough to render a real page + picker"
+        );
     }
 
     #[test]

@@ -239,7 +239,7 @@ impl App {
         // it takes this arm as a TOTAL no-op, byte-identical as ever.
         if crate::theme::active().has_ambient_motion() {
             #[cfg(not(target_arch = "wasm32"))]
-            if crate::probe::live_active() { eprintln!("PROBE-TRACE on_moved (ambient world) t={:?}", std::time::Instant::now()); }
+            if crate::probe::live_active() { crate::probe::trace(format_args!("on_moved (ambient world)")); }
             self.move_settle_at = Some(Instant::now());
             self.lava_tick_at = None;
             self.sync_present_txn();
@@ -264,14 +264,13 @@ impl App {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if crate::probe::live_active() {
-            eprintln!(
-                "PROBE-TRACE present_txn {} (resize={} move={} crossing={}) t={:?}",
+            crate::probe::trace(format_args!(
+                "present_txn {} (resize={} move={} crossing={})",
                 if want { "ON" } else { "OFF" },
                 self.resize_settle_at.is_some(),
                 self.move_settle_at.is_some(),
                 self.crossing_settle_at.is_some(),
-                std::time::Instant::now(),
-            );
+            ));
         }
         self.present_sync_on = want;
         #[cfg(target_os = "macos")]
@@ -314,7 +313,7 @@ impl App {
     /// flash. Clearing `move_settle_at` first makes it fire exactly once.
     pub(super) fn finish_move_settle(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::probe::live_active() { eprintln!("PROBE-TRACE finish_move_settle t={:?}", std::time::Instant::now()); }
+        if crate::probe::live_active() { crate::probe::trace(format_args!("finish_move_settle")); }
         self.move_settle_at = None;
         self.lava_tick_at = None;
         self.sync_present_txn();
@@ -336,7 +335,7 @@ impl App {
     /// the stamp) fire exactly once. Live-only: a headless capture never previews.
     pub(super) fn finish_crossing_settle(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::probe::live_active() { eprintln!("PROBE-TRACE finish_crossing_settle t={:?}", std::time::Instant::now()); }
+        if crate::probe::live_active() { crate::probe::trace(format_args!("finish_crossing_settle")); }
         self.crossing_settle_at = None;
         self.sync_present_txn();
         if let Some(gpu) = self.gpu.as_ref() {

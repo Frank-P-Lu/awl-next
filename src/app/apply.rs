@@ -66,10 +66,12 @@ impl App {
         let crossing = crate::lava::preview_crossing(&prev, &crate::theme::active());
         #[cfg(not(target_arch = "wasm32"))]
         if crate::probe::live_active() {
-            eprintln!(
-                "PROBE-TRACE retint_preview {} -> {} crossing={:?} t={:?}",
-                prev.name, crate::theme::active().name, crossing, std::time::Instant::now()
-            );
+            crate::probe::trace(format_args!(
+                "retint_preview {} -> {} crossing={:?}",
+                prev.name,
+                crate::theme::active().name,
+                crossing
+            ));
         }
         if crossing == crate::lava::CrossingAction::SyncAcrossCrossing {
             self.crossing_settle_at = Some(Instant::now());

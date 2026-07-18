@@ -16,7 +16,11 @@
 # WHAT A RUN DOES (per matrix cell):
 #   1. renders the cell's HEADLESS reference frames (offscreen, per state);
 #   2. launches an isolated live app (`--theme SRC --live-script ...`) — a
-#      real window appears on your screen for a few seconds, always-on-top;
+#      SMALL window appears in the top-left corner for a few seconds. It is a
+#      macOS ACCESSORY app (no Dock/cmd-tab entry) that NEVER takes keyboard
+#      focus, so you keep typing into whatever you were using; the script injects
+#      its chords directly into the event loop. Visible + unoccluded regardless
+#      (the occlusion gate is about display, not focus — presents still fire);
 #   3. the in-app driver feeds the scripted chords through the REAL keymap
 #      dispatch tail, dwells, and screenshots the real window (window-server
 #      image when the Screen Recording permission exists; else the presented
@@ -96,6 +100,16 @@ PROC_NAME="awl-probe-$$"
 BIN="$WORK/$PROC_NAME"
 cp "$BUILT_BIN" "$BIN" && chmod +x "$BIN"
 
+# The probe window's LOGICAL canvas (small + cornered — see src/probe.rs's
+# PROBE_LOGICAL_W/H, which this MUST match). Headless references render at this
+# exact `--capture-size` (physical == logical at the default `--capture-dpi 1.0`),
+# so the live-vs-headless block comparison stays dpi-agnostic: the live LOGICAL
+# size equals the ref LOGICAL size and the display's real scale factor is absorbed
+# as the integer block-compare scale (2x on retina). A drift between this value
+# and the Rust constant surfaces immediately as probe-shot-check.py's
+# "live width N is not an integer multiple of ref width M".
+PROBE_CANVAS="900x600"
+
 FIXTURE="$WORK/fix.md"
 cat > "$FIXTURE" <<'EOF'
 # Probe fixture
@@ -123,13 +137,15 @@ ref_for() { # ref_for SRC "KEYS with spaces or -" -> echoes png path
   local png="$WORK/ref/$slug.png"
   if [[ ! -f "$png" ]]; then
     mkdir -p "$WORK/ref"
+    # `--capture-size $PROBE_CANVAS` renders the headless reference at the SAME
+    # logical size as the small live probe window (see PROBE_CANVAS above).
     # (bash 3.2: an empty-array "${a[@]}" trips `set -u`, hence the split call)
     if [[ "$keys" != "-" ]]; then
       HOME="$WORK/refhome" XDG_CONFIG_HOME="$WORK/refhome/cfg" XDG_DATA_HOME="$WORK/refhome/data" \
-        "$BIN" --screenshot "$png" --theme "$src" --keys "$keys" "$FIXTURE" >/dev/null 2>&1
+        "$BIN" --screenshot "$png" --capture-size "$PROBE_CANVAS" --theme "$src" --keys "$keys" "$FIXTURE" >/dev/null 2>&1
     else
       HOME="$WORK/refhome" XDG_CONFIG_HOME="$WORK/refhome/cfg" XDG_DATA_HOME="$WORK/refhome/data" \
-        "$BIN" --screenshot "$png" --theme "$src" "$FIXTURE" >/dev/null 2>&1
+        "$BIN" --screenshot "$png" --capture-size "$PROBE_CANVAS" --theme "$src" "$FIXTURE" >/dev/null 2>&1
     fi
     [[ -f "$png" ]] || { echo "error: reference capture failed for $src / $keys" >&2; return 1; }
   fi

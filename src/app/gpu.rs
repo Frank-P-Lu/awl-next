@@ -478,7 +478,7 @@ impl Gpu {
         frame.present();
         #[cfg(not(target_arch = "wasm32"))]
         if crate::probe::live_active() {
-            eprintln!("PROBE-TRACE present t={:?}", std::time::Instant::now());
+            crate::probe::trace(format_args!("present"));
         }
         // The latency endpoint: present-SUBMISSION return (wgpu exposes no
         // presented-time), stamped before the off-frame atlas trim.

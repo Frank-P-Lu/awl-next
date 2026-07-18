@@ -1691,6 +1691,21 @@ impl ApplicationHandler<AwlEvent> for App {
                 .with_min_inner_size(LogicalSize::new(min_w, min_h))
                 .with_title(if self.soak.is_some() { "Awl GPU probe — keep visible".to_string() } else { title })
                 .with_visible(true);
+            // LIVE PROBE: a small, corner-anchored, DETERMINISTIC window
+            // (`crate::probe::PROBE_LOGICAL_*`). Overrides any restored session
+            // frame — a probe run is isolated (temp HOME) and must land in a
+            // known small corner, not wherever the last real window happened to
+            // sit. Anchored near the top-left, clear of the menu bar, so it stays
+            // fully on-screen and unoccluded (the occlusion tripwire) while never
+            // reading as the center-stage main window.
+            if crate::probe::live_active() {
+                attrs
+                    .with_inner_size(LogicalSize::new(
+                        crate::probe::PROBE_LOGICAL_W,
+                        crate::probe::PROBE_LOGICAL_H,
+                    ))
+                    .with_position(winit::dpi::LogicalPosition::new(48.0, 64.0))
+            } else {
             match self.restored_window {
                 Some(frame) => {
                     let screens: Vec<crate::session::ScreenRect> = event_loop
@@ -1715,6 +1730,7 @@ impl ApplicationHandler<AwlEvent> for App {
                         .with_position(winit::dpi::PhysicalPosition::new(clamped.x, clamped.y))
                 }
                 None => attrs.with_inner_size(LogicalSize::new(1200.0, 800.0)),
+            }
             }
         };
         #[cfg(target_arch = "wasm32")]
@@ -2333,6 +2349,26 @@ pub fn run(
     #[cfg(all(feature = "mas", target_os = "macos"))]
     if soak.is_none() { crate::mas::restore_all_grants(); }
 
+    // LIVE PROBE (`--live-script`): launch as a macOS ACCESSORY app so the probe
+    // window appears ON SCREEN (visible + unoccluded — the wgpu occlusion gate is
+    // about display VISIBILITY, not key-window status, so presents still fire;
+    // verified nonzero in the harness bring-up) but never becomes the KEY window,
+    // never enters the Dock / cmd-tab, and never steals keyboard focus from
+    // whatever the user is typing into. The driver injects chords straight into
+    // the event loop (never OS key focus), so nothing the probe needs is lost. A
+    // normal launch stays Regular — byte-identical activation to before.
+    #[cfg(not(target_arch = "wasm32"))]
+    let event_loop = {
+        #[allow(unused_mut)]
+        let mut builder = EventLoop::<AwlEvent>::with_user_event();
+        #[cfg(target_os = "macos")]
+        if live.is_some() {
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            builder.with_activation_policy(ActivationPolicy::Accessory);
+        }
+        builder.build()?
+    };
+    #[cfg(target_arch = "wasm32")]
     let event_loop = EventLoop::<AwlEvent>::with_user_event().build()?;
     #[cfg(not(target_arch = "wasm32"))]
     let proxy = event_loop.create_proxy();
