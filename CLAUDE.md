@@ -54,7 +54,7 @@ cargo run -- --screenshot OUT.png [file]   # writes OUT.png AND OUT.json (sideca
 ```
 Flags compose:
 - `--keys "C-n C-n M->"` — replay chords through the **real keymap** before capture.
-- `--theme <World>` — Tawny | Mopoke | Currawong | Potoroo | Outback | Undertow | Kingfisher | Gumtree | Bilby | Saltpan | Quokka | Mangrove | Firetail | Galah | Magpie | Wagtail | Brolga | Cassowary.
+- `--theme <World>` — Tawny | Mopoke | Currawong | Potoroo | Mulga | Bombora | Bowerbird | Gumtree | Bilby | Saltpan | Quokka | Mangrove | Firetail | Galah | Magpie | Wagtail | Brolga | Cassowary.
 - `--caret-mode block|morph|ibeam|auto`
 - `--measure <chars>` — page-mode column width (NARROW, e.g. 40, to see margins on the 1200px canvas).
 - `--screenshot-motion[-v|-d]` — one mid-glide frame (horizontal | vertical | diagonal).
