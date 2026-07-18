@@ -445,6 +445,23 @@ pub enum ListStyle {
     },
 }
 
+impl ListStyle {
+    /// Does a list SURFACE in this style back its rows with an opaque CARD PANE
+    /// (a bordered box / raised float panel), or do the rows float as BARE PLATES
+    /// on the ground with NO backing card? `Pane` backs; `Bars` floats. THE ONE
+    /// OWNER of the "Bars ⇒ no pane" decision — read by BOTH the centered overlay
+    /// picker AND the contextual spell-suggestion popup (see
+    /// [`crate::render::TextPipeline`]'s `overlay_draw_card`), so a
+    /// Firetail-family world can never box one surface while floating the other.
+    /// That divergence WAS the bug: the picker dropped its pane under Bars but the
+    /// autocorrect popup kept elevating a solid float card (the user's Firetail
+    /// report — "for the autocorrect, get rid of the pane too"). Both arms now
+    /// consult this predicate, so they can't drift.
+    pub fn backs_rows_with_pane(self) -> bool {
+        matches!(self, ListStyle::Pane)
+    }
+}
+
 /// V6 P5 round — the BAR-EXTENT axis (see [`ListStyle::Bars`]). `FullWidth` is
 /// the shipped v5 bar (edge-to-edge, inset from the card). `HugText` sizes each
 /// bar to its own row's text width + a symmetric pad, so the right edges go

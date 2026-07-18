@@ -552,6 +552,139 @@ fn bars_draw_a_findable_surface_per_row() {
     );
 }
 
+// --- Spell popup: drops its pane on Bars, keeps it on Pane (every world) ------
+
+/// THE SPELL-POPUP PANE LAW, ENUMERATED OVER EVERY WORLD (real pixels) — the
+/// Firetail refit carried to the contextual autocorrect popup (the user's report:
+/// "for the auto correct, we gotta get rid of the pane as well! in firetail … and
+/// yknow for similar worlds"). Renders the spell-suggestion popup on EACH shipped
+/// world and asserts the OUTCOME over the rendered bytes (the Wagtail lesson —
+/// appearance asserted over PIXELS, never inferred from state), classified by the
+/// ONE pane owner [`theme::ListStyle::backs_rows_with_pane`] so a NEW world is
+/// auto-decided by its own `list_style` (no wildcard, no per-world branch — a new
+/// Bars world joins the no-pane set for free, a new Pane world the pane set):
+///   - BARS worlds (Firetail-family): NO raised float pane (`float_card == 0`);
+///     the popup BACKGROUND (a strip just inside the card's left edge, LEFT of the
+///     inset plates) reads the GROUND ROOM `base_100`, NOT the bright `base_300`
+///     pane fill the popup drew before — and the SELECTED suggestion plate is
+///     LEGIBLE (perceptibly distinct from that room).
+///   - PANE worlds (unchanged): the raised float pane IS present
+///     (`float_card == 1`) and the same background reads the `base_300` float fill
+///     — the pre-refit popup the user kept everywhere else. (A one-bit world's
+///     ramp collapses `base_300` onto `base_100`, so the fill-vs-ground redmean is
+///     ~0 there — the `d_pane <= floor` form holds regardless, and the pane's own
+///     definition is its border, law-tested in `one_bit.rs`.)
+#[test]
+fn spell_popup_drops_the_pane_on_bars_keeps_it_on_pane() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping spell_popup_drops_the_pane_on_bars_keeps_it_on_pane: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let (wi, hi) = (w as i64, h as i64);
+    // NO-WILDCARD over the whole roster: every shipped world, each decided by its
+    // OWN list_style through the one pane owner.
+    for t in theme::THEMES.iter() {
+        theme::set_active_by_name(t.name).unwrap();
+        p.sync_theme();
+        let bars = !t.render_caps.list_style.backs_rows_with_pane();
+
+        // "teh" misspelled at line 0 cols [0,3), with document text BELOW it — so
+        // the popup hangs over the LIVE doc, the worst case a dropped pane must
+        // survive (bare plates would collide with that text; the room must calm it).
+        let mut v = view(
+            "teh quick brown fox\nsecond line of the doc\nthird line of the doc\n",
+            0,
+            0,
+        );
+        v.overlay_active = true;
+        v.overlay_items = vec!["the".into(), "tea".into(), "ten".into(), "ted".into()];
+        v.overlay_selected = 0;
+        v.overlay_spell = Some((0, 0, 3));
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+
+        // MECHANISM WITNESS (cheap, exact): the raised float pane is present iff the
+        // world backs its list rows with a pane.
+        let float_n = p.float_card.instance_count();
+        let rect = p.overlay_card_rect().expect("spell popup has a card rect");
+        let (cx, cy, ch) = (rect[0], rect[1], rect[3]);
+        let base100 = theme::base_100();
+        let base300 = theme::base_300();
+
+        let px = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+        // BACKGROUND SAMPLE — a thin vertical strip just inside the card's LEFT edge,
+        // over the card's LOWER rows (below the selected row 0's band): on Bars this
+        // sits LEFT of the inset plates (pure room); on Pane it sits LEFT of the row
+        // glyphs (pure pane fill). Averaged tall so a stray glyph edge can't skew it.
+        let bg = avg(
+            &px,
+            wi,
+            hi,
+            (cx + 5.0) as i64,
+            (cy + ch * 0.5) as i64,
+            3,
+            (ch * 0.5 - 12.0) as i64,
+        );
+        let d_ground = redmean(bg, base100);
+        let d_pane = redmean(bg, base300);
+
+        if bars {
+            assert_eq!(
+                float_n, 0,
+                "{}: Bars draws NO raised float pane behind the spell popup",
+                t.name
+            );
+            assert!(
+                d_ground < d_pane,
+                "{}: the spell popup background {bg:?} must read the GROUND ROOM base_100 {base100:?} \
+                 (redmean {d_ground:.1}), NOT the base_300 pane fill {base300:?} (redmean {d_pane:.1}) \
+                 — the dropped-pane outcome asserted over pixels, not state",
+                t.name
+            );
+            // LEGIBILITY: the SELECTED suggestion plate (row 0) must read against the
+            // room. row 0 top = the popup's inner pad (10) + the bar's own gap/2
+            // offset; the bar is `lh - gap` tall. Sample the plate + its "the" glyph.
+            let lh = p.overlay_lh();
+            let gap = p.overlay_row_gap();
+            let sel_top = chrome::overlay_row_top(cy + 10.0, 0, 0.0, 0, lh) + gap * 0.5;
+            let sel = avg(
+                &px,
+                wi,
+                hi,
+                (cx + 10.0) as i64,
+                (sel_top + 2.0) as i64,
+                70,
+                (lh - gap - 4.0) as i64,
+            );
+            let d_sel = redmean(sel, bg);
+            assert!(
+                d_sel >= 12.0,
+                "{}: the SELECTED suggestion plate {sel:?} must be legible against the room {bg:?} (redmean {d_sel:.1})",
+                t.name
+            );
+        } else {
+            assert_eq!(
+                float_n, 1,
+                "{}: Pane keeps its raised float pane behind the spell popup",
+                t.name
+            );
+            // The background reads the base_300 float fill — the unchanged pre-refit
+            // pane. `<= 20` tolerates AA + the one-bit ramp collapse (base_300 ==
+            // base_100 there → ~0), while a Bars-style ground room (base_100, far
+            // from base_300 on a real ramp) would blow it out.
+            assert!(
+                d_pane <= 20.0,
+                "{}: the spell popup background {bg:?} must read the base_300 PANE fill {base300:?} \
+                 (redmean {d_pane:.1}) — the unchanged pre-refit pane, not a Bars ground room",
+                t.name
+            );
+        }
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 // --- Bars: the query caret sits ON the query text (real pixels) --------------
 
 /// FULL-BLEED CARET LAW (real pixels): under `Bars` the flat picker draws no
@@ -763,10 +896,12 @@ fn facet_band_draws_and_differs_from_text_in_the_strip() {
 /// (`overlay_draw_card`), gated only by `effective_list_style()` — never per
 /// kind — so this law enumerates `OverlayKind::ALL` with a NO-WILDCARD match and
 /// proves, for EVERY kind, that Bars drops the boxed pane:
-///   - the contextual SPELL popup is the ONE kind that legitimately stays a
-///     RAISED float panel (a popup over the doc, not a centered list card); it
-///     draws NO list-card fill (`panel_card == 0`) — its elevation rides the
-///     separate `float_*` pipelines.
+///   - the contextual SPELL popup ALSO drops its pane under Bars (the user's
+///     Firetail refit extended to the autocorrect popup — "for the autocorrect,
+///     get rid of the pane too"): NO raised float pane (`float_card == 0`, its
+///     Pane-world elevation), the suggestion plates floating on the SAME ground
+///     room the picker lays — clipped to the popup (`panel_card == 1`, no
+///     shadow/border), never the boxed base_300 float card it draws on Pane.
 ///   - EVERY other kind: ZERO card BORDER + ZERO card SHADOW (no boxed
 ///     elevation), exactly ONE full-canvas ROOM VEIL (`panel_card == 1`, not a
 ///     boxed card), a bar per row, and the selected bar drawn — so its `grow_px`
@@ -788,9 +923,11 @@ fn bars_drop_the_pane_for_every_overlay_kind() {
 
     use crate::overlay::OverlayKind;
     for kind in OverlayKind::ALL {
-        // NO-WILDCARD: Spell is the sole contextual FLOAT panel; every other kind
-        // is a centered list card that must drop its boxed pane under Bars.
-        let is_float = match kind {
+        // NO-WILDCARD: Spell is the sole CONTEXTUAL popup (a float over the doc,
+        // not a centered list card); every kind — Spell included — must drop its
+        // boxed pane under Bars. Spell's drop looks different (no `float_*` pane +
+        // a localized room) so it has its own assertion block below.
+        let is_spell = match kind {
             OverlayKind::Spell => true,
             OverlayKind::Theme
             | OverlayKind::Goto
@@ -815,7 +952,7 @@ fn bars_drop_the_pane_for_every_overlay_kind() {
         v.overlay_items = (0..6).map(|i| format!("Item {i}")).collect();
         v.overlay_selected = 2;
         v.overlay_hint = "hint".into();
-        if is_float {
+        if is_spell {
             // the contextual spell popup, anchored at the word "quick" (cols 4..9)
             v.overlay_spell = Some((0, 4, 9));
         } else if crate::facets::scheme(kind).is_some() {
@@ -826,13 +963,45 @@ fn bars_drop_the_pane_for_every_overlay_kind() {
         p.set_view(&v);
         p.prepare(&device, &queue, w, h).unwrap();
 
-        if is_float {
-            // Spell: a raised float panel, NOT a list card — its own elevation is
-            // correct. The list-card fill stays empty for it.
+        if is_spell {
+            // SPELL ON BARS (the Firetail refit — the autocorrect popup drops its
+            // pane too): NO raised FLOAT pane (its Pane-world `float_*` elevation
+            // parks empty), and in its place the SAME ground room the picker lays,
+            // just clipped to the popup — `panel_card == 1`, no shadow/border. The
+            // suggestion plates float on it like the picker bars (a plate per row).
+            assert_eq!(
+                p.float_card.instance_count(),
+                0,
+                "{kind:?}: Bars draws NO raised float pane behind the spell popup"
+            );
+            assert_eq!(
+                p.float_shadow.instance_count(),
+                0,
+                "{kind:?}: Bars draws NO float shadow behind the spell popup"
+            );
+            assert_eq!(
+                p.float_border.instance_count(),
+                0,
+                "{kind:?}: Bars draws NO float border behind the spell popup"
+            );
             assert_eq!(
                 p.panel_card.instance_count(),
+                1,
+                "{kind:?}: the spell popup floats on ONE ground room, not a boxed card"
+            );
+            assert_eq!(
+                p.panel_shadow.instance_count(),
                 0,
-                "{kind:?}: the spell float popup draws no list-card fill"
+                "{kind:?}: the spell room has no shadow (no elevation)"
+            );
+            assert_eq!(
+                p.panel_border.instance_count(),
+                0,
+                "{kind:?}: the spell room has no border (no elevation)"
+            );
+            assert!(
+                p.overlay_bars.instance_count() > 0,
+                "{kind:?}: the spell suggestions draw a plate per row"
             );
             continue;
         }
