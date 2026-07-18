@@ -602,6 +602,10 @@ impl App {
         if zoom_changed
             && matches!(action, Action::ZoomIn | Action::ZoomOut | Action::ZoomReset)
         {
+            // Anchor the keyboard zoom on the CARET (captured against the still-OLD
+            // geometry, BEFORE the deferred reflow reshapes): the caret holds its
+            // screen position instead of drifting by its distance from the top.
+            self.arm_zoom_anchor_caret();
             self.mark_zoom_dirty();
         }
         self.search = search;

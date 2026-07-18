@@ -1003,7 +1003,15 @@ impl App {
             // Cmd/Super + wheel: zoom in/out (wheel up = zoom in).
             if lines.abs() >= 1.0 {
                 let dir = lines.signum();
+                let before = self.zoom;
                 self.set_zoom(self.zoom + dir * render::ZOOM_STEP);
+                // Anchor the wheel zoom on the POINTER (captured against the OLD
+                // geometry before the deferred reflow) — the doc point under the mouse
+                // holds its screen position. Only when the zoom actually moved, so a
+                // step against the min/max clamp leaves no stale anchor behind.
+                if self.zoom != before {
+                    self.arm_zoom_anchor_pointer();
+                }
                 // HOLD-⌘ SHORTCUT PEEK: a Cmd-scroll holds the arming modifier bare, so
                 // the peek may have armed (or already opened) before the wheel moved.
                 // The user is zooming to READ the text — put the frosted card down at

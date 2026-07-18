@@ -138,6 +138,19 @@ pub fn page_column_advance(char_width: f32, zoom: f32) -> f32 {
     }
 }
 
+/// ZOOM ANCHOR — the buffer-relative TOP the first visible visual row must have so a
+/// document point whose buffer-relative top is `anchor_top` lands at screen y
+/// `anchor_py`. Pure: inverts `screen_y = doc_top(scroll) + anchor_top` with
+/// `doc_top(scroll) = TEXT_TOP + menubar − row_top(scroll)`, giving
+/// `row_top(scroll) = TEXT_TOP + menubar + anchor_top − anchor_py`. The caller maps
+/// this target to an integer scroll row via the row-geometry `nearest_row`
+/// (see [`TextPipeline::zoom_anchor_scroll`], the one owner that composes it). A
+/// negative result means the anchor sits above the document top, so `nearest_row`
+/// pins scroll 0 and the anchor yields — correct at the top boundary.
+pub fn zoom_anchor_target_top(anchor_top: f32, anchor_py: f32, menubar: f32) -> f32 {
+    TEXT_TOP + menubar + anchor_top - anchor_py
+}
+
 /// PAGE MODE column WIDTH (px) for a given window width + ZOOM-INDEPENDENT glyph
 /// advance (see [`page_column_advance`]) + page state + measure. The single source
 /// of truth, factored out of [`TextPipeline::column_width`] so it is unit-testable
@@ -1320,6 +1333,46 @@ impl TextPipeline {
         // Never scroll the cursor's own row off the top (a degenerate sub-row-height
         // viewport could otherwise pick s > row).
         s.min(row)
+    }
+
+    /// Screen-space TOP y (px) of the visual row that holds char `(line, col)`,
+    /// given a `scroll` offset — i.e. where that char's row currently draws. Reads
+    /// the CURRENT metrics (`self.metrics`, so the current zoom), so a caller records
+    /// the ZOOM ANCHOR by calling this BEFORE the deferred zoom reshape: the caret's
+    /// (or hit-tested char's) on-screen top is the point the anchored zoom then holds
+    /// still. `doc_top(scroll) = TEXT_TOP + menubar − row_top(scroll)`, and the row's
+    /// screen top is `doc_top + row_top(row)`.
+    pub fn char_screen_top(&self, line: usize, col: usize, scroll: usize) -> f32 {
+        let row = self.visual_row_of(line, col);
+        TEXT_TOP + self.menubar_reserve() - self.row_top_px(scroll) + self.row_top_px(row)
+    }
+
+    /// THE ONE OWNER of the zoom-anchored scroll decision. Given a document anchor
+    /// `(line, col)`, the screen y it should stay at (`anchor_py`), and the viewport
+    /// `height` — all evaluated at the CURRENT (POST-reshape) zoom — return the
+    /// integer visual-row scroll that keeps that document point at `anchor_py`,
+    /// clamped to the valid range so the anchor YIELDS at the document ends. Both
+    /// zoom paths route here (the wheel with the POINTER's char + y, the keyboard with
+    /// the CARET's char + y, or the viewport-centre char when the caret is off-screen);
+    /// there is NO parallel scroll math.
+    ///
+    /// WHY POST-reshape, not a linear scale of the old geometry: awl's page COLUMN is
+    /// zoom-invariant in pixels (`page_column_advance` divides the zoom back out), but
+    /// the glyph ADVANCES inside it are zoomed, so a larger zoom fits fewer chars per
+    /// line and the soft-WRAP points move — the visual-row table is NOT a scalar
+    /// multiple of the old one. So the anchor is captured as a stable `(line, col)`
+    /// CHAR (which survives re-wrapping) plus its old screen y, and re-solved here
+    /// against the freshly reshaped row geometry. Exact for the caret (its row top IS
+    /// the anchor); the pointer keeps its char's row top under the cursor to sub-row
+    /// tolerance (integer-row scroll quantisation dominates the residual).
+    pub fn zoom_anchor_scroll(&self, line: usize, col: usize, anchor_py: f32, height: f32) -> usize {
+        let row = self.visual_row_of(line, col);
+        let anchor_top = self.row_top_px(row);
+        let target_top = zoom_anchor_target_top(anchor_top, anchor_py, self.menubar_reserve());
+        let scroll = self
+            .row_geom
+            .nearest_row(&self.buffer, &self.metrics, target_top);
+        scroll.min(self.max_scroll_rows(height))
     }
 
     /// Real shaped-glyph X boundaries for a logical `line`, in pixels RELATIVE to

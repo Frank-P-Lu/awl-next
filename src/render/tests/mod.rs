@@ -44,6 +44,7 @@ mod washes;
 #[cfg(not(target_arch = "wasm32"))]
 mod webgl_shader_validation;
 mod wysiwyg;
+mod zoom_anchor;
 
 // 800px tall, TEXT_TOP 16, LINE_HEIGHT 32 -> floor((800-16)/32) = 24 rows.
 pub(super) const H: f32 = 800.0;
