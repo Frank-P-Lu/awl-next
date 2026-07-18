@@ -870,6 +870,22 @@ the hue gaps) moved to `ROADMAP.md`.
   light": palest rose-gold ground, night-violet ink), carries a 1px frame of
   its own ink — the two poles now mirror each other's frames).
 
+### Per-world heading weight (`Theme::heading_bold` — the HEADING-WEIGHT round, 2026-07-18)
+
+One BIT of world data: does this world's face need WEIGHT to carry markdown
+heading hierarchy? `true` ⇒ `##`/`###` shape at the family's real bundled Bold;
+the TITLE (`#`) never bolds in any world (Ladder J carries it by size alone —
+1.6/1.3/1.15, `markdown/headings.rs::type_scale`). The assignment is taste
+derived from the FACE, one line of reasoning per world in `worlds.rs`: serif
+display faces (Gumtree, Bilby, Saltpan, Undertow, Outback, Magpie) carry
+hierarchy structurally → regular; monospace + sans faces (the other ten) need
+the weight → bold. Its laws: `heading_bold_worlds_shape_bold_in_their_own_family`
+(a bold world's heading resolves the SAME family at weight ≥ 600 — the guard
+against the foreign-face fallback bug class) and
+`heading_levels_stay_measurably_distinct_from_body_in_every_world` (pixel row
+heights, strictly descending, all 16 under their own bit). Sidecar:
+`theme.heading_bold` (the effective bit, force-knob honest).
+
 ### Per-script font resolution (i18n round — `FontId`; Chinese round — the zh-Hans/ko floors)
 
 `Theme::cjk` (Japanese, mincho/gothic split) generalizes to `theme::FontId`
