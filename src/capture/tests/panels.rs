@@ -626,6 +626,55 @@ fn streaks_card_absent_by_default_and_summoned_shows_the_placeholder_year() {
         );
     }
 
+    // THE VIEW TOGGLE (outcome tier — the ←/→ key path itself is law-tested at
+    // the `apply_core` seam in `actions/tests/picker_misc_smoke.rs`): a summon
+    // opens on the HEATMAP page; flipped to CUMULATIVE the sidecar reports the
+    // page + the synthetic running total, the capture stays byte-stable across
+    // runs, and the pixels actually CHANGE (the flip is a real render, not just
+    // state — the sidecar-is-not-an-appearance-oracle tripwire).
+    assert_eq!(on["streaks"]["view"], serde_json::json!("heatmap"), "a summon opens on the heatmap");
+    let expect_total = *crate::streaks::placeholder().cumulative.last().unwrap();
+    assert_eq!(on["streaks"]["total_words"], serde_json::json!(expect_total));
+
+    crate::streaks::toggle_view();
+    let cum_a = dir.join("cum_a.png");
+    let cum_b = dir.join("cum_b.png");
+    capture_with(&cum_a, &md, &CaptureOpts::default()).expect("cumulative capture a");
+    capture_with(&cum_b, &md, &CaptureOpts::default()).expect("cumulative capture b");
+    assert_eq!(
+        std::fs::read(&cum_a).unwrap(),
+        std::fs::read(&cum_b).unwrap(),
+        "a cumulative-page capture is deterministic + byte-identical across runs"
+    );
+    assert_ne!(
+        std::fs::read(&on_a).unwrap(),
+        std::fs::read(&cum_a).unwrap(),
+        "the cumulative page renders DIFFERENT pixels from the heatmap page"
+    );
+    let cum: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(cum_a.with_extension("json")).unwrap())
+            .unwrap();
+    assert_eq!(cum["streaks"]["view"], serde_json::json!("cumulative"), "the sidecar reports the flipped page");
+    assert_eq!(cum["streaks"]["total_words"], serde_json::json!(expect_total));
+
+    // WAGTAIL (1-bit): the flip stays VISIBLE under the binary ramp (fill and
+    // cap collapse to full ink — a solid area chart, the declared monochrome
+    // degradation; per-world tint legality is the standing
+    // `streaks_heatmap_levels_are_distinguishable_every_world` law, which the
+    // chart rides via the same `heatmap_colors` owner).
+    crate::theme::set_active_by_name("Wagtail").expect("Wagtail is a real world");
+    let wag_cum = dir.join("wag_cum.png");
+    capture_with(&wag_cum, &md, &CaptureOpts::default()).expect("wagtail cumulative capture");
+    crate::streaks::toggle_view(); // back to the heatmap page
+    let wag_heat = dir.join("wag_heat.png");
+    capture_with(&wag_heat, &md, &CaptureOpts::default()).expect("wagtail heatmap capture");
+    assert_ne!(
+        std::fs::read(&wag_cum).unwrap(),
+        std::fs::read(&wag_heat).unwrap(),
+        "the page flip is visible in the 1-bit world too"
+    );
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+
     crate::streaks::set_open(false);
     let _ = std::fs::remove_dir_all(&dir);
 }

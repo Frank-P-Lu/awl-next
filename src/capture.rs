@@ -294,7 +294,14 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // twinkle phase (the FIXED 0.0 in every headless capture, the determinism
 // law; the dev `AWL_STARS_PHASE` gallery knob pins another). A state oracle
 // only — star PLACEMENT/brightness are asserted over the PNG's pixels.
-pub const SCHEMA_VERSION: u32 = 173;
+// `/174` — STREAKS VIEW TOGGLE: the `streaks` block gains `view` — which PAGE
+// of the summoned card is showing (`"heatmap"`, the default on every summon, or
+// `"cumulative"`, the running-total chart reached with ←/→ while the card is
+// open — a `--keys "Left"` replay flips it) — and `total_words`, the cumulative
+// window's final running total (the figure the chart tops out at; the fixed
+// synthetic placeholder total in a capture). Same `streaks_effective_view` +
+// `card_view` owners the pixels read.
+pub const SCHEMA_VERSION: u32 = 174;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

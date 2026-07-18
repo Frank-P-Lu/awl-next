@@ -460,15 +460,33 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         return Effect::None;
     }
 
-    // MODAL CARD DISMISSAL (About / Lifetime stats). While either summoned card is
-    // open it OWNS the very next key — ANY key closes it and is otherwise consumed
-    // (no other effect), mirroring the "any key/click dismisses" spec rather than
-    // the navigation overlay's narrower Esc/Enter contract (a card has nothing to
-    // navigate). ONE owner of the check+close (`card::dismiss_summoned_card`),
-    // shared verbatim with the live App's mouse-press handler. Checked BEFORE the
-    // overlay intercept: the two cards are never open at once, nor with an overlay
-    // (each opens via `Effect::RunAction` after the palette that summoned it has
-    // already closed).
+    // WRITING-STREAKS VIEW TOGGLE. While the streaks card is open, ←/→ FLIP it
+    // between its two pages (per-day heatmap ⇄ cumulative running total —
+    // `streaks::toggle_view`, a pure view flip over the same records) instead of
+    // dismissing — the overlay's Right/Left lens precedent, applied to the one
+    // summoned card with a second page. Consumed entirely (the caret never
+    // moves, the card stays open); every OTHER key still falls through to the
+    // modal dismiss just below, so the arrows are that door's ONE exception,
+    // and — sitting here in the shared core — the flip is `--keys "Left"`-
+    // drivable headlessly like everything else.
+    if crate::streaks::streaks_open()
+        && matches!(action, Action::ForwardChar | Action::BackwardChar)
+    {
+        crate::streaks::toggle_view();
+        return Effect::None;
+    }
+
+    // MODAL CARD DISMISSAL (About / Lifetime stats / Writing streaks). While a
+    // summoned card is open it OWNS the very next key — ANY key closes it and is
+    // otherwise consumed (no other effect; the streaks card's ←/→ page flip
+    // above is the one carve-out), mirroring the "any key/click dismisses" spec
+    // rather than the navigation overlay's narrower Esc/Enter contract (a card
+    // has nothing to navigate). ONE owner of the check+close
+    // (`card::dismiss_summoned_card`), shared verbatim with the live App's
+    // mouse-press handler. Checked BEFORE the overlay intercept: the cards are
+    // never open at once, nor with an overlay (each opens via
+    // `Effect::RunAction` after the palette that summoned it has already
+    // closed).
     if crate::card::dismiss_summoned_card() {
         return Effect::None;
     }

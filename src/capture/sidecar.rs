@@ -927,17 +927,21 @@ fn about_json(pipeline: &TextPipeline) -> String {
 /// The summoned WRITING STREAKS card's state (`streaks.rs`): `open` is false by
 /// default (a default capture is byte-identical), true when opened via the palette
 /// "Writing streaks" command / the `--streaks` capture flag / `--keys` replaying
-/// it. The figures (`streak`/`today_words`) + the `cells` intensity grid are the
-/// LIVE year the App pushed OR the fixed synthetic `streaks::placeholder` in a
-/// capture (no persisted store), via the SAME `streaks_effective_view` owner the
-/// pixels use — so a `--streaks` capture is deterministic + byte-stable and the
-/// sidecar can never claim a figure the card doesn't draw.
+/// it. `view` is which PAGE is showing — `"heatmap"` (the default on every
+/// summon) or `"cumulative"` (flipped by a `--keys "Left"`/`"Right"` replay
+/// while the card is open, the same `apply_core` intercept the live keys ride).
+/// The figures (`streak`/`today_words`/`total_words`) + the `cells` intensity
+/// grid are the LIVE year the App pushed OR the fixed synthetic
+/// `streaks::placeholder` in a capture (no persisted store), via the SAME
+/// `streaks_effective_view` + `card_view` owners the pixels use — so a
+/// `--streaks` capture is deterministic + byte-stable and the sidecar can never
+/// claim a figure (or a page) the card doesn't draw.
 fn streaks_json(pipeline: &TextPipeline) -> String {
     let s = pipeline.streaks_report();
     let cells = s.cells.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",");
     format!(
-        "{{ \"open\": {}, \"streak\": {}, \"today_words\": {}, \"cells\": [{}] }}",
-        s.open, s.streak, s.today_words, cells
+        "{{ \"open\": {}, \"view\": \"{}\", \"streak\": {}, \"today_words\": {}, \"total_words\": {}, \"cells\": [{}] }}",
+        s.open, s.view, s.streak, s.today_words, s.total_words, cells
     )
 }
 

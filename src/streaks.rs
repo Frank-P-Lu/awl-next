@@ -2,7 +2,10 @@
 //! day, summoned as a year-calendar heatmap card (the contribution-graph shape).
 //!
 //! This module is the PURE data model + the calendar/intensity arithmetic + the
-//! (de)serializer + the summoned-card open flag. It is deliberately TIMEZONE- and
+//! (de)serializer + the summoned-card open flag + the card's two-page VIEW
+//! state ([`CardView`]: per-day heatmap ⇄ cumulative running total — a pure
+//! view over the same daily records, flipped with ←/→ while the card is open,
+//! ephemeral per-summon). It is deliberately TIMEZONE- and
 //! CLOCK-FREE: every recording call takes the calendar day as an INJECTED
 //! `"YYYY-MM-DD"` string (the `prune_ladder` precedent — a pure function of
 //! `(state, day)`), so the whole boundary rule is unit-testable with no clock at
@@ -29,6 +32,8 @@
 //! drawn on any target, but a capture never pushes a live view, so it renders the
 //! fixed synthetic [`placeholder`] year + fixed streak numbers — exactly the HUD
 //! determinism boundary (`hud_stats` → `"—"`).
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeMap;
@@ -64,8 +69,58 @@ pub fn streaks_open() -> bool {
 }
 
 /// Open or close the card explicitly (mirrors [`crate::lifetime::set_open`]).
+/// Opening RESETS the page to the heatmap — the view toggle is EPHEMERAL
+/// per-summon (see [`CardView`]): every summon opens on the habit view.
 pub fn set_open(open: bool) {
+    if open {
+        CUMULATIVE.store(false, Ordering::Relaxed);
+    }
     STREAKS.set_open(open);
+}
+
+/// Which PAGE of the summoned card is showing: the per-day HEATMAP (the habit
+/// view — the DEFAULT) or the CUMULATIVE running-total chart (the progress
+/// view). A pure VIEW over the same daily records — flipping it changes no
+/// data and no storage. EPHEMERAL BY DESIGN: the flag resets to `Heatmap` on
+/// every summon ([`set_open`]) — the default view is a design statement (the
+/// habit view leads), so there is deliberately NO config key and NO
+/// stickiness across summons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardView {
+    Heatmap,
+    Cumulative,
+}
+
+impl CardView {
+    /// The sidecar's lowercase token for this page (`streaks.view`).
+    pub fn label(self) -> &'static str {
+        match self {
+            CardView::Heatmap => "heatmap",
+            CardView::Cumulative => "cumulative",
+        }
+    }
+}
+
+/// The card's current page — `false` = heatmap (the default), `true` =
+/// cumulative. Process-global like the open flag above (the card is a
+/// singleton); written only by [`toggle_view`] (the ←/→ intercept in
+/// `actions::apply_core`) and reset by [`set_open`] on every summon.
+static CUMULATIVE: AtomicBool = AtomicBool::new(false);
+
+/// The page the summoned card shows this frame.
+pub fn card_view() -> CardView {
+    if CUMULATIVE.load(Ordering::Relaxed) {
+        CardView::Cumulative
+    } else {
+        CardView::Heatmap
+    }
+}
+
+/// FLIP the card's page (heatmap ⇄ cumulative). With exactly two pages, both
+/// ← and → toggle — so ← then → always lands back where it started (the
+/// round-trip law).
+pub fn toggle_view() {
+    CUMULATIVE.fetch_xor(true, Ordering::Relaxed);
 }
 
 /// One calendar day's writing figures. `words` is the clamped-non-negative DAY
@@ -180,9 +235,38 @@ impl Streaks {
         }
         StreaksView {
             cells,
+            cumulative: self.cumulative_series(today),
             streak: self.current_streak(today),
             today_words: self.words_on(today),
         }
+    }
+
+    /// The CUMULATIVE view's data: the chronological RUNNING TOTAL of words
+    /// over the SAME date window the heatmap grid shows — one entry per day
+    /// from the grid's first Sunday through `today` inclusive (the future days
+    /// of the current week are excluded; no writing has happened there). A day
+    /// with no record carries the total FLAT (a gap is a plateau, never a dip
+    /// — day totals are clamped ≥ 0 at recording, so the series is
+    /// non-decreasing by construction: the rising line IS the point). A
+    /// malformed `today` degrades to the epoch window, mirroring
+    /// [`Streaks::view`]'s own lenient date handling.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn cumulative_series(&self, today: &str) -> Vec<u64> {
+        let today_days = match parse_ymd(today) {
+            Some((y, m, d)) => days_from_civil(y, m, d),
+            None => 0,
+        };
+        let dow = weekday(today_days);
+        let first = today_days - dow - ((WEEKS as i64 - 1) * DAYS_PER_WEEK as i64);
+        let len = (today_days - first + 1) as usize;
+        let mut out = Vec::with_capacity(len);
+        let mut total = 0u64;
+        for i in 0..len {
+            let (y, m, d) = civil_from_days(first + i as i64);
+            total = total.saturating_add(self.words_on(&fmt_ymd(y, m, d)));
+            out.push(total);
+        }
+        out
     }
 }
 
@@ -194,6 +278,12 @@ pub struct StreaksView {
     /// `WEEKS × DAYS_PER_WEEK` intensity buckets (0..=4), column-major: cell
     /// `col*7 + row`, row 0 = Sunday.
     pub cells: [u8; CELLS],
+    /// Chronological RUNNING TOTAL of words over the same date window the
+    /// heatmap shows — one entry per non-future day, ending at today (see
+    /// [`Streaks::cumulative_series`]). Non-decreasing by construction;
+    /// zero-word days carry the total flat. The cumulative page's chart is
+    /// drawn from exactly this series ([`chart_bars`]).
+    pub cumulative: Vec<u64>,
     pub streak: u64,
     pub today_words: u64,
 }
@@ -219,7 +309,53 @@ pub fn placeholder() -> StreaksView {
             _ => 4, // residue 8
         };
     }
-    StreaksView { cells, streak: 12, today_words: 347 }
+    // The synthetic CUMULATIVE series rides the same scramble: each cell's
+    // level scaled to a plausible day (level × 40 words) and running-summed, so
+    // the progress page's chart shows a believable rising line with flat
+    // plateaus on the level-0 days — deterministic on every machine, exactly
+    // like the cells it derives from.
+    let mut cumulative = Vec::with_capacity(CELLS);
+    let mut total = 0u64;
+    for c in &cells {
+        total += *c as u64 * 40;
+        cumulative.push(total);
+    }
+    StreaksView { cells, cumulative, streak: 12, today_words: 347 }
+}
+
+/// The cumulative chart's GEOMETRY: one vertical AREA BAR per day of `series`
+/// (a running total, non-decreasing), laid left→right across `rect` =
+/// `[x, y, w, h]`, each rising from the rect's baseline to its share of the
+/// FINAL total (which spans the rect's full height — the line always tops out
+/// at the right edge). Pure — no theme, no clock — so the in-bounds law is a
+/// plain unit test; the caller tints (`prepare_streaks_card`: a quiet fill +
+/// a thin full-ink cap that reads as the rising line). Every bar is CLAMPED
+/// inside `rect` by construction. Zero-total days (nothing written yet) yield
+/// no bar; an empty or all-zero series yields no bars at all — a calm empty
+/// chart, mirroring the heatmap's empty wells.
+pub fn chart_bars(series: &[u64], rect: [f32; 4]) -> Vec<[f32; 4]> {
+    let [rx, ry, rw, rh] = rect;
+    let n = series.len();
+    let max = series.last().copied().unwrap_or(0); // non-decreasing → last is max
+    if n == 0 || max == 0 || rw <= 0.0 || rh <= 0.0 {
+        return Vec::new();
+    }
+    let step = rw / n as f32;
+    // A hair over one step so adjacent bars OVERLAP instead of leaving
+    // antialiased hairline gaps between them (the `merge_row_bands` lesson, in
+    // miniature); the last bar clamps back to the rect's right edge.
+    let bar_w = (step + 0.5).min(rw);
+    let mut out = Vec::with_capacity(n);
+    for (i, &v) in series.iter().enumerate() {
+        if v == 0 {
+            continue;
+        }
+        let h = ((v as f32 / max as f32) * rh).min(rh);
+        let x = rx + i as f32 * step;
+        let w = bar_w.min(rx + rw - x);
+        out.push([x, ry + rh - h, w, h]);
+    }
+    out
 }
 
 /// The intensity BUCKET (0..=4) for `words` against the window `peak`. 0 iff no
@@ -530,6 +666,106 @@ mod tests {
         }
         assert_eq!(a.streak, 12);
         assert_eq!(a.today_words, 347);
+        // The synthetic cumulative series: full-length, non-decreasing (a running
+        // total never dips), ends positive (the chart has a line to draw).
+        assert_eq!(a.cumulative.len(), CELLS);
+        assert!(a.cumulative.windows(2).all(|w| w[0] <= w[1]), "a running total never dips");
+        assert!(*a.cumulative.last().unwrap() > 0, "the synthetic year wrote something");
+    }
+
+    #[test]
+    fn card_view_is_ephemeral_and_defaults_to_heatmap_on_every_summon() {
+        let _g = crate::testlock::serial();
+        set_open(false);
+        set_open(true);
+        assert_eq!(card_view(), CardView::Heatmap, "every summon opens on the habit view");
+        toggle_view();
+        assert_eq!(card_view(), CardView::Cumulative);
+        toggle_view();
+        assert_eq!(card_view(), CardView::Heatmap, "the toggle round-trips");
+        // Leave it flipped, close, re-summon: back on the heatmap — the view is
+        // EPHEMERAL by design (no config key, no stickiness across summons).
+        toggle_view();
+        set_open(false);
+        set_open(true);
+        assert_eq!(card_view(), CardView::Heatmap, "a fresh summon never remembers the page");
+        set_open(false);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cumulative_series_runs_totals_and_carries_gaps_flat() {
+        // 2026-07-17 is a Friday (dow 5): window = 52 weeks + Sun..Fri = 370 days.
+        let today = "2026-07-17";
+
+        // Empty store: a full-length, all-zero series (a flat baseline, no bars).
+        let empty = Streaks::default().cumulative_series(today);
+        assert_eq!(empty.len(), 370);
+        assert!(empty.iter().all(|&v| v == 0), "an empty store totals zero everywhere");
+
+        // Two writing days with a GAP between them: the gap day carries the
+        // total FLAT (a plateau, never a dip), today (blank) carries the final.
+        let mut s = Streaks::default();
+        s.days.insert("2026-07-14".to_string(), DayWords { words: 100, raw_net: 100 });
+        s.days.insert("2026-07-16".to_string(), DayWords { words: 50, raw_net: 50 });
+        let series = s.cumulative_series(today);
+        assert_eq!(series.len(), 370);
+        let last = series.len() - 1; // today's index
+        assert_eq!(series[last], 150, "the final running total sums every day");
+        assert_eq!(series[last - 1], 150, "2026-07-16 adds its 50");
+        assert_eq!(series[last - 2], 100, "the gap day (07-15) carries the total flat");
+        assert_eq!(series[last - 3], 100, "2026-07-14 starts the total");
+        assert_eq!(series[last - 4], 0, "before the first writing day the total is 0");
+        assert!(series.windows(2).all(|w| w[0] <= w[1]), "a running total never dips");
+
+        // Single day: one step, then flat all the way to today.
+        let mut one = Streaks::default();
+        one.days.insert("2026-07-10".to_string(), DayWords { words: 7, raw_net: 7 });
+        let series = one.cumulative_series(today);
+        assert_eq!(*series.last().unwrap(), 7);
+        assert!(series.contains(&0), "days before the single writing day are zero");
+        assert!(series.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn chart_bars_stay_inside_the_rect_and_skip_zero_days() {
+        let rect = [10.0_f32, 20.0, 580.0, 60.0];
+        // Empty / all-zero series: no bars (a calm empty chart).
+        assert!(chart_bars(&[], rect).is_empty());
+        assert!(chart_bars(&[0, 0, 0], rect).is_empty());
+        // A degenerate rect: no bars, never a NaN/negative quad.
+        assert!(chart_bars(&[5, 9], [0.0, 0.0, 0.0, 0.0]).is_empty());
+
+        // The synthetic year's own series (gaps + plateaus): every bar strictly
+        // inside the rect — the in-bounds law the render inherits.
+        let series = placeholder().cumulative;
+        let bars = chart_bars(&series, rect);
+        assert!(!bars.is_empty());
+        let leading_zeros = series.iter().take_while(|&&v| v == 0).count();
+        assert_eq!(
+            bars.len(),
+            series.len() - leading_zeros,
+            "zero-total days draw nothing; every day after the first words draws one bar"
+        );
+        for b in &bars {
+            assert!(b[2] > 0.0 && b[3] > 0.0, "a bar has real extent: {b:?}");
+            assert!(
+                b[0] >= rect[0] - 0.01 && b[0] + b[2] <= rect[0] + rect[2] + 0.01,
+                "bar x-span inside the rect: {b:?}"
+            );
+            assert!(
+                b[1] >= rect[1] - 0.01 && b[1] + b[3] <= rect[1] + rect[3] + 0.01,
+                "bar y-span inside the rect: {b:?}"
+            );
+        }
+        // The FINAL bar reaches the rect's full height: the total IS the top.
+        let final_bar = bars.last().unwrap();
+        assert!((final_bar[3] - rect[3]).abs() < 0.01, "the line tops out at the right edge");
+
+        // A single-entry series fills the full height with one bar.
+        let single = chart_bars(&[42], rect);
+        assert_eq!(single.len(), 1);
+        assert!((single[0][3] - rect[3]).abs() < 0.01);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

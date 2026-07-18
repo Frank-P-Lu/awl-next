@@ -184,6 +184,66 @@ fn lifetime_stats_opens_and_any_key_dismisses_it() {
 }
 
 #[test]
+fn streaks_card_arrows_flip_the_view_and_any_other_key_dismisses() {
+    // THE VIEW-TOGGLE LAWS, through the REAL `apply_core` seam a `--keys
+    // "Left Right"` replay rides: while the Writing-streaks card is open, ←/→
+    // FLIP its page (heatmap ⇄ cumulative) — consumed, the card stays open, the
+    // caret never moves; ← then → lands back on the heatmap (the round-trip
+    // law); any OTHER key still dismisses like About/Lifetime; and a re-summon
+    // always opens on the heatmap (the ephemeral-view law — no stickiness).
+    let _g = crate::testlock::serial();
+    crate::streaks::set_open(false);
+    let mut b = Buffer::from_str("alpha beta");
+    let mut sel = false;
+    let cursor0 = b.cursor_char();
+
+    drive_shift(&mut b, &mut sel, &Action::WritingStreaks, false);
+    assert!(crate::streaks::streaks_open(), "Action::WritingStreaks opens the card");
+    assert_eq!(
+        crate::streaks::card_view(),
+        crate::streaks::CardView::Heatmap,
+        "a summon opens on the heatmap (the default page)"
+    );
+    assert_eq!(b.cursor_char(), cursor0, "opening the card never touches the buffer");
+
+    // ← flips to the cumulative page — consumed, the card stays open.
+    drive_shift(&mut b, &mut sel, &Action::BackwardChar, false);
+    assert!(crate::streaks::streaks_open(), "an arrow never dismisses the card");
+    assert_eq!(crate::streaks::card_view(), crate::streaks::CardView::Cumulative);
+    assert_eq!(b.cursor_char(), cursor0, "the arrow is consumed, not applied");
+
+    // → flips back: the round trip lands on the heatmap, card still open, and
+    // the ForwardChar that would have moved the caret is fully consumed.
+    drive_shift(&mut b, &mut sel, &Action::ForwardChar, false);
+    assert!(crate::streaks::streaks_open());
+    assert_eq!(
+        crate::streaks::card_view(),
+        crate::streaks::CardView::Heatmap,
+        "← then → returns to the heatmap (the round-trip law)"
+    );
+    assert_eq!(b.cursor_char(), cursor0, "the flip consumes the motion entirely");
+
+    // Leave it on the cumulative page, then dismiss with a NON-arrow key — the
+    // any-key contract still holds for everything but ←/→.
+    drive_shift(&mut b, &mut sel, &Action::ForwardChar, false); // → cumulative again
+    assert_eq!(crate::streaks::card_view(), crate::streaks::CardView::Cumulative);
+    drive_shift(&mut b, &mut sel, &Action::NextLine, false);
+    assert!(!crate::streaks::streaks_open(), "any non-arrow key dismisses the card");
+    assert_eq!(b.cursor_char(), cursor0, "the dismissing key is consumed, not applied");
+
+    // Re-summon: the page reset to the heatmap (ephemeral per-summon, by design).
+    drive_shift(&mut b, &mut sel, &Action::WritingStreaks, false);
+    assert_eq!(
+        crate::streaks::card_view(),
+        crate::streaks::CardView::Heatmap,
+        "a fresh summon never remembers the previous page"
+    );
+    drive_shift(&mut b, &mut sel, &Action::NextLine, false); // dismiss, leave clean
+    assert!(!crate::streaks::streaks_open());
+    crate::streaks::set_open(false);
+}
+
+#[test]
 fn shift_motion_sets_mark_extends_then_unshifted_motion_collapses() {
     let mut b = Buffer::from_str("alpha beta\ngamma delta");
     let mut sel = false;

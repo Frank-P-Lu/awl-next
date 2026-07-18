@@ -854,12 +854,18 @@ pub struct PeekReport {
 /// synthetic [`crate::streaks::placeholder`] in a headless capture (no persisted
 /// store), via the SAME `streaks_effective_view` owner the pixels use — so the
 /// sidecar can never claim a figure the card doesn't show, and a `--streaks`
-/// capture is deterministic + byte-stable across machines. `cells` is the row-major
-/// (`col*7 + row`) intensity-bucket grid.
+/// capture is deterministic + byte-stable across machines. `view` is which PAGE
+/// is showing (`"heatmap"`, the default on every summon, or `"cumulative"` —
+/// flipped with ←/→ while the card is open, `crate::streaks::card_view`);
+/// `total_words` is the cumulative window's final running total (the figure the
+/// progress chart tops out at); `cells` is the row-major (`col*7 + row`)
+/// intensity-bucket grid.
 pub struct StreaksReport {
     pub open: bool,
+    pub view: &'static str,
     pub streak: u64,
     pub today_words: u64,
+    pub total_words: u64,
     pub cells: Vec<u8>,
 }
 
