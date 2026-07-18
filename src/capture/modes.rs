@@ -413,11 +413,23 @@ pub(super) fn settled_viewstate(
     // a plain `--screenshot` byte-identical.
     if let Some(p) = &opts.preview_text {
         vstate.text = p.clone();
-        let (pl, pc) = crate::history::clamp_line_col(p, vstate.cursor_line, vstate.cursor_col);
+        // DIFF-AS-PREVIEW: the previewed text is the writer's-diff TRANSCRIPT —
+        // park the caret on its blank line 1 (between `# title` and the first
+        // block) so no line's WYSIWYG conceal reveals, mirroring the live
+        // `sync_view` park exactly (the ONE reveal-suppression rule).
+        let (pl, pc) = crate::history::clamp_line_col(p, 1, 0);
         vstate.cursor_line = pl;
         vstate.cursor_col = pc;
         sc_line = pl;
         sc_col = pc;
+        // Dress the page column as the diff panel card, with the focus cue
+        // mirrored from the overlay state.
+        vstate.diff_panel = true;
+        vstate.diff_panel_focus = opts
+            .overlay
+            .as_ref()
+            .map(|o| o.diff_focus)
+            .unwrap_or(false);
         vstate.selection = None;
         vstate.misspelled = Vec::new();
         vstate.search_matches = Vec::new();

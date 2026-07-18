@@ -2836,6 +2836,32 @@ mod tests {
         App::new(file, PathBuf::from(root), None, None, config)
     }
 
+    impl App {
+        /// TEST DRIVER: route one action through the SHARED core against this
+        /// App's own buffer/overlay/search — the same seam a live keypress
+        /// reaches after `App::apply`'s window-level intercepts (no event loop,
+        /// no GPU). Minimal builder closures: an overlay-opening action would
+        /// no-op, which the preview-path read-only tests never need.
+        fn apply_core_for_test(&mut self, action: &Action) -> crate::actions::Effect {
+            let mut shift = self.shift_selecting;
+            let mut zoom = self.zoom;
+            let mut make = |_k: crate::overlay::OverlayKind| None;
+            let mut browse = |_k: crate::overlay::OverlayKind, _p: Option<String>| None;
+            let mut ctx = crate::actions::ActionCtx {
+                buffer: &mut self.buffer,
+                shift_selecting: &mut shift,
+                zoom: &mut zoom,
+                search: &mut self.search,
+                scroll_page_lines: 10,
+                overlay: &mut self.overlay,
+                make_overlay: &mut make,
+                browse_to: &mut browse,
+                oracle: None,
+            };
+            crate::actions::apply_core(&mut ctx, action, false)
+        }
+    }
+
     // ── GOTO FILE-INDEX FRESHNESS (queue: "file picker freshness") ──────────
     //
     // The go-to overlay (`C-x f`) corpus comes from `App.file_index`, a CACHED
@@ -3966,23 +3992,30 @@ mod tests {
     fn history_preview_resolves_without_touching_buffer() {
         use crate::fs::{FileSystem, InMemoryFs};
         let p = PathBuf::from("/notes/draft.md");
-        let mem = InMemoryFs::new().with_file(&p, "v2\n");
+        let mem = InMemoryFs::new().with_file(&p, "the second draft entirely\n");
         let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
-        crate::history::record(&p, "v1\n", &Config::empty());
-        crate::history::record(&p, "v2\n", &Config::empty());
+        crate::history::record(&p, "the first draft wording\n", &Config::empty());
+        crate::history::record(&p, "the second draft entirely\n", &Config::empty());
         let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
         let version_before = app.buffer.version();
         open_history_overlay(&mut app, &p);
-        // Row 0 (newest) previews v2; move down → row 1 previews the OLDER v1.
-        assert_eq!(app.history_preview_text().as_deref(), Some("v2\n"));
+        // DIFF-AS-PREVIEW: row 0 (newest, identical to the buffer) previews a
+        // folds-only transcript; row 1 (older) previews a transcript CARRYING the
+        // change marks (the reworded paragraph shows surgery / a rewrite).
+        let newest = app.history_preview_text().expect("row 0 previews");
+        assert!(newest.starts_with("# Comparing with "), "a titled transcript: {newest}");
+        assert!(
+            !newest.contains("~~") && !newest.contains("=="),
+            "identical content diffs to no marks: {newest}"
+        );
         app.overlay.as_mut().unwrap().move_sel(1);
-        assert_eq!(
-            app.history_preview_text().as_deref(),
-            Some("v1\n"),
-            "arrowing the rows previews THAT version"
+        let older = app.history_preview_text().expect("row 1 previews");
+        assert!(
+            older.contains("~~") || older.contains("=="),
+            "arrowing to the older version previews ITS diff (marks present): {older}"
         );
         // The BUFFER was never touched: content, version, and undo all intact.
-        assert_eq!(app.buffer.text(), "v2\n", "preview never mutates the buffer");
+        assert_eq!(app.buffer.text(), "the second draft entirely\n");
         assert_eq!(app.buffer.version(), version_before, "no version bump");
         // The per-id CACHE serves a repeat without re-reading the store: blow the
         // store away and the highlighted row still previews from the cache.
@@ -3992,7 +4025,7 @@ mod tests {
         }
         assert_eq!(
             app.history_preview_text().as_deref(),
-            Some("v1\n"),
+            Some(older.as_str()),
             "a repeat on the same id is a cache hit"
         );
     }
@@ -4007,12 +4040,15 @@ mod tests {
         crate::history::record(&p, "v2\n", &Config::empty());
         let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
         open_history_overlay(&mut app, &p);
-        assert_eq!(app.history_preview_text().as_deref(), Some("v2\n"));
+        assert!(app.history_preview_text().is_some());
         let cached_id = app.history_preview.as_ref().map(|(id, _)| id.clone());
-        // Moving the selection to another row (a different id) reloads: the cache
-        // is keyed by id, never by "an overlay is open".
+        // Moving the selection to another row (a different id) re-renders: the
+        // cache is keyed by id, never by "an overlay is open". (The selection
+        // move also resets the diff panel scroll — the transcript changed.)
+        app.overlay.as_mut().unwrap().diff_scroll = 7;
         app.overlay.as_mut().unwrap().move_sel(1);
-        assert_eq!(app.history_preview_text().as_deref(), Some("v1\n"));
+        assert_eq!(app.overlay.as_ref().unwrap().diff_scroll, 0, "a new version tops the diff out");
+        assert!(app.history_preview_text().is_some());
         assert_ne!(
             app.history_preview.as_ref().map(|(id, _)| id.clone()),
             cached_id,
@@ -4031,7 +4067,9 @@ mod tests {
         app.history_scroll_before = Some(42);
         app.scroll_lines = 3;
         app.history_preview = Some(("100".into(), "old\n".into()));
+        app.diff_settle_at = Some(Instant::now());
         app.history_overlay_closed(false);
+        assert!(app.diff_settle_at.is_none(), "a pending deferred diff dies with the picker");
         assert_eq!(app.scroll_lines, 42, "Esc restores the pre-open scroll");
         assert!(app.history_scroll_before.is_none());
         assert!(app.history_preview.is_none(), "the preview is dropped");
@@ -4046,106 +4084,81 @@ mod tests {
         assert!(app.history_preview.is_none());
     }
 
-    // ── THE WRITER'S DIFF — the read-only "Compare with version…" view ───────
+    // ── DIFF-AS-PREVIEW — the History picker's writer's-diff preview ────────
     //
-    // The diff view is a DERIVED transcript shown in place of the buffer text
-    // (`sync_view`'s preview override), read-only, Esc-exits. These pin the
-    // entry (`enter_diff_view_for` / `compare_with_latest` build the transcript,
-    // buffer untouched), the read-only law (`diff_view_gate`), and the exit.
+    // The diff IS the picker's live preview now (the takeover Compare view is
+    // retired). These pin the transcript's shape, the read-only invariants on
+    // the PREVIEW path (buffer / version / undo untouched — the successor of
+    // the old diff_view_gate suite), and the settle-debounce close contract.
 
     #[test]
-    fn compare_view_renders_transcript_without_touching_buffer() {
+    fn diff_preview_renders_marked_up_transcript_without_touching_buffer() {
         use crate::fs::InMemoryFs;
         let p = PathBuf::from("/notes/draft.md");
         // Current buffer keeps the first paragraph, drops the second, adds a third.
         let now = "Keep this opening paragraph exactly as it was.\n\nAn entirely fresh third paragraph appears here now.\n";
         let mem = InMemoryFs::new().with_file(&p, now);
         let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
-        // Seed an older version (the one we compare against).
+        // Seed an older version (the one the highlighted row compares against).
         let old = "Keep this opening paragraph exactly as it was.\n\nDrop this whole second paragraph entirely please.\n";
         crate::history::record(&p, old, &Config::empty());
         let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
         let version_before = app.buffer.version();
         let text_before = app.buffer.text();
-
-        // Compare against the most-recent version.
-        app.compare_with_latest();
-        let dv = app.diff_view.as_ref().expect("the diff view is active");
+        open_history_overlay(&mut app, &p);
+        let transcript = app.history_preview_text().expect("the diff preview is live");
         // The transcript speaks awl's diff vocabulary: a struck deletion (REAL
-        // `~~` markdown, the strikethrough-render round) AND a highlight-washed
-        // insertion (`==`), under a title heading.
-        assert!(dv.transcript.starts_with("# Comparing with "));
-        assert!(dv.transcript.contains("~~"), "a struck deletion: {}", dv.transcript);
-        assert!(dv.transcript.contains("=="), "a washed insertion: {}", dv.transcript);
+        // `~~` markdown) AND a highlight-washed insertion (`==`), under a title
+        // heading naming the compared row.
+        assert!(transcript.starts_with("# Comparing with "), "{transcript}");
+        assert!(transcript.contains("~~"), "a struck deletion: {transcript}");
+        assert!(transcript.contains("=="), "a washed insertion: {transcript}");
         // The BUFFER was never touched — content, version, undo all intact.
-        assert_eq!(app.buffer.text(), text_before, "compare never mutates the buffer");
+        assert_eq!(app.buffer.text(), text_before, "preview never mutates the buffer");
         assert_eq!(app.buffer.version(), version_before, "no version bump");
+        app.buffer.undo();
+        assert_eq!(app.buffer.text(), text_before, "undo after preview is inert");
     }
 
     #[test]
-    fn compare_view_is_read_only_and_esc_exits() {
+    fn diff_preview_read_only_law_typing_edits_the_query_never_the_buffer() {
+        // THE READ-ONLY LAW on the preview path (the successor of the retired
+        // diff_view_gate suite): while the History picker's diff preview is up,
+        // the overlay's MODALITY is the law — every key routes through
+        // `overlay_intercept`, so typing filters the query, Tab shifts focus,
+        // PgUp/PgDn scroll the panel, and NOTHING reaches the rope.
         use crate::fs::InMemoryFs;
-        let _g = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
-        let mut app = app_on(None, "/proj", Config::empty());
-        // Not comparing: the gate is inert (every action follows the normal path).
-        assert_eq!(app.diff_view_gate(&Action::InsertChar('x')), None);
-
-        // Enter a diff view directly (the transcript content is irrelevant here).
-        app.diff_view = Some(DiffView {
-            transcript: "# Comparing with earlier\n\ndemo\n".into(),
-            label: "earlier".into(),
-        });
-        // READ-ONLY LAW: every editing action is swallowed (a calm no-op) — typing,
-        // newline, delete, paste, undo, format, save, buffer switch, opening a picker.
+        let p = PathBuf::from("/notes/draft.md");
+        let mem = InMemoryFs::new().with_file(&p, "current words\n");
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        crate::history::record(&p, "older words\n", &Config::empty());
+        crate::history::record(&p, "current words\n", &Config::empty());
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        let version_before = app.buffer.version();
+        open_history_overlay(&mut app, &p);
+        assert!(app.history_preview_text().is_some(), "preview live");
+        // Drive the modal intercept exactly as a keypress would (the core seam).
         for act in [
             Action::InsertChar('z'),
-            Action::Newline,
-            Action::DeleteBackward,
-            Action::DeleteForward,
-            Action::Yank,
-            Action::Undo,
-            Action::Redo,
-            Action::Bold,
-            Action::Save,
-            Action::LastBuffer,
-            Action::OpenGoto,
-            Action::OpenHistory,
-        ] {
-            assert_eq!(
-                app.diff_view_gate(&act),
-                Some(DiffGate::Swallow),
-                "{act:?} must be a read-only no-op in the diff view"
-            );
-        }
-        // Read affordances pass through (zoom + page-scroll never mutate the buffer).
-        for act in [
-            Action::ZoomIn,
-            Action::ZoomOut,
-            Action::ZoomReset,
+            Action::InsertTab,
             Action::PageScrollDown,
-            Action::PageScrollUp,
+            Action::NextLine,
+            Action::DeleteBackward,
         ] {
-            assert_eq!(app.diff_view_gate(&act), Some(DiffGate::Pass), "{act:?} reads");
+            app.apply_core_for_test(&act);
         }
-        // Esc and a second Compare EXIT the view.
-        assert_eq!(app.diff_view_gate(&Action::Cancel), Some(DiffGate::Exit));
-        assert_eq!(app.diff_view_gate(&Action::CompareVersion), Some(DiffGate::Exit));
-        // exit_diff_view drops it — back to the live document.
-        app.exit_diff_view();
-        assert!(app.diff_view.is_none(), "Esc returns to the buffer");
-        assert_eq!(app.diff_view_gate(&Action::InsertChar('x')), None, "gate inert again");
-    }
-
-    #[test]
-    fn compare_with_latest_no_history_is_a_calm_notice() {
-        use crate::fs::InMemoryFs;
-        let _g = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
-        let mut app = app_on(None, "/proj", Config::empty());
-        // A fresh scratch with no recorded history: comparing is a calm no-op notice,
-        // never an empty diff or a panic.
-        app.compare_with_latest();
-        assert!(app.diff_view.is_none(), "nothing to compare, no view opens");
-        assert_eq!(app.notice.as_deref(), Some("no earlier version to compare"));
+        assert_eq!(app.buffer.text(), "current words\n", "the rope never changed");
+        assert_eq!(app.buffer.version(), version_before, "no version bump");
+        // Esc from panel focus returns to the LIST; a second Esc closes — two
+        // Escs total from panel to home, and the buffer text is back untouched.
+        app.apply_core_for_test(&Action::InsertTab); // focus the panel
+        assert!(app.overlay.as_ref().unwrap().diff_focus);
+        app.apply_core_for_test(&Action::Cancel);
+        assert!(app.overlay.is_some(), "first Esc: back to LIST focus, not home");
+        assert!(!app.overlay.as_ref().unwrap().diff_focus);
+        app.apply_core_for_test(&Action::Cancel);
+        assert!(app.overlay.is_none(), "second Esc closes the picker");
+        assert_eq!(app.buffer.version(), version_before, "back to now exactly");
     }
 
     #[test]
@@ -4174,10 +4187,10 @@ mod tests {
         // And the preview resolver rides the same key: the newest row previews
         // the stashed content.
         app.overlay = Some(crate::overlay::OverlayState::new_history(rows, None, None));
-        assert_eq!(
-            app.history_preview_text().as_deref(),
-            Some("scratch thoughts\n")
-        );
+        // DIFF-AS-PREVIEW: the stash's newest snapshot is identical to the
+        // buffer, so the preview is a titled folds-only transcript.
+        let transcript = app.history_preview_text().expect("the stash previews");
+        assert!(transcript.starts_with("# Comparing with "), "{transcript}");
     }
 
     #[test]

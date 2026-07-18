@@ -733,6 +733,8 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: None,
+        diff_focus: false,
+        diff_scroll: 0,
         empty: None,
         show_hidden: false,
     });
@@ -800,6 +802,8 @@ fn caret_picker_morph_preview_paints_the_silhouette() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: None,
+        diff_focus: false,
+        diff_scroll: 0,
         empty: None,
         show_hidden: false,
     });
@@ -881,6 +885,8 @@ fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
         lens_strip: Vec::new(),
         sections: Vec::new(),
         preview_id: None,
+        diff_focus: false,
+        diff_scroll: 0,
         empty: None,
         show_hidden: false,
     });

@@ -1026,9 +1026,19 @@ fn capture_screenshot(
             // Reflect any still-open overlay in the capture opts (and thus the
             // sidecar `overlay` block).
             if let Some(ov) = &res.overlay {
-                let (info, preview_text) = overlay_capture_info(ov, &buffer);
+                let (info, preview_text, diff) = overlay_capture_info(ov, &buffer);
                 opts.overlay = Some(info);
                 opts.preview_text = preview_text;
+                // DIFF-AS-PREVIEW: surface the preview's diff STATE in the
+                // top-level `diff` block (the AWL_DIFF harness's env request, if
+                // any, was set earlier and wins), and honor the overlay's diff
+                // scroll as the capture's scroll unless the spec pinned one.
+                if opts.diff.is_none() {
+                    opts.diff = diff;
+                }
+                if opts.scroll.is_none() && opts.preview_text.is_some() {
+                    opts.scroll = Some(ov.diff_scroll);
+                }
             }
             // If a selection is requested (or one came from --keys), move the
             // buffer cursor to its END so the caret renders at the cursor end of
@@ -1079,13 +1089,26 @@ fn capture_screenshot(
 pub(crate) fn overlay_capture_info(
     ov: &crate::overlay::OverlayState,
     buffer: &Buffer,
-) -> (capture::OverlayInfo, Option<String>) {
-    // HISTORY timeline: the highlighted row's VERSION previews in the
-    // document itself — resolve it here so the capture folds it over
-    // the snapshot text and the sidecar reports `preview_id` + the
-    // previewed `text` (exactly what the live preview shows).
+) -> (capture::OverlayInfo, Option<String>, Option<capture::DiffInfo>) {
+    // HISTORY timeline (DIFF-AS-PREVIEW): the highlighted row's writer's-DIFF
+    // previews in the document itself — resolve it here so the capture folds
+    // the transcript over the snapshot text and the sidecar reports
+    // `preview_id` + the previewed `text` + the `diff` counts block (exactly
+    // what the live preview shows).
     let preview = history_preview_for(ov, buffer);
-    let preview_text = preview.as_ref().map(|(_, content)| content.clone());
+    let preview_text = preview.as_ref().map(|(_, transcript, _)| transcript.clone());
+    // The sidecar's top-level `diff` block now ALSO reports a History preview's
+    // counts (the same DiffInfo shape the `AWL_DIFF_*` harness fills) — the
+    // label is the picker row the user is looking at.
+    let diff = preview.as_ref().map(|(_, _, c)| capture::DiffInfo {
+        active: true,
+        label: ov.selected_value().unwrap_or("an earlier version").to_string(),
+        struck: c.struck,
+        washed: c.washed,
+        modified: c.modified,
+        moved: c.moved,
+        folds: c.folds,
+    });
     let info = capture::OverlayInfo {
         active: true,
         mode: ov.kind.as_str(),
@@ -1099,7 +1122,9 @@ pub(crate) fn overlay_capture_info(
         browse_dir: ov.browse_dir.clone(),
         return_to: ov.return_to.map(|k| k.as_str()),
         spell_target: ov.spell_target,
-        preview_id: preview.map(|(id, _)| id),
+        preview_id: preview.map(|(id, _, _)| id),
+        diff_focus: ov.diff_focus,
+        diff_scroll: ov.diff_scroll,
         show_hidden: ov.show_hidden,
         capture: ov.capture.as_ref().map(|c| capture::CaptureInfo {
             command: c.cmd_name.clone(),
@@ -1121,7 +1146,7 @@ pub(crate) fn overlay_capture_info(
         sections: ov.item_sections(),
         title: ov.kind.title(),
     };
-    (info, preview_text)
+    (info, preview_text, diff)
 }
 
 /// The HISTORY timeline's headless live preview: when the replay left the History
@@ -1135,14 +1160,12 @@ pub(crate) fn overlay_capture_info(
 fn history_preview_for(
     ov: &crate::overlay::OverlayState,
     buffer: &Buffer,
-) -> Option<(String, String)> {
-    if ov.kind != crate::overlay::OverlayKind::History {
-        return None;
-    }
-    let id = ov.selected_history_id()?.to_string();
-    let path = crate::history::source_path(buffer.path(), None, buffer.is_note())?;
-    let content = crate::history::load(&path, &id)?;
-    Some((id, content))
+) -> Option<(String, String, crate::prosediff::DiffCounts)> {
+    // DIFF-AS-PREVIEW: the preview IS the writer's diff of the current buffer vs
+    // the highlighted version — built by the SAME one owner the live App renders
+    // through (`history::diff_preview`), synchronously (the live debounce is a
+    // wall-clock concern the deterministic capture never has).
+    crate::history::diff_preview(ov, buffer.path(), None, buffer.is_note(), &buffer.text())
 }
 
 /// Execute the resolved [`Mode`]: render a headless capture, run the typing
@@ -3005,13 +3028,13 @@ mod tests {
             );
             assert_eq!(rows.len(), 2, "two seeded versions");
             let mut ov = crate::overlay::OverlayState::new_history(rows, None, None);
-            let (id, content) =
+            let (id, content, _counts) =
                 history_preview_for(&ov, &buffer).expect("the newest row resolves");
             assert_eq!(content, "v2\n");
             assert_eq!(Some(id.as_str()), ov.selected_history_id());
             // Arrow down: the OLDER version previews.
             ov.move_sel(1);
-            let (_, older) = history_preview_for(&ov, &buffer).expect("row 1 resolves");
+            let (_, older, _) = history_preview_for(&ov, &buffer).expect("row 1 resolves");
             assert_eq!(older, "v1\n", "the highlighted row IS the previewed version");
             // A non-history overlay never previews.
             let goto = crate::overlay::OverlayState::new(

@@ -614,6 +614,38 @@ impl TextPipeline {
         line_top + line_height > -margin && line_top < self.window_h + margin
     }
 
+    /// DIFF-AS-PREVIEW: clip a list of emitted quads to the panel's content band
+    /// (drop fully-outside rows, TRIM partial ones at the band edge) — the quad
+    /// counterpart of the text layer's `TextBounds` clip, so a scrolled
+    /// transcript's washes/pills/panels stop AT the card edge instead of sliding
+    /// over the margin above/below it. Identity on an ordinary frame (no band).
+    fn clip_rects_to_band(&self, mut rects: Vec<[f32; 4]>) -> Vec<[f32; 4]> {
+        let Some((top, bottom)) = self.doc_clip_band(self.window_h) else {
+            return rects;
+        };
+        rects.retain_mut(|r| {
+            let y0 = r[1];
+            let y1 = r[1] + r[3];
+            if y1 <= top || y0 >= bottom {
+                return false;
+            }
+            let ny0 = y0.max(top);
+            r[3] = y1.min(bottom) - ny0;
+            r[1] = ny0;
+            true
+        });
+        rects
+    }
+
+    /// DIFF-AS-PREVIEW: the line-shaped emit gate (strike / squiggle / nit rows).
+    /// A 1–2px line is DROPPED when any part leaves the band, never trimmed.
+    fn band_admits(&self, y: f32, h: f32) -> bool {
+        match self.doc_clip_band(self.window_h) {
+            Some((top, bottom)) => y >= top && y + h <= bottom,
+            None => true,
+        }
+    }
+
     /// Rebuild the cached spell-squiggle protos IF the shaped geometry or the
     /// misspelling list changed since they were last built (keyed by the row-geometry
     /// GENERATION + the spell list generation). ONE `layout_runs()` walk for ALL
@@ -722,6 +754,9 @@ impl TextPipeline {
             let cell_bottom = band_y + row_caret_h;
             // Center the wave band a touch below the cell bottom.
             let y = cell_bottom + 1.0 * m.zoom;
+            if !self.band_admits(y, band_h) {
+                continue; // DIFF-AS-PREVIEW: the row scrolled past the card edge
+            }
             out.push(Squiggle {
                 x,
                 y,
@@ -897,6 +932,9 @@ impl TextPipeline {
             let cell_bottom = band_y + row_caret_h;
             // Sit the straight line a hair below the cell bottom (as the squiggle).
             let y = cell_bottom + 1.0 * m.zoom;
+            if !self.band_admits(y, band_h) {
+                continue; // DIFF-AS-PREVIEW: the row scrolled past the card edge
+            }
             out.push(Squiggle {
                 x,
                 y,
@@ -1140,9 +1178,10 @@ impl TextPipeline {
             }
             merge_row_bands(out)
         };
-        let comment = build(&self.wash_cache.comment_protos.borrow());
-        let string = build(&self.wash_cache.string_protos.borrow());
-        let highlight = build(&self.wash_cache.highlight_protos.borrow());
+        let comment = self.clip_rects_to_band(build(&self.wash_cache.comment_protos.borrow()));
+        let string = self.clip_rects_to_band(build(&self.wash_cache.string_protos.borrow()));
+        let highlight =
+            self.clip_rects_to_band(build(&self.wash_cache.highlight_protos.borrow()));
         (comment, string, highlight)
     }
 
@@ -1191,7 +1230,7 @@ impl TextPipeline {
             let (y, h) = self.row_band_for(p.line, p.line_height, line_top);
             out.push([x, y - inset_y, w, h + 2.0 * inset_y]);
         }
-        merge_row_bands(out)
+        self.clip_rects_to_band(merge_row_bands(out))
     }
 
     /// Build the `~~strikethrough~~` STRIKE LINES — one flat [`Squiggle`]
@@ -1230,6 +1269,9 @@ impl TextPipeline {
             // The row's caret-height glyph cell, then THE owner's band over it.
             let (band_y, cell_h) = self.row_band_for(p.line, p.line_height, line_top);
             let (y, band_h, stroke) = super::spans::strike_line_band(band_y, cell_h, m.zoom);
+            if !self.band_admits(y, band_h) {
+                continue; // DIFF-AS-PREVIEW: the row scrolled past the card edge
+            }
             out.push(Squiggle {
                 x,
                 y,
@@ -1342,7 +1384,7 @@ impl TextPipeline {
             }
             out.push([x, line_top, w, p.line_height]);
         }
-        merge_row_bands(out)
+        self.clip_rects_to_band(merge_row_bands(out))
     }
 
     /// The fence-panel cache's current version key, or `None` before the first

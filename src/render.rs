@@ -1177,6 +1177,17 @@ pub struct ViewState {
     /// `None` parks every popover quad/glyph empty, so a default capture is
     /// byte-identical.
     pub popover: Option<crate::popover::PopoverModel>,
+    /// DIFF-AS-PREVIEW: true while the History picker's writer's-diff preview is
+    /// what the document shows — the page column dresses as a CARD (the float-panel
+    /// border + elevation around the column, content clipped to the panel band; see
+    /// `prepare_diff_panel` / `doc_clip_band`). False for every ordinary frame, so a
+    /// default capture is byte-identical.
+    pub diff_panel: bool,
+    /// DIFF-AS-PREVIEW focus cue: true when Tab moved the keyboard focus INTO the
+    /// diff panel — its card border strengthens one value step (content ink) and
+    /// widens a px (the value-free half of the cue, so it survives a one-bit
+    /// world). Never amber. Inert unless `diff_panel`.
+    pub diff_panel_focus: bool,
 }
 
 impl ViewState {
@@ -1241,6 +1252,8 @@ impl ViewState {
             cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
             eol: crate::buffer::Eol::Lf,
             popover: None,
+            diff_panel: false,
+            diff_panel_focus: false,
         }
     }
 }
@@ -3093,6 +3106,15 @@ pub struct TextPipeline {
     pub float_shadow: SelectionPipeline,
     pub float_border: SelectionPipeline,
     pub float_card: SelectionPipeline,
+    /// DIFF-AS-PREVIEW panel dressing — its OWN elevation trio (the established
+    /// per-surface pattern: popover/hud/which-key each own theirs), because the
+    /// `float_*` trio belongs to the spell/caret panels and `panel_*` to the very
+    /// picker card floating over this panel the SAME frame. Shadow + border ride
+    /// `set_float_quads`' one shape; the card is the opaque fill the transcript
+    /// draws on. All parked empty unless a History diff preview is up.
+    pub diffpanel_shadow: SelectionPipeline,
+    pub diffpanel_border: SelectionPipeline,
+    pub diffpanel_card: SelectionPipeline,
     /// Text renderer + buffer for the caret-preview panel's sample line (drawn on the
     /// float card). Parked off-screen unless the caret-style picker is open.
     pub preview_renderer: TextRenderer,
@@ -3722,6 +3744,9 @@ pub struct TextPipeline {
     /// `None`. `Some` renders the overlay as a small floating panel anchored at the
     /// word (no blur, no scrim) instead of the centered takeover card.
     overlay_spell: Option<(usize, usize, usize)>,
+    /// DIFF-AS-PREVIEW: mirrors [`ViewState::diff_panel`] / [`ViewState::diff_panel_focus`].
+    diff_panel: bool,
+    diff_panel_focus: bool,
     /// The widest SHAPED suggestion-row width (logical px) for the open SPELL panel,
     /// measured whenever the overlay syncs (0.0 when the panel is closed / empty). The
     /// float panel sizes its card to fit THIS — the longest correction — plus padding,
@@ -4044,6 +4069,12 @@ impl TextPipeline {
         let float_border =
             SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
         let float_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        // DIFF-AS-PREVIEW panel dressing (same float tokens; parked until summoned).
+        let diffpanel_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
+        let diffpanel_border =
+            SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
+        let diffpanel_card =
+            SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
         // The caret-preview panel's sample-line text renderer + buffer.
         let preview_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
@@ -4243,6 +4274,9 @@ impl TextPipeline {
             float_shadow,
             float_border,
             float_card,
+            diffpanel_shadow,
+            diffpanel_border,
+            diffpanel_card,
             preview_renderer,
             preview_buffer,
             spell_pipeline,
@@ -4408,6 +4442,8 @@ impl TextPipeline {
             overlay_lens: Vec::new(),
             overlay_sections: Vec::new(),
             overlay_spell: None,
+            diff_panel: false,
+            diff_panel_focus: false,
             overlay_spell_w: 0.0,
             caret_preview: None,
             caret_demo: crate::caret::CaretDemo::new(),
@@ -4570,6 +4606,10 @@ impl TextPipeline {
         self.float_border
             .set_color(theme::surface_selected().rgba_bytes());
         self.float_card.set_color(theme::base_300().rgba_bytes());
+        // DIFF-AS-PREVIEW panel: shadow/card re-tint here; the BORDER color is
+        // re-decided every `prepare_diff_panel` (it carries the focus cue).
+        self.diffpanel_shadow.set_color(float_shadow_srgba());
+        self.diffpanel_card.set_color(theme::base_300().rgba_bytes());
         self.overlay_rows.set_color(theme::selection().rgba_bytes());
         // PER-ITEM LIST SURFACES: the bar surfaces re-tint to the new world's
         // quiet value step (their real per-frame color is set at draw time from the
@@ -4911,6 +4951,8 @@ impl TextPipeline {
         self.overlay_lens = view.overlay_lens.clone();
         self.overlay_sections = view.overlay_sections.clone();
         self.overlay_spell = view.overlay_spell;
+        self.diff_panel = view.diff_panel;
+        self.diff_panel_focus = view.diff_panel_focus;
         // Measure the widest suggestion NOW (a `&mut FontSystem` is in hand) so the
         // contextual spell panel can size its card to the longest correction, not the
         // anchor word. Cheap + gated: only shaped when the SPELL panel is the open
@@ -5374,6 +5416,10 @@ impl TextPipeline {
         // THE PAGE FRAME: the thin writing-column frame (zero rects for every
         // PageFrame::None world, so those stay byte-identical).
         self.prepare_page_frame(device, queue, width, height);
+        // DIFF-AS-PREVIEW: the page-column card dressing (parked on every
+        // ordinary frame). Prepared before the washes/text so its quads sit
+        // under them in the document band (painter's order is the draw fn's).
+        self.prepare_diff_panel(device, queue, width, height);
         self.prepare_wash_layer(device, queue, width, height);
         self.prepare_wysiwyg_wash_layer(device, queue, width, height);
         self.prepare_text_layer(device, queue, width, height)?;
@@ -5627,6 +5673,12 @@ impl TextPipeline {
         // shouldn't: the frame straddles the column boundary, in the margin).
         // Zero instances (draws nothing) for every PageFrame::None world.
         self.page_frame_pipeline.draw(pass);
+        // DIFF-AS-PREVIEW panel dressing: shadow -> border -> card, UNDER every
+        // wash/text layer (the transcript draws ON the card, clipped to it via
+        // `doc_clip_band`). Zero instances on every ordinary frame.
+        self.diffpanel_shadow.draw(pass);
+        self.diffpanel_border.draw(pass);
+        self.diffpanel_card.draw(pass);
         // WYSIWYG value-step panel/pill sit directly ON the ground, BEFORE the
         // syntax washes — so a fenced block's comment/string wash composites over
         // the panel exactly as it does over the bare ground, and a selection over

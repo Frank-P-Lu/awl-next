@@ -52,6 +52,8 @@ fn theme_picker_is_flat_and_reports_no_lens() {
         lens_strip: ov.lens_strip(),
         sections: ov.item_sections(),
         preview_id: None,
+        diff_focus: false,
+        diff_scroll: 0,
         empty: None,
         show_hidden: false,
     });
@@ -119,6 +121,8 @@ fn overlay_empty_state_renders_and_reports() {
         lens_strip: ov.lens_strip(),
         sections: ov.item_sections(),
         preview_id: None,
+        diff_focus: false,
+        diff_scroll: 0,
         empty: ov.empty_notice(),
         show_hidden: false,
     };
@@ -202,6 +206,8 @@ fn file_pickers_faceted_lens_render_and_report() {
             lens_strip: ov.lens_strip(),
             sections: ov.item_sections(),
             preview_id: None,
+        diff_focus: false,
+        diff_scroll: 0,
             empty: None,
             show_hidden: false,
         });
@@ -307,6 +313,8 @@ fn faceted_grouped_window_is_bounded_and_scrolls_to_selection() {
             lens_strip: ov.lens_strip(),
             sections: ov.item_sections(),
             preview_id: None,
+        diff_focus: false,
+        diff_scroll: 0,
             empty: ov.empty_notice(),
             show_hidden: false,
         });
@@ -434,6 +442,8 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
             lens_strip: ov.lens_strip(),
             sections: ov.item_sections(),
             preview_id: None,
+        diff_focus: false,
+        diff_scroll: 0,
             empty: None,
             show_hidden: false,
         });

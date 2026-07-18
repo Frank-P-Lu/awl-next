@@ -309,7 +309,20 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // NAMED row also re-shapes its existing cells (name as the primary `items` text,
 // "when · +N −M" in `bindings`); unnamed rows and a default capture are
 // byte-identical.
-pub const SCHEMA_VERSION: u32 = 175;
+// `/176` — DIFF-AS-PREVIEW: the History picker's live preview IS the writer's
+// diff now (the page below the card renders the marked-up-manuscript transcript
+// of the current buffer vs the highlighted version, dressed as a card — the old
+// plain-content preview is a logged v1 trim, and the separate Compare TAKEOVER
+// view is retired; "Compare with version…" repoints to opening this picker). The
+// `overlay` block gains `diff_focus` (Tab moved keyboard focus into the diff
+// panel) and `diff_scroll` (the panel's scroll in visual rows — PgUp/PgDn /
+// panel ↑/↓ / the wheel over the page). The top-level `diff` block — same shape
+// as `/172` — is now ALSO reported for a History-picker preview capture (its
+// `label` is the highlighted row's display text), not only the `AWL_DIFF_*`
+// harness. `overlay.preview_id` keeps its meaning (the compared version's id);
+// the previewed `text` is now the transcript. A default capture is
+// byte-identical apart from the two new always-present overlay keys.
+pub const SCHEMA_VERSION: u32 = 176;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

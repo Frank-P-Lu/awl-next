@@ -425,7 +425,7 @@ fn overlay_json(opts: &CaptureOpts, pipeline: &TextPipeline) -> String {
                 .map(|m| json_string(m))
                 .unwrap_or_else(|| "null".into());
             format!(
-                "{{ \"active\": {}, \"mode\": {}, \"title\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"return_to\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"preview_id\": {}, \"show_hidden\": {}, \"capture\": {}, \"empty\": {}, \"window\": {}, \"items\": [{}], \"bindings\": [{}], \"git\": [{}] }}",
+                "{{ \"active\": {}, \"mode\": {}, \"title\": {}, \"query\": {}, \"selected_index\": {}, \"browse_dir\": {}, \"return_to\": {}, \"spell_target\": {}, \"hint\": {}, \"notice\": {}, \"lens\": {}, \"lens_strip\": [{}], \"sections\": [{}], \"preview_id\": {}, \"diff_focus\": {}, \"diff_scroll\": {}, \"show_hidden\": {}, \"capture\": {}, \"empty\": {}, \"window\": {}, \"items\": [{}], \"bindings\": [{}], \"git\": [{}] }}",
                 o.active,
                 json_string(o.mode),
                 json_string(o.title),
@@ -440,6 +440,8 @@ fn overlay_json(opts: &CaptureOpts, pipeline: &TextPipeline) -> String {
                 lens_strip,
                 sections,
                 preview_id,
+                o.diff_focus,
+                o.diff_scroll,
                 o.show_hidden,
                 capture,
                 empty,
@@ -449,7 +451,7 @@ fn overlay_json(opts: &CaptureOpts, pipeline: &TextPipeline) -> String {
                 git
             )
         }
-        None => "{ \"active\": false, \"mode\": null, \"title\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"return_to\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"preview_id\": null, \"show_hidden\": false, \"capture\": null, \"empty\": null, \"window\": null, \"items\": [], \"bindings\": [], \"git\": [] }".to_string(),
+        None => "{ \"active\": false, \"mode\": null, \"title\": null, \"query\": \"\", \"selected_index\": null, \"browse_dir\": null, \"return_to\": null, \"spell_target\": null, \"hint\": null, \"notice\": \"\", \"lens\": null, \"lens_strip\": [], \"sections\": [], \"preview_id\": null, \"diff_focus\": false, \"diff_scroll\": 0, \"show_hidden\": false, \"capture\": null, \"empty\": null, \"window\": null, \"items\": [], \"bindings\": [], \"git\": [] }".to_string(),
     }
 }
 

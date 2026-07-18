@@ -857,6 +857,10 @@ pub fn render_markdown_blocks(blocks: &[Block], title: &str) -> String {
 
 /// One-call convenience: strip both docs to plain prose, diff, and render the
 /// transcript. The strip is a RENDER-path concern (the pure [`diff`] stays raw).
+/// (Non-test callers all want the counts too and ride [`diff_and_render`]
+/// directly — the History preview owner, the `AWL_DIFF_*` capture harness —
+/// so this convenience is exercised by the unit tests alone today.)
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn render_markdown(old: &str, new: &str, p: Params, title: &str) -> String {
     diff_and_render(old, new, p, title).0
 }

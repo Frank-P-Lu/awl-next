@@ -34,6 +34,14 @@ const PREFIX_HEADER: &str = "C-x";
 /// top [`outline`] so BOTH hug the column by the exact same amount and move with it.
 pub(in crate::render) const MARGIN_COLUMN_GAP_CHARS: f32 = 1.5;
 
+/// DIFF-AS-PREVIEW panel: the card's inset from the canvas TOP (px). Sits above
+/// the document's `TEXT_TOP` (16px), so the transcript's title row starts 8px
+/// inside the card.
+const DIFF_PANEL_TOP: f32 = 8.0;
+/// DIFF-AS-PREVIEW panel: the card's reserve above the canvas BOTTOM (px) — room
+/// for the 1px rim + the shadow tail to read as an edge, not a bleed.
+const DIFF_PANEL_BOTTOM: f32 = 14.0;
+
 /// Upload the three FLOAT-PANEL elevation quads (drop `shadow` -> raised `border` ->
 /// opaque `card`) for `rect`, or PARK all three empty when `rect` is `None`. Shared by
 /// the reusable [`TextPipeline::prepare_float_panel`] (the caret-preview / spell
@@ -350,6 +358,92 @@ impl TextPipeline {
             rect,
             true, // this primitive's every use wants unconditional elevation
         );
+    }
+
+    /// DIFF-AS-PREVIEW — the PAGE COLUMN dressed as a CARD while the History
+    /// picker's writer's-diff preview is up. "Visually it looks like a card, but
+    /// it's actually a panel" (the user's spec): the transcript renders in the
+    /// page column with the full measure + the existing row/scroll machinery, and
+    /// THIS gives that column the summoned-card visual language — the float
+    /// trio's drop shadow, the crisp raised border rim, and the opaque `base_300`
+    /// card face — via the ONE quad-shape owner [`set_float_quads`] on the
+    /// panel's own dedicated pipelines. Parked (all three empty) on every
+    /// ordinary frame, so a default capture is byte-identical.
+    ///
+    /// FOCUS CUE: when Tab moved the keyboard focus INTO the panel
+    /// (`diff_panel_focus`), the border strengthens one value step
+    /// (`surface_selected` → content ink) AND its rim widens one px — the
+    /// value-free half of the cue, so it still reads on a one-bit world where
+    /// the ink ladder collapses. Never amber (DESIGN §3).
+    pub(super) fn prepare_diff_panel(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
+        let rect = self.diff_panel_rect(height as f32);
+        set_float_quads(
+            &mut self.diffpanel_shadow,
+            &mut self.diffpanel_border,
+            &mut self.diffpanel_card,
+            device,
+            queue,
+            width,
+            height,
+            rect,
+            true, // the large-summoned-panel elevation class (shadow + rim + card)
+        );
+        // The focus cue re-decides the border every frame: color (one value step
+        // up) + a 1px-wider rim, overriding the shape owner's default 1px ring.
+        let focused = self.diff_panel_focus;
+        self.diffpanel_border.set_color(if focused {
+            theme::base_content().rgba_bytes()
+        } else {
+            theme::surface_selected().rgba_bytes()
+        });
+        if focused {
+            if let Some([x, y, w, h]) = rect {
+                self.diffpanel_border.prepare(
+                    device,
+                    queue,
+                    width,
+                    height,
+                    &[[x - 2.0, y - 2.0, w + 4.0, h + 4.0]],
+                );
+            }
+        }
+    }
+
+    /// The diff panel's card RECT (`[x, y, w, h]`), or `None` when no diff
+    /// preview is up — the ONE geometry owner [`Self::prepare_diff_panel`] (the
+    /// dressing) and [`Self::doc_clip_band`] (the content clip) both read, so the
+    /// border and the clipped content can never disagree. Horizontally it IS the
+    /// page column (`column_left`/`column_width` — the full measure, adaptive
+    /// placement composing for free); vertically it is inset from the canvas so
+    /// the card reads as a card ([`DIFF_PANEL_TOP`]/[`DIFF_PANEL_BOTTOM`] — the
+    /// bottom reserve leaves room for the shadow tail). The document's TEXT_TOP
+    /// (16px) lands the transcript's title 8px inside the card's top edge.
+    pub(in crate::render) fn diff_panel_rect(&self, height: f32) -> Option<[f32; 4]> {
+        if !self.diff_panel {
+            return None;
+        }
+        let x = self.column_left();
+        let w = self.column_width();
+        let h = (height - DIFF_PANEL_TOP - DIFF_PANEL_BOTTOM).max(1.0);
+        Some([x, DIFF_PANEL_TOP, w, h])
+    }
+
+    /// The vertical band (`(top, bottom)` in px) DOCUMENT CONTENT may paint into
+    /// while the diff panel is up, or `None` on an ordinary frame (no clipping).
+    /// Derived from [`Self::diff_panel_rect`] inset by the rim, and applied at
+    /// every content emitter — the text layer's `TextBounds`, the wash / pill /
+    /// fence-panel quads, the strike / squiggle lines, the ornament glyphs, and
+    /// the caret quad — so a scrolled transcript clips AT the card's edge instead
+    /// of sliding over the margin band above/below it.
+    pub(in crate::render) fn doc_clip_band(&self, height: f32) -> Option<(f32, f32)> {
+        self.diff_panel_rect(height)
+            .map(|[_, y, _, h]| (y + 2.0, y + h - 2.0))
     }
 
     /// The CENTERED-OVERLAY family's card elevation (go-to / command / theme /
