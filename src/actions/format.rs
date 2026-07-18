@@ -504,28 +504,89 @@ fn inline_span(chars: &[char], anchor: Option<usize>, cursor: usize) -> (usize, 
     }
 }
 
-/// Whether span `[ws, we)` is currently WRAPPED by `kind`'s delimiters — either
-/// they immediately surround it (`**|foo|**`, and the empty-delimiter `**||**`
-/// case where `ws == we`), or the span itself opens+closes with them (a fully
-/// selected `**foo**`). This is exactly the STRIP condition [`inline_toggle`]
-/// tests, extracted so the popover's active-state oracle ([`inline_active`]) shares
-/// the ONE definition of "already formatted".
-fn inline_is_wrapped(kind: InlineKind, chars: &[char], ws: usize, we: usize) -> bool {
+/// WHERE `kind`'s delimiters sit relative to span `[ws, we)`, when it is already
+/// wrapped — the ONE definition of "already formatted" shared by the toggle (it
+/// STRIPs) and the popover's lit oracle ([`inline_active`], it LIGHTS), so they
+/// can never disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InlineWrap {
+    /// The delimiters immediately SURROUND the span (`**|foo|**`, and the empty
+    /// `**||**` toggle-off where `ws == we`) — strip removes them just outside.
+    Surrounding,
+    /// The span itself OPENS+CLOSES with the delimiters (a fully selected
+    /// `**foo**`) — strip removes them from the span's own ends.
+    Enclosing,
+}
+
+/// Decide whether `[ws, we)` is already wrapped by `kind`, and if so where its
+/// delimiters sit. The syntactic delimiter match is the CANDIDATE; a NON-empty
+/// span is then CONFIRMED against the real markdown parse ([`content_is_kind`]),
+/// which is what makes a single `*` that is actually half of a `**` bold fence
+/// read as NOT-italic — the lit-I-inside-bold fix. Without that confirmation the
+/// old code saw `**bold**` as `*` + `*bold*` + `*`, lit the popover's I inside
+/// bold, and STRIPPED the inner pair (degrading bold to italic) on toggle. An
+/// EMPTY delimited span (`**||**`) has no content to parse and stays purely
+/// syntactic (the empty-delimiter toggle-off round-trip).
+fn inline_wrap(kind: InlineKind, chars: &[char], text: &str, ws: usize, we: usize) -> Option<InlineWrap> {
     let d: Vec<char> = kind.delim().chars().collect();
     let dl = d.len();
     let eq = |from: usize| from + dl <= chars.len() && chars[from..from + dl] == d[..];
-    (ws >= dl && we + dl <= chars.len() && eq(ws - dl) && eq(we))
-        || (we - ws >= 2 * dl && eq(ws) && eq(we - dl))
+    let (plan, content_empty) = if ws >= dl && we + dl <= chars.len() && eq(ws - dl) && eq(we) {
+        (InlineWrap::Surrounding, ws == we)
+    } else if we - ws >= 2 * dl && eq(ws) && eq(we - dl) {
+        (InlineWrap::Enclosing, we - ws == 2 * dl)
+    } else {
+        return None;
+    };
+    if content_empty || content_is_kind(kind, text, ws, we) {
+        Some(plan)
+    } else {
+        None
+    }
+}
+
+/// True when the (non-empty) span `[ws, we)` renders as `kind` under the REAL
+/// markdown parse ([`crate::markdown::spans`]) — the disambiguator that tells a
+/// genuine `*italic*` from a `**bold**` fence's `*`s. Probes ONE char index
+/// strictly inside the span: its byte offset lands in the CONTENT run whether the
+/// span abuts the delimiters (surrounding) or encloses them (fully selected), so a
+/// single probe serves both [`InlineWrap`] arms.
+fn content_is_kind(kind: InlineKind, text: &str, ws: usize, we: usize) -> bool {
+    let mid_char = ws + (we - ws) / 2;
+    let mid_byte = char_to_byte(text, mid_char);
+    crate::markdown::spans(text)
+        .into_iter()
+        .any(|(r, k)| r.contains(&mid_byte) && kind_matches_span(kind, k))
+}
+
+/// Which [`crate::markdown::MdKind`] content span(s) mean "already `kind`". Bold /
+/// Italic each also match `BoldItalic` (so I lights inside `***both***` and toggles
+/// it back to bold, `**both**`), which is exactly why the naive syntactic check
+/// couldn't be trusted alone.
+fn kind_matches_span(kind: InlineKind, k: crate::markdown::MdKind) -> bool {
+    use crate::markdown::MdKind;
+    match kind {
+        InlineKind::Bold => matches!(k, MdKind::Bold | MdKind::BoldItalic),
+        InlineKind::Italic => matches!(k, MdKind::Italic | MdKind::BoldItalic),
+        InlineKind::InlineCode => matches!(k, MdKind::Code { inline: true }),
+        InlineKind::Highlight => matches!(k, MdKind::Highlight),
+        InlineKind::Strikethrough => matches!(k, MdKind::Strikethrough),
+    }
+}
+
+/// Byte offset of char index `char_idx` into `text` (its length when past the end).
+fn char_to_byte(text: &str, char_idx: usize) -> usize {
+    text.char_indices().nth(char_idx).map(|(b, _)| b).unwrap_or(text.len())
 }
 
 /// Whether the format popover's inline button for `kind` should draw LIT — i.e.
 /// toggling it would STRIP (the selection / caret-word is already wrapped). PURE;
 /// the popover's active-state oracle, routed through the SAME [`inline_span`] +
-/// [`inline_is_wrapped`] the toggle uses.
+/// [`inline_wrap`] the toggle uses.
 pub(crate) fn inline_active(kind: InlineKind, text: &str, anchor: Option<usize>, cursor: usize) -> bool {
     let chars: Vec<char> = text.chars().collect();
     let (ws, we, _) = inline_span(&chars, anchor, cursor);
-    inline_is_wrapped(kind, &chars, ws, we)
+    inline_wrap(kind, &chars, text, ws, we).is_some()
 }
 
 /// Toggle an INLINE format over the selection / word under the caret. See module doc.
@@ -538,27 +599,32 @@ fn inline_toggle(kind: InlineKind, text: &str, anchor: Option<usize>, cursor: us
     // insert empty delimiters with the caret between them.
     let (ws, we, want_caret) = inline_span(&chars, anchor, cursor);
 
-    let eq = |from: usize| from + dl <= chars.len() && chars[from..from + dl] == d[..];
-
-    // STRIP — the delimiters immediately surround the span (the round-trip path; also
-    // the empty-delimiter toggle-off, where the caret sits between the two delimiters
-    // and `ws == we`).
-    if ws >= dl && we + dl <= chars.len() && eq(ws - dl) && eq(we) {
-        let mut out: Vec<char> = Vec::with_capacity(chars.len() - 2 * dl);
-        out.extend_from_slice(&chars[..ws - dl]);
-        out.extend_from_slice(&chars[ws..we]);
-        out.extend_from_slice(&chars[we + dl..]);
-        let (a, c) = (ws - dl, we - dl);
-        return finish_inline(out, ws == we, a, c);
-    }
-    // STRIP — the span itself begins and ends with the delimiters (selected `**x**`).
-    if we - ws >= 2 * dl && eq(ws) && eq(we - dl) {
-        let mut out: Vec<char> = Vec::with_capacity(chars.len() - 2 * dl);
-        out.extend_from_slice(&chars[..ws]);
-        out.extend_from_slice(&chars[ws + dl..we - dl]);
-        out.extend_from_slice(&chars[we..]);
-        let (a, c) = (ws, we - 2 * dl);
-        return finish_inline(out, false, a, c);
+    // STRIP — the span is already wrapped by `kind`. WHERE the delimiters sit comes
+    // from the ONE shared owner [`inline_wrap`] (the same the popover lights from),
+    // so the toggle can never strip a `*` that is really half of a `**` bold fence:
+    // pressing I inside `**bold**` falls through to WRAP → `***bold***`, never a
+    // silent bold→italic degrade.
+    match inline_wrap(kind, &chars, text, ws, we) {
+        Some(InlineWrap::Surrounding) => {
+            // Delimiters immediately surround the span (the round-trip path; also the
+            // empty-delimiter toggle-off, caret between the two and `ws == we`).
+            let mut out: Vec<char> = Vec::with_capacity(chars.len() - 2 * dl);
+            out.extend_from_slice(&chars[..ws - dl]);
+            out.extend_from_slice(&chars[ws..we]);
+            out.extend_from_slice(&chars[we + dl..]);
+            let (a, c) = (ws - dl, we - dl);
+            return finish_inline(out, ws == we, a, c);
+        }
+        Some(InlineWrap::Enclosing) => {
+            // The span itself begins and ends with the delimiters (selected `**x**`).
+            let mut out: Vec<char> = Vec::with_capacity(chars.len() - 2 * dl);
+            out.extend_from_slice(&chars[..ws]);
+            out.extend_from_slice(&chars[ws + dl..we - dl]);
+            out.extend_from_slice(&chars[we..]);
+            let (a, c) = (ws, we - 2 * dl);
+            return finish_inline(out, false, a, c);
+        }
+        None => {}
     }
 
     // WRAP — insert the delimiters around the span (empty span → caret between).
@@ -699,6 +765,47 @@ mod tests {
         assert!(inline_active(InlineKind::Bold, "a **beta** c", Some(2), 10));
         // Caret-word (no selection) inside a wrap → active.
         assert!(inline_active(InlineKind::Italic, "a *word* here", None, 4));
+    }
+
+    /// The lit-I-inside-bold TRUTH TABLE: `**` is bold's fence, not two italic
+    /// markers. The disambiguator ([`content_is_kind`]) reads the real markdown
+    /// parse so a bare `*` inside a `**` never lights I.
+    #[test]
+    fn inline_active_disambiguates_bold_from_italic() {
+        // `*i*` — a genuine lone-`*` italic: I active, B not.
+        assert!(inline_active(InlineKind::Italic, "*i*", None, 1), "*i* is italic");
+        assert!(!inline_active(InlineKind::Bold, "*i*", None, 1), "*i* is not bold");
+        // `**b**` — plain bold: B active, I DARK (the fix; pre-fix I lit here).
+        assert!(inline_active(InlineKind::Bold, "**b**", None, 2), "**b** is bold");
+        assert!(!inline_active(InlineKind::Italic, "**b**", None, 2), "**b** is NOT italic");
+        // `***bi***` — both: I and B both active (I strips to `**bi**`).
+        assert!(inline_active(InlineKind::Italic, "***bi***", None, 4), "***bi*** is italic too");
+        assert!(inline_active(InlineKind::Bold, "***bi***", None, 4), "***bi*** is bold too");
+        // `**a *i* b**` — a nested `*i*` inside bold: I active on "i", and DARK on
+        // the plain-bold "a" (I inside plain bold text = not active).
+        assert!(inline_active(InlineKind::Italic, "**a *i* b**", None, 5), "italic on the nested i");
+        assert!(!inline_active(InlineKind::Italic, "**a *i* b**", None, 2), "I dark on plain-bold a");
+        // EDGE — fully SELECTING `**b**` (delimiters included): B active, I dark.
+        assert!(inline_active(InlineKind::Bold, "**b**", Some(0), 5), "select-all **b** is bold");
+        assert!(!inline_active(InlineKind::Italic, "**b**", Some(0), 5), "select-all **b** not italic");
+        // EDGE — caret ON the opening marker (no word) lights nothing.
+        assert!(!inline_active(InlineKind::Italic, "*i*", None, 0), "caret on the * marker: dark");
+    }
+
+    /// Pressing I inside plain bold WRAPS italic inside it (`***bold***`), never
+    /// strips the bold — the (b) half of the lit-I bug — and the result renders as
+    /// bold+italic; a second I strips the italic back to plain bold (round-trip).
+    #[test]
+    fn toggling_italic_inside_bold_wraps_then_strips_back() {
+        let a = inl(InlineKind::Italic, "**bold**", None, 4);
+        assert_eq!(a.text, "***bold***", "I wraps italic inside bold, no bold→italic degrade");
+        let rendered = crate::markdown::spans(&a.text);
+        assert!(
+            rendered.iter().any(|(_, k)| *k == crate::markdown::MdKind::BoldItalic),
+            "***bold*** renders bold+italic: {rendered:?}"
+        );
+        let b = inl(InlineKind::Italic, &a.text, a.anchor, a.cursor);
+        assert_eq!(b.text, "**bold**", "second I strips the italic, bold survives");
     }
 
     #[test]

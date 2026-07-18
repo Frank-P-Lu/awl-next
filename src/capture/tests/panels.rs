@@ -1227,7 +1227,7 @@ fn popover_labels_demonstrate_their_own_effects() {
     // The roster speaks LETTERS, never raw syntax.
     let rows = pop["buttons"].as_array().expect("buttons array");
     let labels: Vec<&str> = rows.iter().map(|b| b["label"].as_str().unwrap()).collect();
-    assert_eq!(labels, vec!["B", "I", "A", "C", "S", "H", "Link"], "self-demonstrating labels");
+    assert_eq!(labels, vec!["B", "I", "A", "code", "S", "H", "Link"], "self-demonstrating labels");
     let span_of = |label: &str| -> (f32, f32) {
         let b = rows.iter().find(|b| b["label"] == serde_json::json!(label)).unwrap();
         (b["x0"].as_f64().unwrap() as f32, b["x1"].as_f64().unwrap() as f32)
@@ -1289,7 +1289,7 @@ fn popover_labels_demonstrate_their_own_effects() {
     // step / translucent wash, not full ink) but far above antialias noise.
     let beside = |x0: f32, y: u32| -> i32 { diff_sum(img.get_pixel((x0 - 2.0) as u32, y)) };
     let (ax0, _) = span_of("A");
-    let (cx0, _) = span_of("C");
+    let (cx0, _) = span_of("code");
     let (bx0, _) = span_of("B");
     assert!(
         beside(ax0, y_mid) > 12,
@@ -1298,7 +1298,7 @@ fn popover_labels_demonstrate_their_own_effects() {
     );
     assert!(
         beside(cx0, y_mid) > 12,
-        "the C button's code pill paints beside its letter (got {})",
+        "the code button's pill paints beside its first glyph (got {})",
         beside(cx0, y_mid)
     );
     assert!(

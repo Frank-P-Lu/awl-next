@@ -4,11 +4,12 @@
 //! the summons). A mouse selection (drag-release or double-click word-select) in
 //! a markdown buffer floats a small row of format buttons over the selection:
 //!
-//!   B · I · A · C · S · H · Link
+//!   B · I · A · code · S · H · Link
 //!
 //! Every label is SELF-DEMONSTRATING (no raw markdown syntax in chrome): B is
-//! bold, I italic, A sits in the real highlight wash, C is mono in the code
-//! pill, S carries a real strike line — see [`PopoverButton::base_label`].
+//! bold, I italic, A sits in the real highlight wash, `code` is the word in the
+//! mono face sitting in the code pill, S carries a real strike line — see
+//! [`PopoverButton::base_label`].
 //!
 //! Each button fires an EXISTING catalog [`Action`] through `App::apply` (the
 //! menu-bar precedent — there is NO popover-only edit path; the law test
@@ -103,20 +104,21 @@ impl PopoverButton {
     /// the plan — see [`crate::actions::popover::plan`]).
     ///
     /// SELF-DEMONSTRATING (the user's ask: "a user would not know what ~~ or ==
-    /// means"): every label is a LETTER that PREVIEWS ITS OWN EFFECT, never raw
-    /// markdown syntax leaking into chrome. `B` shapes bold, `I` italic, `S`
-    /// carries a real strike line (THE one strike-line owner,
-    /// `render::spans::strike_line_band`), `A` sits in the actual
-    /// `==highlight==` wash, `C` renders mono in the inline-code pill wash —
-    /// the drawing lives in `render/chrome/popover.rs`. (`A` because `H` is the
-    /// Heading cycler's; `C` for code.) `Link` stays a word: inserting a link
-    /// has no inline look to preview.
+    /// means"): every label PREVIEWS ITS OWN EFFECT, never raw markdown syntax
+    /// leaking into chrome. `B` shapes bold, `I` italic, `S` carries a real strike
+    /// line (THE one strike-line owner, `render::spans::strike_line_band`), `A`
+    /// sits in the actual `==highlight==` wash — the drawing lives in
+    /// `render/chrome/popover.rs`. (`A` because `H` is the Heading cycler's.) The
+    /// inline-code button spells the WORD `code` in the monospace face, sitting in
+    /// the inline-code pill wash: the pill demonstrates, the word names (the user's
+    /// call — a bare `C` read as ambiguous). `Link` likewise stays a word:
+    /// inserting a link has no inline look to preview.
     pub fn base_label(self) -> &'static str {
         match self {
             PopoverButton::Bold => "B",
             PopoverButton::Italic => "I",
             PopoverButton::Highlight => "A",
-            PopoverButton::Code => "C",
+            PopoverButton::Code => "code",
             PopoverButton::Strike => "S",
             PopoverButton::Heading => "H",
             PopoverButton::Link => "Link",
@@ -185,10 +187,12 @@ mod tests {
 
     #[test]
     fn roster_is_the_locked_seven_in_order() {
-        // Self-demonstrating letters, never raw markdown syntax (`==`/`` ` ``/`~~`
-        // leaked file format into chrome — wrong for the writer audience).
+        // Self-demonstrating labels, never raw markdown syntax (`==`/`` ` ``/`~~`
+        // leaked file format into chrome — wrong for the writer audience). The
+        // inline-code button spells the WORD `code` (the user's call), not a bare
+        // `C` — still mono, still in the pill.
         let labels: Vec<&str> = ALL.iter().map(|b| b.base_label()).collect();
-        assert_eq!(labels, vec!["B", "I", "A", "C", "S", "H", "Link"]);
+        assert_eq!(labels, vec!["B", "I", "A", "code", "S", "H", "Link"]);
     }
 
     #[test]
