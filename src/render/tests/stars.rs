@@ -171,6 +171,113 @@ fn currawong_stars_twinkle_in_the_margins_only_at_real_pixels() {
     crate::page::set_measure(was_measure);
 }
 
+/// THE DPI-INVARIANCE LAW (the twinkling-stars density/size bug, 2026-07-18: on a
+/// 2x-retina display Currawong's sky rendered ~5.6x too DENSE and every dot at HALF
+/// its intended logical size — 8 stars at 1x vs 45 at 2x for the same logical
+/// window). The authored `cell_px`/`size_px` (`theme/worlds.rs`) are PHYSICAL px at
+/// scale 1.0; `prepare_stars_layer` scales BOTH by the total logical->physical
+/// factor (user-zoom × device-DPI) before the grid scatter, so the SAME logical
+/// window keeps a constant LOGICAL star DENSITY and a constant LOGICAL dot SIZE at
+/// any DPI. Proven at REAL pixels over the ACTUAL render path — the pure
+/// `crate::stars::layout` is untouched by the fix, so this must exercise the
+/// renderer, not the layout. Render the identical logical Currawong page at 1x and
+/// at 2x physical, then assert two arms, EACH of which the reverted (unscaled) fix
+/// fails:
+///   * DENSITY — the DRAWN instance count is ~equal (the reverted signature is
+///     ~4-5x more instances at 2x, rejected by the band here), and
+///   * DOT SIZE — the star-tinted pixel AREA PER instance grows ~4x at 2x (each dot
+///     2x wider AND 2x taller → constant logical size); a reverted fix leaves the
+///     dots the same PHYSICAL size (~1x area/instance) and fails this arm.
+#[test]
+fn currawong_star_field_is_dpi_invariant_in_logical_space() {
+    // The SAME LOGICAL window at two device scales: 1x is WxH physical, 2x is 2Wx2H.
+    const W: u32 = 900;
+    const H: u32 = 600;
+
+    let _g = crate::testlock::serial();
+    let was_page_on = crate::page::page_on();
+    let was_measure = crate::page::measure();
+    crate::page::set_page_on(true);
+    crate::page::set_measure(24); // narrow column -> wide, star-bearing margins
+
+    // Render the identical logical Currawong page at a given device scale; return
+    // (drawn instance count, star-tinted pixel area in the margins), or None on a
+    // GPU-less machine.
+    let render_at = |dpi: f32| -> Option<(u32, u64)> {
+        let pw = (W as f32 * dpi) as u32;
+        let ph = (H as f32 * dpi) as u32;
+        let (device, queue, mut p) = headless_dqp(pw as f32, ph as f32)?;
+        // DPI after set_size (headless_dqp already sized), mirroring the capture
+        // path — set_dpi rebuilds the metrics + re-shapes at the rescaled column.
+        p.set_dpi(dpi);
+        theme::set_active_by_name("Currawong").unwrap();
+        p.sync_theme();
+        let v = view("hi\nthere\n", 0, 0);
+        p.set_view(&v);
+        let frame = render_frame(&device, &queue, &mut p, pw, ph);
+        let count = p.stars_pipeline.instance_count();
+        // The writing-column band this frame (the geometry owner the cull read) —
+        // star pixels live strictly OUTSIDE it, so measure only the margins.
+        let col_left = p.column_left();
+        let col_right = col_left + p.column_width();
+        // Currawong's star tint (#9DB0CF) reads BLUE-forward; the world's muted/faint
+        // margin ink is neutral (r≈g≈b), so `b > r` isolates star pixels. (Any neutral
+        // contamination would scale ~4x with the surface at BOTH DPIs and cancels in
+        // the per-instance RATIO below — it can never turn a reverted fix into a pass.)
+        let mut area = 0u64;
+        for y in 0..ph as usize {
+            for x in 0..pw as usize {
+                let xf = x as f32;
+                if xf >= col_left && xf < col_right {
+                    continue;
+                }
+                let px = frame[y * pw as usize + x];
+                if px[2] as i32 > px[0] as i32 + 8 && px[2] > 24 {
+                    area += 1;
+                }
+            }
+        }
+        Some((count, area))
+    };
+
+    let (one, two) = (render_at(1.0), render_at(2.0));
+
+    // Restore globals BEFORE asserting so a failing arm can't leak page/theme state.
+    theme::set_active(theme::DEFAULT_THEME);
+    crate::page::set_page_on(was_page_on);
+    crate::page::set_measure(was_measure);
+
+    let (Some((count_1, area_1)), Some((count_2, area_2))) = (one, two) else {
+        eprintln!(
+            "skipping currawong_star_field_is_dpi_invariant_in_logical_space: no wgpu adapter"
+        );
+        return;
+    };
+
+    assert!(
+        count_1 > 5 && count_2 > 5,
+        "both scales must scatter a real population (1x {count_1}, 2x {count_2})"
+    );
+    // DENSITY invariance: ~equal counts. The reverted-fix signature is count_2 ≈
+    // 4-5.6x count_1; this band rejects it while admitting the small residual from
+    // the physical-px margin gap + AA fringe (a few extra stars near the boundary).
+    assert!(
+        (count_2 as f32) <= 2.0 * count_1 as f32 && (count_1 as f32) <= 2.0 * count_2 as f32,
+        "DPI-invariant DENSITY: the 2x sky must hold ~as many stars as 1x, not ~4x \
+         (1x {count_1}, 2x {count_2}) — the density half of the twinkling-stars bug"
+    );
+    // DOT-SIZE invariance: area PER instance ~4x at 2x (2x wider × 2x taller). A
+    // reverted fix keeps dots the same PHYSICAL size -> ~1x area/instance -> fails.
+    let per_1 = area_1 as f32 / count_1 as f32;
+    let per_2 = area_2 as f32 / count_2 as f32;
+    assert!(
+        per_2 >= 2.5 * per_1 && per_2 <= 6.0 * per_1,
+        "DPI-invariant DOT SIZE: each dot's pixel area must grow ~4x at 2x so its \
+         LOGICAL size is constant (per-instance area 1x {per_1:.1}, 2x {per_2:.1}) — \
+         the half-size-dots half of the bug"
+    );
+}
+
 /// THE ABSENT HALF: every `AmbientStyle::None` world uploads ZERO star
 /// instances through the same prepare path (structurally nothing to draw — the
 /// byte-identity guarantee for the starless roster), and even the stars world
