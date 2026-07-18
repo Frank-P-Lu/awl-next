@@ -460,6 +460,50 @@ impl ListStyle {
     pub fn backs_rows_with_pane(self) -> bool {
         matches!(self, ListStyle::Pane)
     }
+
+    /// What sits BEHIND the rows of a summoned list surface in this style — THE
+    /// ONE OWNER of "the row backing", read by `overlay_draw_card` AND the
+    /// surface-audit laws so a NEW world is decided by its own `list_style` (no
+    /// per-world branch, no wildcard). `spell` distinguishes the two Bars
+    /// surfaces (the ONLY thing that differs between them):
+    ///   - [`ListStyle::Pane`] → [`ListBacking::Card`]: an opaque raised card
+    ///     (the classic picker card / the spell popup's little float panel).
+    ///   - [`ListStyle::Bars`], centered picker (`spell == false`) →
+    ///     [`ListBacking::Room`]: the full-canvas ground VEIL the plates float on
+    ///     (a maximalist statement room — the live theme preview reads honestly
+    ///     around it).
+    ///   - [`ListStyle::Bars`], contextual spell popup (`spell == true`) →
+    ///     [`ListBacking::BarePlates`]: NO room box at all. The suggestion plates
+    ///     float on the RAW PAGE, each carrying only its own minimal ground SCRIM
+    ///     (a thin feathered moat confined to the plate footprint), so the
+    ///     document shows BETWEEN the plates and the popup never reads as a box —
+    ///     option B, the user's pick ("with the bars there shouldn't be a pane"
+    ///     carried all the way, so a dark world stops drawing that near-black box
+    ///     behind the plates). The per-plate scrim solves legibility over doc
+    ///     text WITHOUT a rectangle — figure/ground by VALUE, DESIGN §3/§5.
+    pub fn list_backing(self, spell: bool) -> ListBacking {
+        match self {
+            ListStyle::Pane => ListBacking::Card,
+            ListStyle::Bars { .. } if spell => ListBacking::BarePlates,
+            ListStyle::Bars { .. } => ListBacking::Room,
+        }
+    }
+}
+
+/// What a summoned list surface lays beneath its rows — see
+/// [`ListStyle::list_backing`]. A three-way, no-wildcard token so
+/// `overlay_draw_card` and the audit laws share ONE classification of "card vs
+/// room vs bare plates" (a new backing would fail the exhaustive matches until
+/// wired).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ListBacking {
+    /// Opaque raised card behind the rows (`Pane` worlds — picker + spell float).
+    Card,
+    /// Full-canvas ground veil the plates float on (`Bars` centered picker).
+    Room,
+    /// No room box — plates float on the raw page, each with its own ground
+    /// scrim (`Bars` contextual spell popup, option B).
+    BarePlates,
 }
 
 /// V6 P5 round — the BAR-EXTENT axis (see [`ListStyle::Bars`]). `FullWidth` is

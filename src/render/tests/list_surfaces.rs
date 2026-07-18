@@ -552,134 +552,205 @@ fn bars_draw_a_findable_surface_per_row() {
     );
 }
 
-// --- Spell popup: drops its pane on Bars, keeps it on Pane (every world) ------
+// --- Spell popup: floats BARE (no room box) on Bars, keeps the card on Pane ---
 
-/// THE SPELL-POPUP PANE LAW, ENUMERATED OVER EVERY WORLD (real pixels) — the
-/// Firetail refit carried to the contextual autocorrect popup (the user's report:
-/// "for the auto correct, we gotta get rid of the pane as well! in firetail … and
-/// yknow for similar worlds"). Renders the spell-suggestion popup on EACH shipped
-/// world and asserts the OUTCOME over the rendered bytes (the Wagtail lesson —
-/// appearance asserted over PIXELS, never inferred from state), classified by the
-/// ONE pane owner [`theme::ListStyle::backs_rows_with_pane`] so a NEW world is
-/// auto-decided by its own `list_style` (no wildcard, no per-world branch — a new
-/// Bars world joins the no-pane set for free, a new Pane world the pane set):
-///   - BARS worlds (Firetail-family): NO raised float pane (`float_card == 0`);
-///     the popup BACKGROUND (a strip just inside the card's left edge, LEFT of the
-///     inset plates) reads the GROUND ROOM `base_100`, NOT the bright `base_300`
-///     pane fill the popup drew before — and the SELECTED suggestion plate is
-///     LEGIBLE (perceptibly distinct from that room).
+/// THE SPELL-POPUP BACKING LAW, ENUMERATED OVER EVERY WORLD (real pixels) —
+/// OPTION B (the user's "b is good"): on a Bars world the contextual autocorrect
+/// popup floats its suggestion plates on the RAW PAGE with NO room box AT ALL.
+/// The prior round clipped a `base_100` room to the card; on a DARK world that
+/// read as a prominent near-black BOX behind the plates, which the user wanted
+/// gone. Legibility over the live document is now carried by each plate's own
+/// minimal ground SCRIM (a thin feathered moat confined to the plate footprint —
+/// `overlay_draw_card`), never a rectangle. Classified by the ONE row-backing
+/// owner [`theme::ListStyle::list_backing`] so a NEW world is auto-decided by its
+/// own `list_style` (NO WILDCARD, no per-world branch — a new Bars world joins
+/// the bare-plates set for free, a new Pane world the card set). Asserted over
+/// the rendered BYTES (the Wagtail lesson — appearance over PIXELS, never
+/// inferred from state):
+///   - BARS worlds (Firetail-family, DARK ONES INCLUDED): NO raised float pane
+///     (`float_card == 0`), and — the crux — the DOCUMENT SHOWS THROUGH between
+///     the plates. Rendered twice (bare page vs page + popup); in every
+///     inter-plate GAP the two frames are byte-for-byte equal, so nothing (no
+///     `base_100` box) covers the page there. The bare-page strip is proven to
+///     carry real doc text first, so the check is not vacuous. The SELECTED plate
+///     stays a findable surface (a clear value step from the ground it floats on).
 ///   - PANE worlds (unchanged): the raised float pane IS present
-///     (`float_card == 1`) and the same background reads the `base_300` float fill
-///     — the pre-refit popup the user kept everywhere else. (A one-bit world's
-///     ramp collapses `base_300` onto `base_100`, so the fill-vs-ground redmean is
-///     ~0 there — the `d_pane <= floor` form holds regardless, and the pane's own
-///     definition is its border, law-tested in `one_bit.rs`.)
+///     (`float_card == 1`) and its opaque `base_300` fill covers the strip just
+///     inside the card's left edge — the pre-refit popup the user kept everywhere
+///     else. (A one-bit world's ramp collapses `base_300` onto `base_100`, so the
+///     fill-vs-ground redmean is ~0 there — the `d_pane <= floor` form holds
+///     regardless, and the pane's own definition is its border, law-tested in
+///     `one_bit.rs`.)
 #[test]
-fn spell_popup_drops_the_pane_on_bars_keeps_it_on_pane() {
+fn spell_popup_floats_bare_on_bars_keeps_the_card_on_pane() {
     let (w, h) = (1200u32, 800u32);
     let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
-        eprintln!("skipping spell_popup_drops_the_pane_on_bars_keeps_it_on_pane: no wgpu adapter");
+        eprintln!("skipping spell_popup_floats_bare_on_bars_keeps_the_card_on_pane: no wgpu adapter");
         return;
     };
     let _g = crate::testlock::serial();
     let (wi, hi) = (w as i64, h as i64);
+
+    // A DENSE document: the misspelled word "teh" at line 0, then many long
+    // single-token lines (no spaces → every sampled strip is full of glyphs) that
+    // sit DIRECTLY BEHIND the popup. So every between-plate gap is guaranteed to
+    // land over real document text — the case a room box WOULD cover, which is the
+    // whole point of proving the page shows THROUGH.
+    let mut doc = String::from("teh quick brown fox jumps over\n");
+    for _ in 0..18 {
+        doc.push_str("loremipsumdolorsitametconsecteturadipiscingelit\n");
+    }
+
     // NO-WILDCARD over the whole roster: every shipped world, each decided by its
-    // OWN list_style through the one pane owner.
+    // OWN list_style through the one row-backing owner.
     for t in theme::THEMES.iter() {
         theme::set_active_by_name(t.name).unwrap();
         p.sync_theme();
-        let bars = !t.render_caps.list_style.backs_rows_with_pane();
-
-        // "teh" misspelled at line 0 cols [0,3), with document text BELOW it — so
-        // the popup hangs over the LIVE doc, the worst case a dropped pane must
-        // survive (bare plates would collide with that text; the room must calm it).
-        let mut v = view(
-            "teh quick brown fox\nsecond line of the doc\nthird line of the doc\n",
-            0,
-            0,
-        );
-        v.overlay_active = true;
-        v.overlay_items = vec!["the".into(), "tea".into(), "ten".into(), "ted".into()];
-        v.overlay_selected = 0;
-        v.overlay_spell = Some((0, 0, 3));
-        p.set_view(&v);
-        p.prepare(&device, &queue, w, h).unwrap();
-
-        // MECHANISM WITNESS (cheap, exact): the raised float pane is present iff the
-        // world backs its list rows with a pane.
-        let float_n = p.float_card.instance_count();
-        let rect = p.overlay_card_rect().expect("spell popup has a card rect");
-        let (cx, cy, ch) = (rect[0], rect[1], rect[3]);
-        let base100 = theme::base_100();
+        // Per-world tokens (read AFTER set_active — never hoist a palette value
+        // out of the world loop).
         let base300 = theme::base_300();
+        let backing = t.render_caps.list_style.list_backing(true);
 
-        let px = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
-        // BACKGROUND SAMPLE — a thin vertical strip just inside the card's LEFT edge,
-        // over the card's LOWER rows (below the selected row 0's band): on Bars this
-        // sits LEFT of the inset plates (pure room); on Pane it sits LEFT of the row
-        // glyphs (pure pane fill). Averaged tall so a stray glyph edge can't skew it.
-        let bg = avg(
-            &px,
-            wi,
-            hi,
-            (cx + 5.0) as i64,
-            (cy + ch * 0.5) as i64,
-            3,
-            (ch * 0.5 - 12.0) as i64,
-        );
-        let d_ground = redmean(bg, base100);
-        let d_pane = redmean(bg, base300);
+        // Frame B: the page + the spell popup over "teh" (cols [0,3)).
+        let mut b = view(&doc, 0, 0);
+        b.overlay_active = true;
+        b.overlay_items = vec!["the".into(), "tea".into(), "ten".into(), "ted".into()];
+        b.overlay_selected = 0;
+        b.overlay_spell = Some((0, 0, 3));
+        p.set_view(&b);
+        p.prepare(&device, &queue, w, h).unwrap();
+        // Read geometry + mechanism witnesses from THIS (popup) prepare, before the
+        // bare-page render below parks the plates.
+        let float_n = p.float_card.instance_count();
+        let n_plates = p.overlay_bars.instance_count() + p.overlay_rows.instance_count();
+        let rect = p.overlay_card_rect().expect("spell popup has a card rect");
+        let (cx, cy, cw, ch) = (rect[0], rect[1], rect[2], rect[3]);
+        let lh = p.overlay_lh();
+        let gap = p.overlay_row_gap();
+        let pb = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+        let base100 = theme::base_100();
 
-        if bars {
-            assert_eq!(
-                float_n, 0,
-                "{}: Bars draws NO raised float pane behind the spell popup",
+        match backing {
+            theme::ListBacking::BarePlates => {
+                assert_eq!(
+                    float_n, 0,
+                    "{}: a Bars world floats the spell plates BARE — no raised float pane",
+                    t.name
+                );
+                assert!(
+                    n_plates >= 2,
+                    "{}: need >= 2 plates to sample a between-plate gap (got {n_plates})",
+                    t.name
+                );
+
+                // Frame A: the BARE PAGE (no popup) — the "page ground" B is compared
+                // to. The spell popup recedes nothing (no blur/scrim — `overlay_blur`
+                // exempts it), so the document layer is rendered IDENTICALLY in both
+                // frames; wherever the popup draws nothing, B must equal A.
+                let a = view(&doc, 0, 0);
+                p.set_view(&a);
+                p.prepare(&device, &queue, w, h).unwrap();
+                let pa = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+                // THE NO-ROOM-BOX OUTCOME (DARK-INCLUSIVE), measured directly over the
+                // whole CARD footprint: how much of the bare page's DOCUMENT TEXT
+                // survives UNCHANGED under the popup. A `base_100` room box (the prior
+                // round's clipped room — a near-black box on the dark worlds) covers
+                // the entire card, so ZERO bare-page text would show through; option B
+                // draws only the plates + their thin scrims, so the page — text and
+                // all — reads BETWEEN and AROUND them. Compare A vs B per pixel: a
+                // bare-page TEXT pixel (far enough from the ground to be a glyph, not
+                // AA) that is byte-for-byte identical in B SURVIVED — the document
+                // showing through. Independent of the exact plate geometry, so it can
+                // never land in a doc inter-line gap and read vacuous.
+                let (x0, y0) = (cx.max(0.0) as i64, cy.max(0.0) as i64);
+                let x1 = ((cx + cw).min(w as f32)) as i64;
+                let y1 = ((cy + ch).min(h as f32)) as i64;
+                let mut card_text = 0i64; // bare-page glyph pixels inside the card
+                let mut survived = 0i64; // ... that show THROUGH the popup unchanged
+                for yy in y0..y1 {
+                    for xx in x0..x1 {
+                        let ia = pa[(yy * wi + xx) as usize];
+                        let is_text =
+                            redmean(theme::Srgb::rgb(ia[0], ia[1], ia[2]), base100) > 40.0;
+                        if !is_text {
+                            continue;
+                        }
+                        card_text += 1;
+                        let ib = pb[(yy * wi + xx) as usize];
+                        if (0..3).all(|c| (ia[c] as i64 - ib[c] as i64).abs() <= 2) {
+                            survived += 1;
+                        }
+                    }
+                }
+                // NOT VACUOUS: the fixture really does put doc text behind the popup.
+                assert!(
+                    card_text > 1000,
+                    "{}: the fixture must put real doc text behind the popup (only {card_text} glyph px in the card) — else the no-box law is vacuous",
+                    t.name
+                );
+                // NO ROOM BOX: a large share of that text shows THROUGH untouched. A
+                // room box would cover the whole card → survived ~ 0.
+                assert!(
+                    survived * 3 >= card_text,
+                    "{}: the document must show THROUGH the popup — only {survived}/{card_text} bare-page glyph px survived under it; a base_100 room box would cover them ALL (the near-black box on the dark worlds)",
+                    t.name
+                );
+
+                // LEGIBILITY: the SELECTED plate is a findable surface — a clear value
+                // step from the ground it floats on (per the bar laws), so the popup
+                // reads as a floating object over the live document even without a
+                // room. Sample the selected (row-0) plate + its glyph. row 0 top = the
+                // popup's inner pad (10) + the bar's own gap/2 offset.
+                let row0 = chrome::overlay_row_top(cy + 10.0, 0, 0.0, 0, lh);
+                let sel_top = row0 + gap * 0.5;
+                let sel = avg(
+                    &pb,
+                    wi,
+                    hi,
+                    (cx + 10.0) as i64,
+                    (sel_top + 2.0) as i64,
+                    60,
+                    (lh - gap - 4.0).max(2.0) as i64,
+                );
+                let d_sel = redmean(sel, base100);
+                assert!(
+                    d_sel >= 20.0,
+                    "{}: the SELECTED suggestion plate {sel:?} must read as a clear value step from the ground {base100:?} (redmean {d_sel:.1})",
+                    t.name
+                );
+            }
+            theme::ListBacking::Card => {
+                assert_eq!(
+                    float_n, 1,
+                    "{}: a Pane world keeps its raised float pane behind the spell popup",
+                    t.name
+                );
+                // The card background reads the opaque base_300 float fill — the
+                // unchanged pre-refit pane. A thin strip just inside the card's LEFT
+                // edge, over the lower rows. `<= 20` tolerates AA + the one-bit ramp
+                // collapse (base_300 == base_100 there → ~0).
+                let bg = avg(
+                    &pb,
+                    wi,
+                    hi,
+                    (cx + 5.0) as i64,
+                    (cy + ch * 0.5) as i64,
+                    3,
+                    (ch * 0.5 - 12.0) as i64,
+                );
+                let d_pane = redmean(bg, base300);
+                assert!(
+                    d_pane <= 20.0,
+                    "{}: the spell popup background {bg:?} must read the base_300 PANE fill {base300:?} \
+                     (redmean {d_pane:.1}) — the unchanged pre-refit pane, not a Bars ground room",
+                    t.name
+                );
+            }
+            theme::ListBacking::Room => unreachable!(
+                "{}: the spell popup passes spell == true, which never classifies as Room",
                 t.name
-            );
-            assert!(
-                d_ground < d_pane,
-                "{}: the spell popup background {bg:?} must read the GROUND ROOM base_100 {base100:?} \
-                 (redmean {d_ground:.1}), NOT the base_300 pane fill {base300:?} (redmean {d_pane:.1}) \
-                 — the dropped-pane outcome asserted over pixels, not state",
-                t.name
-            );
-            // LEGIBILITY: the SELECTED suggestion plate (row 0) must read against the
-            // room. row 0 top = the popup's inner pad (10) + the bar's own gap/2
-            // offset; the bar is `lh - gap` tall. Sample the plate + its "the" glyph.
-            let lh = p.overlay_lh();
-            let gap = p.overlay_row_gap();
-            let sel_top = chrome::overlay_row_top(cy + 10.0, 0, 0.0, 0, lh) + gap * 0.5;
-            let sel = avg(
-                &px,
-                wi,
-                hi,
-                (cx + 10.0) as i64,
-                (sel_top + 2.0) as i64,
-                70,
-                (lh - gap - 4.0) as i64,
-            );
-            let d_sel = redmean(sel, bg);
-            assert!(
-                d_sel >= 12.0,
-                "{}: the SELECTED suggestion plate {sel:?} must be legible against the room {bg:?} (redmean {d_sel:.1})",
-                t.name
-            );
-        } else {
-            assert_eq!(
-                float_n, 1,
-                "{}: Pane keeps its raised float pane behind the spell popup",
-                t.name
-            );
-            // The background reads the base_300 float fill — the unchanged pre-refit
-            // pane. `<= 20` tolerates AA + the one-bit ramp collapse (base_300 ==
-            // base_100 there → ~0), while a Bars-style ground room (base_100, far
-            // from base_300 on a real ramp) would blow it out.
-            assert!(
-                d_pane <= 20.0,
-                "{}: the spell popup background {bg:?} must read the base_300 PANE fill {base300:?} \
-                 (redmean {d_pane:.1}) — the unchanged pre-refit pane, not a Bars ground room",
-                t.name
-            );
+            ),
         }
     }
     theme::set_active(theme::DEFAULT_THEME);
@@ -964,11 +1035,17 @@ fn bars_drop_the_pane_for_every_overlay_kind() {
         p.prepare(&device, &queue, w, h).unwrap();
 
         if is_spell {
-            // SPELL ON BARS (the Firetail refit — the autocorrect popup drops its
-            // pane too): NO raised FLOAT pane (its Pane-world `float_*` elevation
-            // parks empty), and in its place the SAME ground room the picker lays,
-            // just clipped to the popup — `panel_card == 1`, no shadow/border. The
-            // suggestion plates float on it like the picker bars (a plate per row).
+            // SPELL ON BARS (OPTION B — the user's "b is good"): the autocorrect
+            // popup floats its suggestion plates on the RAW PAGE with NO room box
+            // at all (the prior round's clipped `base_100` room read as a
+            // near-black BOX on the dark worlds). Its Pane-world `float_*`
+            // elevation parks empty (no raised pane), and the room
+            // `panel_shadow`/`panel_border` stay empty (no card) — but in place of
+            // ONE clipped room, `panel_card` now carries ONE minimal ground SCRIM
+            // PER PLATE (a thin feathered moat confined to each plate's footprint),
+            // so its count MATCHES the plate count, never 1. The document shows
+            // BETWEEN the plates; the pixel-level no-box + legibility outcome is
+            // law-tested in `spell_popup_floats_bare_on_bars_keeps_the_card_on_pane`.
             assert_eq!(
                 p.float_card.instance_count(),
                 0,
@@ -984,24 +1061,25 @@ fn bars_drop_the_pane_for_every_overlay_kind() {
                 0,
                 "{kind:?}: Bars draws NO float border behind the spell popup"
             );
+            let plates = p.overlay_bars.instance_count() + p.overlay_rows.instance_count();
+            assert!(
+                plates > 1,
+                "{kind:?}: the spell suggestions draw a plate per row (got {plates})"
+            );
             assert_eq!(
                 p.panel_card.instance_count(),
-                1,
-                "{kind:?}: the spell popup floats on ONE ground room, not a boxed card"
+                plates,
+                "{kind:?}: the spell popup floats BARE — ONE ground scrim per plate ({plates}), NOT a single room box"
             );
             assert_eq!(
                 p.panel_shadow.instance_count(),
                 0,
-                "{kind:?}: the spell room has no shadow (no elevation)"
+                "{kind:?}: the spell scrims carry no shadow (no elevation)"
             );
             assert_eq!(
                 p.panel_border.instance_count(),
                 0,
-                "{kind:?}: the spell room has no border (no elevation)"
-            );
-            assert!(
-                p.overlay_bars.instance_count() > 0,
-                "{kind:?}: the spell suggestions draw a plate per row"
+                "{kind:?}: the spell scrims carry no border (no elevation)"
             );
             continue;
         }
