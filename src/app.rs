@@ -136,6 +136,18 @@ const ZOOM_PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 /// (Enter), revert (Esc/C-g), and the headless capture all stay SYNCHRONOUS.
 const THEME_FONT_DEBOUNCE: Duration = Duration::from_millis(150);
 
+/// DIFF-AS-PREVIEW settle: how long the History picker's highlight must rest
+/// before a SLOW (see [`DIFF_SLOW_BUDGET`]) diff re-renders — the theme-font
+/// debounce pattern applied to the per-arrow writer's diff. Small documents
+/// (~1 ms per render) never wait; only a measured-slow document defers.
+const DIFF_SETTLE: Duration = Duration::from_millis(150);
+
+/// The per-render cost above which the DIFF-AS-PREVIEW switches to the debounced
+/// path: the round's release perf probe measured ~1 ms at SCOPE.md scale (stays
+/// synchronous) vs ~15 ms on a 5k-line draft (debounces). Measured, not guessed —
+/// re-sampled at every actual render.
+const DIFF_SLOW_BUDGET: Duration = Duration::from_millis(4);
+
 /// AMBIENT LAVA TICK period — the lava-lamp ground's slow drift cadence
 /// (`crate::lava::LAVA_TICK_MS`). A single `WaitUntil` this far out in
 /// `about_to_wait` advances the phase + requests one redraw + re-arms, so a lava
@@ -396,35 +408,6 @@ mod stats;
 /// live year-view push. `crate::streaks` owns the pure store + calendar/intensity
 /// arithmetic + the (de)serializer.
 mod streaks;
-
-/// THE WRITER'S DIFF: the read-only "Compare with version…" view state
-/// (`App::diff_view`). Holds the pre-rendered marked-up-manuscript `transcript`
-/// (`crate::prosediff` → awl's own strike / `==wash==` / blockquote-dim vocabulary)
-/// that `sync_view` shows in the writing column in place of the buffer, plus the
-/// `label` shown as the transcript heading + the page-mode gutter. The buffer is
-/// never touched; Esc drops the view and the next sync shows the live document.
-pub struct DiffView {
-    /// The marked-up-markdown transcript (`prosediff::render_markdown`), shown
-    /// read-only in the writing column. Built once on entry; never re-rendered while
-    /// the view is up (a read-only surface — the buffer it derives from can't change
-    /// under it, since edits are swallowed).
-    pub transcript: String,
-    /// The version being compared against, in human words (e.g. `"3 hr ago"` for a
-    /// loose-file snapshot, or a git commit's relative label) — the transcript's
-    /// heading and the sidecar/gutter identity of "what am I comparing to".
-    pub label: String,
-}
-
-/// THE WRITER'S DIFF read-only classification of ONE action while the diff view is
-/// up — the result of [`App::diff_view_gate`]. Keeps the read-only law a pure,
-/// unit-testable decision (no event loop needed): `Exit` leaves the view, `Pass`
-/// runs a read affordance (zoom / page-scroll) normally, `Swallow` is a calm no-op.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiffGate {
-    Exit,
-    Pass,
-    Swallow,
-}
 
 pub struct App {
     file: Option<PathBuf>,
@@ -789,26 +772,30 @@ pub struct App {
     /// that writes it back in step (so ANY caller of `update_title`, not just
     /// `sync_view`'s own comparison, keeps this cache honest).
     title_dirty: bool,
-    /// HISTORY TIMELINE live preview cache: the `(id, content)` of the version the
-    /// open History overlay's highlighted row resolves to, loaded once per id (via
-    /// [`crate::history::load`]) so an arrow/hover/wheel burst over the rows never
-    /// re-reads the store per sync. The preview itself is DERIVED at
+    /// DIFF-AS-PREVIEW cache: the `(id, transcript)` of the WRITER'S DIFF the open
+    /// History overlay's highlighted row resolves to — the marked-up-manuscript
+    /// comparison of the CURRENT buffer against that version, built once per id by
+    /// the one owner [`crate::history::diff_preview`] so an arrow/hover/wheel burst
+    /// over the rows never re-diffs per sync. The preview itself is DERIVED at
     /// ViewState-build time (`sync_view` overrides the pushed text) — the Buffer,
     /// its version, and its undo history are NEVER touched. Dropped the moment the
-    /// overlay closes (Esc = back to now exactly). `None` = no preview.
+    /// overlay closes (Esc = back to now exactly). `None` = no preview. (The old
+    /// read-only Compare TAKEOVER that used to own the transcript is RETIRED —
+    /// this preview override seam is the one surviving diff surface.)
     history_preview: Option<(String, String)>,
-    /// THE WRITER'S DIFF: the read-only "Compare with version…" view, or `None` when
-    /// not comparing. `Some` holds the pre-rendered marked-up-manuscript transcript
-    /// (`crate::prosediff::render_markdown` — struck deletions, washed insertions,
-    /// moves, folds) that `sync_view` shows in the writing column IN PLACE OF the
-    /// buffer text (the Buffer, its version, and its undo history are NEVER touched —
-    /// exactly like the history preview override). Read-only: `App::apply` swallows
-    /// every editing action while it is `Some` (the caret parks on the transcript's
-    /// blank line 1 so no WYSIWYG line ever reveals raw). Esc / a buffer switch drops
-    /// it — back to the live document exactly. Entered by `Action::CompareVersion`
-    /// (the palette command, or the History picker's compare key). LIVE-ONLY state;
-    /// the headless capture renders the same transcript via the `AWL_DIFF_*` harness.
-    diff_view: Option<DiffView>,
+    /// DIFF-AS-PREVIEW debounce: when a NEW version was highlighted while the last
+    /// measured diff render was SLOW (`diff_slow`), the settle deadline — the
+    /// theme-font-debounce pattern: the picker highlight moves instantly (and the
+    /// page keeps the PREVIOUS transcript), the fresh diff lands after
+    /// `DIFF_SETTLE` of rest via the single `WaitUntil` in `about_to_wait`.
+    /// `None` = nothing pending. LIVE-ONLY; headless computes synchronously.
+    diff_settle_at: Option<Instant>,
+    /// Whether the LAST measured diff render exceeded [`DIFF_SLOW_BUDGET`] — the
+    /// gate that turns per-arrow diffs from synchronous (small docs, ~1 ms) into
+    /// debounced (a 5k-line draft measures ~15 ms; see the round's perf probe).
+    /// Re-measured at every actual render, so it tracks the open document's real
+    /// cost and self-corrects when a smaller file is opened.
+    diff_slow: bool,
     /// The document scroll (visual rows) captured when the History timeline
     /// OPENED, restored on a close-without-restore — a shorter previewed version
     /// can destructively clamp `scroll_lines` against ITS max-scroll, and "Esc =
@@ -1247,7 +1234,8 @@ impl App {
             pending_crash: None,
             title_dirty: false,
             history_preview: None,
-            diff_view: None,
+            diff_settle_at: None,
+            diff_slow: false,
             history_scroll_before: None,
             zoom_persist_at: None,
             zoom_reflow: ZoomReflow::default(),
@@ -1934,6 +1922,27 @@ impl ApplicationHandler<AwlEvent> for App {
                 }
                 false if self.last_frame.is_none() => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + AUTOSAVE_IDLE));
+                }
+                false => {}
+            }
+        }
+        // DIFF-AS-PREVIEW settle: a measured-slow document deferred its per-arrow
+        // diff render; once the History highlight rests `DIFF_SETTLE`, the one
+        // deferred render lands here (the theme-font-debounce pattern — each
+        // further arrow re-stamps `diff_settle_at`, sliding the deadline; the
+        // overlay closing clears the stamp via `history_overlay_closed`).
+        if let Some(dirty) = self.diff_settle_at {
+            match debounce_due(dirty, DIFF_SETTLE, Instant::now()) {
+                true => {
+                    self.diff_settle_at = None;
+                    self.render_diff_preview_now();
+                    self.sync_view(false);
+                    if let Some(gpu) = self.gpu.as_ref() {
+                        gpu.window.request_redraw();
+                    }
+                }
+                false if self.last_frame.is_none() => {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + DIFF_SETTLE));
                 }
                 false => {}
             }

@@ -287,27 +287,11 @@ impl App {
             return false;
         }
 
-        // THE WRITER'S DIFF read-only gate: while the "Compare with version…" view is
-        // up, the writing column shows a DERIVED transcript, not the buffer — so the
-        // core (`apply_core`) is never reached for anything that would EDIT it. The
-        // pure classifier [`Self::diff_view_gate`] owns the decision; here we act on
-        // it. Placed before every edit/overlay path below, and before
-        // `page_scroll_intercept` so the two allowed scroll actions fall through to it.
-        if let Some(gate) = self.diff_view_gate(&action) {
-            match gate {
-                // Esc / a second Compare returns to the live document exactly.
-                DiffGate::Exit => {
-                    self.exit_diff_view();
-                    return false;
-                }
-                // Zoom + page-scroll pass through so a long diff stays readable
-                // (none mutate the buffer — the wheel reads it regardless).
-                DiffGate::Pass => {}
-                // Read-only: typing, delete, paste, format, undo, a buffer switch,
-                // opening a picker — every other action is a calm no-op.
-                DiffGate::Swallow => return false,
-            }
-        }
+        // DIFF-AS-PREVIEW note: the old Compare TAKEOVER's read-only gate lived
+        // here. The takeover is RETIRED — the writer's diff now lives entirely
+        // inside the History picker's live preview, whose read-only law is the
+        // overlay's own modality (every key routes through `overlay_intercept`;
+        // typing filters the QUERY, never the transcript or the buffer).
 
         // The buffer/zoom/search core is shared with the headless `--keys`
         // replay via `actions::apply_core`, so live editing and captured replay
@@ -487,7 +471,7 @@ impl App {
         // stamps the relative labels; History is an explicitly-summoned, non-default
         // overlay, so this clock read never touches a default capture.
         let history_entries: Vec<crate::history::TimelineRow> =
-            if matches!(action, Action::OpenHistory) {
+            if matches!(action, Action::OpenHistory | Action::CompareVersion) {
                 match crate::history::source_path(
                     self.buffer.path(),
                     self.file.as_deref(),
@@ -804,14 +788,6 @@ impl App {
             // prune-exempt local-history snapshot, optionally NAMED (the naming
             // minibuffer's commit; the store owns the git/off gates).
             actions::Effect::KeepVersion { name } => self.keep_version(name.as_deref()),
-            // THE WRITER'S DIFF from the HISTORY picker: open the read-only prose-diff
-            // view against the highlighted version (its restore id). The overlay was
-            // already closed by the core's `dispose_after_accept`.
-            actions::Effect::CompareVersion(id) => self.enter_diff_view_for(&id),
-            // THE WRITER'S DIFF from the buffer ("Compare with version…"): resolve the
-            // most-recent version's id (a loose file's newest snapshot / a git file's
-            // HEAD) and open the diff view; a buffer with no history is a calm no-op.
-            actions::Effect::CompareLatest => self.compare_with_latest(),
             // C-c C-o: open the markdown link under the caret in the OS default
             // browser (a user-initiated handoff — see `App::follow_link`).
             actions::Effect::FollowLink(url) => self.follow_link(&url),
@@ -857,7 +833,7 @@ impl App {
         // preview is put down — restore the scroll on a close-without-restore
         // (Esc / click-away / no-op Enter → "back to now exactly"), just discard it
         // on a real accept (the restored version owns the viewport now).
-        if matches!(action, Action::OpenHistory)
+        if matches!(action, Action::OpenHistory | Action::CompareVersion)
             && self
                 .overlay
                 .as_ref()
@@ -891,6 +867,8 @@ impl App {
             self.scroll_lines = s;
         }
         self.history_preview = None;
+        // DIFF-AS-PREVIEW: a pending deferred diff render dies with the picker.
+        self.diff_settle_at = None;
     }
 
     /// The PgDn/PgUp intercept: page the BUFFER via the GPU-measured viewport (a
@@ -899,7 +877,38 @@ impl App {
     /// is summoned, return `None` so `apply` falls through to `apply_core`'s overlay
     /// intercept (PgDn/PgUp page the picker SELECTION there). `Some(false)` = handled
     /// (the action never moves the app toward exit); a blocked page recoils the caret.
+    ///
+    /// DIFF-AS-PREVIEW exception: while the HISTORY picker is open WITH a live diff
+    /// preview, PgDn/PgUp SCROLL THE DIFF — handled here with the same GPU-measured
+    /// screenful the buffer paging uses (the core's own History arm applies its fixed
+    /// deterministic page headlessly; only the step SIZE differs, the documented
+    /// PageScroll precedent). The scroll itself lives on the OVERLAY
+    /// (`OverlayState::diff_scroll`), clamped at the next `sync_view`.
     fn page_scroll_intercept(&mut self, action: &Action) -> Option<bool> {
+        if let Some(ov) = self.overlay.as_mut() {
+            if ov.kind == crate::overlay::OverlayKind::History
+                && ov.selected_history_id().is_some()
+                && matches!(action, Action::PageScrollDown | Action::PageScrollUp)
+            {
+                let visible = if let Some(gpu) = self.gpu.as_ref() {
+                    let line_height = render::LINE_HEIGHT * self.zoom * self.dpi;
+                    render::visible_lines_z(gpu.config.height as f32, line_height)
+                } else {
+                    1
+                };
+                let page = visible.saturating_sub(2).max(1);
+                let ov = self.overlay.as_mut().unwrap();
+                ov.diff_scroll = match action {
+                    Action::PageScrollDown => ov.diff_scroll.saturating_add(page),
+                    _ => ov.diff_scroll.saturating_sub(page),
+                };
+                self.sync_view(false);
+                if let Some(gpu) = self.gpu.as_ref() {
+                    gpu.window.request_redraw();
+                }
+                return Some(false);
+            }
+        }
         if self.overlay.is_none() {
             match action {
                 Action::PageScrollDown => {

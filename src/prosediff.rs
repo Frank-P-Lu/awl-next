@@ -239,9 +239,25 @@ fn ratio(a: &[&str], b: &[&str]) -> f32 {
     if a.is_empty() && b.is_empty() {
         return 1.0;
     }
+    // Token-identical: |LCS| = |a| = |b| by inspection — skip the O(n·m) table
+    // (the overwhelmingly common pair in a lightly-edited document).
+    if a == b {
+        return 1.0;
+    }
     let dp = lcs_table(a, b);
     let common = dp[0][0] as f32;
     2.0 * common / (a.len() + b.len()) as f32
+}
+
+/// A free UPPER BOUND on [`ratio`] from lengths alone: `|LCS| ≤ min(|a|,|b|)`, so
+/// `ratio ≤ 2·min/(|a|+|b|)`. Lets a caller with a similarity FLOOR skip the
+/// quadratic table for pairs that provably can't clear it (exact — a skipped pair
+/// was never going to match).
+fn ratio_upper_bound(a: &[&str], b: &[&str]) -> f32 {
+    if a.is_empty() && b.is_empty() {
+        return 1.0;
+    }
+    2.0 * a.len().min(b.len()) as f32 / (a.len() + b.len()) as f32
 }
 
 /// Within-paragraph inline diff → merged Same/Del/Ins segments (lossless).
@@ -330,11 +346,123 @@ struct Pair {
     role: Role,
 }
 
-/// Similarity-aware LCS over paragraphs → the ordered BACKBONE of in-place matches
-/// (Same when identical, Edit otherwise). Increasing in both indices by construction,
-/// so a relocation is deliberately NOT captured here — it falls to the leftovers.
+/// The ordered BACKBONE of in-place paragraph matches (Same when identical, Edit
+/// otherwise). Increasing in both indices by construction, so a relocation is
+/// deliberately NOT captured here — it falls to the leftovers.
+///
+/// PERF (the DIFF-AS-PREVIEW round): the original single similarity-DP over ALL
+/// paragraph pairs was O(P² · tokens²) — ~6 s per call on a 5k-line draft, which
+/// the History picker now pays PER ARROW. The fix is patience-diff shaped and
+/// output-preserving for ordinary prose: paragraphs whose content tokens are
+/// EXACTLY equal and UNIQUE in both documents become anchors ([`anchor_pairs`]),
+/// the longest increasing subsequence of those anchors is kept as the ordered
+/// `Same` spine, and the expensive similarity DP ([`sim_backbone`]) runs only in
+/// the (typically tiny) GAP WINDOWS between consecutive anchors. An identical
+/// document costs O(P); a localized edit costs the window around it. A document
+/// with NO usable anchors (every paragraph duplicated / everything rewritten)
+/// falls back to the original whole-document DP — never worse, just never
+/// faster. A dropped out-of-order anchor (a relocated paragraph) lands in the
+/// leftovers exactly as before, where [`detect_moves`] claims it.
 fn backbone(old: &[Vec<&str>], new: &[Vec<&str>]) -> Vec<Pair> {
+    let anchors = lis_anchors(&anchor_pairs(old, new));
+    if anchors.is_empty() {
+        return sim_backbone(old, new, 0..old.len(), 0..new.len());
+    }
+    let mut pairs = Vec::new();
+    let (mut oi, mut ni) = (0usize, 0usize);
+    for &(ao, an) in &anchors {
+        // The gap window before this anchor takes the (small) similarity DP.
+        pairs.extend(sim_backbone(old, new, oi..ao, ni..an));
+        pairs.push(Pair { oi: ao, ni: an, role: Role::Same });
+        oi = ao + 1;
+        ni = an + 1;
+    }
+    // The tail window after the last anchor.
+    pairs.extend(sim_backbone(old, new, oi..old.len(), ni..new.len()));
+    pairs
+}
+
+/// Candidate ANCHORS for [`backbone`]: `(oi, ni)` pairs whose content tokens are
+/// exactly equal AND unique within each document (the patience-diff bar — a
+/// duplicated paragraph can't anchor, it falls to the gap windows). Ordered by
+/// `oi` (ascending) by construction.
+fn anchor_pairs(old: &[Vec<&str>], new: &[Vec<&str>]) -> Vec<(usize, usize)> {
+    use std::collections::HashMap;
+    // content-tokens -> (count, first index) per side.
+    let mut on_old: HashMap<&[&str], (usize, usize)> = HashMap::new();
+    for (i, p) in old.iter().enumerate() {
+        let e = on_old.entry(p.as_slice()).or_insert((0, i));
+        e.0 += 1;
+    }
+    let mut on_new: HashMap<&[&str], (usize, usize)> = HashMap::new();
+    for (j, p) in new.iter().enumerate() {
+        let e = on_new.entry(p.as_slice()).or_insert((0, j));
+        e.0 += 1;
+    }
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for (i, p) in old.iter().enumerate() {
+        if on_old.get(p.as_slice()).map(|e| e.0) != Some(1) {
+            continue;
+        }
+        if let Some(&(1, j)) = on_new.get(p.as_slice()) {
+            // An all-whitespace/empty paragraph has no content tokens; equality
+            // over zero tokens would anchor unrelated blanks — skip those.
+            if !p.is_empty() {
+                out.push((i, j));
+            }
+        }
+    }
+    out
+}
+
+/// The LONGEST INCREASING SUBSEQUENCE (by `ni`) of the `oi`-ordered anchor
+/// candidates — the largest order-consistent anchor spine. An out-of-order
+/// candidate (a relocated paragraph) is dropped here and re-found as a MOVE in
+/// the leftovers. Standard O(A log A) patience stacks.
+fn lis_anchors(cands: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    if cands.is_empty() {
+        return Vec::new();
+    }
+    // tails[k] = index into cands of the smallest-ending increasing chain of len k+1.
+    let mut tails: Vec<usize> = Vec::new();
+    let mut prev: Vec<Option<usize>> = vec![None; cands.len()];
+    for (idx, &(_, ni)) in cands.iter().enumerate() {
+        let pos = tails.partition_point(|&t| cands[t].1 < ni);
+        if pos > 0 {
+            prev[idx] = Some(tails[pos - 1]);
+        }
+        if pos == tails.len() {
+            tails.push(idx);
+        } else {
+            tails[pos] = idx;
+        }
+    }
+    let mut chain = Vec::with_capacity(tails.len());
+    let mut cur = tails.last().copied();
+    while let Some(i) = cur {
+        chain.push(cands[i]);
+        cur = prev[i];
+    }
+    chain.reverse();
+    chain
+}
+
+/// The ORIGINAL similarity-aware LCS over a paragraph WINDOW (`or` × `nr`) — the
+/// expensive exact aligner, now scoped to the gaps between anchors (and the whole
+/// document only when no anchor exists). Emits pairs in ABSOLUTE indices.
+fn sim_backbone(
+    old: &[Vec<&str>],
+    new: &[Vec<&str>],
+    or: std::ops::Range<usize>,
+    nr: std::ops::Range<usize>,
+) -> Vec<Pair> {
+    let (ob, nb) = (or.start, nr.start);
+    let old = &old[or];
+    let new = &new[nr];
     let (n, m) = (old.len(), new.len());
+    if n == 0 || m == 0 {
+        return Vec::new();
+    }
     // score[i][j] = best total similarity aligning old[i..] with new[j..]
     let mut score = vec![vec![0.0f32; m + 1]; n + 1];
     for i in (0..n).rev() {
@@ -360,7 +488,7 @@ fn backbone(old: &[Vec<&str>], new: &[Vec<&str>]) -> Vec<Pair> {
         };
         if diag >= score[i + 1][j] && diag >= score[i][j] && r >= BACKBONE_SIM_MIN {
             let role = if r >= 0.999 { Role::Same } else { Role::Edit };
-            pairs.push(Pair { oi: i, ni: j, role });
+            pairs.push(Pair { oi: ob + i, ni: nb + j, role });
             i += 1;
             j += 1;
         } else if score[i + 1][j] >= score[i][j + 1] {
@@ -387,6 +515,11 @@ fn detect_moves(
         }
         for (ni, nw) in new.iter().enumerate() {
             if used_new[ni] {
+                continue;
+            }
+            // Length bound first: a pair that provably can't clear the MOVE bar
+            // skips the quadratic ratio table (exact — see `ratio_upper_bound`).
+            if ratio_upper_bound(o, nw) < MOVE_SIM_MIN {
                 continue;
             }
             let r = ratio(o, nw);
@@ -846,6 +979,64 @@ mod tests {
 
     fn wp(s: &str) -> Vec<String> {
         word_tokens(s)
+    }
+
+    /// DIFF-AS-PREVIEW perf probe (run manually, RELEASE ONLY — dev timings lie):
+    /// `cargo test --release perf_probe -- --ignored --nocapture`. Measures the
+    /// per-arrow cost of [`diff_and_render`] — the whole work one History-picker
+    /// arrow step pays — on (a) a real repo doc (SCOPE.md scale), (b) a 5k-line
+    /// synthetic draft, (c) the same 5k-line draft with a heavy mid-document
+    /// rewrite + a paragraph move (the expensive alignment case). The numbers
+    /// gate the theme-preview-debounce decision recorded in the round report.
+    #[test]
+    #[ignore]
+    fn perf_probe() {
+        let scope = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("SCOPE.md"),
+        )
+        .unwrap_or_default();
+        // An edited SCOPE.md: reword one paragraph, drop one, append one.
+        let scope_new = {
+            let mut s = scope.replace("audience", "readership");
+            s.push_str("\n\nA freshly appended closing paragraph for the probe.\n");
+            s
+        };
+        // A 5k-line synthetic draft: 1000 five-line paragraphs of varied prose.
+        let mut big_old = String::new();
+        for i in 0..1000 {
+            big_old.push_str(&format!(
+                "Paragraph {i} begins with its own opening line here.\nThe second line of paragraph {i} carries on the thought.\nA third line follows, still inside paragraph {i} itself.\nLine four of paragraph {i} keeps the rhythm moving along.\nAnd the fifth line closes paragraph {i} with a full stop.\n\n"
+            ));
+        }
+        // A light edit: one paragraph reworded mid-document.
+        let big_light = big_old.replace(
+            "Paragraph 500 begins with its own opening line here.",
+            "Paragraph 500 now opens with an entirely reworded first line.",
+        );
+        // A heavy edit: rewrite a band of paragraphs AND relocate one to the top.
+        let mut big_heavy = big_old.replace(
+            "inside paragraph 7 itself",
+            "inside the seventh stanza of this draft",
+        );
+        let moved = "Paragraph 900 begins with its own opening line here.\nThe second line of paragraph 900 carries on the thought.\nA third line follows, still inside paragraph 900 itself.\nLine four of paragraph 900 keeps the rhythm moving along.\nAnd the fifth line closes paragraph 900 with a full stop.\n\n";
+        big_heavy = format!("{moved}{}", big_heavy.replace(moved, ""));
+        let time = |name: &str, old: &str, new: &str| {
+            let t0 = std::time::Instant::now();
+            let (md, counts) = diff_and_render(old, new, Params::shipping(), "Probe");
+            let dt = t0.elapsed();
+            println!(
+                "perf_probe {name}: {:.2} ms  (old {} lines, new {} lines, transcript {} bytes, {counts:?})",
+                dt.as_secs_f64() * 1000.0,
+                old.lines().count(),
+                new.lines().count(),
+                md.len(),
+            );
+        };
+        time("scope_md_edit", &scope, &scope_new);
+        time("scope_md_identical", &scope, &scope);
+        time("5k_light_edit", &big_old, &big_light);
+        time("5k_identical", &big_old, &big_old);
+        time("5k_heavy_rewrite_plus_move", &big_old, &big_heavy);
     }
 
     #[test]

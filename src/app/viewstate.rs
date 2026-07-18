@@ -66,22 +66,28 @@ impl App {
                 self.doc_autosave_at = Some(Instant::now());
             }
         }
-        // HISTORY TIMELINE live preview: while the History picker is open, the
-        // highlighted row's VERSION is what the document shows — derived here, at
-        // ViewState-build time, by overriding the pushed text. The BUFFER (its
+        // DIFF-AS-PREVIEW: while the History picker is open, the page below the
+        // card shows the WRITER'S DIFF of the current buffer vs the highlighted
+        // row's version — derived here, at ViewState-build time, by overriding
+        // the pushed text with the marked-up-manuscript transcript (the one owner
+        // `crate::history::diff_preview`, cached per id). The BUFFER (its
         // content, version, undo history) is NEVER touched, so Esc just closes
         // the overlay and the next sync pushes the buffer's own text again —
         // "back to now exactly". `None` whenever the picker isn't open / the row
-        // is the empty-state one.
-        // THE WRITER'S DIFF takes priority over the history preview (they are mutually
-        // exclusive — entering the diff view closes any History overlay): its
-        // pre-rendered marked-up transcript is what the writing column shows, IN PLACE
-        // OF the buffer text, exactly like the history preview override. The buffer is
-        // never touched, so Esc just drops `diff_view` and the next sync shows the live
-        // document again.
-        let preview = match self.diff_view.as_ref().map(|d| d.transcript.clone()) {
-            Some(t) => Some(t),
-            None => self.history_preview_text(),
+        // is the empty-state one. (The old plain-content preview and the separate
+        // Compare takeover both retired into this one surface.)
+        let preview = self.history_preview_text();
+        // DIFF-AS-PREVIEW scroll: while the diff preview is up, the page shows the
+        // OVERLAY's own `diff_scroll` (PgUp/PgDn / panel-focus ↑/↓ / the wheel over
+        // the page all mutate it) — and `self.scroll_lines`, the DOCUMENT's
+        // viewport, is deliberately never touched, so "Esc = back to now exactly"
+        // includes the scroll by construction. Clamped against the shaped
+        // transcript below (with the clamp written back, so the sidecar reports
+        // the honest value).
+        let diff_scroll = if preview.is_some() {
+            self.overlay.as_ref().map(|o| o.diff_scroll)
+        } else {
+            None
         };
         // ROPE-CLONE SHORT-CIRCUIT: reuse the last materialised rope clone while the
         // buffer version is unchanged (see [`Self::view_text`]). A PREVIEW bypasses
@@ -160,7 +166,7 @@ impl App {
             text,
             cursor_line,
             cursor_col,
-            scroll_lines: self.scroll_lines,
+            scroll_lines: diff_scroll.unwrap_or(self.scroll_lines),
             zoom: self.zoom,
             selection: self.buffer.selection_line_col(),
             preedit: self.preedit.clone(),
@@ -259,18 +265,10 @@ impl App {
                 .and_then(|o| o.selected_caret_mode()),
             // PAGE-MODE GUTTER: the buffer's display name (saved file name, or the
             // derived scratch/slug name for an unsaved note) over the project name.
-            // THE WRITER'S DIFF: while comparing, the gutter names WHAT is being
-            // compared against ("comparing · 3 hr ago") so the read-only context stays
-            // visible after the transcript's title scrolls off — the buffer's file
-            // name still rides the project line below.
-            gutter_name: match &self.diff_view {
-                Some(d) => format!("comparing · {}", d.label),
-                None => self.buffer.display_name(),
-            },
-            gutter_project: match &self.diff_view {
-                Some(_) => self.buffer.display_name(),
-                None => self.project.name.clone(),
-            },
+            // (While the History picker's diff preview is up, the card itself names
+            // the compared version — the gutter keeps its ordinary identity.)
+            gutter_name: self.buffer.display_name(),
+            gutter_project: self.project.name.clone(),
             // MARKDOWN STYLING gate: a buffer is "markdown" only once it has a
             // `.md`/`.markdown` path. An unnamed scratch / `.rs` / `.txt` buffer is
             // left untouched (no markup dimming of `#` comments etc.).
@@ -306,6 +304,16 @@ impl App {
             // FORMAT POPOVER: the mouse-summoned format toolbar's model (computed
             // above), or `None` when down.
             popover,
+            // DIFF-AS-PREVIEW: dress the page column as a CARD (border + elevation
+            // + clipped content) while the History picker's diff preview is up;
+            // the panel border strengthens one value step when Tab moved the
+            // focus into it.
+            diff_panel: preview.is_some(),
+            diff_panel_focus: self
+                .overlay
+                .as_ref()
+                .map(|o| o.diff_focus)
+                .unwrap_or(false),
         };
         // HISTORY PREVIEW geometry safety: the pushed text is a DIFFERENT (possibly
         // shorter) version than the buffer, so every field whose line/col spans
@@ -316,22 +324,16 @@ impl App {
         // restored automatically on close: the next sync rebuilds them from the
         // untouched buffer.
         if preview.is_some() {
-            let (l, c) =
-                crate::history::clamp_line_col(&view.text, view.cursor_line, view.cursor_col);
-            view.cursor_line = l;
-            view.cursor_col = c;
-            // THE WRITER'S DIFF: park the caret on the transcript's blank line 1
+            // DIFF-AS-PREVIEW: park the caret on the transcript's blank line 1
             // (between the `# title` and the first diff block) so NO line's WYSIWYG
             // conceal reveals — the reveal is caret-line-scoped and line 1 carries no
             // markup, so the title's `#` and every `==`/`>`/strike marker stay
             // concealed: the clean marked-up manuscript, never a revealed-raw line.
             // The ONE reveal-suppression rule, shared with the `AWL_DIFF_*` capture
             // harness (`main/run.rs` parks the same way), so live == capture.
-            if self.diff_view.is_some() {
-                let (dl, dc) = crate::history::clamp_line_col(&view.text, 1, 0);
-                view.cursor_line = dl;
-                view.cursor_col = dc;
-            }
+            let (dl, dc) = crate::history::clamp_line_col(&view.text, 1, 0);
+            view.cursor_line = dl;
+            view.cursor_col = dc;
             view.selection = None;
             view.preedit = String::new();
             view.misspelled = Vec::new();
@@ -382,13 +384,30 @@ impl App {
         }
         // Always keep scroll within document bounds (pixel-accurate "does it fit").
         let max = self.gpu.as_ref().unwrap().pipeline.max_scroll_rows(height);
-        self.scroll_lines = self.scroll_lines.min(max);
-
-        // Re-push only if the scroll actually changed (cheap; avoids a redundant
-        // reshape on the common no-scroll-change path).
-        if self.scroll_lines != prev_scroll {
-            view.scroll_lines = self.scroll_lines;
-            self.gpu.as_mut().unwrap().pipeline.set_view(&view);
+        match diff_scroll {
+            // DIFF-AS-PREVIEW: clamp the OVERLAY's diff scroll against the shaped
+            // transcript and write the clamp back (state stays honest for the
+            // sidecar + the next key). `self.scroll_lines` is untouched — the
+            // document's own viewport survives the whole preview.
+            Some(ds) => {
+                let clamped = ds.min(max);
+                if let Some(ov) = self.overlay.as_mut() {
+                    ov.diff_scroll = clamped;
+                }
+                if view.scroll_lines != clamped {
+                    view.scroll_lines = clamped;
+                    self.gpu.as_mut().unwrap().pipeline.set_view(&view);
+                }
+            }
+            None => {
+                self.scroll_lines = self.scroll_lines.min(max);
+                // Re-push only if the scroll actually changed (cheap; avoids a
+                // redundant reshape on the common no-scroll-change path).
+                if self.scroll_lines != prev_scroll {
+                    view.scroll_lines = self.scroll_lines;
+                    self.gpu.as_mut().unwrap().pipeline.set_view(&view);
+                }
+            }
         }
         // Keep the OS candidate window anchored to the (advance-aware) caret.
         self.update_ime_cursor_area();
@@ -458,33 +477,60 @@ impl App {
         }
     }
 
-    /// The HISTORY TIMELINE's live-preview text, or `None` when no preview
-    /// applies: the open History overlay's highlighted row resolves (via its
-    /// restore id) to that version's content, loaded from the store ONCE per id
-    /// into the `history_preview` cache — so an arrow/hover/wheel burst re-reads
-    /// nothing, and moving to another row (a different id) reloads. Reads only;
-    /// the buffer is never touched. `None` for every other overlay / no overlay
-    /// / the empty-state row / an unresolvable id (the document then just shows
-    /// the buffer — a calm degrade).
+    /// DIFF-AS-PREVIEW: the History picker's live-preview TRANSCRIPT (the writer's
+    /// diff of the current buffer vs the highlighted version — see the one owner
+    /// [`crate::history::diff_preview`]), or `None` when no preview applies (other
+    /// overlays / no overlay / the empty-state row / an unresolvable id — the
+    /// document then just shows the buffer, a calm degrade). Rendered ONCE per id
+    /// into the `history_preview` cache, so an arrow/hover/wheel burst re-diffs
+    /// nothing. Reads only; the buffer is never touched.
+    ///
+    /// DEBOUNCE (the theme-font pattern, measured not guessed): when the LAST
+    /// render measured slow (`diff_slow` — a 5k-line draft costs ~15 ms; SCOPE.md
+    /// scale ~1 ms), a NEW highlight keeps showing the PREVIOUS transcript and
+    /// arms `diff_settle_at`; the fresh diff lands after `DIFF_SETTLE` of rest in
+    /// `about_to_wait`. A fast document never waits. LIVE-ONLY: the headless
+    /// capture path renders synchronously (`main/run.rs`), the determinism gate.
     pub(super) fn history_preview_text(&mut self) -> Option<String> {
         let ov = self
             .overlay
             .as_ref()
             .filter(|o| o.kind == crate::overlay::OverlayKind::History)?;
         let id = ov.selected_history_id()?.to_string();
-        if let Some((cached_id, content)) = &self.history_preview {
+        if let Some((cached_id, transcript)) = &self.history_preview {
             if *cached_id == id {
-                return Some(content.clone());
+                return Some(transcript.clone());
+            }
+            // A DIFFERENT id on a measured-slow document: defer the render to the
+            // settle, keeping the previous transcript on the page meanwhile.
+            if self.diff_slow {
+                self.diff_settle_at = Some(Instant::now());
+                return self.history_preview.as_ref().map(|(_, t)| t.clone());
             }
         }
-        let path = crate::history::source_path(
+        self.render_diff_preview_now()
+    }
+
+    /// Render the diff for the CURRENTLY highlighted History row right now — the
+    /// synchronous path AND the debounce's settle landing. Measures the render
+    /// cost (re-deciding `diff_slow` for the next arrow) and caches per id.
+    pub(super) fn render_diff_preview_now(&mut self) -> Option<String> {
+        let current = self.view_text();
+        let ov = self
+            .overlay
+            .as_ref()
+            .filter(|o| o.kind == crate::overlay::OverlayKind::History)?;
+        let t0 = Instant::now();
+        let (id, transcript, _counts) = crate::history::diff_preview(
+            ov,
             self.buffer.path(),
             self.file.as_deref(),
             self.buffer.is_note(),
+            &current,
         )?;
-        let content = crate::history::load(&path, &id)?;
-        self.history_preview = Some((id, content.clone()));
-        Some(content)
+        self.diff_slow = t0.elapsed() > super::DIFF_SLOW_BUDGET;
+        self.history_preview = Some((id, transcript.clone()));
+        Some(transcript)
     }
 
     /// Map the active isearch state (if any) into the render-facing snapshot fields:

@@ -88,12 +88,18 @@ pub enum OverlayKind {
     /// share a label, then the git COMMIT SUBJECT or an awl snapshot's
     /// auto-description) with the faint "+N −M" changed-count vs the current
     /// buffer riding the right column. Navigate (Up/Down/hover/wheel) SELECTS a
-    /// version AND LIVE-PREVIEWS it in the document itself (derived at
-    /// ViewState-build time — the buffer is never touched; Esc is back-to-now
-    /// exactly); Enter RESTORES it — replacing the buffer content with that
-    /// version (an undoable edit) — then closes. For a git-managed file it lists
-    /// git history (same UI). An empty history shows a calm "no history yet"
-    /// row. The restore `id` per row rides the parallel
+    /// version AND LIVE-PREVIEWS its DIFF in the document itself — DIFF-AS-PREVIEW:
+    /// the page below the card shows the marked-up-manuscript prose diff
+    /// (`crate::prosediff`) of the CURRENT buffer vs the highlighted version,
+    /// wearing the card border dressing (derived at ViewState-build time — the
+    /// buffer is never touched; Esc is back-to-now exactly). The old plain-content
+    /// preview is a LOGGED v1 TRIM of this round: the diff IS the preview now.
+    /// PgUp/PgDn SCROLL the diff (reassigned from list-paging — type-to-filter
+    /// covers jumps); Tab shifts FOCUS into the panel (↑/↓ then scroll step-wise,
+    /// Tab/Esc return to the list); Enter RESTORES the highlighted version —
+    /// replacing the buffer content with it (an undoable edit) — then closes. For
+    /// a git-managed file it lists git history (same UI). An empty history shows a
+    /// calm "no history yet" row. The restore `id` per row rides the parallel
     /// [`OverlayState::history_ids`]; this is LOCAL HISTORY (automatic, git-free
     /// UX), not a git client — no commit/stage/branch UI.
     History,
@@ -430,17 +436,19 @@ impl OverlayKind {
                 key("del", "reset"),
                 key("esc", "close"),
             ],
-            // The faceted history timeline: ↵ RESTORES the highlighted version (an
-            // undoable edit), ⇥ COMPARES it against the current buffer (the read-only
-            // prose-diff view), ←/→ switch the lens (All / Session / Today). esc still
-            // closes but goes UNADVERTISED (the Spell/Settings precedent: plain-close
-            // esc is learned behavior; only an INFORMATIVE esc — the theme picker's
-            // "esc revert" — earns a cell). Width is why the trim landed HERE: with
-            // tab-compare + the universal filter cell, the advertised line overflowed
-            // the flat card (the no-clip law caught 498.7px > 496px).
+            // The faceted history timeline (DIFF-AS-PREVIEW): ↵ RESTORES the
+            // highlighted version (an undoable edit), ⇥ shifts FOCUS into the diff
+            // panel below the card (↑/↓ then scroll it — the panel-focus foot hint
+            // takes over, see `OverlayState::foot_hint`), ←/→ switch the lens
+            // (All / Session / Today). esc still closes but goes UNADVERTISED (the
+            // Spell/Settings precedent), and PgUp/PgDn — which SCROLL THE DIFF in
+            // both focus states — go unadvertised too (the ⇞/⇟ keycaps tofu in
+            // every bundled face; same trim the universal paging took). Width is
+            // why the line stays three cells: the old "tab compare" cell already
+            // grazed the no-clip law (498.7px vs 496px); "tab diff" is narrower.
             OverlayKind::History => vec![
                 enter("restore"),
-                key("tab", "compare"),
+                key("tab", "diff"),
                 key("\u{2190}/\u{2192}", "lens"),
             ],
             // The faceted settings menu: ↵ edits the highlighted setting (toggle /

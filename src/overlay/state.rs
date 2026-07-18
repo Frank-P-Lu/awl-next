@@ -186,6 +186,20 @@ pub struct OverlayState {
     /// menu itself, never a second copy). EMPTY for every other kind and for a
     /// Command palette with no settings attached (`attach_settings_rows` never called).
     pub is_setting: Vec<bool>,
+    /// DIFF-AS-PREVIEW (History only): whether the keyboard FOCUS sits in the DIFF
+    /// PANEL below the picker card (Tab shifts it there; Tab/Esc return it to the
+    /// version list). While `true`, ↑/↓ scroll the diff step-wise instead of moving
+    /// the version selection, and the panel's card border strengthens one value
+    /// step (the calm focus cue). Always `false` for every other kind.
+    pub diff_focus: bool,
+    /// DIFF-AS-PREVIEW (History only): the diff panel's scroll, in VISUAL ROWS off
+    /// the transcript's top — mutated by PgUp/PgDn (both focus states), by ↑/↓
+    /// under panel focus, and by the wheel over the page; clamped against the
+    /// shaped transcript at ViewState-build (the core can't measure). RESET to 0
+    /// whenever the highlighted version changes (a new transcript starts at its
+    /// top) — see the reset lines in `move_sel`/`hover_select`/`set_facet_lens`/
+    /// `refilter`. Inert (always 0) for every other kind.
+    pub diff_scroll: usize,
 }
 
 impl OverlayState {
@@ -260,6 +274,9 @@ impl OverlayState {
             // No settings rows attached on a fresh summon; `attach_settings_rows`
             // (Command palette only) arms it right after.
             is_setting: Vec::new(),
+            // DIFF-AS-PREVIEW: focus opens on the version LIST, diff at its top.
+            diff_focus: false,
+            diff_scroll: 0,
         };
         s.refilter();
         s
@@ -553,6 +570,18 @@ impl OverlayState {
         }
         if !self.notice.is_empty() {
             return self.notice.clone();
+        }
+        // DIFF-AS-PREVIEW panel focus (History, Tab pressed): the foot line teaches
+        // the PANEL's keys instead of the list's. Deliberately WITHOUT the universal
+        // "type to filter" lead — typing is swallowed while the panel holds focus,
+        // so advertising it here would lie. Esc (back to the list) goes unadvertised
+        // per the plain-close precedent; ↵ still restores, so it keeps its cell.
+        if self.diff_focus {
+            return super::format_hint(&[
+                super::HintAction { glyph: "\u{2191}/\u{2193}", label: "scroll" },
+                super::HintAction { glyph: "\u{21B5}", label: "restore" },
+                super::HintAction { glyph: "tab", label: "back" },
+            ]);
         }
         self.kind.hint()
     }

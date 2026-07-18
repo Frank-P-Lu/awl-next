@@ -961,8 +961,43 @@ impl App {
             // A summoned picker OWNS the wheel (it is modal): wheel drives the
             // LIST (advance the selection/scroll window, like ↑/↓); the document
             // behind it does NOT scroll. Symmetric with the click/hover consume.
+            //
+            // DIFF-AS-PREVIEW exception: while the HISTORY picker's diff preview
+            // is up, a wheel with the pointer OVER THE PAGE (outside the card
+            // rect) scrolls THE DIFF instead of the list — the page is the diff's
+            // reading surface, and the trackpad is how you read it. Over the card
+            // the wheel keeps driving the version list exactly as before.
             if lines.abs() >= 1.0 {
-                self.overlay_wheel(lines);
+                let diff_wheel = self
+                    .overlay
+                    .as_ref()
+                    .map(|o| {
+                        o.kind == crate::overlay::OverlayKind::History
+                            && o.selected_history_id().is_some()
+                    })
+                    .unwrap_or(false)
+                    && !self
+                        .gpu
+                        .as_ref()
+                        .and_then(|g| g.pipeline.overlay_card_rect())
+                        .map(|[x, y, w, h]| {
+                            let (px, py) = self.cursor_px;
+                            px >= x && px < x + w && py >= y && py < y + h
+                        })
+                        .unwrap_or(false);
+                if diff_wheel {
+                    let delta = -(lines.round() as f32) as isize; // wheel up = toward the top
+                    if let Some(ov) = self.overlay.as_mut() {
+                        ov.diff_scroll = if delta >= 0 {
+                            ov.diff_scroll.saturating_add(delta as usize)
+                        } else {
+                            ov.diff_scroll.saturating_sub((-delta) as usize)
+                        };
+                    }
+                    self.sync_view(false);
+                } else {
+                    self.overlay_wheel(lines);
+                }
             }
         } else if zoom_mod {
             // Cmd/Super + wheel: zoom in/out (wheel up = zoom in).

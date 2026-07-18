@@ -270,6 +270,42 @@ pub fn auto_description(prev: &str, cur: &str) -> String {
     excerpt
 }
 
+/// DIFF-AS-PREVIEW: the History picker's live preview, built in ONE place. The
+/// highlighted row's version resolves (via its restore id) to that version's
+/// content, and the preview shown in the page below the card is the WRITER'S
+/// DIFF of it against the CURRENT buffer — the marked-up-manuscript transcript
+/// ([`crate::prosediff::diff_and_render`], the shipping SENTENCE × 0.5 recipe)
+/// — not the raw version content (the old plain-content preview is a LOGGED v1
+/// TRIM of the diff-as-preview round: the diff IS the preview). The transcript
+/// title names the row the user is looking at ("Comparing with <row>", the
+/// picker row's own display text — a NAMED save point reads as its name).
+///
+/// Returns `(id, transcript, counts)`; `None` for a non-History overlay, the
+/// empty-state row, or an unresolvable id (the document then shows the buffer —
+/// a calm degrade). Reads only; the buffer is NEVER touched. THE ONE OWNER both
+/// the live App (`App::history_preview_text`, which caches per id) and the
+/// headless capture (`main/run.rs::history_preview_for`) build from, so live
+/// and `--keys` replay can never disagree on what a preview shows.
+pub fn diff_preview(
+    ov: &crate::overlay::OverlayState,
+    buffer_path: Option<&Path>,
+    file: Option<&Path>,
+    is_note: bool,
+    current: &str,
+) -> Option<(String, String, crate::prosediff::DiffCounts)> {
+    if ov.kind != crate::overlay::OverlayKind::History {
+        return None;
+    }
+    let id = ov.selected_history_id()?.to_string();
+    let path = source_path(buffer_path, file, is_note)?;
+    let old = load(&path, &id)?;
+    let label = ov.selected_value().unwrap_or("an earlier version");
+    let title = format!("Comparing with {label}");
+    let (transcript, counts) =
+        crate::prosediff::diff_and_render(&old, current, crate::prosediff::Params::shipping(), &title);
+    Some((id, transcript, counts))
+}
+
 /// Clamp a live `(line, col)` cursor into `text`'s geometry — the HISTORY
 /// PREVIEW's cursor guard: a previewed (possibly shorter) version is pushed
 /// into the render snapshot while the BUFFER cursor stays where it was, so the

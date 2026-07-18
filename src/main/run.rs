@@ -421,7 +421,7 @@ impl<'a> ReplaySession<'a> {
         // gather. `now` stamps the relative labels. History is an explicitly-summoned
         // overlay, so this never runs in a default capture.
         let history_entries: Vec<crate::history::TimelineRow> =
-            if matches!(action, Action::OpenHistory) {
+            if matches!(action, Action::OpenHistory | Action::CompareVersion) {
                 match crate::history::source_path(self.buffer.path(), None, self.buffer.is_note()) {
                     Some(path) => crate::history::timeline_rows(
                         &path,
@@ -728,14 +728,6 @@ impl<'a> ReplaySession<'a> {
             // open/type/cancel flow IS core-driven and stays fully
             // `--keys`-drivable, mirroring Rename — only the commit is inert).
             | actions::Effect::KeepVersion { .. }
-            // THE WRITER'S DIFF (Compare with version…): entering the read-only diff
-            // view resolves a history version + renders the transcript, a live-App-only
-            // concern (`App::enter_diff_view_for` / `compare_with_latest`). The capture
-            // renders the diff VIEW through its own env harness (`AWL_DIFF_OLD`/`_NEW`)
-            // instead, so both compare effects are no-ops here; the transcript's pure
-            // serializer + the view's read-only enforcement are unit-tested.
-            | actions::Effect::CompareVersion(_)
-            | actions::Effect::CompareLatest
             // FollowLink (C-c C-o): opening the OS browser is a live-App-only
             // handoff (`App::follow_link`) — a capture must never spawn a browser,
             // so it is a no-op here (the URL extraction itself is unit-tested pure).

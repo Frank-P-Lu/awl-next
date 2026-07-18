@@ -166,14 +166,6 @@ pub fn classify(effect: &Effect) -> Classified {
             "keep_version",
             unsupported("pinning (and naming) writes the local-history store, gated off the capture path"),
         ),
-        Effect::CompareVersion(_) => c(
-            "compare_version",
-            unsupported("entering the read-only diff view is live-App-only; the capture renders it via the AWL_DIFF_* harness"),
-        ),
-        Effect::CompareLatest => c(
-            "compare_latest",
-            unsupported("resolving the latest version + rendering the diff view are live-App-only; the capture uses the AWL_DIFF_* harness"),
-        ),
         Effect::RebindCommit { .. } => c(
             "rebind_commit",
             unsupported("the config write + live keymap reload are live-App-only; the binding would not take effect"),
