@@ -115,9 +115,9 @@ mod reports;
 mod rects;
 
 /// ARM B "LIVING SELECTION BAND" choreography PROBES (the P5-cursor motion spec).
-/// Pure phase math (morph stretch + two-shape crossing) plus the dev-only
-/// `AWL_LIVING_BAND` phase pin; ships nothing by default (env unset →
-/// the renderer's ordinary single-band path, every capture byte-identical).
+/// Pure phase math (morph stretch + two-shape crossing) plus the `AWL_LIVING_BAND`
+/// override/phase-pin knob. Ships ON by default (calm MORPH voice); SETTLES to a
+/// byte-identical single band in every capture / under Reduce Motion.
 pub(crate) mod livingband;
 
 /// INLINE IMAGES — the decode + GPU-upload cache (native-only, PNG). Keyed by
@@ -5198,6 +5198,18 @@ impl TextPipeline {
         if let Some(phase) = force.phase {
             let from = target + livingband::PIN_JUMP_ROWS * lh;
             return (from, target, phase.clamp(0.0, 1.0));
+        }
+        // SETTLE in every unarmed pipeline (every capture) and under Reduce Motion —
+        // mirrors [`Self::overlay_band_drawn`]. A settled frame is `morph_band(target,
+        // target, .., 1.0)` = the exact target rect, so with MORPH (the shipped live
+        // default) a settled capture is BYTE-IDENTICAL to the ordinary single band;
+        // the choreography only breathes in the live app. This is what makes the
+        // on-by-default flip safe, and gives the whole choreography the accessibility
+        // contract (Reduce Motion → no motion) for free.
+        if !self.juice_live || crate::motion::reduced() {
+            self.overlay_band_last = Some(target);
+            self.overlay_band_t = 1.0;
+            return (target, target, 1.0);
         }
         match self.overlay_band_last {
             Some(last) if (last - target).abs() > 0.5 => {

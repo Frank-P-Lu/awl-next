@@ -1,4 +1,4 @@
-//! src/render/livingband.rs — ARM B "living selection band" choreography PROBES.
+//! src/render/livingband.rs — ARM B "living selection band" choreography.
 //!
 //! The user's 10× P5-cursor direction (TASTE PRINCIPLES #3): a LIVING SELECTION
 //! BAND that STRETCHES/MORPHS between rows and, in its two-shape voice, lays two
@@ -6,14 +6,17 @@
 //! step — "mesmerizing… alive." Menu surfaces only; typing latency untouched.
 //!
 //! This module is the PURE PHASE MATH (no GPU, no clock, no `Theme` — unit
-//! testable directly) plus the dev-only env PIN that lets a headless capture
-//! dump a deterministic MID-FLIGHT frame (mirrors `AWL_LAVA`'s phase pin and the
-//! wild-menu slant probe). It ships NOTHING by default: with `AWL_LIVING_BAND`
-//! unset, [`overlay_motion_force`] is `None`, the renderer takes its
-//! ordinary single-band path, and every capture is BYTE-IDENTICAL. The knob is a
-//! live-A/B + gallery instrument only, exactly like `AWL_MOTION_FORCE` — and a
-//! DISTINCT name from main's `AWL_OVERLAY_MOTION_FORCE` (the slant/grow probe),
-//! so the two instruments never contend over one env var.
+//! testable directly) plus the env knob that overrides the shipped voice / pins a
+//! deterministic MID-FLIGHT capture frame (mirrors `AWL_LAVA`'s phase pin and the
+//! wild-menu slant probe). The band ships ON by default: with `AWL_LIVING_BAND`
+//! unset, [`overlay_motion_force`] is the calm [`Choreo::Morph`] voice, live on
+//! every Pane world. It stays byte-identical to the OLD single band at REST —
+//! `living_band_phase` SETTLES the phase to `1.0` in every capture and under
+//! Reduce Motion, and MORPH is calm-at-rest (a settled morph == the exact target
+//! rect) — so it only breathes during a live selection move. The env var is a
+//! live-A/B + gallery instrument that OVERRIDES the default (pick a voice, pin a
+//! phase, or `off` to disable) — a DISTINCT name from main's
+//! `AWL_OVERLAY_MOTION_FORCE` (the slant/grow probe), so the two never contend.
 //!
 //! Two choreographies, one shared elastic core (leading edge fast, trailing edge
 //! slow — the P5 elastic):
@@ -256,15 +259,25 @@ pub fn parse_motion_force(s: &str) -> Option<MotionForce> {
     Some(MotionForce { choreo, phase })
 }
 
-/// The `AWL_LIVING_BAND` dev knob, read ONCE and memoised. `None` on
-/// every ordinary run (env unset), so the renderer's living-band branch is
-/// unreachable and every default capture stays byte-identical. A DISTINCT env
-/// var from main's `AWL_OVERLAY_MOTION_FORCE` (the slant/grow frame-dump probe,
-/// `crate::render::overlay_motion_probe`) so the two dev instruments never fight
-/// over one name — each ignores the other's grammar.
+/// The `AWL_LIVING_BAND` knob, read ONCE and memoised. The living band ships
+/// ON by default: env UNSET → the calm [`Choreo::Morph`] voice, phase-driven by
+/// the live animator (Pane worlds only; `living_band_phase` SETTLES it in every
+/// capture / under Reduce Motion, so a settled frame is byte-identical to the
+/// ordinary band — MORPH is calm-at-rest). The env var OVERRIDES that default: a
+/// valid `<voice>[:<phase>]` selects a voice (a pinned phase drives deterministic
+/// capture dumps), `off`/empty fully DISABLES the band (the ordinary single band),
+/// and a malformed value keeps the live default (a typo never silently kills it).
+/// A DISTINCT env var from main's `AWL_OVERLAY_MOTION_FORCE` (the slant/grow
+/// frame-dump probe, `crate::render::overlay_motion_probe`) so the two instruments
+/// never fight over one name — each ignores the other's grammar.
 fn awl_living_band() -> &'static Option<MotionForce> {
     static ONCE: std::sync::OnceLock<Option<MotionForce>> = std::sync::OnceLock::new();
-    ONCE.get_or_init(|| std::env::var("AWL_LIVING_BAND").ok().and_then(|s| parse_motion_force(&s)))
+    const DEFAULT: MotionForce = MotionForce { choreo: Choreo::Morph, phase: None };
+    ONCE.get_or_init(|| match std::env::var("AWL_LIVING_BAND") {
+        Err(_) => Some(DEFAULT),
+        Ok(s) if s.trim().is_empty() || s.trim().eq_ignore_ascii_case("off") => None,
+        Ok(s) => parse_motion_force(&s).or(Some(DEFAULT)),
+    })
 }
 
 /// TEST-ONLY escape hatch for the living-band probe (mirrors
@@ -279,11 +292,13 @@ pub fn set_motion_test_override(m: Option<MotionForce>) {
     *MOTION_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = m;
 }
 
-/// The EFFECTIVE living-band probe for this frame — `None` (the shipped single
-/// band) on every run without the env probe / test override, so the renderer's
-/// living-band branch is unreachable and every default capture is byte-identical.
-/// A `cfg(test)` override wins so a capture-level law test can pin a deterministic
-/// mid-flight frame without re-arming the memoised env `OnceLock`.
+/// The EFFECTIVE living-band voice for this frame — the calm [`Choreo::Morph`]
+/// default (shipped ON) unless `AWL_LIVING_BAND` overrides it (`off` → `None`,
+/// the ordinary single band). `None` disables the living-band branch entirely;
+/// otherwise the branch draws, but SETTLES to a byte-identical single band in
+/// every capture / under Reduce Motion (see `living_band_phase`). A `cfg(test)`
+/// override wins so a capture-level law test can pin a deterministic mid-flight
+/// frame without re-arming the memoised env `OnceLock`.
 pub fn overlay_motion_force() -> Option<MotionForce> {
     #[cfg(test)]
     {

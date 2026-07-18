@@ -1606,11 +1606,12 @@ impl TextPipeline {
         // gap maps to the nearest row (no dead zones).
         // `list_style` computed once at the top of this fn (drives the pane-drop).
         let mirror = crate::render::effective_card_anchor().mirrors_growth();
-        // ARM B LIVING-BAND PROBE (`AWL_LIVING_BAND`, env-gated → `None`
-        // on every ordinary run, so the ordinary path below is byte-identical):
-        // the selection band's morph / two-shape choreography. Pane-only; when
-        // active it OWNS the band rects (the ordinary `overlay_band_drawn` slide
-        // is skipped for that frame).
+        // ARM B LIVING BAND (`AWL_LIVING_BAND`): the selection band's morph /
+        // two-shape choreography. Ships ON (calm MORPH) — `None` only when the knob
+        // is `off`. Pane-only; when active it OWNS the band rects (the ordinary
+        // `overlay_band_drawn` slide is skipped for that frame). A settled frame is
+        // byte-identical to the ordinary band (MORPH is calm-at-rest and
+        // `living_band_phase` settles every capture / Reduce-Motion frame).
         let motion = crate::render::livingband::overlay_motion_force();
         // The selected row's settled TARGET top, through the ONE row-y owner —
         // shared by the ordinary slide and the living-band choreography.
