@@ -78,9 +78,9 @@ after any theme-polish batch that shifts grounds / ornaments):
 
 ```sh
 export PATH="/Users/frank/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
-cargo run --release -- --screenshot site/img/hero.png --theme Undertow site/sample.md
+cargo run --release -- --screenshot site/img/hero.png --theme Bombora site/sample.md
 for W in Gumtree Bilby Magpie Saltpan Quokka Galah Potoroo Mopoke \
-         Undertow Outback Kingfisher Mangrove Tawny Currawong; do
+         Bombora Mulga Bowerbird Mangrove Tawny Currawong; do
   cargo run --release -- --screenshot "site/img/world-$(echo $W | tr A-Z a-z).png" \
     --theme "$W" site/sample.md
 done

@@ -55,7 +55,7 @@ fn table_allocation_holds_token_columns_rigid_across_widths() {
 | World      | Ground                | Display     | Ornament                          | Time  | Register |\n\
 |------------|-----------------------|-------------|-----------------------------------|-------|----------|\n\
 | Gumtree    | pale eucalyptus-green | Literata    | Junicode botanical sprig fleur    | Day   | Refined  |\n\
-| Kingfisher | midnight-navy         | IBM Sans    | Awl Marks pinwheel star lozenge   | Night | Everyday |\n\
+| Bowerbird | midnight-navy         | IBM Sans    | Awl Marks pinwheel star lozenge   | Night | Everyday |\n\
 \n\
 prose after\n";
 

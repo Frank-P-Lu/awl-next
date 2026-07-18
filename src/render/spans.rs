@@ -879,8 +879,8 @@ const S_FG_LIGHT: f32 = 0.18;
 /// per a live Currawong screenshot, visually indistinguishable from plain ink
 /// (measured ≈43, barely over the *pairwise* law floor of 40 but perceptually
 /// nil). Raised to `0.26` (+ `S_FG_DARK` to `0.46`) — measured worst case across
-/// the 8 dark worlds is now redmean 86 vs `base_content` (Kingfisher) and 59 vs
-/// `Constant` (Undertow), both comfortably clear of their floors, while the
+/// the 8 dark worlds is now redmean 86 vs `base_content` (Bowerbird) and 59 vs
+/// `Constant` (Bombora), both comfortably clear of their floors, while the
 /// 0.26 vs 0.28 gap to `Constant` keeps monotone presence ordering intact (the
 /// ordering is an exact `t`-proportional relationship, not a numeric coin-flip,
 /// so a 0.02 gap is as safe as a 0.16 one) and saturation stays 0.46 — under the

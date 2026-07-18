@@ -582,7 +582,7 @@ installed (the property the harness could not previously assert — see
 `capture::tests::i18n_fixtures::japanese_fixture_resolves_bundled_cjk_face_deterministically`,
 the first JP-rendering capture test). Bundling is TASTE-GATED, not yet the
 final call: Hiragino/system stays as a trailing candidate until a live
-eyeball-call between the two (see `gallery/jp-compare/` — Undertow/Currawong ×
+eyeball-call between the two (see `gallery/jp-compare/` — Bombora/Currawong ×
 Hiragino/Noto, produced via the dev-only `AWL_CJK_FORCE=system|bundled` env
 knob, not a shipped flag). The Chinese round bundled zh-Hans (Noto Serif/Sans
 SC + a characterful LXGW WenKai override for the Klee worlds) and ko (Noto
@@ -978,8 +978,8 @@ rendered in the world's face (mono / serif / sans / slab) via
 Proportional faces are fully supported: the caret tracks each glyph's real shaped
 advance (no fixed mono cell), so it sits correctly over the glyph on every world.
 The eight worlds map onto five distinct faces: Tawny + Potoroo → IBM Plex Mono,
-Gumtree + Saltpan → Literata, Bilby + Undertow → Newsreader, Quokka → IBM Plex
-Sans, Outback → Zilla Slab. (Historical note, schema `/40`-era: Tawny was the
+Gumtree + Saltpan → Literata, Bilby + Bombora → Newsreader, Quokka → IBM Plex
+Sans, Mulga → Zilla Slab. (Historical note, schema `/40`-era: Tawny was the
 DEFAULT world then, IBM Plex Mono, so a bare capture opened on awl's mono "home"
 look. As of 2026-07-11 the DEFAULT is **Saltpan** — a warm light world, Fraunces
 9pt serif — awl's first impression now; see `theme::DEFAULT_THEME`'s own doc

@@ -473,7 +473,7 @@ impl TextPipeline {
         // variant's doc). On an ordinary (`ValueBand`) world the row normally
         // keeps its content ink (`None`, byte-identical), but when the value band
         // washes that ink out (`theme::selected_row_ink` — the InverseFill lesson
-        // for fill worlds; Undertow-under-Bars was the 2.53:1 exhibit) the ONE
+        // for fill worlds; Bombora-under-Bars was the 2.53:1 exhibit) the ONE
         // derive owner flips it to the reading pole and the shaper recolors the
         // selected row to match. Read from the SAME band `overlay_draw_card` fills.
         let sel_band = crate::render::effective_overlay_selrow_band();
@@ -1797,7 +1797,7 @@ impl TextPipeline {
                 // the selected bar leads by a ~2-step VALUE gap (an obvious glance,
                 // never a hue — DESIGN §3). The old `surface_selected` (steps `2`)
                 // sat one lone step under the selected band and read as barely
-                // distinct on saturated worlds (the Kingfisher/Saltpan defect).
+                // distinct on saturated worlds (the Bowerbird/Saltpan defect).
                 self.overlay_bars
                     .set_color(theme::overlay_bar_unselected().rgba_bytes());
                 // The DISPLAY rows that get a bar: every drawn ITEM row (the theme

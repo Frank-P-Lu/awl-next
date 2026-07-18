@@ -51,13 +51,13 @@ pub const ORNAMENTS_DEFAULT: Ornaments = Ornaments { dash: '❧', star: '⁂', u
 // all OFL) map to the three flavour registers:
 //
 //   * [`ORNAMENT_GARAMOND`] — EB Garamond's Renaissance fleurons (❧ ❦ ☙), for the
-//     TRUE literary serifs (Bilby, Undertow). NOTE: EB Garamond ships NO ⁂ asterism
+//     TRUE literary serifs (Bilby, Bombora). NOTE: EB Garamond ships NO ⁂ asterism
 //     (nor ❡/❥) and only those THREE fleurons, so a Garamond world's trio is exactly
 //     {❧, ☙, ❦} permuted — never ⁂ — see the NEVER-TOFU coverage test.
 //   * [`ORNAMENT_JUNICODE`] — Junicode's antique Caslon flowers (❧ ❦ ☙ + the ⁂/⁑
 //     asterisms + a deep pool of PUA botanical/damask/tile ornaments), for the
 //     antique/expressive/slab worlds AND the warm/pale literary serifs whose display
-//     face carries no fleurons of its own (Gumtree, Saltpan, Magpie, Mopoke, Outback):
+//     face carries no fleurons of its own (Gumtree, Saltpan, Magpie, Mopoke, Mulga):
 //     each gets a distinct in-character trio (a botanical sprig / running vine /
 //     quatrefoil-tile / damask-flourish / typographic-asterism family, respectively).
 //   * [`ORNAMENT_MARKS`] — the merged marks face itself (`render::SYMBOL_FAMILY`),
@@ -69,7 +69,7 @@ pub const ORNAMENTS_DEFAULT: Ornaments = Ornaments { dash: '❧', star: '⁂', u
 //     byte-identical to before this round).
 
 /// The EB Garamond ornament face — refined Renaissance fleurons for the literary
-/// serif worlds. Registered from `EBGaramond-Regular.ttf` (also Undertow's own
+/// serif worlds. Registered from `EBGaramond-Regular.ttf` (also Bombora's own
 /// display face). Covers ❧ ❦ ☙ but NOT ⁂/❡/❥.
 pub const ORNAMENT_GARAMOND: &str = "EB Garamond";
 
@@ -128,7 +128,7 @@ pub const ORNAMENT_SCALE_GEOMETRIC: f32 = 1.5;
 //     before this round) — restraint IS their character; a bullet is not the place to
 //     decorate them for symmetry.
 //   * The ANTIQUE / LITERARY serifs (the [`ORNAMENT_JUNICODE`] + [`ORNAMENT_GARAMOND`]
-//     worlds) draw a small hedera / fleuron — and Undertow the antique MANICULE ☞ —
+//     worlds) draw a small hedera / fleuron — and Bombora the antique MANICULE ☞ —
 //     at [`BULLET_SCALE_ORNAMENT`] (~half body), so the mark reads as quiet list
 //     RHYTHM, never a loud flourish. Garamond ships the manicule (☞ U+261E) and the
 //     three fleurons ❧ ❦ ☙; Junicode ships ❧ ❦ ☙ ⁑ (no plain `•`), so those worlds'

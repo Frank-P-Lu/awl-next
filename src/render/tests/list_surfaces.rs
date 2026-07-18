@@ -570,8 +570,8 @@ fn bars_query_caret_overlaps_the_query_text() {
         return;
     };
     let _g = crate::testlock::serial();
-    // Kingfisher: an amber-accent, coloured-ground world where the bug was shot.
-    theme::set_active_by_name("Kingfisher").unwrap();
+    // Bowerbird: an amber-accent, coloured-ground world where the bug was shot.
+    theme::set_active_by_name("Bowerbird").unwrap();
     p.sync_theme();
     crate::render::set_list_style_test_override(Some(bars(6.0, 8.0, 24.0)));
     // The full-bleed premise is a LEFT-placed card (pre-anchor default); pin the
@@ -658,7 +658,7 @@ fn bars_room_plane_covers_the_first_scanline() {
         return;
     };
     let _g = crate::testlock::serial();
-    theme::set_active_by_name("Kingfisher").unwrap();
+    theme::set_active_by_name("Bowerbird").unwrap();
     p.sync_theme();
     crate::render::set_list_style_test_override(Some(bars(6.0, 8.0, 24.0)));
     let mut v = view("hello world\n", 0, 0);
@@ -695,7 +695,7 @@ fn bars_room_plane_covers_the_first_scanline() {
 
 /// THE FACET-ARM-DRAWS LAW (instance-count + pixel delta). Born from the
 /// facet-chips GALLERY TRAP (fixed @ e56d689): the retired `Chips` skin parsed
-/// to `None` and SILENTLY rendered the `Text` default, so `kingfisher-facet-
+/// to `None` and SILENTLY rendered the `Text` default, so `bowerbird-facet-
 /// chips.png` came out byte-identical to `-text` — a shot named for a variant
 /// that never fired. `Chips` is dropped for cause (the designer pixel-pass chose
 /// `Band`); this law pins the SURVIVING facet arm honestly, both ways the trap

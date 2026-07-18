@@ -965,12 +965,12 @@ fn popover_card_hugs_the_button_row() {
     crate::popover::set_popover_on(true);
     // PIN THE WORLD: the pixel-arithmetic thresholds below only clear on a
     // world whose contrast happens to be generous enough — this law was
-    // riding whatever the AMBIENT active world was (silently Outback), so a
+    // riding whatever the AMBIENT active world was (silently Mulga), so a
     // future default-world change or a leaked `set_active` from another test
     // could break it with no visible cause. Pin explicitly and restore to
     // `DEFAULT_THEME` (not whatever was active before), the diff-panel law's
     // corrected convention a few tests down.
-    crate::theme::set_active_by_name("Outback").unwrap();
+    crate::theme::set_active_by_name("Mulga").unwrap();
 
     let dir = std::env::temp_dir().join(format!("awl_popover_chin_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -1126,7 +1126,7 @@ fn popover_lit_wash_pill_sits_inside_the_card() {
     // this law's contrast thresholds only clear on a generous-enough world,
     // so pin explicitly rather than ride whatever the ambient active world
     // happens to be.
-    crate::theme::set_active_by_name("Outback").unwrap();
+    crate::theme::set_active_by_name("Mulga").unwrap();
 
     let dir = std::env::temp_dir().join(format!("awl_popover_pill_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -1216,7 +1216,7 @@ fn popover_lit_wash_pill_sits_inside_the_card() {
 /// mechanisms): the strike pixels CROSS the whole `S` glyph run at the band's
 /// middle (a bare letter always leaves gaps — the `Link` control proves it),
 /// and each pill paints beside its letter's ink where an unpilled button shows
-/// bare card. Runs on Outback (pinned explicitly, not whatever the ambient
+/// bare card. Runs on Mulga (pinned explicitly, not whatever the ambient
 /// active world happens to be — this law's thresholds only clear on a
 /// generous-enough world) — the cross-world legibility sweep is the round's
 /// capture-gallery audit, not this law.
@@ -1229,7 +1229,7 @@ fn popover_labels_demonstrate_their_own_effects() {
     let _g = crate::testlock::serial();
     let saved = crate::popover::popover_on();
     crate::popover::set_popover_on(true);
-    crate::theme::set_active_by_name("Outback").unwrap();
+    crate::theme::set_active_by_name("Mulga").unwrap();
 
     let dir = std::env::temp_dir().join(format!("awl_popover_demo_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

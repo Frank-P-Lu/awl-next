@@ -17,7 +17,7 @@ use super::derive::{OVERLAY_SELROW_EXTRA_STEPS, SELECTED_BAND_STEPS};
 fn overlay_selected_band_is_a_stronger_value_step_never_a_hue() {
     let _g = crate::testlock::serial();
     assert!(OVERLAY_SELROW_EXTRA_STEPS > 0, "the round strengthens the band by default");
-    for world in ["Kingfisher", "Saltpan", "Firetail", "Tawny"] {
+    for world in ["Bowerbird", "Saltpan", "Firetail", "Tawny"] {
         let t = set_active_by_name(world).unwrap();
         assert_ne!(t.base_200, t.base_300, "{world}: ordinary (non-collapsed) ramp");
         let shared = surface_selected();
@@ -43,11 +43,11 @@ fn overlay_selected_band_is_a_stronger_value_step_never_a_hue() {
     }
     // Non-triviality: on a dark world with ramp headroom the strengthening is
     // STRICT (the extra step actually moves the band).
-    set_active_by_name("Kingfisher").unwrap();
+    set_active_by_name("Bowerbird").unwrap();
     assert_ne!(
         overlay_selected_band(),
         surface_selected(),
-        "Kingfisher: the strengthened band differs from the shared band"
+        "Bowerbird: the strengthened band differs from the shared band"
     );
     set_active(DEFAULT_THEME);
 }
@@ -139,7 +139,7 @@ fn worlds_eleven_dark_seven_light() {
     assert_eq!(THEMES.len(), 18);
     let dark = THEMES.iter().filter(|t| t.dark).count();
     let light = THEMES.iter().filter(|t| !t.dark).count();
-    // 11 dark (Tawny/Mopoke/Currawong/Potoroo/Undertow/Kingfisher/Outback/
+    // 11 dark (Tawny/Mopoke/Currawong/Potoroo/Bombora/Bowerbird/Mulga/
     // Mangrove/Wagtail/Firetail/Cassowary) / 7 light (Gumtree/Bilby/Saltpan/
     // Quokka/Galah/Magpie/Brolga). Brolga (the COOL LIGHT POLE) is a pale
     // sky-blue light world filling the cool-light-blue hole the DAWN round
@@ -774,11 +774,11 @@ fn gutter_corner_carve_is_local_flat_ground_and_keeps_both_margins_on_every_lava
 /// FIRETAIL PALETTE CHARACTER law: the sixteenth world is an ORIGINAL deep
 /// oxblood-charcoal + wine-lava + ember-gold system, not Potoroo's rust palette
 /// copied under a moving ground. Hue arithmetic pins the authored direction:
-/// Firetail's main ground is much nearer red than Undertow's violet, at least
+/// Firetail's main ground is much nearer red than Bombora's violet, at least
 /// 35° away from Potoroo's orange-rust ground, and both its lava and caret stay
 /// in their named wine/gold bands.
 #[test]
-fn firetail_is_oxblood_wine_and_ember_not_potoroo_rust_or_undertow_violet() {
+fn firetail_is_oxblood_wine_and_ember_not_potoroo_rust_or_bombora_violet() {
     fn redmean(a: Srgb, b: Srgb) -> f32 {
         let rbar = (a.r as f32 + b.r as f32) * 0.5;
         let dr = a.r as f32 - b.r as f32;
@@ -799,10 +799,10 @@ fn firetail_is_oxblood_wine_and_ember_not_potoroo_rust_or_undertow_violet() {
 
     let fire_ground = FIRETAIL.base_300.to_hsl().0;
     let potoroo_rust = POTOROO.base_300.to_hsl().0;
-    let undertow_violet = UNDERTOW.base_300.to_hsl().0;
+    let bombora_violet = BOMBORA.base_300.to_hsl().0;
     assert!(
-        red_gap(fire_ground) + 60.0 <= red_gap(undertow_violet),
-        "Firetail ground {fire_ground:.1}° must read far redder/warmer than Undertow {undertow_violet:.1}°"
+        red_gap(fire_ground) + 60.0 <= red_gap(bombora_violet),
+        "Firetail ground {fire_ground:.1}° must read far redder/warmer than Bombora {bombora_violet:.1}°"
     );
     assert!(
         hue_gap(fire_ground, potoroo_rust) >= 35.0,
@@ -985,7 +985,7 @@ fn every_world_has_a_bundled_mono() {
     assert_eq!(WAGTAIL.mono, "JetBrains Mono"); // shares Mangrove's exact display font (logged)
     // And a couple of the borrowed assignments.
     assert_eq!(SALTPAN.mono, "Monaspace Xenon"); // Fraunces serif → slab-serif mono
-    assert_eq!(KINGFISHER.mono, "JetBrains Mono"); // cool technical navy → crisp mono
+    assert_eq!(BOWERBIRD.mono, "JetBrains Mono"); // cool technical navy → crisp mono
     assert_eq!(GALAH.mono, "IBM Plex Mono"); // warm humanist sans → warm humanist mono
 }
 
@@ -1001,10 +1001,10 @@ fn every_world_has_a_bundled_mono() {
 /// `zh_hans_ladder_matches_world_character_with_klee_override`.
 #[test]
 fn cjk_fallback_matches_world_character() {
-    let shippori = ["Gumtree", "Bilby", "Undertow"];
-    let zenmaru = ["Galah", "Kingfisher"];
+    let shippori = ["Gumtree", "Bilby", "Bombora"];
+    let zenmaru = ["Galah", "Bowerbird"];
     let klee = ["Mopoke", "Quokka"];
-    let mincho = ["Saltpan", "Outback", "Magpie"]; // neutral serif (Noto Serif JP)
+    let mincho = ["Saltpan", "Mulga", "Magpie"]; // neutral serif (Noto Serif JP)
     let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong", "Wagtail", "Firetail", "Brolga", "Cassowary"]; // neutral sans/mono (Noto Sans JP)
     for t in THEMES.iter() {
         assert!(!t.cjk.is_empty(), "{} has no CJK fallback list", t.name);
@@ -1139,7 +1139,7 @@ fn every_world_has_an_ornament_scale() {
     let by = |name: &str| set_active_by_name(name).unwrap().ornament_scale;
     let _t = crate::testlock::serial();
     assert_eq!(by("Mopoke"), 2.2, "Mopoke (Junicode flowers) is ornate 2.2");
-    assert_eq!(by("Undertow"), 1.8, "Undertow (Garamond fleurons) is fleuron 1.8");
+    assert_eq!(by("Bombora"), 1.8, "Bombora (Garamond fleurons) is fleuron 1.8");
     assert_eq!(by("Currawong"), 1.5, "Currawong (geometric marks) is geometric 1.5");
     set_active(DEFAULT_THEME);
 }
@@ -1151,7 +1151,7 @@ fn every_world_has_an_ornament_scale() {
 /// the world's [`Theme::ornament_face`] — is `render::tests::markdown::
 /// bullet_glyphs_resolve_in_each_worlds_assigned_face`. Also pins the geometric
 /// worlds to the plain byte-identical [`BULLETS_PLAIN`]/[`BULLET_SCALE_PLAIN`]
-/// (restraint) and the manicule showpiece (Undertow's level-1 ☞).
+/// (restraint) and the manicule showpiece (Bombora's level-1 ☞).
 #[test]
 fn every_world_has_a_bullet_pair() {
     assert_eq!(BULLETS_PLAIN, ('•', '◦'), "the plain bullet pair is • / ◦");
@@ -1201,11 +1201,11 @@ fn every_world_has_a_bullet_pair() {
     assert_eq!(TAWNY.bullet_for_depth(1), '◦');
     assert_eq!(TAWNY.bullet_for_depth(2), '•');
     assert_eq!(TAWNY.bullet_for_depth(3), '◦');
-    assert_eq!(UNDERTOW.bullet_for_depth(0), '☞');
-    assert_eq!(UNDERTOW.bullet_for_depth(1), '❧');
-    // The manicule showpiece: Undertow alone rides the antique pointing hand,
+    assert_eq!(BOMBORA.bullet_for_depth(0), '☞');
+    assert_eq!(BOMBORA.bullet_for_depth(1), '❧');
+    // The manicule showpiece: Bombora alone rides the antique pointing hand,
     // at its top level (level 1).
-    assert_eq!(UNDERTOW.bullets.0, '☞', "Undertow's level-1 bullet is the manicule");
+    assert_eq!(BOMBORA.bullets.0, '☞', "Bombora's level-1 bullet is the manicule");
     assert!(
         THEMES.iter().filter(|t| t.bullets.0 == '☞' || t.bullets.1 == '☞').count() == 1,
         "exactly one world uses the manicule bullet (a hand everywhere is loud)"
@@ -1230,9 +1230,9 @@ fn latin_candidates_is_the_worlds_own_display_face() {
 /// no serif/sans split yet — both documented taste calls, logged above).
 #[test]
 fn zh_hans_ladder_matches_world_character_with_klee_override() {
-    let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
+    let mincho = ["Gumtree", "Saltpan", "Bilby", "Bombora", "Mulga", "Magpie"];
     let klee = ["Mopoke", "Quokka"];
-    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong", "Wagtail", "Firetail", "Brolga", "Cassowary"];
+    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Bowerbird", "Currawong", "Wagtail", "Firetail", "Brolga", "Cassowary"];
     for t in THEMES.iter() {
         assert!(!t.zh_hans.is_empty(), "{} has no zh-Hans candidate list", t.name);
         if klee.contains(&t.name) {
@@ -1266,7 +1266,7 @@ fn zh_hant_uniform_ko_splits_serif_from_sans() {
     // The SERIF worlds — exactly the ones whose zh_hans is CJK_ZH_HANS_SERIF
     // (Theme::cjk is a mincho-family ja ladder). Kept as an explicit roster so
     // a world silently switching character fails HERE, not as a tofu box.
-    let serif = ["Gumtree", "Bilby", "Undertow", "Saltpan", "Outback", "Magpie"];
+    let serif = ["Gumtree", "Bilby", "Bombora", "Saltpan", "Mulga", "Magpie"];
     for t in THEMES.iter() {
         assert_eq!(t.zh_hant, CJK_ZH_HANT, "{}: zh-Hant stays uniform", t.name);
         if serif.contains(&t.name) {
@@ -1425,6 +1425,35 @@ fn roster_position_is_name_stable() {
     set_active(DEFAULT_THEME);
 }
 
+/// RETIRED-WORLD LENIENT FALLBACK (2026-07-18 rename: Outback→Mulga,
+/// Kingfisher→Bowerbird, Undertow→Bombora). A `config.toml` that still names one
+/// of the three RETIRED worlds — a user who upgrades with `theme = "Outback"`
+/// persisted — must not crash and must not resurface a neighbour by position:
+/// `set_active_by_name` returns `None` for each retired name, and the config
+/// apply seam (`Config::apply_sticky_globals`) discards that `None`, so the
+/// built-in default (Saltpan) is kept. This test pins the NAME half; the
+/// apply-seam half lives in `config::tests`.
+#[test]
+fn retired_world_names_fall_back_leniently() {
+    let _g = crate::testlock::serial();
+    for retired in ["Outback", "Kingfisher", "Undertow"] {
+        assert!(
+            set_active_by_name(retired).is_none(),
+            "retired world {retired:?} must resolve to None (lenient fallback), not a live world"
+        );
+        // Case-insensitive: a lower-cased persisted value is equally retired.
+        assert!(
+            set_active_by_name(&retired.to_ascii_lowercase()).is_none(),
+            "retired world {retired:?} (lower-cased) must resolve to None"
+        );
+    }
+    // The successor names DO resolve (the rename actually landed).
+    assert_eq!(set_active_by_name("Mulga").unwrap().name, "Mulga");
+    assert_eq!(set_active_by_name("Bowerbird").unwrap().name, "Bowerbird");
+    assert_eq!(set_active_by_name("Bombora").unwrap().name, "Bombora");
+    set_active(DEFAULT_THEME);
+}
+
 #[test]
 fn cycle_wraps_both_ways() {
     let _g = crate::testlock::serial();
@@ -1446,7 +1475,7 @@ fn cycle_wraps_both_ways() {
 fn set_by_name_is_case_insensitive() {
     let _g = crate::testlock::serial();
     assert_eq!(set_active_by_name("quokka").unwrap().name, "Quokka");
-    assert_eq!(set_active_by_name("OUTBACK").unwrap().name, "Outback");
+    assert_eq!(set_active_by_name("MULGA").unwrap().name, "Mulga");
     assert!(set_active_by_name("nope").is_none());
     set_active(DEFAULT_THEME);
 }
@@ -1517,7 +1546,7 @@ fn selection_is_the_only_translucent_token() {
         // Selection is the ONE translucent token — a calm highlight, never opaque
         // (a paint fill) nor so sheer it fails the contrast floor. The exact alpha
         // is PER-WORLD now: most sit at 0x52, but a world whose composited
-        // selection would be sub-glance over its own ground lifts it (Undertow /
+        // selection would be sub-glance over its own ground lifts it (Bombora /
         // Mangrove → 0x60) to clear `ink_ladder_and_selection_laws_*`.
         assert!(
             (0x40..0xA0).contains(&t.selection.a),
@@ -1822,7 +1851,7 @@ fn placard_ink_derives_from_the_ink_ladder_never_a_free_color() {
 
 /// THE DARK-GROUND PLACARD LEGIBILITY LAW (the user's 2026-07-15 taste note,
 /// enforced: "the dark worlds — there's not enough contrast for the placard";
-/// Undertow's Ghost was near-invisible). On every DARK world both placard
+/// Bombora's Ghost was near-invisible). On every DARK world both placard
 /// rungs must clearly READ against the world's own ground — a relative-
 /// luminance floor, the same domain law (h) of the role tints uses, because
 /// the eye resolves luminance — while still RECEDING behind the rows: the
@@ -1873,7 +1902,7 @@ fn placard_inks_read_on_dark_grounds_and_stay_below_muted() {
         assert!(
             dy_ghost >= 0.05,
             "{}: dark-ground Ghost placard ink {} sits only ΔY {dy_ghost:.3} above the ground \
-             (near-invisible — the Undertow gallery bug)",
+             (near-invisible — the Bombora gallery bug)",
             t.name,
             ghost.hex()
         );
@@ -2120,7 +2149,7 @@ fn personality_assignments_are_exactly_the_decided_table() {
             "Gumtree" | "Saltpan" | "Quokka" | "Brolga" => {
                 RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT }
             }
-            "Tawny" | "Mopoke" | "Potoroo" | "Undertow" | "Kingfisher" | "Outback" => {
+            "Tawny" | "Mopoke" | "Potoroo" | "Bombora" | "Bowerbird" | "Mulga" => {
                 RenderCaps::DEFAULT
             }
             // CASSOWARY (the NERV-terminal statement world): the loud NERV console

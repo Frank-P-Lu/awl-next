@@ -129,7 +129,7 @@ mod tests {
         let doc = dir.join("doc.md");
         let cfg = dir.join("cfg.toml");
         std::fs::write(&doc, "# body\n").unwrap();
-        std::fs::write(&cfg, "theme = \"Undertow\"\n").unwrap();
+        std::fs::write(&cfg, "theme = \"Bombora\"\n").unwrap();
 
         // Both present: two seeds, verbatim bytes, in (file, config) order.
         let seeds = cli_seeds(Some(&doc), Some(&cfg));
@@ -137,7 +137,7 @@ mod tests {
         assert_eq!(seeds[0].path, doc);
         assert_eq!(seeds[0].bytes, b"# body\n");
         assert_eq!(seeds[1].path, cfg);
-        assert_eq!(seeds[1].bytes, b"theme = \"Undertow\"\n");
+        assert_eq!(seeds[1].bytes, b"theme = \"Bombora\"\n");
 
         // A missing input yields NO seed (the scenario sees an absent file —
         // the same degrade the legacy path gives), never an error.

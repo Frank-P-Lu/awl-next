@@ -440,7 +440,7 @@ pub const SYMBOL_FAMILY: &str = "Awl Marks";
 /// "Newsreader 16pt 16pt" (the static Newsreader master registers under this
 /// optical-size name), "IBM Plex Sans", "Zilla Slab", "JetBrains Mono"
 /// (Mangrove), "Figtree" (Galah), "iA Writer Quattro S" (Mopoke), "Monaspace
-/// Xenon" (Potoroo), "Fraunces 9pt" (Saltpan), and "EB Garamond" (Undertow) —
+/// Xenon" (Potoroo), "Fraunces 9pt" (Saltpan), and "EB Garamond" (Bombora) —
 /// eleven distinct faces across the worlds.
 ///
 /// Literata/Newsreader/Plex Sans/Zilla/Fraunces/EB Garamond are PROPORTIONAL and
@@ -469,7 +469,7 @@ pub const FONT_THEME_FACES: &[&[u8]] = &[
     // Fraunces 9pt — Saltpan's warm old-style serif at the text optical size
     // (registers as "Fraunces 9pt"). SIL OFL, github.com/undercasetype/Fraunces.
     include_bytes!("../assets/fonts/Fraunces9pt-Regular.ttf"),
-    // EB Garamond — Undertow's classic Garamond serif (registers as
+    // EB Garamond — Bombora's classic Garamond serif (registers as
     // "EB Garamond"). SIL OFL, github.com/octaviopardo/EBGaramond12.
     include_bytes!("../assets/fonts/EBGaramond-Regular.ttf"),
     // Fira Sans — a humanist sans (registers as "Fira Sans"), Latin-subset.
@@ -560,7 +560,7 @@ pub const FONT_THEME_BOLD_FACES: &[&[u8]] = &[
 ///
 /// The other two ornament faces are registered ELSEWHERE, not here: EB Garamond
 /// ([`crate::theme::ORNAMENT_GARAMOND`], the literary worlds' fleurons) is already
-/// a display face in `FONT_THEME_FACES` (Undertow's), and the geometric worlds'
+/// a display face in `FONT_THEME_FACES` (Bombora's), and the geometric worlds'
 /// [`crate::theme::ORNAMENT_MARKS`] IS the merged `SYMBOL_FAMILY` face. (The dud
 /// `Vollkorn-Ornaments.ttf` — it ships NO classic fleurons, only ¶ ‸ ‽ … — was
 /// dropped: no world could use it for a section break.)
@@ -639,11 +639,11 @@ pub const FONT_CJK_FACES: &[&[u8]] = &[
 ///  - Shippori Mincho (github.com/fontdasu/ShipporiMincho, ofl/shipporimincho)
 ///    — a warm, bookish LITERARY mincho, distinct from Noto Serif JP's neutral
 ///    modern one. For the warm book-serif worlds ([`theme::CJK_JA_SHIPPORI`]:
-///    Gumtree, Bilby, Undertow). ~3.5 MB (vs the unsubset ~8.7 MB static).
+///    Gumtree, Bilby, Bombora). ~3.5 MB (vs the unsubset ~8.7 MB static).
 ///  - Zen Maru Gothic (github.com/googlefonts/zen-marugothic, ofl/zenmarugothic)
 ///    — a rounded "maru" gothic, warmer than Noto Sans JP's even geometric
 ///    gothic. For the two dedicated sans worlds ([`theme::CJK_JA_ZENMARU`]:
-///    Galah, Kingfisher). ~3.5 MB (vs ~3.8 MB static).
+///    Galah, Bowerbird). ~3.5 MB (vs ~3.8 MB static).
 ///  - Klee One (github.com/fontworks-fonts/Klee, ofl/kleeone) — a kaisho
 ///    TEXTBOOK face with gentle brush entry strokes, the CHARACTERFUL override
 ///    for the two Klee-derived worlds ([`theme::CJK_JA_KLEE`]: Mopoke, Quokka)
@@ -743,7 +743,7 @@ pub const FONT_ZH_KO_FACES: &[&[u8]] = &[
 ///    genuinely lovely Korean BATANG (serif / 明朝-equivalent), OFL 1.1. It
 ///    closes the i18n/Chinese round's LOGGED v1 gap ("no comparable bundled
 ///    serif Korean companion yet"): the SERIF worlds' ko ladder
-///    ([`theme::CJK_KO_SERIF`]: Gumtree, Bilby, Undertow, Saltpan, Outback,
+///    ([`theme::CJK_KO_SERIF`]: Gumtree, Bilby, Bombora, Saltpan, Mulga,
 ///    Magpie) now names Gowun Batang FIRST, above the neutral Noto Sans KR
 ///    floor, mirroring the ja serif/sans split (`CJK_JA_SHIPPORI` sits above the
 ///    Noto Serif JP floor) — sans/mono worlds keep the plain Noto Sans KR floor
@@ -765,7 +765,7 @@ pub const FONT_ZH_KO_FACES: &[&[u8]] = &[
 /// DECLINED (license is CLEAN, but there is no Simplified variant to serve the
 /// intended zh-Hans goal):** the round proposed it as the ONE zh-Hans add — a
 /// rounded/warm Source-Han-derived companion for the rounded worlds (Galah/
-/// Kingfisher, whose ja is the rounded Zen Maru Gothic). Its license IS a proper
+/// Bowerbird, whose ja is the rounded Zen Maru Gothic). Its license IS a proper
 /// SIL OFL 1.1 (`SIL_Open_Font_License_1.1.txt` ships in the repo), so — unlike
 /// KingHwa OldSong — this is NOT a license decline. But the repo (and every
 /// release, v2.100 down) provides ONLY the TRADITIONAL-Chinese TW (月, Taiwan
@@ -3191,7 +3191,7 @@ pub struct TextPipeline {
     /// per-span text colors (syntax / markdown / focus) were last BAKED under.
     /// Those colors are frozen into the buffer `AttrsList` at shape time
     /// (`syn_attrs`/`md_attrs` call `role_style_for(&theme::active(), ..)`), so a
-    /// theme switch that keeps the SAME effective face (e.g. Magpie -> Undertow, both
+    /// theme switch that keeps the SAME effective face (e.g. Magpie -> Bombora, both
     /// Monaspace Xenon, on a code buffer) would leave those spans colored for the OLD
     /// world's light/dark ink derivation on the NEW ground. [`Self::sync_theme_font`]
     /// compares against this alongside `shaped_font` and re-bakes (`restyle_all_lines`)
@@ -4689,7 +4689,7 @@ impl TextPipeline {
     /// ([`Self::shaped_theme`]) AND the document actually carries baked color spans?
     /// A restyle re-bakes BOTH the glyph shapes and the syntax/markdown span
     /// colors, so a same-FACE world hop still needs it when the palette changed on a
-    /// buffer that bakes colors (else stale colors — the Magpie -> Undertow bug); a
+    /// buffer that bakes colors (else stale colors — the Magpie -> Bombora bug); a
     /// color-less prose buffer stays free (its ink reads live). Lets the live preview
     /// arm its settle-deferral only when a real restyle is pending.
     pub fn needs_theme_reshape(&self) -> bool {
@@ -4705,13 +4705,13 @@ impl TextPipeline {
     /// display face than the one the document is shaped with (so the glyph SHAPES
     /// switch — mono <-> serif <-> sans <-> slab) OR a DIFFERENT palette than the
     /// one the per-span text colors were baked under (so a same-face world hop still
-    /// re-tints the syntax/markdown spans — the Magpie -> Undertow stale-color
+    /// re-tints the syntax/markdown spans — the Magpie -> Bombora stale-color
     /// bug). The text + zoom are unchanged, so `restyle_all_lines` (below) re-lays
     /// every line's attrs in the new family + span colors and reshapes once. A hop
     /// to the SAME world (an idle re-preview back) skips this and stays free.
     /// Compares the EFFECTIVE face (`doc_family` → the world's mono on a CODE
     /// buffer, else its display font), so two worlds that share a display font but
-    /// differ in `mono` (e.g. Quokka/Kingfisher, both IBM Plex Sans) still reshape
+    /// differ in `mono` (e.g. Quokka/Bowerbird, both IBM Plex Sans) still reshape
     /// a code buffer when their mono differs; and two worlds that share the effective
     /// face but differ in palette still reshape to re-bake the span colors.
     pub fn sync_theme_font(&mut self) {

@@ -7,8 +7,8 @@ grid must allocate column widths without ever breaking a word mid-word.
 |------------|----------------------------|-----------------|--------------------------------------------|-------|----------|
 | Gumtree    | pale eucalyptus-green      | Literata        | Junicode botanical sprig spray fleur       | Day   | Refined  |
 | Saltpan    | warm ecru salt-flat        | Fraunces        | Junicode running-vine vine-scroll          | Dawn  | Refined  |
-| Undertow   | dark violet                | EB Garamond     | EB Garamond dagger fleuron floret          | Night | Refined  |
-| Kingfisher | midnight-navy              | IBM Plex Sans   | Awl Marks pinwheel star lozenge            | Night | Everyday |
+| Bombora   | dark violet                | EB Garamond     | EB Garamond dagger fleuron floret          | Night | Refined  |
+| Bowerbird | midnight-navy              | IBM Plex Sans   | Awl Marks pinwheel star lozenge            | Night | Everyday |
 | Currawong  | near-pure-black OLED       | Iosevka         | Awl Marks spray asterism lozenge           | Night | Humble   |
 
 Prose after the table stays ordinary prose.

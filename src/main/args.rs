@@ -858,7 +858,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --preedit STR       render STR as an IME preedit at the caret\n\
                      \x20 --search STR        open isearch panel for STR + highlight hits\n\
                      \x20 --search-case       make --search case-sensitive\n\
-                     \x20 --theme NAME        set the active color theme (Tawny, Potoroo, Gumtree, Bilby, Saltpan, Quokka, Undertow, Outback, Mangrove, Firetail)\n\
+                     \x20 --theme NAME        set the active color theme (Tawny, Potoroo, Gumtree, Bilby, Saltpan, Quokka, Bombora, Mulga, Mangrove, Firetail)\n\
                      \x20 --caret-mode MODE   caret look: block, morph, ibeam, or auto (default: mono->block, proportional->morph)\n\
                      \x20 --capture-size WxH  physical canvas size for the capture (default 1200x800)\n\
                      \x20 --capture-dpi N      renderer scale factor (default 1.0); WxH at dpi N == (W/N)x(H/N) logical retina window\n\

@@ -23,7 +23,7 @@
 //! reference trips the law.
 
 const WORLD_NAMES: &[&str] = &[
-    "Tawny", "Mopoke", "Currawong", "Potoroo", "Outback", "Undertow", "Kingfisher", "Gumtree",
+    "Tawny", "Mopoke", "Currawong", "Potoroo", "Mulga", "Bombora", "Bowerbird", "Gumtree",
     "Bilby", "Saltpan", "Quokka", "Mangrove", "Galah", "Magpie", "Wagtail", "Firetail", "Brolga",
     "Cassowary",
 ];

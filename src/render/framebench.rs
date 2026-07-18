@@ -444,8 +444,8 @@ const BURST_WORLDS: [&str; 10] = [
     "Bilby",     // Newsreader 16pt 16pt
     "Saltpan",   // Fraunces 9pt
     "Quokka",    // IBM Plex Sans
-    "Undertow",  // EB Garamond
-    "Outback",   // Zilla Slab
+    "Bombora",  // EB Garamond
+    "Mulga",   // Zilla Slab
     "Tawny",     // IBM Plex Mono
     "Mopoke",    // iA Writer Quattro S
     "Galah",     // Figtree

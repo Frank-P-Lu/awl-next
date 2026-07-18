@@ -27,9 +27,9 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 | **Galah**      | dusty-pink                 | Figtree             | IBM Plex Mono   | Awl Marks · ❁ ❂ ✿                             | Dawn  | Everyday | Modern    | Warm    |
 | **Potoroo**    | dark burnt-orange          | Monaspace Xenon     | Monaspace Xenon | Awl Marks · ✶ ✦ ◆                             | Dusk  | Humble   | Technical | Warm    |
 | **Mopoke**     | warm charcoal              | iA Writer Quattro S | IBM Plex Mono   | Junicode · damask / candelabra / damask-tile  | Dusk  | Humble   | Modern    | Warm    |
-| **Undertow**   | dark violet                | EB Garamond         | Monaspace Xenon | EB Garamond · ☙ ❧ ❦                           | Night | Refined  | Literary  | Cool    |
-| **Outback**    | blackish-olive             | Zilla Slab          | Monaspace Xenon | Junicode · ⁂ ⁑ ❦                              | Night | Everyday | Literary  | Cool    |
-| **Kingfisher** | midnight-navy              | IBM Plex Sans       | JetBrains Mono  | Awl Marks · ❂ ✴ ◈                             | Night | Everyday | Modern    | Cool    |
+| **Bombora**   | dark violet                | EB Garamond         | Monaspace Xenon | EB Garamond · ☙ ❧ ❦                           | Night | Refined  | Literary  | Cool    |
+| **Mulga**    | blackish-olive             | Zilla Slab          | Monaspace Xenon | Junicode · ⁂ ⁑ ❦                              | Night | Everyday | Literary  | Cool    |
+| **Bowerbird** | midnight-navy              | IBM Plex Sans       | JetBrains Mono  | Awl Marks · ❂ ✴ ◈                             | Night | Everyday | Modern    | Cool    |
 | **Brolga**     | pale sky-blue              | IBM Plex Sans       | IBM Plex Mono   | Awl Marks · ✧ ✴ ⬥                             | Day   | —        | —         | Cool    |
 | **Mangrove**   | dark tidal-teal            | JetBrains Mono      | JetBrains Mono  | Awl Marks · ❖ ◈ ⬥                             | Night | Humble   | Technical | Cool    |
 | **Tawny**      | warm-grey                  | IBM Plex Mono       | IBM Plex Mono   | Awl Marks · ✦ ✷ ◈                             | Night | Humble   | Technical | Neutral |
@@ -49,7 +49,7 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 > (`---`/`***`/`___`) — and its About-card end-mark, which is the flagship `---` dash —
 > in its OWN ornament face, with a distinct glyph per syntax so the mark tracks what the
 > author typed. Three faces: **EB Garamond** (its only three Renaissance fleurons
-> ❧ ☙ ❦, permuted — the true literary serifs Bilby & Undertow), **Junicode** (antique
+> ❧ ☙ ❦, permuted — the true literary serifs Bilby & Bombora), **Junicode** (antique
 > Caslon flowers: botanical sprays, running vines, quatrefoil/damask tiles, plus the
 > ⁂/⁑ asterisms — the antique/slab worlds AND the warm/pale serifs Gumtree & Saltpan
 > whose display face carries no fleurons of its own), and the merged **Awl Marks** face
@@ -100,7 +100,7 @@ Dusk · Humble · Technical · Warm.
 
 ### Firetail
 **A deep oxblood-charcoal lamp — wine-dark ground with one ember-gold spark.**
-Monaspace Xenon as both page and code face; smooth wine lava drifts in the margins, redder than violet Undertow and deliberately clear of Potoroo's orange-rust den.
+Monaspace Xenon as both page and code face; smooth wine lava drifts in the margins, redder than violet Bombora and deliberately clear of Potoroo's orange-rust den.
 Warm.
 
 ### Mopoke
@@ -108,18 +108,18 @@ Warm.
 iA Writer Quattro S (duospaced) on warm charcoal; Klee One for Japanese; IBM Plex Mono for code.
 Dusk · Humble · Modern · Warm.
 
-### Undertow
-**A dark violet current at midnight — classical and literary.**
+### Bombora
+**A violet-dark swell over a submerged reef — classical and literary.**
 EB Garamond's Renaissance serif on deep violet; Shippori Mincho for Japanese; Monaspace Xenon for code.
 Night · Refined · Literary · Cool.
 
-### Outback
-**A blackish-olive night on the open range — slab-sturdy.**
+### Mulga
+**A blackish-olive night in the arid acacia scrub — slab-sturdy.**
 Zilla Slab on dark olive; Monaspace Xenon for code.
 Night · Everyday · Literary · Cool.
 
-### Kingfisher
-**A midnight-navy dive — crisp and technical.**
+### Bowerbird
+**A glossy blue-black bower — crisp and technical.**
 IBM Plex Sans on midnight navy; Zen Maru Gothic for Japanese; the crisp JetBrains Mono for code.
 Night · Everyday · Modern · Cool.
 
@@ -185,11 +185,11 @@ Regular) on every face; and headings deliberately use size, not weight.
 - **Newsreader** — a lively editorial serif with old-style warmth, built for reading on screen.
 - **Fraunces** — a characterful "old-style" display serif with soft-serif wobble and literary swagger.
 - **EB Garamond** — a faithful revival of Claude Garamond's Renaissance serif: classical, elegant, and (uniquely here) carrying real fleurons.
-- **Zilla Slab** — Mozilla's sturdy, friendly slab-serif; utilitarian with a bit of shoulder. *(Now Outback's alone.)*
+- **Zilla Slab** — Mozilla's sturdy, friendly slab-serif; utilitarian with a bit of shoulder. *(Now Mulga's alone.)*
 - **Bitter** — a sharp, higher-contrast screen slab: crisper and more incisive than Zilla, cut for high-contrast pages.
 
 ### Display sans
-- **IBM Plex Sans** — IBM's neutral humanist workhorse: clear, unfussy, corporate-calm. *(awl's cool-sans face, worn at both value poles — dark Kingfisher's midnight navy and light Brolga's pale sky.)*
+- **IBM Plex Sans** — IBM's neutral humanist workhorse: clear, unfussy, corporate-calm. *(awl's cool-sans face, worn at both value poles — dark Bowerbird's midnight navy and light Brolga's pale sky.)*
 - **Fira Sans** — a warm, friendly humanist sans: rounder and more personable than corporate-calm Plex.
 - **Figtree** — a soft, rounded geometric sans with a friendly contemporary warmth.
 - **iA Writer Quattro S** — a duospaced writing face (proportional look, monospace rhythm) tuned for calm drafting.
@@ -201,10 +201,10 @@ Regular) on every face; and headings deliberately use size, not weight.
 - **Iosevka** — a narrow, mechanical, characterful coding mono: tight and precise, a literal coder's face.
 
 ### CJK (per-script, per-world)
-- **Noto Serif JP** — Japanese mincho (serif): brushed and formal, for a literary Japanese page — the neutral floor for the display-serif worlds that keep it (Saltpan, Outback, Magpie).
-- **Shippori Mincho** — a bookish, characterful Japanese mincho: the per-world pick for awl's true book-serif worlds (Gumtree, Bilby, Undertow).
+- **Noto Serif JP** — Japanese mincho (serif): brushed and formal, for a literary Japanese page — the neutral floor for the display-serif worlds that keep it (Saltpan, Mulga, Magpie).
+- **Shippori Mincho** — a bookish, characterful Japanese mincho: the per-world pick for awl's true book-serif worlds (Gumtree, Bilby, Bombora).
 - **Noto Sans JP** — Japanese gothic (sans): even, modern, clean kana and kanji — the neutral floor for the mono/sans worlds that keep it (Potoroo, Tawny, Currawong, Mangrove, Firetail, Brolga).
-- **Zen Maru Gothic** — a rounded, warm Japanese gothic: the per-world pick for awl's rounded humanist-sans worlds (Galah, Kingfisher).
+- **Zen Maru Gothic** — a rounded, warm Japanese gothic: the per-world pick for awl's rounded humanist-sans worlds (Galah, Bowerbird).
 - **Klee One** — a brush kaisho Japanese face with real calligraphic character: the per-world pick for the two Klee worlds (Mopoke, Quokka), pairing with LXGW WenKai's matching Chinese brush.
 - **Noto Serif SC** — Simplified-Chinese Song/serif: the classic printed-book hanzi shape.
 - **Noto Sans SC** — Simplified-Chinese Hei/sans: even geometric strokes, screen-clean.
@@ -216,6 +216,6 @@ Regular) on every face; and headings deliberately use size, not weight.
 
 ### Ornament faces
 Each world carries a trio of **THREE DISTINCT** section-break symbols (dash `---` / star `***` / underscore `___`), all present in its face — the dash is the flagship (also the About end-mark).
-- **EB Garamond** — its only three Renaissance fleurons ❧ ☙ ❦ (no ⁂), permuted, for the TRUE literary serifs Bilby & Undertow.
-- **Junicode** — antique Caslon flowers (botanical sprays E67D/E270/E68A, running vines F01B/F01D/F01E, quatrefoil/lattice/damask tiles EF90/EF98/EF9A + E670/F011/F014) plus the ⁂/⁑ asterisms, for the antique/slab worlds (Magpie, Mopoke, Outback) AND the warm/pale serifs (Gumtree, Saltpan) whose display face has no fleurons of its own.
-- **Awl Marks** — the merged marks face itself, drawing its per-world trios from the expanded star/floret/geometric pool, for the modern/technical/geometric worlds (Quokka ✿❀✽, Galah ❁❂✿, Potoroo ✶✦◆, Kingfisher ❂✴◈, Mangrove ❖◈⬥, Tawny ✦✷◈, Currawong ✷✴⬥, Wagtail ✧⭑❡, Firetail ✷✶✦, Brolga ✧✴⬥).
+- **EB Garamond** — its only three Renaissance fleurons ❧ ☙ ❦ (no ⁂), permuted, for the TRUE literary serifs Bilby & Bombora.
+- **Junicode** — antique Caslon flowers (botanical sprays E67D/E270/E68A, running vines F01B/F01D/F01E, quatrefoil/lattice/damask tiles EF90/EF98/EF9A + E670/F011/F014) plus the ⁂/⁑ asterisms, for the antique/slab worlds (Magpie, Mopoke, Mulga) AND the warm/pale serifs (Gumtree, Saltpan) whose display face has no fleurons of its own.
+- **Awl Marks** — the merged marks face itself, drawing its per-world trios from the expanded star/floret/geometric pool, for the modern/technical/geometric worlds (Quokka ✿❀✽, Galah ❁❂✿, Potoroo ✶✦◆, Bowerbird ❂✴◈, Mangrove ❖◈⬥, Tawny ✦✷◈, Currawong ✷✴⬥, Wagtail ✧⭑❡, Firetail ✷✶✦, Brolga ✧✴⬥).
