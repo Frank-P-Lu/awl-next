@@ -70,6 +70,15 @@ riding it) never leaves a later motion on stale wrap geometry.
 - **Unbound chords are silent no-ops** (e.g. `C-Q` → `Ignore`, dropped); only
   structurally invalid tokens (e.g. `frobnicate`) error. (Under
   `--strict-replay` an unbound chord aborts instead — see below.)
+- **The theme (and caret-style) picker's LIVE PREVIEW is real, not skipped
+  headlessly.** `--keys "Cmd-T C-n"` opens "Switch theme…" and moves the
+  selection down — same as live, that PREVIEWS the next world onto the
+  process-global active theme (`preview_overlay`), so the captured frame
+  renders in the NEXT world, not whatever `--theme` you passed. This is
+  expected behavior (the whole point of `--keys` is driving the real seam),
+  not a bug — but a scenario author who wants a SPECIFIC world should pin it
+  with `--theme` and avoid keying through the theme picker at all, rather
+  than trying to land on a world by counting `C-n`/`C-p` presses.
 
 ### Search/replace is fully drivable (the isearch-input gap is retired)
 
