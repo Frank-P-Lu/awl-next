@@ -30,13 +30,14 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 | **Undertow**   | dark violet                | EB Garamond         | Monaspace Xenon | EB Garamond · ☙ ❧ ❦                           | Night | Refined  | Literary  | Cool    |
 | **Outback**    | blackish-olive             | Zilla Slab          | Monaspace Xenon | Junicode · ⁂ ⁑ ❦                              | Night | Everyday | Literary  | Cool    |
 | **Kingfisher** | midnight-navy              | IBM Plex Sans       | JetBrains Mono  | Awl Marks · ❂ ✴ ◈                             | Night | Everyday | Modern    | Cool    |
+| **Brolga**     | pale sky-blue              | IBM Plex Sans       | IBM Plex Mono   | Awl Marks · ✧ ✴ ⬥                             | Day   | —        | —         | Cool    |
 | **Mangrove**   | dark tidal-teal            | JetBrains Mono      | JetBrains Mono  | Awl Marks · ❖ ◈ ⬥                             | Night | Humble   | Technical | Cool    |
 | **Tawny**      | warm-grey                  | IBM Plex Mono       | IBM Plex Mono   | Awl Marks · ✦ ✷ ◈                             | Night | Humble   | Technical | Neutral |
 | **Currawong**  | near-pure-black OLED       | Iosevka             | Iosevka         | Awl Marks · ✷ ✴ ⬥                             | Night | Humble   | Technical | Neutral |
 | **Wagtail**    | near-black, zero-saturation | JetBrains Mono     | JetBrains Mono  | Awl Marks · ✧ ⭑ ❡                             | Dusk  | —        | —         | —       |
 | **Firetail**   | deep oxblood-charcoal       | Monaspace Xenon    | Monaspace Xenon | Awl Marks · ✷ ✶ ✦                             | —     | —        | —         | Warm    |
 
-*(16 worlds. The names are Australian fauna, flora, and landscape — flavour, not taxonomy. Wagtail and Firetail close the roster as statement-world mirrors — see below.)*
+*(17 worlds. The names are Australian fauna, flora, and landscape — flavour, not taxonomy. Wagtail and Firetail close the roster as statement-world mirrors; Brolga is the newest, the cool light pole — see below.)*
 
 ---
 
@@ -147,6 +148,18 @@ is still its and only its own) instead of hue. Named for the Willie
 Wagtail, a fearless black-and-white bird that's active at dawn and dusk —
 Dusk.
 
+### Brolga
+**A clear cool sky after rain — pale sky-blue, washed clean, one red-crown spark.**
+IBM Plex Sans on a pale periwinkle sky-blue page, a deep cool slate-navy ink; Noto Sans JP for Japanese; the humanist IBM Plex Mono for code.
+Brolga is the cool light pole — the DAWN round turned Bilby warm rose-gold and
+vacated the cool-light-blue side of the roster, and this world fills it: a clean
+cool SANS on blue where Gumtree (the only other cool light world) is a green
+SERIF, so it reads as its own thing, not Gumtree's sibling. The brolga is a tall
+grey-blue wetland crane with a vivid red crown; its world is the pale blue of a
+clear sky reflected in still shallow water, and its one warm living thing is the
+crane's red crown — a coral-vermilion caret.
+Day · Cool.
+
 ---
 
 ## The fonts we ship
@@ -170,7 +183,7 @@ Regular) on every face; and headings deliberately use size, not weight.
 - **Bitter** — a sharp, higher-contrast screen slab: crisper and more incisive than Zilla, cut for high-contrast pages.
 
 ### Display sans
-- **IBM Plex Sans** — IBM's neutral humanist workhorse: clear, unfussy, corporate-calm. *(Now Kingfisher's alone.)*
+- **IBM Plex Sans** — IBM's neutral humanist workhorse: clear, unfussy, corporate-calm. *(awl's cool-sans face, worn at both value poles — dark Kingfisher's midnight navy and light Brolga's pale sky.)*
 - **Fira Sans** — a warm, friendly humanist sans: rounder and more personable than corporate-calm Plex.
 - **Figtree** — a soft, rounded geometric sans with a friendly contemporary warmth.
 - **iA Writer Quattro S** — a duospaced writing face (proportional look, monospace rhythm) tuned for calm drafting.
@@ -184,7 +197,7 @@ Regular) on every face; and headings deliberately use size, not weight.
 ### CJK (per-script, per-world)
 - **Noto Serif JP** — Japanese mincho (serif): brushed and formal, for a literary Japanese page — the neutral floor for the display-serif worlds that keep it (Saltpan, Outback, Magpie).
 - **Shippori Mincho** — a bookish, characterful Japanese mincho: the per-world pick for awl's true book-serif worlds (Gumtree, Bilby, Undertow).
-- **Noto Sans JP** — Japanese gothic (sans): even, modern, clean kana and kanji — the neutral floor for the mono worlds that keep it (Potoroo, Tawny, Currawong, Mangrove, Firetail).
+- **Noto Sans JP** — Japanese gothic (sans): even, modern, clean kana and kanji — the neutral floor for the mono/sans worlds that keep it (Potoroo, Tawny, Currawong, Mangrove, Firetail, Brolga).
 - **Zen Maru Gothic** — a rounded, warm Japanese gothic: the per-world pick for awl's rounded humanist-sans worlds (Galah, Kingfisher).
 - **Klee One** — a brush kaisho Japanese face with real calligraphic character: the per-world pick for the two Klee worlds (Mopoke, Quokka), pairing with LXGW WenKai's matching Chinese brush.
 - **Noto Serif SC** — Simplified-Chinese Song/serif: the classic printed-book hanzi shape.
@@ -199,4 +212,4 @@ Regular) on every face; and headings deliberately use size, not weight.
 Each world carries a trio of **THREE DISTINCT** section-break symbols (dash `---` / star `***` / underscore `___`), all present in its face — the dash is the flagship (also the About end-mark).
 - **EB Garamond** — its only three Renaissance fleurons ❧ ☙ ❦ (no ⁂), permuted, for the TRUE literary serifs Bilby & Undertow.
 - **Junicode** — antique Caslon flowers (botanical sprays E67D/E270/E68A, running vines F01B/F01D/F01E, quatrefoil/lattice/damask tiles EF90/EF98/EF9A + E670/F011/F014) plus the ⁂/⁑ asterisms, for the antique/slab worlds (Magpie, Mopoke, Outback) AND the warm/pale serifs (Gumtree, Saltpan) whose display face has no fleurons of its own.
-- **Awl Marks** — the merged marks face itself, drawing its per-world trios from the expanded star/floret/geometric pool, for the modern/technical/geometric worlds (Quokka ✿❀✽, Galah ❁❂✿, Potoroo ✶✦◆, Kingfisher ❂✴◈, Mangrove ❖◈⬥, Tawny ✦✷◈, Currawong ✷✴⬥, Wagtail ✧⭑❡, Firetail ✷✶✦).
+- **Awl Marks** — the merged marks face itself, drawing its per-world trios from the expanded star/floret/geometric pool, for the modern/technical/geometric worlds (Quokka ✿❀✽, Galah ❁❂✿, Potoroo ✶✦◆, Kingfisher ❂✴◈, Mangrove ❖◈⬥, Tawny ✦✷◈, Currawong ✷✴⬥, Wagtail ✧⭑❡, Firetail ✷✶✦, Brolga ✧✴⬥).

@@ -13,7 +13,7 @@ world the design got wrong.
 ## 1. What a world is
 
 A **world** (`theme::Theme`, `src/theme.rs`) is a complete, curated mood — not a
-swatch. Sixteen ship today (ten dark, six light; `theme::THEMES`), each with:
+swatch. Seventeen ship today (ten dark, seven light; `theme::THEMES`), each with:
 
 - **An identity**: a name (Tawny, Saltpan, Potoroo, …), a one-line character
   description in its doc comment, and — critically — its own **display font**
@@ -69,6 +69,24 @@ than Potoroo; numeric whole-palette distance keeps it distinct from every world.
 deepening its existing tidal-teal identity. Both are law-tested by §3's "The
 `Background::Lava` law". This reaches PHILOSOPHY.md §2's upper "sixteen" — future
 worlds displace, not just append.
+
+The seventeenth world, **Brolga**, is not a statement world but a deliberate
+ROSTER REPAIR: the **cool light pole**. The DAWN round (2026-07-18) retuned
+Bilby out of its old pale-BLUE day room into a warm rose-gold dawn, vacating the
+cool-light-blue pole — the roster then had no light world on the blue side
+(Gumtree, the one cool light world, is GREEN). Brolga fills that hole: a clear
+cool sky after rain — a pale periwinkle sky-blue ground under a deep cool
+slate-navy ink, drawn in the clean cool sans IBM Plex Sans (the light value-pole
+twin of dark Kingfisher's navy, and a SANS where Gumtree is a serif, so it never
+reads as Gumtree's sibling — the exact near-pair trap the dawn round fixed). Its
+one warm living thing (DESIGN §3) is the brolga crane's red crown, a warm
+coral-vermilion caret. Its ground sits ≥35.7 redmean from every surviving light
+ground (min vs Galah), well past the dawn round's ~18.8 pale-band ceiling — its
+own point in the crowded pale band. It carries only the light-world card border
+(the DAWN round's reserved dark-line-on-light PAGE FRAME was declined: the
+user's live verdict on Bilby's 1px frame was "the frame is so weird" on a light
+world). No new law: Brolga rides the shared ink/role/selection derivations and
+is enrolled in every sweep the moment it joins `THEMES`.
 
 ---
 
@@ -225,7 +243,7 @@ new law here, not a bypass of this one.
 ### Structural / identity laws
 
 Enforced by the `theme::tests` module (see file for exact assertions):
-`worlds_ten_dark_six_light`, `every_world_has_a_valid_background`,
+`worlds_ten_dark_seven_light`, `every_world_has_a_valid_background`,
 `every_world_has_a_bundled_mono`, `cjk_fallback_matches_world_character`,
 `zh_hans_ladder_matches_world_character_with_klee_override`,
 `zh_hant_uniform_ko_splits_serif_from_sans`,
@@ -260,7 +278,7 @@ Enforced by `render::tests::syntax_roles::every_monochrome_world_renders_zero_sa
   from-comment-wash laws apply UNCHANGED — a monochrome highlight must still
   read as a highlight, by value instead of hue.
 - This is a property test layered ON TOP of, not a replacement for, the
-  ordinary structural laws above (`worlds_ten_dark_six_light`,
+  ordinary structural laws above (`worlds_ten_dark_seven_light`,
   `role_style_laws_hold_for_every_world`, …) — those still separately pin
   Wagtail's exact hex literals; this law is what stops a future hand-edit from
   quietly nudging one of those greys toward a hue and surviving unnoticed.
@@ -1220,7 +1238,7 @@ Checklist:
    wash and let `role_style_laws_hold_for_every_world` prove the pins still
    clear every law on their own.
 6. Add the const to `THEMES`; run `cargo test` — the structural laws
-   (`worlds_ten_dark_six_light` will need its counts updated), the role-style
+   (`worlds_ten_dark_seven_light` will need its counts updated), the role-style
    laws, and the ink-ladder/selection laws all sweep `THEMES` automatically, so a
    new world is enrolled in every law the moment it's in the array. A new WORLD
    CLASS (Wagtail's monochrome one) may also need its own new law, per §2/§3's
