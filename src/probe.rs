@@ -146,6 +146,95 @@ pub fn live_active() -> bool {
     LIVE_ACTIVE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// THE FLIGHT RECORDER (native live-App only) — the user's black box for the
+/// live "the page vanishes while previewing a theme" report. That bug is a
+/// present/compositor race: awl renders the correct frame but the macOS
+/// window-server shows a stale/blank drawable, so a readback of OUR OWN frame
+/// (the probe mirror) would look fine — the diagnostic signal is the PRESENT
+/// PATH itself (was the frame presented or skipped? was the transaction bracket
+/// armed? did a redraw get scheduled?), not a pixel of our own render. The
+/// vanish also will not reproduce under the automated probe (its non-key window
+/// is unfocused, so the ambient tick pauses and present races differ), while the
+/// user reproduces it constantly on their real focused window — so the honest
+/// tool is to hand them the recorder and read the trace of the next repro.
+///
+/// Armed by `AWL_FLIGHT_RECORDER=<path>` at launch (`init_flight`, called once
+/// from `crate::app::run`, the ONE native live door — a headless capture never
+/// reaches it, mirroring the daemon/probe capture gate). When armed, every
+/// diagnostic `trace` line ALSO appends to that file (flushed per line, so a
+/// crash/force-quit keeps the black box), and the `recording`-gated trace points
+/// across the app fire in the NORMAL live session, not just under the probe.
+/// Absent env = a total no-op, production byte-identical.
+#[cfg(not(target_arch = "wasm32"))]
+static FLIGHT_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(not(target_arch = "wasm32"))]
+static FLIGHT_SINK: std::sync::Mutex<Option<std::io::BufWriter<std::fs::File>>> =
+    std::sync::Mutex::new(None);
+
+/// Process-start monotonic anchor: each flight line is stamped `+<ms>` since this,
+/// so present gaps (the vanish signature) read directly off the log while the
+/// header carries the wall-clock start for correlating with the user's "it
+/// vanished at HH:MM".
+#[cfg(not(target_arch = "wasm32"))]
+static FLIGHT_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Arm the flight recorder from `AWL_FLIGHT_RECORDER` if the user set it. Opens the
+/// file in APPEND mode (a session adds to the black box, never truncates a prior
+/// repro). A missing/empty var or an open failure leaves the recorder OFF — never
+/// blocks launch. Idempotent-safe (re-arming just replaces the sink).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn init_flight() {
+    let Some(path) = std::env::var_os("AWL_FLIGHT_RECORDER") else {
+        return;
+    };
+    if path.is_empty() {
+        return;
+    }
+    arm_flight(std::path::Path::new(&path));
+}
+
+/// The env-free arming core (so a test can drive it without mutating `std::env` —
+/// the `set_var`/`var` data-race hazard). Opens the black box in APPEND mode and
+/// writes a header line stamping the build + wall-clock start.
+#[cfg(not(target_arch = "wasm32"))]
+fn arm_flight(path: &std::path::Path) {
+    match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        Ok(f) => {
+            let _ = FLIGHT_START.set(std::time::Instant::now());
+            if let Ok(mut sink) = FLIGHT_SINK.lock() {
+                *sink = Some(std::io::BufWriter::new(f));
+            }
+            FLIGHT_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+            let wall = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            trace(format_args!(
+                "=== flight-recorder armed (awl {}, pid {}, unix {wall}) ===",
+                env!("CARGO_PKG_VERSION"),
+                std::process::id(),
+            ));
+        }
+        Err(e) => eprintln!("awl: AWL_FLIGHT_RECORDER open failed ({e}); flight recorder off"),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn flight_active() -> bool {
+    FLIGHT_ACTIVE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Should the `recording`-gated diagnostic trace points fire? True under EITHER
+/// the automated live PROBE (`--live-script`) OR the user's FLIGHT RECORDER
+/// (`AWL_FLIGHT_RECORDER`). The vanish-hunt trace points guard on THIS (not the
+/// narrower `live_active`) so the same well-placed seams serve both readers —
+/// one set of trace points, two consumers, never a parallel copy.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn recording() -> bool {
+    live_active() || flight_active()
+}
+
 /// The LIVE PROBE window's fixed LOGICAL size (px): small + corner-anchored (see
 /// the window-attrs branch in `App::resumed`), so a probe window never sits
 /// center-stage stealing the eye — the companion to the Prohibited activation
@@ -171,7 +260,29 @@ pub const PROBE_LOGICAL_H: f64 = 600.0;
 /// the wrapping script asserts on.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn trace(args: std::fmt::Arguments) {
-    eprintln!("PROBE-TRACE {args} t={:?}", std::time::Instant::now());
+    // The PROBE reads its ordering off stderr (`PROBE-TRACE …`); only the live
+    // probe prints there, so a flight-recorder-only session stays silent on the
+    // terminal (the user's normal editor must not spew).
+    if live_active() {
+        eprintln!("PROBE-TRACE {args} t={:?}", std::time::Instant::now());
+    }
+    // The FLIGHT RECORDER appends the same line to the user's file, stamped `+<ms>`
+    // since arm so present gaps read directly. Flushed per line so a force-quit
+    // mid-repro keeps the tail. A poisoned lock or write error is swallowed —
+    // diagnostics must never crash the editor.
+    if flight_active() {
+        if let Ok(mut guard) = FLIGHT_SINK.lock() {
+            if let Some(w) = guard.as_mut() {
+                use std::io::Write;
+                let ms = FLIGHT_START
+                    .get()
+                    .map(|s| s.elapsed().as_millis())
+                    .unwrap_or(0);
+                let _ = writeln!(w, "+{ms}ms {args}");
+                let _ = w.flush();
+            }
+        }
+    }
 }
 
 /// Parse the `--live-script` grammar. A malformed step names itself in the
@@ -470,6 +581,40 @@ mod tests {
             PROBE_LOGICAL_W >= 640.0 && PROBE_LOGICAL_H >= 400.0,
             "probe window must stay large enough to render a real page + picker"
         );
+    }
+
+    /// THE FLIGHT RECORDER LAW: arming (env-free, via `arm_flight`) flips
+    /// `flight_active`/`recording`, and a `trace` line lands in the file with the
+    /// `+<ms>` stamp — the black box the user enables for the live vanish repro.
+    /// Global-state + fs, so it takes the process-wide `serial()` guard and disarms
+    /// on the way out (the flag must not leak into a sibling test's `recording()`).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn flight_recorder_arms_and_appends_a_stamped_line() {
+        let _g = crate::testlock::serial();
+        let path = std::env::temp_dir().join(format!("awl-flight-test-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        assert!(!flight_active(), "flight starts disarmed");
+        assert!(!live_active(), "no probe in a unit test, so recording() == flight_active()");
+        arm_flight(&path);
+        assert!(flight_active(), "arming flips the flag");
+        assert!(recording(), "recording() is true under the flight recorder alone");
+        trace(format_args!("preview Galah -> Magpie {}", 42));
+        let body = std::fs::read_to_string(&path).expect("the flight file exists");
+        assert!(
+            body.contains("preview Galah -> Magpie 42"),
+            "the traced line landed in the black box, got:\n{body}"
+        );
+        assert!(body.contains("flight-recorder armed"), "the header line is present:\n{body}");
+        assert!(
+            body.lines().all(|l| l.starts_with("+") && l.contains("ms ")),
+            "every line carries the +<ms> stamp:\n{body}"
+        );
+        // Disarm + clean up so the process global never leaks past this test.
+        FLIGHT_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut s) = FLIGHT_SINK.lock() { *s = None; }
+        let _ = std::fs::remove_file(&path);
+        assert!(!recording(), "disarmed again — no leak into sibling tests");
     }
 
     #[test]

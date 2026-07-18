@@ -377,6 +377,44 @@ mod tests {
         assert!(!lava_should_tick(true, false, false, true, false));
     }
 
+    /// THE STARS-ARM-THE-TICK-LIKE-LAVA LAW (user report 2026-07-18: "they don't
+    /// twinkle though?" — Currawong's stars render but sit STATIC while the lava
+    /// worlds animate). The live App arms its ~10 fps ambient tick by feeding the
+    /// ACTIVE world's `has_ambient_motion()` into `lava_should_tick` as its `active`
+    /// term (`App::about_to_wait`, `let lava_active = active().has_ambient_motion()`).
+    /// A stars-only world (Currawong, NOT lava) must therefore arm the tick EXACTLY
+    /// like a lava world — the widening from the old `is_lava()` gate to the shared
+    /// `has_ambient_motion()` one, which the vanish-fix's lava.rs deletion sweep was
+    /// suspected of reverting. This pins the COMPOSITION the App performs (the prior
+    /// test only fed a hardcoded `true`), so any future regression of the tick-arm
+    /// term back to lava-only fails here rather than silently freezing the stars.
+    #[test]
+    fn a_stars_only_world_arms_the_ambient_tick_exactly_like_a_lava_world() {
+        let world = |name: &str| THEMES.iter().find(|t| t.name == name).expect("real world");
+        let (currawong, firetail, magpie) =
+            (world("Currawong"), world("Firetail"), world("Magpie"));
+        assert!(
+            currawong.render_caps.ambient.is_animated() && !currawong.background.is_lava(),
+            "Currawong is the stars-only (non-lava) ambient world"
+        );
+        assert!(firetail.background.is_lava(), "Firetail is a lava world");
+        assert!(
+            !magpie.has_ambient_motion(),
+            "Magpie is a static world (the vanish's light destination)"
+        );
+        // Compose EXACTLY as `App::about_to_wait` does: active-world ambient bit ->
+        // `lava_should_tick`'s `active` term, with normal live conditions (ambient
+        // on, motion not reduced, focused, not paused).
+        let arms = |t: &crate::theme::Theme| lava_should_tick(t.has_ambient_motion(), true, false, true, false);
+        assert!(arms(firetail), "a lava world arms the tick");
+        assert!(
+            arms(currawong),
+            "a stars-only world MUST arm the tick just like a lava world (the frozen-stars regression guard)"
+        );
+        assert_eq!(arms(currawong), arms(firetail), "stars and lava arm identically");
+        assert!(!arms(magpie), "a static world schedules zero ambient frames");
+    }
+
     #[test]
     fn env_phase_grammar_accepts_finite_floats_only() {
         assert_eq!(parse_phase("0.5"), Some(0.5));

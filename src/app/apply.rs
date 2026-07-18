@@ -67,11 +67,18 @@ impl App {
             };
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::probe::live_active() {
+        if crate::probe::recording() {
+            // Log the DESTINATION page ground (`base_100`) — what the writing
+            // surface SHOULD be this preview step. A vanish is "the page went
+            // blank/stale on screen": pairing this intended color with the
+            // present outcome (traced below) tells the black box whether awl's
+            // correct light-ground frame actually reached the compositor.
+            let g = crate::theme::base_100().rgb_bytes();
             crate::probe::trace(format_args!(
-                "retint_preview {} -> {} (bracket armed unconditionally)",
+                "retint_preview {} -> {} (page_ground #{:02x}{:02x}{:02x}, bracket armed)",
                 prev.name,
-                crate::theme::active().name
+                crate::theme::active().name,
+                g[0], g[1], g[2],
             ));
         }
         // Unconditional: every preview frame joins the compositor's transaction.
@@ -110,7 +117,7 @@ impl App {
         // `crossing_teardown_pending`, it never disarms the bracket), that present
         // lands INSIDE the transaction. See `finish_crossing_settle`.
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::probe::live_active() {
+        if crate::probe::recording() {
             crate::probe::trace(format_args!("deferred_reshape applied (bracketed present to follow)"));
         }
         if let Some(gpu) = self.gpu.as_ref() {
