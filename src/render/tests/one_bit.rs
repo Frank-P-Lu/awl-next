@@ -512,6 +512,149 @@ fn wagtail_palette_card_real_pixels_show_a_white_border_ring_black_interior() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
+/// ARM B LIVING-BAND — the FILL/INK DIVERGENCE law, at the REAL-PIXEL seam (the
+/// Wagtail-tripwire class: the sidecar/state oracle can't see it, only bytes
+/// can). On a 1-bit world the moving selection band is a SOLID WHITE fill; the
+/// covered rows' glyphs must flip to BLACK so they read on it. The bug this
+/// guards: the ink flip used to bail on the FACETED (`geom.theme`) layout — the
+/// Cmd-P palette IS faceted — so the band FILL animated over the palette while
+/// the ink stayed state-tied to the settled selected row, painting white glyphs
+/// on the white band (white-on-white, invisible) for every row the band passed
+/// that wasn't the selection. This forces the palette faceted layout (a
+/// non-empty `overlay_lens`), pins a mid-flight morph phase, and asserts, over
+/// the rendered pixels: (1) every row the band majority-covers carries BLACK
+/// glyph pixels sitting WITHIN the white band (legible, not washed out), and
+/// (2) the not-yet-reached TARGET row keeps WHITE (unflipped) glyph pixels — its
+/// ink did NOT prematurely flip to black-on-black. Morph (single band) so the
+/// band region is unambiguous.
+#[test]
+fn wagtail_living_band_ink_rides_the_band_on_the_faceted_palette() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping wagtail_living_band_ink_rides_the_band_on_the_faceted_palette: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    use crate::render::livingband::{Choreo, MotionForce};
+
+    // FACETED palette: a non-empty lens strip routes `overlay_geometry` →
+    // `theme_overlay_geometry` (`geom.theme == true`) — the exact surface the
+    // old gate killed. TARGET = a MIDDLE row: the pinned band climbs from
+    // PIN_JUMP_ROWS BELOW it, so early in the flight it sits over rows BELOW the
+    // target (still on-card → covered) while the leading edge hasn't yet reached
+    // the target (target clear). Rows below the target must exist on-card, hence
+    // a middle selection with a full list.
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "commands";
+    v.overlay_lens = vec![("All".into(), true), ("File".into(), false)];
+    v.overlay_items = vec![
+        "Save all files".into(),
+        "Open recent".into(),
+        "Close window".into(),
+        "Find and replace".into(),
+        "Toggle sidebar".into(),
+        "Command palette".into(),
+    ];
+    v.overlay_selected = 2;
+
+    theme::set_active_by_name("Wagtail").unwrap();
+    // An EARLY morph phase: the band has just left its start row (PIN_JUMP_ROWS
+    // below the target) and covers the rows immediately below the target, whose
+    // leading edge has not yet climbed onto the target — so the target stays
+    // clear (asserted below, not assumed). Mirrors the unit test's t=0.1 regime.
+    crate::render::livingband::set_motion_test_override(Some(MotionForce {
+        choreo: Choreo::Morph,
+        phase: Some(0.1),
+    }));
+
+    p.sync_theme();
+    p.set_view(&v);
+
+    let geom = p.overlay_geometry(1200);
+    assert!(p.overlay_geom_is_faceted(&geom), "the lens strip must route the FACETED layout");
+    let (covered, target, first_top, lh, band) = p.living_probe_geom(&geom);
+    let [_bx, band_top, _bw, band_h] = band;
+    let band_bot = band_top + band_h;
+
+    // Preconditions the pixel law rests on: the band covers rows the fill
+    // animates over, and the TOP target is NOT among them (mid-flight).
+    assert!(!covered.is_empty(), "mid-flight band must cover at least one row (got {covered:?})");
+    assert!(
+        !covered.contains(&target),
+        "the not-yet-reached target row {target} must NOT be covered mid-flight (covered {covered:?})"
+    );
+
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let [card_x, _cy, card_w, _ch] = p.overlay_card_rect().expect("the faceted palette card must be open");
+    let (texture, tview) = super::dither::offscreen(&device, 1200, 800);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl living-band ink-rides encoder"),
+    });
+    p.render(&mut encoder, &tview).unwrap();
+    queue.submit(Some(encoder.finish()));
+    let pixels = super::dither::read_pixels(&device, &queue, &texture, 1200, 800);
+    let at = |x: i64, y: i64| pixels[(y as u32 * 1200 + x as u32) as usize];
+    // Pane world: text inset is the card pad (12px, `overlay_text_hpad == pad`).
+    let x0 = (card_x + 14.0) as i64;
+    let x1 = (card_x + card_w - 6.0) as i64;
+    let near_white = |px: [u8; 4]| px[3] == 255 && px[0] >= 170 && px[1] >= 170 && px[2] >= 170;
+    let near_black = |px: [u8; 4]| px[3] == 255 && px[0] <= 80 && px[1] <= 80 && px[2] <= 80;
+
+    // (1) EVERY covered row: within the band's overlap with that row (all white
+    // fill), there MUST be BLACK glyph pixels — the flipped ink reading on the
+    // band. A row with the white band but zero black glyphs IS the invisible bug.
+    for &k in &covered {
+        let row_top = first_top + k as f32 * lh;
+        let row_bot = row_top + lh;
+        // The slab that is genuinely UNDER the band (so any black there is glyph
+        // ink, never the black card ground): the row∩band intersection.
+        let y_lo = row_top.max(band_top).ceil() as i64;
+        let y_hi = row_bot.min(band_bot).floor() as i64;
+        assert!(y_hi > y_lo, "covered row {k} must have a real band overlap slab");
+        let mut white = 0usize;
+        let mut black = 0usize;
+        for y in y_lo..y_hi {
+            for x in x0..x1 {
+                let px = at(x, y);
+                if near_white(px) {
+                    white += 1;
+                } else if near_black(px) {
+                    black += 1;
+                }
+            }
+        }
+        assert!(white > 200, "covered row {k}: the white band fill must be present (white px {white})");
+        assert!(
+            black > 40,
+            "covered row {k}: BLACK glyph pixels must ride the white band (got {black}); \
+             white-on-white here is the faceted-palette invisible-ink bug"
+        );
+    }
+
+    // (2) The TARGET row keeps its WHITE (unflipped) glyph ink on the black
+    // ground — legible, and proof the flip did NOT fire early. Sample the row's
+    // own y-band (clear of the band). Erroneous black-on-black would leave ~0
+    // white glyph pixels here.
+    let t_top = (first_top + target as f32 * lh + 3.0) as i64;
+    let t_bot = (first_top + (target as f32 + 1.0) * lh - 3.0) as i64;
+    let mut target_white = 0usize;
+    for y in t_top..t_bot {
+        for x in x0..x1 {
+            if near_white(at(x, y)) {
+                target_white += 1;
+            }
+        }
+    }
+    assert!(
+        target_white > 40,
+        "the not-yet-reached target row {target} must keep WHITE glyph pixels (got {target_white}); \
+         a premature flip would paint them black-on-black (invisible)"
+    );
+
+    crate::render::livingband::set_motion_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 /// THE CENTERED-OVERLAY FAMILY, at the NO-WILDCARD [`crate::overlay::OverlayKind`]
 /// seam: every summoned picker EXCEPT the contextual SPELL popup (which floats
 /// at the misspelled word on its own float-panel primitive, UNCONDITIONALLY

@@ -219,13 +219,18 @@ pub(super) struct OverlayGeom {
     /// the hit-test / selected-row band (which only span the candidate rows above) are
     /// untouched.
     footer_rows: usize,
-    /// THEME PICKER only: `true` when this card is the faceted theme picker (drives the
-    /// strip + section-header layout branch). `false` for every other overlay.
+    /// FACETED card: `true` when this card takes the faceted (lens-strip +
+    /// section-header) layout branch — the Switch-theme picker AND every other
+    /// picker once a lens strip is populated (the Cmd-P command palette, Settings,
+    /// Browse, …; `overlay_geometry` routes to `theme_overlay_geometry` whenever
+    /// `overlay_lens` is non-empty, not just for the literal Theme kind). `false`
+    /// for the flat pickers. (The field name predates the faceted UNION; it now
+    /// means "faceted layout", not "the Theme kind".)
     theme: bool,
-    /// THEME PICKER only: the lens strip (label + active flag), drawn on display line 1.
+    /// FACETED card: the lens strip (label + active flag), drawn on display line 1.
     strip: Vec<(String, bool)>,
-    /// THEME PICKER only: the candidate-area display sequence (headers + world rows),
-    /// starting at display line 2 (below the query line 0 + strip line 1).
+    /// FACETED card: the candidate-area display sequence (section headers + item
+    /// rows), starting at display line 2 (below the query line 0 + strip line 1).
     plan: Vec<ThemeLine>,
     /// Rows occupied ABOVE the candidate list: `1` for the query line the flat/nav
     /// pickers show at the top (`› query`), `0` for the contextual SPELL panel (no

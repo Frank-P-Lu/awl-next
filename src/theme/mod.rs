@@ -52,7 +52,8 @@ pub(crate) use cjk::EMBEDDED_CJK_FAMILIES;
 pub use color::Srgb;
 pub use derive::{
     active, active_index, background, base_100, base_200, base_300, base_content, error, faint,
-    heatmap_colors, image_reveal_scrim, muted, overlay_bar_unselected, overlay_bars_room,
+    heatmap_colors, image_reveal_scrim, muted, overlay_band_overlap, overlay_bar_unselected,
+    overlay_bars_room,
     overlay_selected_band,
     page_frame_ink,
     placard_ink,

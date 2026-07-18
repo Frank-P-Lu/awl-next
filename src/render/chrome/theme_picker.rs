@@ -268,6 +268,11 @@ impl TextPipeline {
         ink: glyphon::Color,
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
+        // ARM B LIVING-BAND PROBE — the DISPLAY (plan-line) rows the moving band
+        // covers this frame; those rows' ink flips instead of the static selected
+        // item. `None` on every ordinary run → the shaper flips exactly the
+        // selected item (byte-identical). See [`livingband::covered_rows`].
+        covered: Option<&[usize]>,
         // V7 TASTE-GATE — one trailing INLINE-SHORTCUT string per PLAN line
         // (already `INLINE_SHORTCUT_GAP`-prefixed; empty = none / a header). Non-empty
         // ONLY under `HugText` bars with a right column, where each item's shortcut
@@ -316,11 +321,11 @@ impl TextPipeline {
             }
             _ => ink,
         };
-        self.shape_theme_spans(geom, ink, active_ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, trailing, 1.0);
+        self.shape_theme_spans(geom, ink, active_ink, muted, selected_ink, covered, &strip_s, &label_ranges, &sep_ranges, trailing, 1.0);
         let strip_w = self.theme_strip_px();
         if strip_w > geom.text_w {
             let scale = (geom.text_w / strip_w).max(0.5);
-            self.shape_theme_spans(geom, ink, active_ink, muted, selected_ink, &strip_s, &label_ranges, &sep_ranges, trailing, scale);
+            self.shape_theme_spans(geom, ink, active_ink, muted, selected_ink, covered, &strip_s, &label_ranges, &sep_ranges, trailing, scale);
         }
 
         // Record the active-lens mark from the shaped strip glyphs (line 1). Line-1
@@ -503,6 +508,10 @@ impl TextPipeline {
         active_ink: glyphon::Color,
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
+        // ARM B LIVING-BAND PROBE — the DISPLAY (plan-line) rows the moving band
+        // covers this frame; their ink flips instead of the static selected item.
+        // `None` on every ordinary run → flips exactly the selected item.
+        covered: Option<&[usize]>,
         strip_s: &str,
         label_ranges: &[(std::ops::Range<usize>, bool)],
         sep_ranges: &[std::ops::Range<usize>],
@@ -653,8 +662,17 @@ impl TextPipeline {
                     spans.push((h.as_str(), mk(faint).metrics(header_metrics)));
                 }
                 ThemeLine::Item(i) => {
+                    // INK RIDES THE BAND: under the living-band probe (`covered`
+                    // set) the flip follows whichever PLAN rows the MOVING band
+                    // covers this frame (`idx` is the plan-line/display-row index,
+                    // matching `covered_rows`' basis); otherwise it flips exactly
+                    // the settled selected item (byte-identical).
+                    let flip = match covered {
+                        Some(rows) => rows.contains(&idx),
+                        None => *i == self.overlay_selected,
+                    };
                     let c = match selected_ink {
-                        Some(c) if *i == self.overlay_selected => c,
+                        Some(c) if flip => c,
                         _ => ink,
                     };
                     spans.push((fit.as_deref().unwrap_or(""), rk(c)));

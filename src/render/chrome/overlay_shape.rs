@@ -429,6 +429,13 @@ impl TextPipeline {
         // where the selected row keeps its content ink and the shaper is
         // byte-identical to before.
         selected_ink: Option<glyphon::Color>,
+        // ARM B LIVING-BAND PROBE — the DISPLAY rows the moving band COVERS this
+        // frame (whose ink flips instead of the static selected row). `None` on
+        // every ordinary run: the shaper flips exactly `overlay_selected`
+        // (byte-identical). Threaded through BOTH the flat AND the FACETED path
+        // (the demo surface is the Cmd-P palette, which is faceted) so the ink
+        // rides the band wherever the fill animates it.
+        covered: Option<&[usize]>,
     ) -> bool {
         // FACETED (lens-strip) pickers — the theme worlds AND the Cmd-P command
         // palette / Settings / Browse / … once a lens strip is populated — lay out
@@ -436,10 +443,12 @@ impl TextPipeline {
         // shaper, which also records the active-lens underline rect) PLUS, when the
         // picker fills a right column (chords / times / git), that column aligned to
         // the plan's item rows. `shape_faceted` owns both halves and returns whether
-        // a right column was built.
+        // a right column was built. It ALSO threads `covered` through to the
+        // section-grouped shaper, so the living-band ink flip works on the palette
+        // (the demo surface) exactly like the flat pickers.
         self.overlay_right_shown = false;
         if geom.theme {
-            return self.shape_faceted(geom, ink, muted, selected_ink);
+            return self.shape_faceted(geom, ink, muted, selected_ink, covered);
         }
         let visible = geom.visible;
         let top_idx = geom.top_idx;
@@ -504,7 +513,7 @@ impl TextPipeline {
                     _ => String::new(),
                 })
                 .collect();
-            self.shape_overlay_names(geom, ink, muted, selected_ink, &rows, &trailing);
+            self.shape_overlay_names(geom, ink, muted, selected_ink, covered, &rows, &trailing);
             return false;
         }
         let widest_right = if has_right {
@@ -525,7 +534,7 @@ impl TextPipeline {
                 }
             })
             .collect();
-        self.shape_overlay_names(geom, ink, muted, selected_ink, &rows, &[]);
+        self.shape_overlay_names(geom, ink, muted, selected_ink, covered, &rows, &[]);
         if !has_right {
             return false;
         }
@@ -548,7 +557,7 @@ impl TextPipeline {
         let rows: Vec<String> = (0..visible)
             .map(|row| rowlayout::fit_primary(&self.overlay_items[top_idx + row], full))
             .collect();
-        self.shape_overlay_names(geom, ink, muted, selected_ink, &rows, &[]);
+        self.shape_overlay_names(geom, ink, muted, selected_ink, covered, &rows, &[]);
         false
     }
 
@@ -584,6 +593,11 @@ impl TextPipeline {
         ink: glyphon::Color,
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
+        // ARM B LIVING-BAND PROBE — the DISPLAY (plan-line) rows the moving band
+        // covers this frame; their ink flips instead of the static selected item.
+        // `None` on every ordinary run → the theme shaper flips exactly the
+        // selected item (byte-identical).
+        covered: Option<&[usize]>,
     ) -> bool {
         // The dim RIGHT column through the SAME one-owner precedence the flat path
         // reads (bindings → times → git; only one is ever populated). Empty on the
@@ -635,7 +649,7 @@ impl TextPipeline {
         };
         // The section-grouped name column + the active-lens underline (unchanged,
         // save the inline shortcuts composed onto the ITEM rows under hug bars).
-        self.overlay_shape_theme(geom, ink, muted, selected_ink, &trailing);
+        self.overlay_shape_theme(geom, ink, muted, selected_ink, covered, &trailing);
         if !has_right || hug_inline {
             return false;
         }
@@ -718,6 +732,11 @@ impl TextPipeline {
         ink: glyphon::Color,
         muted: glyphon::Color,
         selected_ink: Option<glyphon::Color>,
+        // ARM B LIVING-BAND PROBE — the DISPLAY rows the moving band covers this
+        // frame; their ink flips instead of the static selected row ("ink rides
+        // the band"). `None` on every ordinary run → the shaper flips exactly
+        // `sel_vis` (byte-identical). See [`livingband::covered_rows`].
+        covered: Option<&[usize]>,
         rows: &[String],
         // V7 TASTE-GATE — one trailing INLINE-SHORTCUT string per candidate row
         // (already `INLINE_SHORTCUT_GAP`-prefixed; empty = none). Non-empty ONLY
@@ -822,8 +841,15 @@ impl TextPipeline {
             if !(!has_query && row == 0) {
                 spans.push(("\n", mk(ink)));
             }
+            // INK RIDES THE BAND: under the living-band probe (`covered` set) the
+            // flip follows whichever rows the MOVING band covers this frame;
+            // otherwise it flips exactly the settled selected row (byte-identical).
+            let flip = match covered {
+                Some(rows) => rows.contains(&row),
+                None => row == sel_vis,
+            };
             let (name_c, dir_c) = match selected_ink {
-                Some(c) if row == sel_vis => (c, c),
+                Some(c) if flip => (c, c),
                 _ => (ink, muted),
             };
             let split = if content.ends_with('/') {

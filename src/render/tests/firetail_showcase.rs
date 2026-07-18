@@ -466,13 +466,13 @@ fn slant_width_tax_makes_rowlayout_elide_what_no_longer_fits() {
         }
         w
     };
-    p.overlay_shape_text(&geom, ink, muted, None);
+    p.overlay_shape_text(&geom, ink, muted, None, None);
     let plain_w = widest(&p);
     assert!(plain_w > 0.0);
 
     // A hefty stair: 40px/row over 3 rows = an 80px tax.
     set_slant_test_override(Some(SlantProbe { px_per_row: 40.0, italic: false }));
-    p.overlay_shape_text(&geom, ink, muted, None);
+    p.overlay_shape_text(&geom, ink, muted, None, None);
     let slanted_w = widest(&p);
     set_slant_test_override(None);
 
