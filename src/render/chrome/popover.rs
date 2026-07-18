@@ -2,8 +2,9 @@
 //! [`crate::popover::PopoverModel`] (from [`ViewState::popover`]) + the live
 //! selection, this shapes the button labels, measures their real glyph spans,
 //! lays out a small elevated card ANCHORED just above (or below) the selection's
-//! first endpoint, and uploads: the float elevation (shadow → raised border →
-//! `base_300` card), a `base_200` value-step wash behind each LIT button, and the
+//! first endpoint, and uploads: the RIMMED float elevation (raised border →
+//! `base_300` card, NO drop shadow — see [`FloatElevation::Rimmed`], the "fat
+//! chin" cure), a `base_200` value-step wash behind each LIT button, and the
 //! button labels themselves. Parked (nothing drawn) when the model is `None`, so a
 //! popover-down frame is byte-identical.
 //!
@@ -90,8 +91,12 @@ impl TextPipeline {
         let geom = self.popover_layout(width, height);
         match geom {
             Some(geom) => {
-                // Float elevation (shadow → raised border → card), the SAME primitive
-                // every summoned micro-panel rides.
+                // Float elevation via the SAME primitive every summoned micro-panel
+                // rides — but RIMMED (border + card, no shadow): the drop-shadow quad
+                // hung a hard-edged ~9px slab below this two-line-height card's rim,
+                // out-massing its own 7px pad — the LIVE "fat chin" that survived the
+                // card-hug fix, at every scale (the card rect measured tight while
+                // the slab painted OUTSIDE it). See [`FloatElevation::Rimmed`].
                 set_float_quads(
                     &mut self.popover_shadow,
                     &mut self.popover_border,
@@ -101,7 +106,7 @@ impl TextPipeline {
                     width,
                     height,
                     Some(geom.card),
-                    true,
+                    FloatElevation::Rimmed,
                 );
                 // A value-step wash behind each LIT button (never amber) — a pill
                 // hugging the glyph ink band with a small halo (the card hugs the same
@@ -178,7 +183,7 @@ impl TextPipeline {
                     width,
                     height,
                     None,
-                    true,
+                    FloatElevation::Rimmed,
                 );
                 self.popover_wash.prepare(device, queue, width, height, &[]);
                 self.popover_hl_wash.prepare(device, queue, width, height, &[]);

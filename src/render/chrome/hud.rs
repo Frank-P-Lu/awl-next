@@ -247,7 +247,7 @@ impl TextPipeline {
                 width,
                 height,
                 None,
-                true,
+                FloatElevation::Shadowed,
             );
         }
 
@@ -489,7 +489,7 @@ impl TextPipeline {
             width,
             height,
             Some([card_x, card_y, card_w, card_h]),
-            true,
+            FloatElevation::Shadowed,
         );
         let area = TextArea {
             buffer: &self.hud_buffer,
@@ -710,7 +710,7 @@ impl TextPipeline {
             width,
             height,
             Some([card_x, card_y, card_w, card_h]),
-            true,
+            FloatElevation::Shadowed,
         );
 
         // ── The stats text below the grid ──
