@@ -133,6 +133,16 @@ pub enum OverlayKind {
     /// empty / from the clipboard-if-URL / from an existing link's current URL,
     /// per `Action::InsertLink`'s own doc. No list to browse.
     InsertLink,
+    /// NAMED SAVE POINTS: the "Keep version…" minibuffer — a single-row prompt
+    /// for the kept version's OPTIONAL name, mirroring [`OverlayKind::Rename`]'s
+    /// exact shape (the modal `keep_edit` sub-state owns every key; the
+    /// live-typed name IS the row's primary cell). Enter COMMITS
+    /// (`Effect::KeepVersion { name }` — `Some(name)` for a typed name, `None`
+    /// for a blank Enter, which is exactly the pre-name plain keep: zero
+    /// friction preserved), Esc cancels (nothing recorded). Opens empty (there
+    /// is no old name to seed — a fresh point is being marked). No list to
+    /// browse.
+    KeepName,
 }
 
 /// How a picker's ACCEPT (Enter on a committed item) disposes of the breadcrumb
@@ -174,7 +184,7 @@ impl OverlayKind {
     /// `rowlayout` — are the real compile-time guards; this is iteration
     /// convenience, kept in lockstep by hand like `CaretMode::ALL`).
     #[allow(dead_code)] // consumed only by the `facets`/law tests today.
-    pub const ALL: [OverlayKind; 16] = [
+    pub const ALL: [OverlayKind; 17] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -191,7 +201,18 @@ impl OverlayKind {
         OverlayKind::Assets,
         OverlayKind::Rename,
         OverlayKind::InsertLink,
+        OverlayKind::KeepName,
     ];
+
+    /// Resolve a capture-sidecar MODE string ([`Self::as_str`]) back to its kind —
+    /// derived from [`Self::ALL`] + `as_str` (no third match to maintain), so it
+    /// can never disagree with the forward mapping. `None` for an unknown string.
+    /// Lets the headless capture path consult the REAL per-kind owners
+    /// ([`Self::draws_title_prefix`]) instead of re-listing mode strings by hand —
+    /// the aligned-copy drift the KeepName round caught in `capture/modes.rs`.
+    pub fn from_mode(mode: &str) -> Option<OverlayKind> {
+        Self::ALL.iter().copied().find(|k| k.as_str() == mode)
+    }
 
     /// The short mode string used in the capture sidecar.
     pub fn as_str(self) -> &'static str {
@@ -212,6 +233,7 @@ impl OverlayKind {
             OverlayKind::Assets => "assets",
             OverlayKind::Rename => "rename",
             OverlayKind::InsertLink => "insert_link",
+            OverlayKind::KeepName => "keep_version",
         }
     }
 
@@ -259,6 +281,12 @@ impl OverlayKind {
             // declared here anyway so the law test's no-wildcard sweep can't
             // silently forget this kind.)
             OverlayKind::InsertLink => Navigate,
+            // NAMED SAVE POINTS: a commit LANDS a result (the version is kept),
+            // so it closes the whole stack — same class as Rename/InsertLink.
+            // (In practice the `keep_edit` modal intercept closes the overlay
+            // itself at Enter, before this is consulted — declared anyway for
+            // the no-wildcard sweep.)
+            OverlayKind::KeepName => Navigate,
         }
     }
 
@@ -323,12 +351,26 @@ impl OverlayKind {
     /// (combined `←/→` for a lens axis); `⌫` Backspace (ascend a level); and a short
     /// lowercase WORD (`esc`, `del`) for a key with no bundled glyph.
     pub fn hint_actions(self) -> Vec<HintAction> {
-        // Every summoned overlay is a navigable LIST — ↑/↓ (and C-n/C-p) always move
-        // the selection — so the MOVE affordance is UNIVERSAL and LEADS every kind's
-        // line. Prepended here in the ONE shared owner so no kind can forget to teach
-        // it (users otherwise reach for the OS-eaten Ctrl-Up/Down and think nav is
-        // broken). The per-kind primary/nav/cancel actions follow, from `kind_actions`.
-        let mut actions = vec![HintAction { glyph: "\u{2191}/\u{2193}", label: "move" }];
+        // Every summoned overlay is a navigable LIST that shares the SAME jump
+        // affordances, so a UNIVERSAL NAV CLUSTER leads every kind's line — the fix
+        // for the "you can't jump, you go up or down one by one" report (the arrow-only
+        // model was the only advertised motion). ONE universal cell, prepended here
+        // in the ONE shared owner so no kind can forget it:
+        //   type to filter  — random access by NAME (`push`/`refilter` runs on every
+        //                     kind), the STRONGEST jump — the direct answer to "you
+        //                     can't jump, you go up or down one by one".
+        // KEPT DELIBERATELY TO ONE CELL (a calm line that still fits the flat card at
+        // every zoom): arrows need no teaching (the report's author already lived in
+        // ↑/↓ — the gap was only that filter/jump went UNADVERTISED), and the width
+        // budget is real: with History's tab-compare cell the two-cell lead overflowed
+        // the flat card 585px > 496px (the no-clip law below caught it). PgUp/PgDn
+        // paging and Home/End jump-to-ends still WORK (drivable + tested), just
+        // unadvertised — the ⇞/⇟ keycaps also tofu (they live in neither the per-world
+        // display faces nor the bundled `AwlMarks` set). The per-kind primary/nav/
+        // cancel actions (↵ / lens / esc) follow, from `kind_actions`. (Rename/
+        // InsertLink never show this line — their `foot_hint` returns their own modal
+        // prompt — so the cluster never misleads a text edit.)
+        let mut actions = vec![HintAction { glyph: "type", label: "to filter" }];
         actions.extend(self.kind_actions());
         actions
     }
@@ -389,11 +431,17 @@ impl OverlayKind {
                 key("esc", "close"),
             ],
             // The faceted history timeline: ↵ RESTORES the highlighted version (an
-            // undoable edit), ←/→ switch the lens (All / Session / Today), esc closes.
+            // undoable edit), ⇥ COMPARES it against the current buffer (the read-only
+            // prose-diff view), ←/→ switch the lens (All / Session / Today). esc still
+            // closes but goes UNADVERTISED (the Spell/Settings precedent: plain-close
+            // esc is learned behavior; only an INFORMATIVE esc — the theme picker's
+            // "esc revert" — earns a cell). Width is why the trim landed HERE: with
+            // tab-compare + the universal filter cell, the advertised line overflowed
+            // the flat card (the no-clip law caught 498.7px > 496px).
             OverlayKind::History => vec![
                 enter("restore"),
+                key("tab", "compare"),
                 key("\u{2190}/\u{2192}", "lens"),
-                key("esc", "close"),
             ],
             // The faceted settings menu: ↵ edits the highlighted setting (toggle /
             // open a sub-picker — wired next phase), ←/→ switch the category lens,
@@ -416,6 +464,10 @@ impl OverlayKind {
             // `link_edit` prompt (via `foot_hint`) teaches Enter/Esc, mirroring
             // Rename exactly.
             OverlayKind::InsertLink => vec![enter("insert link"), key("esc", "cancel")],
+            // NAMED SAVE POINTS: no list nav either (a single editable row) —
+            // its own `keep_edit` prompt (via `foot_hint`) teaches Enter/Esc,
+            // mirroring Rename/InsertLink exactly.
+            OverlayKind::KeepName => vec![enter("keep"), key("esc", "cancel")],
         }
     }
 
@@ -457,6 +509,9 @@ impl OverlayKind {
             // LINKS V2 always summons with exactly one row (the editable URL) —
             // this arm is structurally unreachable, mirroring Rename.
             OverlayKind::InsertLink => "no matches",
+            // NAMED SAVE POINTS always summons with exactly one row (the
+            // editable name) — structurally unreachable, mirroring Rename.
+            OverlayKind::KeepName => "no matches",
         }
     }
 
@@ -488,19 +543,24 @@ impl OverlayKind {
             OverlayKind::Assets => "unused assets",
             OverlayKind::Rename => "rename",
             OverlayKind::InsertLink => "insert link",
+            OverlayKind::KeepName => "keep version",
         }
     }
 
     /// THE OVERLAY-TITLES ROUND: does this kind's RENDER draw the `title() › `
-    /// prefix on its input line? `false` for Rename/InsertLink — their own modal
-    /// prompt (`foot_hint`, "rename to:"/"link to:") already orients, so a second
-    /// self-announcement would be redundant chrome; the SIDECAR still reports
-    /// [`Self::title`] unconditionally for every kind (the law is "every kind names
-    /// itself", not "every kind draws it" — see [`Self::title`]'s own doc). Spell
-    /// (no input line at all, `header_rows == 0`) needs no exclusion here — the
+    /// prefix on its input line? `false` for Rename/InsertLink/KeepName — their
+    /// own modal prompt (`foot_hint`, "rename to:"/"link to:"/"name this
+    /// version:") already orients, so a second self-announcement would be
+    /// redundant chrome; the SIDECAR still reports [`Self::title`]
+    /// unconditionally for every kind (the law is "every kind names itself",
+    /// not "every kind draws it" — see [`Self::title`]'s own doc). Spell (no
+    /// input line at all, `header_rows == 0`) needs no exclusion here — the
     /// render path simply never reaches a query line to prefix for it.
     pub fn draws_title_prefix(self) -> bool {
-        !matches!(self, OverlayKind::Rename | OverlayKind::InsertLink)
+        !matches!(
+            self,
+            OverlayKind::Rename | OverlayKind::InsertLink | OverlayKind::KeepName
+        )
     }
 
     /// THE SETTINGS-MARKER GLYPH (the union round): a settings row reached via the

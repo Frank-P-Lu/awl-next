@@ -54,6 +54,8 @@ mod daemon;
 mod debug;
 mod durable;
 mod ease;
+mod embedded_docs;
+mod embedded_docs_law;
 mod export;
 mod facets;
 mod frontmatter;
@@ -90,9 +92,11 @@ mod peek;
 #[cfg(not(target_arch = "wasm32"))]
 mod paste_image;
 mod pointer_hide;
+mod popover;
 #[cfg(test)]
 mod println_audit;
 mod project;
+mod prosediff;
 mod recent_files;
 mod recents;
 mod render;
@@ -112,7 +116,12 @@ mod settings;
 mod spell;
 mod storyboard;
 mod spellunderline;
+// TWINKLING STARS — the ambient star-field ground (margins-only, individually
+// phased twinkle riding the lava's own ~10 fps ambient clock). Currawong's
+// differentiator; every other world's `AmbientStyle::None` is a total no-op.
+mod stars;
 mod stats;
+mod streaks;
 mod syntax;
 mod theme;
 #[cfg(test)]

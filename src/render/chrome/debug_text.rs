@@ -75,6 +75,19 @@ impl TextPipeline {
         self.page_drag_readout = r;
     }
 
+    /// LIVE-ONLY: set (or clear) the ZOOM READOUT — the pointer position (physical
+    /// px) + the current zoom factor the quiet percentage label floats near while a
+    /// zoom gesture (Cmd-± / Cmd-scroll) is IN FLIGHT (the sticky-zoom debounce
+    /// window). `None` clears it (the zoom settled, or never zoomed — the default),
+    /// parking the label off-screen. Called only by the live App's zoom debounce
+    /// (`App::mark_zoom_dirty` arms it, `about_to_wait` clears it on settle); the
+    /// headless capture/replay path never calls this (zoom mirrors through
+    /// `apply_core`, never `mark_zoom_dirty`), so a default capture — and every
+    /// `--keys` replay — stays byte-identical.
+    pub fn set_zoom_readout(&mut self, r: Option<(f32, f32, f32)>) {
+        self.zoom_readout = r;
+    }
+
     /// The DEBUG panel TEXT for the top-left corner: a small STACKED dev readout, one
     /// diagnostic per line. EMPTY when the panel is off (parks it off-screen, so a
     /// default capture stays byte-identical). The first THREE lines are the honest

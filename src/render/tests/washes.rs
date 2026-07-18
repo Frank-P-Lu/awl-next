@@ -309,6 +309,68 @@ fn markdown_highlight_inherits_wash_and_code_buffers_never_match() {
     );
 }
 
+/// THE WRITER'S DIFF — the marked-up-manuscript transcript DRAWS awl's real diff
+/// vocabulary: an inserted paragraph rides the `==highlight==` WASH (a drawn quad in
+/// `wash_rects`' highlight bucket, its own violet tint), a struck deletion carries
+/// REAL `~~` strikethrough (drawn strike-line quads from `strike_lines`, positioned
+/// by THE one owner `spans::strike_line_band` — the strikethrough-render round
+/// retired the combining-stroke mechanism), and the fold/deletion blockquotes dim. This
+/// asserts the APPEARANCE at the DRAWN-quad level (the `wash_rects` oracle the
+/// codebase uses instead of pixel-diffing), so the washed region is proven present
+/// from the actual render, never inferred from state. The transcript is exactly what
+/// `prosediff::render_markdown` produces, so the live diff view + the capture harness
+/// both draw this.
+#[test]
+fn prose_diff_transcript_draws_highlight_wash_and_struck_deletion() {
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping prose_diff_transcript_draws_highlight_wash_and_struck_deletion: no wgpu adapter");
+        return;
+    };
+    // A deletion, an insertion, and an untouched-fold — the real serializer output.
+    let old = "Keep this opening line.\n\nDrop this whole paragraph entirely now.";
+    let new = "Keep this opening line.\n\nA brand new inserted paragraph arrives.";
+    let transcript = crate::prosediff::render_markdown(
+        old,
+        new,
+        crate::prosediff::Params::shipping(),
+        "Comparing with earlier",
+    );
+    // The transcript IS awl's diff vocabulary: a struck deletion + a washed insertion.
+    assert!(transcript.contains("~~"), "struck deletion speaks real `~~` markdown");
+    assert!(transcript.contains("=="), "highlight-washed insertion in the drawn text");
+
+    // Park the caret on the blank line 1 (as the diff view does) so nothing reveals.
+    let mut v = view(&transcript, 1, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+
+    // md_report shows the washed insertion as a `highlight` span (its `==` dim markup).
+    let spans = p.md_report();
+    assert!(
+        spans.iter().any(|(_, _, t)| *t == "highlight"),
+        "the inserted paragraph is a highlight span: {spans:?}"
+    );
+    // APPEARANCE ORACLE: the highlight rides its OWN drawn wash quad (violet tint),
+    // decoupled from the comment/string buckets — the washed region is really drawn.
+    let (comments, strings, highlights) = p.wash_rects();
+    assert!(
+        !highlights.is_empty(),
+        "the inserted paragraph draws a highlight-wash quad: {highlights:?}"
+    );
+    assert!(comments.is_empty() && strings.is_empty(), "no code washes in a prose diff");
+    // APPEARANCE ORACLE, strike half: the deleted paragraph really draws its
+    // strike-line quads (the diff's struck rendering routes through the SAME
+    // `MdKind::Strikethrough` → `strike_lines` path body prose uses — one owner,
+    // no diff-only strike mechanism).
+    let strikes = p.strike_lines();
+    assert!(!strikes.is_empty(), "the struck deletion draws strike-line quads");
+    for s in &strikes {
+        assert!(s.amp == 0.0 && s.thickness > 0.0, "a strike is a flat positive stroke: {s:?}");
+    }
+}
+
 /// `merge_row_bands` PURE UNIT CONTRACT: vertically-contiguous same-x
 /// bands collapse to one quad spanning their union; a variable-width run
 /// merges to the UNION x-range; two bands on the SAME row (equal y) never
@@ -480,4 +542,80 @@ fn wysiwyg_flip_rekeys_wash_and_fence_panel_caches() {
 
     // restore the sticky default for any later test on this thread
     crate::markdown::set_wysiwyg_on(true);
+}
+
+/// `~~strikethrough~~` — the drawn STRIKE LINE's geometry contract, at the
+/// render seam: one flat quad band per struck run, x-hugging the struck glyphs
+/// (the SAME `xs` boundaries the selection rect reads, so line and text can't
+/// disagree), vertically centered by THE ONE OWNER (`spans::strike_line_band` at
+/// `STRIKE_V_FRAC` of the row's glyph cell — the fn the popover's `S` button
+/// also rides), NOT caret-gated (content styling: the line stays while the
+/// caret edits the run — only the `~~` MARKER conceal is reveal-on-cursor), and
+/// absent entirely for a strike-less buffer (byte-identity's geometry half).
+#[test]
+fn strike_lines_hug_the_struck_run_and_survive_the_caret() {
+    let _t = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping strike_lines_hug_the_struck_run_and_survive_the_caret: no wgpu adapter");
+        return;
+    };
+    let text = "keep ~~cut~~ end\nplain second line\n";
+    // Caret parked on line 1: the ~~ markers conceal, the strike line draws.
+    let mut v = view(text, 1, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+
+    let strikes = p.strike_lines();
+    assert_eq!(strikes.len(), 1, "one struck run, one strike line: {strikes:?}");
+    let s = strikes[0];
+    assert_eq!(s.amp, 0.0, "a strike is FLAT");
+    assert!(s.thickness > 0.0, "positive stroke");
+
+    // The struck content "cut" is chars 7..10 on line 0; its selection rect
+    // reads the SAME row xs boundaries the strike proto captured.
+    let sel = p.range_rects((0, 7), (0, 10));
+    assert_eq!(sel.len(), 1, "one selection rect for the struck run: {sel:?}");
+    let [rx, ry, rw, rh] = sel[0];
+    assert!((s.x - rx).abs() < 0.6, "strike x hugs the run: {} vs {rx}", s.x);
+    assert!((s.w - rw).abs() < 2.5, "strike width hugs the run: {} vs {rw}", s.w);
+    // Vertically INSIDE the run's glyph cell, centered by the owner's fraction.
+    let center = s.y + s.h * 0.5;
+    assert!(
+        center > ry && center < ry + rh,
+        "strike center {center} inside the glyph cell [{ry}, {}]",
+        ry + rh
+    );
+
+    // Caret ON the struck line: the raw markers reveal, but the strike LINE
+    // stays (content styling, not marker conceal) — it re-hugs the now-wider
+    // run (the revealed `~~` advances shift the xs).
+    let mut on = view(text, 0, 8);
+    on.is_markdown = true;
+    p.set_view(&on);
+    let on_strikes = p.strike_lines();
+    assert_eq!(on_strikes.len(), 1, "the strike line survives the caret landing");
+
+    // A strike-less buffer: zero strike geometry (the byte-identity half — the
+    // pipeline uploads zero instances, so nothing can draw).
+    let mut plain = view("no struck text here\n", 0, 0);
+    plain.is_markdown = true;
+    p.set_view(&plain);
+    assert!(p.strike_lines().is_empty(), "no struck span, no strike geometry");
+}
+
+/// THE ONE-OWNER LAW, ink half: the struck TEXT's ink (`md_attrs`'
+/// `Strikethrough` arm) and the strike LINE's pipeline tint
+/// (`strike_srgba_bytes`) both read `spans::strike_ink` — for EVERY world, the
+/// two are byte-equal, and equal to the world's own `muted` rung (an ink-ladder
+/// value, structurally incapable of reading as the caret's amber — DESIGN §3).
+#[test]
+fn strike_text_and_line_share_one_ink_in_every_world() {
+    for th in crate::theme::THEMES.iter() {
+        let ink = super::spans::strike_ink(th);
+        assert_eq!(
+            ink, th.muted,
+            "{}: strike ink IS the world's muted rung",
+            th.name
+        );
+    }
 }

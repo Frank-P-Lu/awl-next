@@ -92,6 +92,19 @@ pub enum MdKind {
     /// syntax character). See [`push_highlight_spans`] for the delimiter rules
     /// (single `=` is deliberately meaningless; only an ISOLATED `==` pair counts).
     Highlight,
+    /// `~~struck~~` content (GFM strikethrough, `ENABLE_STRIKETHROUGH`, gated to
+    /// EXACTLY-two-tilde delimiters — a single `~x~`, which pulldown also accepts,
+    /// stays inert, mirroring the `==` exactly-two rule). Struck text RECEDES: the
+    /// content takes the muted strike ink (see `render::spans::strike_ink`, the one
+    /// owner the drawn LINE shares) and the renderer draws a thin STRIKE LINE
+    /// through the run (`render::rects` strike bucket → `strike_lines`, positioned
+    /// by `render::spans::strike_line_band` — the SAME one owner the format
+    /// popover's self-demonstrating `S` button rides). Never amber (DESIGN §3).
+    /// The `~~` delimiters are separate [`ConcealMarkup`](Self::ConcealMarkup)
+    /// spans ([`ConcealKind::Strikethrough`], line-scoped like Emphasis). Pushed
+    /// ADDITIVELY over the context span (like [`Highlight`](Self::Highlight)), so
+    /// struck text inside a heading/quote/bold run still dims + strikes.
+    Strikethrough,
     /// A horizontal rule line (`---`/`***`/`___` alone on a line). An hr is pure
     /// MARKUP with no content, so the renderer drops a centered ornament on the row —
     /// which ONE depends on the syntax the author typed (see [`BreakKind`]): `---` →
@@ -305,6 +318,7 @@ impl MdKind {
             MdKind::Task(true) => "task_checked",
             MdKind::TaskDone => "task_done",
             MdKind::Highlight => "highlight",
+            MdKind::Strikethrough => "strikethrough",
             MdKind::Rule => "rule",
             MdKind::TablePipe => "table_pipe",
             MdKind::TableSep => "table_sep",
@@ -394,6 +408,14 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
     let mut quote = 0u32;
     let mut link = 0u32;
     let mut code_block = 0u32;
+    // STRIKETHROUGH nesting. `strike` counts only ENGAGED (exactly-two-tilde)
+    // spans; pulldown also parses single-tilde `~x~` with the option on, which
+    // awl deliberately keeps INERT (the `==` exactly-two precedent — the format
+    // command inserts `~~`, so only `~~` means struck). `strike_engaged` is a
+    // tiny per-Start stack so a skipped single-tilde span's `TagEnd` never
+    // decrements a counter it didn't increment.
+    let mut strike = 0u32;
+    let mut strike_engaged: Vec<bool> = Vec::new();
     // IMAGE nesting depth. An image's `![alt](path)` source is emitted as ONE
     // `ConcealMarkup(Image)` span over its whole range (see the `Tag::Image`
     // arm); while inside one, the inner alt-text `Event::Text` is SUPPRESSED
@@ -433,8 +455,12 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
     };
 
     // ENABLE_TASKLISTS so `- [ ]` / `- [x]` surface as `TaskListMarker` events;
-    // every other construct parses exactly as before (the option is additive).
-    let opts = Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES;
+    // ENABLE_STRIKETHROUGH so `~~struck~~` surfaces as `Tag::Strikethrough`
+    // (matching the export model's own option set — `export/model.rs` already
+    // parsed it; the RENDER now catches up). Every other construct parses
+    // exactly as before (the options are additive).
+    let opts =
+        Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
     for (ev, range) in Parser::new_ext(text, opts).into_offset_iter() {
         match ev {
             Event::Start(tag) => match tag {
@@ -444,11 +470,27 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 }
                 Tag::Strong => {
                     strong += 1;
-                    push_delim(&mut body, &range, 2);
+                    push_delim(&mut body, &range, 2, ConcealKind::Emphasis);
                 }
                 Tag::Emphasis => {
                     emph += 1;
-                    push_delim(&mut body, &range, 1);
+                    push_delim(&mut body, &range, 1, ConcealKind::Emphasis);
+                }
+                // STRIKETHROUGH: engage ONLY for exactly-two-tilde delimiters
+                // (`~~struck~~`). pulldown's GFM option also parses single-tilde
+                // `~x~`; awl keeps that inert (no marker span, no content span,
+                // no strike line — the bytes render as plain text), mirroring the
+                // `==` exactly-two rule. A `~~~` run is a FENCE at block level and
+                // never reaches this inline arm.
+                Tag::Strikethrough => {
+                    let s = &text[range.clone()];
+                    let tildes = s.bytes().take_while(|&b| b == b'~').count();
+                    let engaged = tildes == 2;
+                    strike_engaged.push(engaged);
+                    if engaged {
+                        strike += 1;
+                        push_delim(&mut body, &range, 2, ConcealKind::Strikethrough);
+                    }
                 }
                 Tag::BlockQuote(_) => {
                     quote += 1;
@@ -528,6 +570,11 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 TagEnd::Heading(_) => heading = None,
                 TagEnd::Strong => strong = strong.saturating_sub(1),
                 TagEnd::Emphasis => emph = emph.saturating_sub(1),
+                TagEnd::Strikethrough => {
+                    if strike_engaged.pop().unwrap_or(false) {
+                        strike = strike.saturating_sub(1);
+                    }
+                }
                 TagEnd::BlockQuote(_) => quote = quote.saturating_sub(1),
                 TagEnd::CodeBlock => {
                     code_block = code_block.saturating_sub(1);
@@ -576,6 +623,16 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                     inline_kind(heading, strong, emph, quote, link, code_block, task_done)
                 {
                     body.push((range.clone(), k));
+                }
+                // STRIKETHROUGH: pushed ADDITIVELY over the context span above
+                // (the `Highlight` precedent, but receding instead of lifting) —
+                // last-wins on overlap means struck text inside a heading / quote
+                // / bold / link run still takes the muted strike ink, and the
+                // strike-line bucket (`render::rects`) covers exactly these
+                // bytes. Never inside a code block (pulldown treats `~~` in code
+                // as literal, so `strike` can't be armed there).
+                if strike > 0 {
+                    body.push((range.clone(), MdKind::Strikethrough));
                 }
                 // HIGHLIGHT: scan this text run for `==marked==` pairs, pushed
                 // AFTER the context span above so a highlighted sub-range always
@@ -634,13 +691,14 @@ fn inline_kind(
     }
 }
 
-/// Dim the `n`-byte emphasis delimiters at each end of `range` (`*`/`_` → n=1,
-/// `**`/`__` → n=2). No-op if the range is too short to hold both. WYSIWYG-
-/// concealable ([`ConcealKind::Emphasis`]): the delimiters hide off the caret's
-/// line, leaving the bold/italic content alone.
-fn push_delim(out: &mut Vec<(Range<usize>, MdKind)>, range: &Range<usize>, n: usize) {
+/// Dim the `n`-byte inline delimiters at each end of `range` (`*`/`_` → n=1,
+/// `**`/`__`/`~~` → n=2). No-op if the range is too short to hold both. WYSIWYG-
+/// concealable as `ck` ([`ConcealKind::Emphasis`] for bold/italic,
+/// [`ConcealKind::Strikethrough`] for `~~`): the delimiters hide off the caret's
+/// line, leaving the styled content alone.
+fn push_delim(out: &mut Vec<(Range<usize>, MdKind)>, range: &Range<usize>, n: usize, ck: ConcealKind) {
     if range.end.saturating_sub(range.start) >= 2 * n {
-        let k = MdKind::ConcealMarkup(ConcealKind::Emphasis);
+        let k = MdKind::ConcealMarkup(ck);
         out.push((range.start..range.start + n, k));
         out.push((range.end - n..range.end, k));
     }

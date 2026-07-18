@@ -19,6 +19,31 @@ pub struct BuffersInfo {
     pub active: String,
 }
 
+/// THE WRITER'S DIFF (`crate::prosediff`): read-only STATE of an active prose-diff
+/// view for the sidecar `diff` block — reported only when the capture harness
+/// rendered a diff (`AWL_DIFF_OLD`/`AWL_DIFF_NEW`), so an agent can verify "am I
+/// looking at a diff, and does it carry the deletions / insertions / moves / folds
+/// I expect". APPEARANCE (the struck region is muted, the wash is present) is
+/// asserted over the PNG's pixels, per the sidecar-vs-appearance tripwire — these
+/// counts are a state oracle only. `active` is always true when present (the field
+/// is `None` for every ordinary capture, so a plain `--screenshot` omits the block).
+#[derive(Clone)]
+pub struct DiffInfo {
+    pub active: bool,
+    /// The transcript's title (the diff view's heading — "Comparing versions").
+    pub label: String,
+    /// Paragraphs shown STRUCK whole (a coalesced rewrite's old side / a deletion).
+    pub struck: usize,
+    /// Paragraphs shown WASHED whole (a coalesced rewrite's new side / an insertion).
+    pub washed: usize,
+    /// Paragraphs edited IN PLACE (inline word/sentence segments).
+    pub modified: usize,
+    /// Relocated paragraphs, shown once at their new location.
+    pub moved: usize,
+    /// Folded unchanged-stretch rows (`⋯ N paragraphs unchanged ⋯`).
+    pub folds: usize,
+}
+
 /// Read-only project metadata for the sidecar `project` block (`--root`-derived).
 #[derive(Clone)]
 pub struct ProjectInfo {
@@ -210,8 +235,19 @@ pub struct CaptureOpts {
     /// gets a sensible default. Populated in `run.rs`'s main capture path from
     /// the replay's registry count.
     pub buffers: Option<BuffersInfo>,
+    /// THE WRITER'S DIFF: read-only STATE of an active prose-diff view for the
+    /// sidecar `diff` block. `None` (default) for every ordinary capture — the block
+    /// is omitted, so a plain `--screenshot` is byte-identical. Populated only by the
+    /// capture harness's env-gated diff render (`AWL_DIFF_OLD`/`AWL_DIFF_NEW`).
+    pub diff: Option<DiffInfo>,
     /// Explicit passive pending-crash state for the About-card capture law.
     /// False by default; ordinary/headless captures never inspect ambient crash
     /// files and remain deterministic.
     pub pending_crash: bool,
+    /// FORCE the format popover over the current `selection` (the deterministic
+    /// in-test equivalent of the CLI's `AWL_POPOVER` env probe — the live summon is
+    /// a mouse gesture the headless path has no pointer for). Default false, so an
+    /// ordinary capture is byte-identical; the `popover.rs` card-fits law sets it
+    /// to render the toolbar without racing a process-global env var.
+    pub force_popover: bool,
 }

@@ -131,8 +131,8 @@ fn pdf_has_exact_classic_xref_object_plan_pages_and_a4_geometry() {
 fn four_repository_fonts_are_exact_embedded_installable_full_faces() {
     let (_, bytes) = rich_bytes();
     let pdf = Pdf::parse(&bytes);
-    let inventory = include_str!("../../../assets/fonts/LICENSES.md");
-    let ofl = include_str!("../../../assets/fonts/OFL.txt");
+    let inventory = crate::embedded_docs::FONT_LICENSES_MD;
+    let ofl = crate::embedded_docs::FONT_OFL_TXT;
     assert!(ofl.contains("SIL OPEN FONT LICENSE Version 1.1"));
 
     for (index, asset) in ASSETS.iter().enumerate() {

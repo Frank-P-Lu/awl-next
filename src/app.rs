@@ -170,6 +170,20 @@ const RESIZE_SYNC_SETTLE: Duration = Duration::from_millis(150);
 /// TASTE TUNABLE — flagged for live review.
 const MOVE_SETTLE: Duration = Duration::from_millis(1000);
 
+/// Quiet period a THEME-PREVIEW lava-boundary crossing keeps the present-
+/// transaction sync armed (debounce; macOS-only effect). When a preview step
+/// swaps a ticking lava world for a static non-lava one (or back), the ~10 fps
+/// ambient present cadence starts/stops underfoot; arming the transaction sync
+/// makes the crossing frame (and one settle follow-up) JOIN the compositor's
+/// transaction instead of racing it, so the swapchain can't strand a stale
+/// drawable — the "writing surface vanishes" report. Each further crossing
+/// re-stamps the deadline (`retint_theme_preview`), so a rapid arrow burst
+/// through the boundary keeps it armed and settles once you rest — the same
+/// single-`WaitUntil` shape as `RESIZE_SYNC_SETTLE` / the theme-font debounce.
+/// Sized like `RESIZE_SYNC_SETTLE`: long enough to bracket the crossing frame +
+/// its follow-up, short enough that the sync cost is paid only around a crossing.
+const CROSSING_SYNC_SETTLE: Duration = Duration::from_millis(150);
+
 use glyphon::Cache;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -377,6 +391,40 @@ mod session;
 /// travel on view sync, files-touched on open) + the flush on the autosave
 /// triggers. `crate::stats` owns the pure store + injected-clock helpers.
 mod stats;
+/// WRITING STREAKS' App-side wiring (native only): the per-buffer word-delta
+/// sampling on the autosave flush triggers, the local-calendar-day read, and the
+/// live year-view push. `crate::streaks` owns the pure store + calendar/intensity
+/// arithmetic + the (de)serializer.
+mod streaks;
+
+/// THE WRITER'S DIFF: the read-only "Compare with version…" view state
+/// (`App::diff_view`). Holds the pre-rendered marked-up-manuscript `transcript`
+/// (`crate::prosediff` → awl's own strike / `==wash==` / blockquote-dim vocabulary)
+/// that `sync_view` shows in the writing column in place of the buffer, plus the
+/// `label` shown as the transcript heading + the page-mode gutter. The buffer is
+/// never touched; Esc drops the view and the next sync shows the live document.
+pub struct DiffView {
+    /// The marked-up-markdown transcript (`prosediff::render_markdown`), shown
+    /// read-only in the writing column. Built once on entry; never re-rendered while
+    /// the view is up (a read-only surface — the buffer it derives from can't change
+    /// under it, since edits are swallowed).
+    pub transcript: String,
+    /// The version being compared against, in human words (e.g. `"3 hr ago"` for a
+    /// loose-file snapshot, or a git commit's relative label) — the transcript's
+    /// heading and the sidecar/gutter identity of "what am I comparing to".
+    pub label: String,
+}
+
+/// THE WRITER'S DIFF read-only classification of ONE action while the diff view is
+/// up — the result of [`App::diff_view_gate`]. Keeps the read-only law a pure,
+/// unit-testable decision (no event loop needed): `Exit` leaves the view, `Pass`
+/// runs a read affordance (zoom / page-scroll) normally, `Swallow` is a calm no-op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffGate {
+    Exit,
+    Pass,
+    Swallow,
+}
 
 pub struct App {
     file: Option<PathBuf>,
@@ -557,6 +605,17 @@ pub struct App {
     /// editing normally; `Some` = isearch active, and every key is routed to
     /// `handle_search_key` instead of the keymap.
     search: Option<crate::search::SearchState>,
+    /// THE FORMAT POPOVER (`crate::popover`): `true` while the reveal-on-select
+    /// format toolbar is summoned. Set ONLY by a MOUSE selection gesture (a
+    /// drag-release with a non-empty selection / a double-click word-select) in a
+    /// markdown buffer — a KEYBOARD selection never summons it (the spec's
+    /// mouse-only rule). Cleared when the selection collapses, on Esc / a keyboard
+    /// selection extend / a click off its buttons / a buffer swap / a caret move
+    /// with no selection. The render MODEL (which buttons lit, the `H` level) is
+    /// recomputed each `sync_view` from the live selection (`actions::popover::plan`),
+    /// so it stays open + reflective across format applies. LIVE-ONLY: the headless
+    /// capture force-summons via the `AWL_POPOVER` probe instead of this flag.
+    popover_open: bool,
     /// The spell-check engine (bundled en_US Hunspell), loaded ONCE at startup.
     /// `None` if the dictionary failed to parse (reported to stderr); spell-check
     /// then no-ops rather than crashing the editor.
@@ -738,6 +797,18 @@ pub struct App {
     /// its version, and its undo history are NEVER touched. Dropped the moment the
     /// overlay closes (Esc = back to now exactly). `None` = no preview.
     history_preview: Option<(String, String)>,
+    /// THE WRITER'S DIFF: the read-only "Compare with version…" view, or `None` when
+    /// not comparing. `Some` holds the pre-rendered marked-up-manuscript transcript
+    /// (`crate::prosediff::render_markdown` — struck deletions, washed insertions,
+    /// moves, folds) that `sync_view` shows in the writing column IN PLACE OF the
+    /// buffer text (the Buffer, its version, and its undo history are NEVER touched —
+    /// exactly like the history preview override). Read-only: `App::apply` swallows
+    /// every editing action while it is `Some` (the caret parks on the transcript's
+    /// blank line 1 so no WYSIWYG line ever reveals raw). Esc / a buffer switch drops
+    /// it — back to the live document exactly. Entered by `Action::CompareVersion`
+    /// (the palette command, or the History picker's compare key). LIVE-ONLY state;
+    /// the headless capture renders the same transcript via the `AWL_DIFF_*` harness.
+    diff_view: Option<DiffView>,
     /// The document scroll (visual rows) captured when the History timeline
     /// OPENED, restored on a close-without-restore — a shorter previewed version
     /// can destructively clamp `scroll_lines` against ITS max-scroll, and "Esc =
@@ -808,10 +879,21 @@ pub struct App {
     /// world takes the whole move machinery as a structural no-op (zero
     /// redraws scheduled by a move).
     move_settle_at: Option<Instant>,
+    /// A THEME-PREVIEW step just crossed the lava boundary (a ticking lava world
+    /// ⇄ a static non-lava one), so the ambient ~10 fps present cadence starts or
+    /// stops underfoot. Held for `CROSSING_SYNC_SETTLE` (re-stamped on each
+    /// further crossing) so the crossing frame + one settle follow-up present
+    /// join the compositor's transaction rather than racing it — the third source
+    /// feeding `present_sync_armed`, the vanishing-page fix (2026-07-17). Only
+    /// ever stamped when `lava::preview_crossing` returns `SyncAcrossCrossing`
+    /// (`App::retint_theme_preview`); `None` otherwise, and structurally
+    /// unreachable in a headless capture (the shared replay never previews).
+    crossing_settle_at: Option<Instant>,
     /// Shadow of the CAMetalLayer's `presentsWithTransaction` flag — the ONE
     /// owner of its composition is `App::sync_present_txn`, which arms it while
-    /// EITHER live stream (resize OR move) is active and disarms it only once
-    /// BOTH have settled (`present_sync_armed`). The MOVE half is the
+    /// ANY live source (resize OR move stream, OR a theme-preview lava-boundary
+    /// crossing) is active and disarms it only once ALL have settled
+    /// (`present_sync_armed`). The MOVE half is the
     /// move-flash fix's structural core: any present that happens around a
     /// window move (the settle redraw, a sibling debounce firing mid-stream, a
     /// cross-display `ScaleFactorChanged` redraw) now JOINS the window-server's
@@ -876,6 +958,23 @@ pub struct App {
     /// flush with nothing new skips the atomic write.
     #[cfg(not(target_arch = "wasm32"))]
     stats_dirty: bool,
+    /// WRITING STREAKS: the persisted daily-net-words record (native-only, LOCAL/
+    /// PRIVATE — beside `stats.toml`). Loaded once at launch, sampled + persisted on
+    /// the SAME autosave flush triggers as the odometer.
+    #[cfg(not(target_arch = "wasm32"))]
+    streaks: crate::streaks::Streaks,
+    /// The active buffer's word count at the last streaks sample — the `last` side
+    /// of the per-flush word DELTA. `None` until the first sample of a buffer (a
+    /// fresh launch or right after a buffer swap), so opening a file's existing
+    /// words is ANCHORED (never counted as "written"); the next flush records the
+    /// delta from there. Reset to `None` on every buffer swap (`streaks_reset_baseline`).
+    #[cfg(not(target_arch = "wasm32"))]
+    streaks_baseline: Option<usize>,
+    /// Whether the streaks record has unpersisted changes since the last flush, so
+    /// a flush that recorded nothing (an anchor, or a no-net-change idle) skips the
+    /// atomic write.
+    #[cfg(not(target_arch = "wasm32"))]
+    streaks_dirty: bool,
     /// SINGLE-INSTANCE DAEMON (native only, and compiled out under `mas` — see
     /// `crate::daemon`'s module doc): the socket special file's path, so
     /// `daemon::daemon_shutdown` can unlink it on a clean quit — `None` when this
@@ -1097,6 +1196,7 @@ impl App {
             preedit: String::new(),
             ime_enabled: false,
             search: None,
+            popover_open: false,
             spell: match crate::spell::SpellChecker::new(crate::spell::active_variant()) {
                 Ok(sc) => Some(sc),
                 Err(e) => {
@@ -1147,6 +1247,7 @@ impl App {
             pending_crash: None,
             title_dirty: false,
             history_preview: None,
+            diff_view: None,
             history_scroll_before: None,
             zoom_persist_at: None,
             zoom_reflow: ZoomReflow::default(),
@@ -1155,6 +1256,7 @@ impl App {
             focused: true,
             resize_settle_at: None,
             move_settle_at: None,
+            crossing_settle_at: None,
             present_sync_on: false,
             config,
             cli_notes_root,
@@ -1178,6 +1280,14 @@ impl App {
             stats_last_cursor: None,
             #[cfg(not(target_arch = "wasm32"))]
             stats_dirty: false,
+            // WRITING STREAKS: load the persisted record (empty on a fresh install),
+            // beside the odometer. The baseline anchors on the first flush.
+            #[cfg(not(target_arch = "wasm32"))]
+            streaks: crate::streaks::load(&crate::streaks::streaks_path()),
+            #[cfg(not(target_arch = "wasm32"))]
+            streaks_baseline: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            streaks_dirty: false,
             #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
             daemon_socket_path: None,
             #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
@@ -1201,6 +1311,19 @@ impl App {
         // whatever the scratch-stash restore above already picked.
         #[cfg(not(target_arch = "wasm32"))]
         app.apply_session_restore(file_arg_given);
+        // WRITING STREAKS: set the INITIAL word-delta anchor now that every startup
+        // buffer decision (scratch-stash restore + session restore, which can swap
+        // the active buffer) has settled. An awl-CREATED scratch (no path — fresh
+        // empty OR resumed stash) anchors EAGERLY at its birth word count, so words
+        // typed before the first idle flush are recorded rather than swallowed by a
+        // lazy first-flush anchor (the anchor-swallow bug); a resumed stash's own
+        // words are anchored, never miscounted as today's writing. An opened FILE
+        // (CLI arg or session-restored active) keeps the LAZY anchor — its
+        // pre-existing words are not "writing" — so `streaks_baseline` stays `None`.
+        #[cfg(not(target_arch = "wasm32"))]
+        if app.file.is_none() {
+            app.streaks_anchor_now();
+        }
         // A previous crash is passive state, not a startup interruption: retain
         // the marker for About + Settings, and acknowledge it only when the user
         // chooses Report a Problem.
@@ -1640,6 +1763,7 @@ impl ApplicationHandler<AwlEvent> for App {
         self.input_stamp = None;
         self.resize_settle_at = None;
         self.move_settle_at = None;
+        self.crossing_settle_at = None;
         self.present_sync_on = false;
     }
 
@@ -1712,6 +1836,9 @@ impl ApplicationHandler<AwlEvent> for App {
         // right above it (native only; config + dirty gated inside).
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_flush();
+        // WRITING STREAKS: the final day-delta flush, beside the odometer's.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_flush();
         #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
         self.daemon_shutdown();
     }
@@ -1798,6 +1925,9 @@ impl ApplicationHandler<AwlEvent> for App {
                     // config + dirty gated inside).
                     #[cfg(not(target_arch = "wasm32"))]
                     self.stats_flush();
+                    // WRITING STREAKS: sample the day-delta on the same idle door.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.streaks_flush();
                     if let Some(gpu) = self.gpu.as_ref() {
                         gpu.window.request_redraw();
                     }
@@ -1833,11 +1963,14 @@ impl ApplicationHandler<AwlEvent> for App {
                 true => {
                     self.zoom_persist_at = None;
                     self.persist_zoom_now();
+                    // The gesture settled: clear the floating zoom readout (armed per
+                    // step in `mark_zoom_dirty`), parking its label off-screen again.
                     // Fire like the sibling debounces above: request a redraw so the
                     // RedrawRequested handler re-decides control flow (Wait when settled),
                     // instead of leaving it at this now-elapsed WaitUntil — which would
                     // busy-spin the loop at ~100% CPU until the next input (DESIGN §6).
-                    if let Some(gpu) = self.gpu.as_ref() {
+                    if let Some(gpu) = self.gpu.as_mut() {
+                        gpu.pipeline.set_zoom_readout(None);
                         gpu.window.request_redraw();
                     }
                 }
@@ -1874,16 +2007,29 @@ impl ApplicationHandler<AwlEvent> for App {
                 false => {}
             }
         }
-        // AMBIENT LAVA TICK — the lava-lamp ground's slow ~10 fps drift, awl's
-        // FIRST time-varying background. A single `WaitUntil` cadence (NEVER the
-        // caret spring's hot per-frame `Poll` loop): when it elapses, advance the
-        // phase, request ONE redraw, and re-arm. Armed ONLY while
-        // `lava::lava_should_tick` holds — a lava world is active AND
-        // `ambient_motion` is on AND motion is not reduced AND the window is
-        // focused (pause on blur). Firetail + Mangrove are the two lava worlds;
-        // every other world has a static background, so `is_lava()` is false and
-        // schedules ZERO ambient frames — preserving 0% idle CPU there.
-        let lava_active = crate::theme::background().is_lava();
+        // THEME-PREVIEW CROSSING settle (mirrors the resize/move debounces above;
+        // see `CROSSING_SYNC_SETTLE`'s doc). Disarms the present-transaction sync
+        // and fires the ONE follow-up present once a boundary crossing has rested.
+        if let Some(dirty) = self.crossing_settle_at {
+            match debounce_due(dirty, CROSSING_SYNC_SETTLE, Instant::now()) {
+                true => self.finish_crossing_settle(),
+                false if self.last_frame.is_none() => {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + CROSSING_SYNC_SETTLE));
+                }
+                false => {}
+            }
+        }
+        // AMBIENT TICK — the slow ~10 fps drift clock behind awl's time-varying
+        // grounds: the lava lamp (Firetail/Mangrove) AND the twinkling stars
+        // (Currawong) — ONE clock, two consumers (`TextPipeline::lava_phase`).
+        // A single `WaitUntil` cadence (NEVER the caret spring's hot per-frame
+        // `Poll` loop): when it elapses, advance the phase, request ONE redraw,
+        // and re-arm. Armed ONLY while `lava::lava_should_tick` holds — an
+        // ambient-motion world is active (`Theme::has_ambient_motion`, the ONE
+        // gate) AND `ambient_motion` is on AND motion is not reduced AND the
+        // window is focused (pause on blur). Every static world schedules ZERO
+        // ambient frames — preserving 0% idle CPU there.
+        let lava_active = crate::theme::active().has_ambient_motion();
         let lava_paused = crate::lava::lava_paused(
             self.resize_settle_at.is_some(),
             self.move_settle_at.is_some(),
@@ -1929,10 +2075,11 @@ impl ApplicationHandler<AwlEvent> for App {
                 }
             }
         } else if lava_active {
-            // A lava world, but the lamp must be STATIC: reduce motion OR ambient
-            // motion off (blur is handled at the focus edge, which merely HOLDS the
-            // phase). Stop ticking; hard-freeze the phase to the settled frame so a
-            // later resume restarts cleanly rather than from a stale mid-bob.
+            // An ambient-motion world (lava or stars), but the ground must be
+            // STATIC: reduce motion OR ambient motion off (blur is handled at
+            // the focus edge, which merely HOLDS the phase). Stop ticking;
+            // hard-freeze the shared phase to the settled frame so a later
+            // resume restarts cleanly rather than from a stale mid-breath.
             self.lava_tick_at = None;
             if crate::motion::reduced() || !self.config.ambient_motion_on() {
                 if let Some(gpu) = self.gpu.as_mut() {
@@ -1988,13 +2135,14 @@ fn debounce_due(dirty: Instant, window: Duration, now: Instant) -> bool {
 }
 
 /// Should the CAMetalLayer's `presentsWithTransaction` be armed? ONE owner of
-/// the composition: armed while EITHER live window-server stream — a RESIZE
-/// drag or a MOVE drag — is active, disarmed only once BOTH have settled (a
-/// corner drag streams both; the settle of one must not strip the other's
-/// protection). Pure, so the composition is unit-testable without a window;
-/// `App::sync_present_txn` is the sole applier.
-fn present_sync_armed(resize_active: bool, move_active: bool) -> bool {
-    resize_active || move_active
+/// the composition: armed while ANY source needs it — a RESIZE drag, a MOVE
+/// drag, or a THEME-PREVIEW lava-boundary crossing — disarmed only once ALL have
+/// settled (a corner drag streams both resize+move; a crossing can overlap a
+/// drag; the settle of one source must never strip another's protection). Pure,
+/// so the composition is unit-testable without a window; `App::sync_present_txn`
+/// is the sole applier.
+fn present_sync_armed(resize_active: bool, move_active: bool, crossing_active: bool) -> bool {
+    resize_active || move_active || crossing_active
 }
 
 /// Compose one idle deadline with the event loop's current intent. A hot `Poll`
@@ -2052,8 +2200,12 @@ fn hud_mods_broken(summon: ModifiersState, now: ModifiersState) -> bool {
 /// `>` glyph, so that Shift is INCIDENTAL — Emacs treats them as pure motion
 /// (you select via the mark, `C-Space`), so it must NOT extend the selection.
 /// Every other action keeps Shift's normal select-extend meaning. Pure, so it's
-/// unit-testable without a window/event loop.
-fn motion_honors_shift_select(action: &Action) -> bool {
+/// unit-testable without a window/event loop. THE ONE OWNER of the rule: both
+/// the live key dispatch (`app/input/keys.rs`) and the headless `--keys` replay
+/// (`main/run.rs::ReplaySession::apply_chord`) derive their `apply_core` shift
+/// flag through this fn, so an `S-` chord in a spec signals select-intent
+/// exactly as a live held Shift does — never a parallel copy of the rule.
+pub(crate) fn motion_honors_shift_select(action: &Action) -> bool {
     !matches!(action, Action::BufferStart | Action::BufferEnd)
 }
 
@@ -2278,13 +2430,18 @@ mod tests {
     }
 
     #[test]
-    fn present_transaction_sync_composes_over_both_live_streams() {
-        // The ONE-owner composition `App::sync_present_txn` applies: armed
-        // while either window-server stream is live, off only when both idle.
-        assert!(!present_sync_armed(false, false), "idle: async presents");
-        assert!(present_sync_armed(true, false), "live resize arms it");
-        assert!(present_sync_armed(false, true), "live move arms it");
-        assert!(present_sync_armed(true, true), "corner drag: both live");
+    fn present_transaction_sync_composes_over_every_source() {
+        // The ONE-owner composition `App::sync_present_txn` applies: armed while
+        // ANY source needs it (resize stream, move stream, or a theme-preview
+        // lava-boundary crossing), off only when ALL three are idle.
+        assert!(!present_sync_armed(false, false, false), "idle: async presents");
+        assert!(present_sync_armed(true, false, false), "live resize arms it");
+        assert!(present_sync_armed(false, true, false), "live move arms it");
+        assert!(present_sync_armed(false, false, true), "a preview crossing arms it");
+        assert!(present_sync_armed(true, true, false), "corner drag: both streams live");
+        assert!(present_sync_armed(true, false, true), "resize + crossing overlap");
+        assert!(present_sync_armed(false, true, true), "move + crossing overlap");
+        assert!(present_sync_armed(true, true, true), "all three at once");
     }
 
     /// THE MOVE-FLASH REGRESSION PIN (user report 2026-07-15, "kinda back"):
@@ -2395,6 +2552,98 @@ mod tests {
             "no hold: the settle arm can never fire, zero redraws scheduled"
         );
         assert!(!app.present_sync_on, "no stream, no transaction sync");
+        crate::theme::set_active(prev);
+    }
+
+    /// THE VANISHING-PAGE REGRESSION PIN (user report 2026-07-17, "arrowing
+    /// Mangrove→Magpie makes the writing surface vanish"): a theme-preview step
+    /// that CROSSES the lava boundary arms the present-transaction sync (so the
+    /// crossing frame joins the compositor's transaction rather than racing it as
+    /// the ambient cadence stops), holds it through the `CROSSING_SYNC_SETTLE`
+    /// window, and settles exactly once. A same-side hop takes it as a no-op.
+    /// Drives the REAL `App` state machine through the real `retint_theme_preview`
+    /// / `finish_crossing_settle` bodies (the `about_to_wait` arm is just
+    /// `debounce_due`, pinned separately above).
+    #[test]
+    fn preview_crossing_the_lava_boundary_brackets_the_present_and_settles_once() {
+        let _g = crate::testlock::serial();
+        let prev = crate::theme::active_index();
+        let w = |name: &str| {
+            *crate::theme::THEMES.iter().find(|t| t.name == name).unwrap()
+        };
+        let (mangrove, magpie) = (w("Mangrove"), w("Magpie"));
+
+        // Open the picker on the dark LAVA world, exactly as the report starts.
+        crate::theme::set_active_by_name("Mangrove").unwrap();
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+        assert!(!app.present_sync_on, "idle: presents run async");
+
+        // ARROW to the static non-lava world: apply_core would have switched the
+        // active world first, so mirror that, then run the real preview retint
+        // with the OUTGOING (lava) world it snapshotted.
+        crate::theme::set_active_by_name("Magpie").unwrap();
+        app.retint_theme_preview(mangrove);
+        assert!(app.crossing_settle_at.is_some(), "the crossing stamps the hold");
+        assert!(
+            app.present_sync_on,
+            "the crossing frame joins the compositor transaction"
+        );
+
+        // ARROW BACK across the boundary (Magpie→Mangrove): re-stamps the hold.
+        crate::theme::set_active_by_name("Mangrove").unwrap();
+        app.retint_theme_preview(magpie);
+        assert!(app.crossing_settle_at.is_some(), "the return crossing re-stamps");
+        assert!(app.present_sync_on, "still armed across the return crossing");
+
+        // Settle once: hold cleared, sync disarmed (no other source is live).
+        app.finish_crossing_settle();
+        assert!(app.crossing_settle_at.is_none(), "settle clears the hold once");
+        assert!(!app.present_sync_on, "presents return to async once settled");
+
+        // A SAME-SIDE hop (lava → lava, Mangrove → Firetail; neither one-bit) is a
+        // total no-op: no boundary changes, so nothing is armed.
+        crate::theme::set_active_by_name("Firetail").unwrap();
+        app.retint_theme_preview(mangrove);
+        assert!(
+            app.crossing_settle_at.is_none(),
+            "a lava→lava hop leaves both boundaries alone: no bracket"
+        );
+        assert!(!app.present_sync_on, "same-side hop arms nothing");
+        crate::theme::set_active(prev);
+    }
+
+    /// A crossing can OVERLAP a live drag: the settle of one source must not
+    /// strip the other's present-transaction protection (the disarm belongs to
+    /// the composition's one owner). Mirrors the corner-drag law for the third
+    /// source.
+    #[test]
+    fn a_crossing_settle_never_strips_a_live_resize_streams_present_sync() {
+        let _g = crate::testlock::serial();
+        let prev = crate::theme::active_index();
+        let mangrove = *crate::theme::THEMES
+            .iter()
+            .find(|t| t.name == "Mangrove")
+            .unwrap();
+
+        crate::theme::set_active_by_name("Mangrove").unwrap();
+        let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+
+        // A live resize stream, then a preview crossing to a non-lava world.
+        app.arm_live_resize_sync();
+        assert!(app.present_sync_on, "resize stream arms the sync");
+        crate::theme::set_active_by_name("Magpie").unwrap();
+        app.retint_theme_preview(mangrove);
+        assert!(app.present_sync_on, "still armed with both sources live");
+
+        // The crossing settles first: the resize stream still owns a claim.
+        app.finish_crossing_settle();
+        assert!(app.crossing_settle_at.is_none());
+        assert!(
+            app.present_sync_on,
+            "the resize stream still owns a claim on the sync"
+        );
+        app.finish_resize_settle();
+        assert!(!app.present_sync_on, "both settled: async presents again");
         crate::theme::set_active(prev);
     }
 
@@ -2746,7 +2995,7 @@ mod tests {
             .collect();
         assert_eq!(
             toggle_rows.len(),
-            14,
+            15,
             "the toggle roster changed size — update this sweep deliberately"
         );
 
@@ -3788,6 +4037,108 @@ mod tests {
         assert!(app.history_preview.is_none());
     }
 
+    // ── THE WRITER'S DIFF — the read-only "Compare with version…" view ───────
+    //
+    // The diff view is a DERIVED transcript shown in place of the buffer text
+    // (`sync_view`'s preview override), read-only, Esc-exits. These pin the
+    // entry (`enter_diff_view_for` / `compare_with_latest` build the transcript,
+    // buffer untouched), the read-only law (`diff_view_gate`), and the exit.
+
+    #[test]
+    fn compare_view_renders_transcript_without_touching_buffer() {
+        use crate::fs::InMemoryFs;
+        let p = PathBuf::from("/notes/draft.md");
+        // Current buffer keeps the first paragraph, drops the second, adds a third.
+        let now = "Keep this opening paragraph exactly as it was.\n\nAn entirely fresh third paragraph appears here now.\n";
+        let mem = InMemoryFs::new().with_file(&p, now);
+        let _g = crate::fs::FsGuard::install(Arc::new(mem.clone()));
+        // Seed an older version (the one we compare against).
+        let old = "Keep this opening paragraph exactly as it was.\n\nDrop this whole second paragraph entirely please.\n";
+        crate::history::record(&p, old, &Config::empty());
+        let mut app = app_on(Some(p.clone()), "/notes", Config::empty());
+        let version_before = app.buffer.version();
+        let text_before = app.buffer.text();
+
+        // Compare against the most-recent version.
+        app.compare_with_latest();
+        let dv = app.diff_view.as_ref().expect("the diff view is active");
+        // The transcript speaks awl's diff vocabulary: a struck deletion (REAL
+        // `~~` markdown, the strikethrough-render round) AND a highlight-washed
+        // insertion (`==`), under a title heading.
+        assert!(dv.transcript.starts_with("# Comparing with "));
+        assert!(dv.transcript.contains("~~"), "a struck deletion: {}", dv.transcript);
+        assert!(dv.transcript.contains("=="), "a washed insertion: {}", dv.transcript);
+        // The BUFFER was never touched — content, version, undo all intact.
+        assert_eq!(app.buffer.text(), text_before, "compare never mutates the buffer");
+        assert_eq!(app.buffer.version(), version_before, "no version bump");
+    }
+
+    #[test]
+    fn compare_view_is_read_only_and_esc_exits() {
+        use crate::fs::InMemoryFs;
+        let _g = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
+        let mut app = app_on(None, "/proj", Config::empty());
+        // Not comparing: the gate is inert (every action follows the normal path).
+        assert_eq!(app.diff_view_gate(&Action::InsertChar('x')), None);
+
+        // Enter a diff view directly (the transcript content is irrelevant here).
+        app.diff_view = Some(DiffView {
+            transcript: "# Comparing with earlier\n\ndemo\n".into(),
+            label: "earlier".into(),
+        });
+        // READ-ONLY LAW: every editing action is swallowed (a calm no-op) — typing,
+        // newline, delete, paste, undo, format, save, buffer switch, opening a picker.
+        for act in [
+            Action::InsertChar('z'),
+            Action::Newline,
+            Action::DeleteBackward,
+            Action::DeleteForward,
+            Action::Yank,
+            Action::Undo,
+            Action::Redo,
+            Action::Bold,
+            Action::Save,
+            Action::LastBuffer,
+            Action::OpenGoto,
+            Action::OpenHistory,
+        ] {
+            assert_eq!(
+                app.diff_view_gate(&act),
+                Some(DiffGate::Swallow),
+                "{act:?} must be a read-only no-op in the diff view"
+            );
+        }
+        // Read affordances pass through (zoom + page-scroll never mutate the buffer).
+        for act in [
+            Action::ZoomIn,
+            Action::ZoomOut,
+            Action::ZoomReset,
+            Action::PageScrollDown,
+            Action::PageScrollUp,
+        ] {
+            assert_eq!(app.diff_view_gate(&act), Some(DiffGate::Pass), "{act:?} reads");
+        }
+        // Esc and a second Compare EXIT the view.
+        assert_eq!(app.diff_view_gate(&Action::Cancel), Some(DiffGate::Exit));
+        assert_eq!(app.diff_view_gate(&Action::CompareVersion), Some(DiffGate::Exit));
+        // exit_diff_view drops it — back to the live document.
+        app.exit_diff_view();
+        assert!(app.diff_view.is_none(), "Esc returns to the buffer");
+        assert_eq!(app.diff_view_gate(&Action::InsertChar('x')), None, "gate inert again");
+    }
+
+    #[test]
+    fn compare_with_latest_no_history_is_a_calm_notice() {
+        use crate::fs::InMemoryFs;
+        let _g = crate::fs::FsGuard::install(Arc::new(InMemoryFs::new()));
+        let mut app = app_on(None, "/proj", Config::empty());
+        // A fresh scratch with no recorded history: comparing is a calm no-op notice,
+        // never an empty diff or a panic.
+        app.compare_with_latest();
+        assert!(app.diff_view.is_none(), "nothing to compare, no view opens");
+        assert_eq!(app.notice.as_deref(), Some("no earlier version to compare"));
+    }
+
     #[test]
     fn scratch_buffer_lists_its_stash_history() {
         use crate::fs::InMemoryFs;
@@ -4390,8 +4741,17 @@ mod tests {
             // (`persist_cjk_priority_writes_the_whole_ordered_ladder_to_config`),
             // inside its own `fs::with_fs(fake, ..)` closure with an `InMemoryFs`
             // handle — proves what `App::persist_cjk_priority` writes to
-            // `config.path` on disk, same CONTROL + INSPECT need.
-            ("app/files.rs", 7),
+            // `config.path` on disk, same CONTROL + INSPECT need. Plus 2
+            // SPELLCHECK x CONFIG-RELOAD tests (the spell-toggle-x-theme
+            // investigation, 2026-07-18:
+            // `reload_config_absent_spellcheck_key_leaves_global_untouched` +
+            // `reload_config_reapplies_a_persisted_spellcheck_value_immediately`),
+            // each inside its own `fs::with_fs(fake, ..)` closure with an
+            // `InMemoryFs` handle — they exist specifically to prove what
+            // `App::reload_config` reads back from `config.path` on disk (and,
+            // for the absent-key case, that it must NOT force a default), same
+            // CONTROL + INSPECT need `new_hermetic` hides.
+            ("app/files.rs", 9),
             // 9 LIFETIME STATS + USAGE LEDGER + DISCOVERABILITY tests, each inside its own
             // `fs::with_fs(fake, ..)` closure seeded with an `InMemoryFs` — they exist
             // specifically to prove what the tracking hooks / the ledger's
@@ -4403,6 +4763,18 @@ mod tests {
             // the 2 added by the discoverability round: peek/footer ranking from a fake
             // ledger, and the fresh-ledger-empty case.)
             ("app/stats.rs", 9),
+            // 6 WRITING STREAKS tests, each inside its own `fs::with_fs(fake, ..)`
+            // closure seeded with an `InMemoryFs` — they exist specifically to prove
+            // what `streaks_flush` writes to / reads back from `streaks.toml` (and
+            // that the kill switch never writes), so they need to CONTROL + INSPECT
+            // the injected fs (which `new_hermetic`'s private fs hides). Same
+            // treatment as `app/stats.rs` above. `new_hermetic` also won't do here:
+            // it restores the real backend on construction return, but these tests
+            // keep driving the fs AFTER construction (`new_note`, the summon flush),
+            // so the fake must stay active across the whole closure. (The 3 added by
+            // the anchor-swallow fix: fresh-note + fresh-scratch record words typed
+            // before the first flush, and the card-summon-freshness flush.)
+            ("app/streaks.rs", 6),
             // input.rs's click tests all moved onto `App::new_hermetic` —
             // zero raw calls left.
         ];

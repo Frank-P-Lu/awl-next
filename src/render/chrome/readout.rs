@@ -338,6 +338,64 @@ impl TextPipeline {
             menubar_reserve,
         )
     }
+
+    /// Shape + upload the ZOOM READOUT: a quiet muted percentage (e.g. "120%")
+    /// floating near the pointer while a zoom gesture (Cmd-± / Cmd-scroll) is IN
+    /// FLIGHT — the current magnification made visible (value-only ink, NEVER amber
+    /// — DESIGN §3). Mirrors [`Self::prepare_page_drag_readout`]'s corner-label body,
+    /// anchoring AT the pointer ([`CornerAnchor::AtPoint`]). `zoom_readout` is `None`
+    /// (settled — the ONLY state a headless capture sees by default) parks it
+    /// off-screen, so every default capture stays byte-identical.
+    ///
+    /// GALLERY PROBE (capture-only): with `AWL_ZOOM_READOUT` set in the environment
+    /// and no live readout, the label is synthesized at canvas-center from the
+    /// pipeline's own zoom factor — the same shape the [`super::outline`]
+    /// `AWL_OUTLINE_REVEAL` probe uses, so a gallery shot can witness the label
+    /// without a live pointer.
+    pub(in crate::render) fn prepare_zoom_readout(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<()> {
+        let effective = self.zoom_readout.or_else(|| {
+            std::env::var_os("AWL_ZOOM_READOUT")
+                .map(|_| (width as f32 * 0.5, height as f32 * 0.5, self.metrics.zoom))
+        });
+        let (text, anchor) = match effective {
+            Some((px, py, zoom)) => {
+                (format!("{}%", (zoom * 100.0).round() as i32), CornerAnchor::AtPoint(px, py))
+            }
+            None => (String::new(), CornerAnchor::AtPoint(0.0, 0.0)),
+        };
+        let m = self.metrics;
+        let label = crate::markdown::type_scale::LABEL;
+        let gm = GlyphMetrics::new(m.font_size * label, m.line_height * label);
+        let (col_left, col_width) = (self.column_left(), self.column_width());
+        let menubar_reserve = self.menubar_reserve();
+        Self::prepare_corner_label(
+            &mut self.zoom_readout_renderer,
+            &mut self.zoom_readout_buffer,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            &mut self.swash_cache,
+            device,
+            queue,
+            width,
+            height,
+            gm,
+            1.0,
+            col_left,
+            col_width,
+            &text,
+            anchor,
+            None,
+            "zoom_readout",
+            menubar_reserve,
+        )
+    }
 }
 
 #[cfg(test)]

@@ -354,6 +354,132 @@ fn lava_blob_hues_stay_clear_of_the_amber_caret() {
     }
 }
 
+/// THE TWINKLING-STARS LAWS (2026-07-18 — the "aliveness ≠ loudness" round).
+/// Every world's `render_caps.ambient` is swept with a NO-WILDCARD match (a
+/// future `AmbientStyle` variant fails to compile until it's under the law).
+/// For a `Stars` world, four fences — the same shapes that fence the lava:
+///
+/// (a) **QUIET-BAND (the value-ladder-derived brightness ceiling).** A star's
+///     PEAK composited pixel — the tint alpha-blended in LINEAR light over each
+///     margin-ground gradient endpoint, exactly the GPU's own SrcAlpha blend on
+///     the sRGB target — deviates from its local ground's relative luminance by
+///     NO MORE than the world's own `muted` rung deviates from `base_100`:
+///     a glint may reach toward the markup ink's presence, never past it (and
+///     therefore never near `base_content` — the figure stays the text's).
+///     Proven over COMPOSITED values, never authored bytes alone (the
+///     Saltpan/camouflage lesson: measure the composite, not the token).
+/// (b) **VISIBLE, not the invisible-band trap.** The same peak composite sits
+///     at least ΔY 0.02 off its local ground — a star that composites to
+///     nothing would pass every mechanism test while the sky ships empty (the
+///     Wagtail invisible-row lesson, applied preemptively).
+/// (c) **AMBER GUARD.** A chromatic tint (HSL sat > 0.15) sits ≥ 30° of hue
+///     from the world's `primary`, and is never literally `primary` — the
+///     one-accent law (DESIGN §3): the caret stays the only warm thing.
+/// (d) **ONE-BIT GUARD.** A star's breath is a FRACTIONAL alpha by
+///     construction — structurally illegal on a true 1-bit world (any
+///     intermediate composite is a forbidden third value), so `Stars` on an
+///     `is_one_bit()` world fails here before a render could ever paint it.
+///     (A future one-bit sky would need a dither-stipple star mode — banked.)
+///
+/// Param sanity rides along: bands ordered (`0 < floor < peak <= 1`), density
+/// in `(0, 1]`, and the dot small enough for its cell's jitter band
+/// (`crate::stars::layout` keeps a dot + AA inside its own cell only while
+/// `size_px` stays well under `cell_px`).
+#[test]
+fn ambient_stars_laws_hold_for_every_world() {
+    fn lin(u: u8) -> f32 {
+        let s = u as f32 / 255.0;
+        if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+    }
+    fn rel_lum(c: Srgb) -> f32 {
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    fn hue_gap(a: f32, b: f32) -> f32 {
+        let d = (a - b).abs() % 360.0;
+        d.min(360.0 - d)
+    }
+    // The GPU blend (linear-space SrcAlpha over) applied to luminance — linear
+    // light is additive, so Y composites exactly.
+    fn composite_y(tint: Srgb, alpha: f32, ground: Srgb) -> f32 {
+        alpha * rel_lum(tint) + (1.0 - alpha) * rel_lum(ground)
+    }
+    let mut stars_worlds = 0usize;
+    for t in THEMES.iter() {
+        match t.render_caps.ambient {
+            model::AmbientStyle::None => continue,
+            model::AmbientStyle::Stars { tint, cell_px, density, size_px, peak, floor } => {
+                stars_worlds += 1;
+                // Param sanity.
+                assert!(
+                    0.0 < floor && floor < peak && peak <= 1.0,
+                    "{}: the breath band must be ordered (0 < floor {floor} < peak {peak} <= 1)",
+                    t.name
+                );
+                assert!(
+                    (0.0..=1.0).contains(&density) && density > 0.0,
+                    "{}: density {density} out of (0, 1]",
+                    t.name
+                );
+                assert!(
+                    size_px > 0.0 && size_px < cell_px * 0.3,
+                    "{}: dot {size_px}px must stay well inside its {cell_px}px cell's jitter band",
+                    t.name
+                );
+                // (d) ONE-BIT GUARD.
+                assert!(
+                    !t.is_one_bit(),
+                    "{}: a fractional-alpha star breath is structurally illegal on a true \
+                     1-bit world (any intermediate composite is a forbidden third value)",
+                    t.name
+                );
+                // (c) AMBER GUARD.
+                assert_ne!(tint, t.primary, "{}: the star tint must never BE the accent", t.name);
+                let (th, ts, _tl) = tint.to_hsl();
+                if ts > 0.15 {
+                    let (ph, _ps, _pl) = t.primary.to_hsl();
+                    let gap = hue_gap(th, ph);
+                    assert!(
+                        gap >= 30.0,
+                        "{}: star tint hue {th:.0}° sits only {gap:.0}° from the caret's \
+                         {ph:.0}° — a second accent (DESIGN §3)",
+                        t.name
+                    );
+                }
+                // (a)+(b) QUIET-BAND + VISIBILITY, per local ground endpoint.
+                let muted_dev = (rel_lum(t.muted) - rel_lum(t.base_100)).abs();
+                for (label, ground) in [("from", t.background.from()), ("to", t.background.to())] {
+                    let gy = rel_lum(ground);
+                    let peak_dev = (composite_y(tint, peak, ground) - gy).abs();
+                    assert!(
+                        peak_dev <= muted_dev,
+                        "{}: a peak star over the {label} ground deviates ΔY {peak_dev:.3} — \
+                         past the world's own muted rung ({muted_dev:.3}); the glint must \
+                         stay inside the ladder's quiet band",
+                        t.name
+                    );
+                    assert!(
+                        peak_dev >= 0.02,
+                        "{}: a peak star over the {label} ground deviates only ΔY \
+                         {peak_dev:.3} — the invisible-band trap (present but unseeable)",
+                        t.name
+                    );
+                    // Presence ordering: the floor really is the quiet end.
+                    let floor_dev = (composite_y(tint, floor, ground) - gy).abs();
+                    assert!(
+                        floor_dev < peak_dev,
+                        "{}: the breath must dim toward its floor (floor ΔY {floor_dev:.3} \
+                         !< peak ΔY {peak_dev:.3})",
+                        t.name
+                    );
+                }
+            }
+        }
+    }
+    // The round's assignment: exactly ONE stars world ships (Currawong — the
+    // user's pick). A second is a conscious data edit that lands here.
+    assert_eq!(stars_worlds, 1, "exactly one world ships AmbientStyle::Stars today");
+}
+
 /// THE FROST PILL CONTRAST LAW (the FROST RAIL round — RE-SCOPED from the retired
 /// whole-margin carve law, which asserted the old flat rail this round replaced).
 /// The shipped headed-doc treatment is now per-entry FROST pills: behind each
@@ -1179,8 +1305,8 @@ fn zh_hant_uniform_ko_splits_serif_from_sans() {
 /// any `Some(tag)` must be one of that axis's declared sections (no world under a
 /// header that doesn't exist); the name-keyed accessor [`tag_for`] agrees with the
 /// inline field; every world HEADLINES at least one axis; and `All` groups nothing.
-/// THIS is the coverage check WORLD-ROLES.md means by "the axes become a build-time
-/// ruler" — no runtime picker consults it.
+/// THIS is the coverage check meant by "the axes become a build-time ruler"
+/// (retired; decision recorded in THEMES.md) — no runtime picker consults it.
 #[test]
 fn axis_coverage_ruler() {
     for lens in [Lens::Time, Lens::Register, Lens::Voice, Lens::Temperature] {
@@ -1870,9 +1996,21 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 ..RenderCaps::DEFAULT
             },
             // C2: the iconic dark-technical statement world anchors TopLeft.
+            // TWINKLING STARS (2026-07-18, the user's morning verdict): Currawong
+            // stays, differentiated by the ambient star field — the maximally-
+            // quiet, unmistakably-alive pole ("aliveness ≠ loudness"). The
+            // params are the authored taste data (BUILD + GALLERY + HOLD).
             "Currawong" => RenderCaps {
                 elevation: Elevation::Bordered,
                 card_anchor: model::CardAnchor::TopLeft,
+                ambient: model::AmbientStyle::Stars {
+                    tint: Srgb::rgb(0x9D, 0xB0, 0xCF),
+                    cell_px: 34.0,
+                    density: 0.16,
+                    size_px: 2.6,
+                    peak: 0.55,
+                    floor: 0.12,
+                },
                 ..RenderCaps::DEFAULT
             },
             // Wagtail: the 1-bit escape hatch (every field away from default)
@@ -1900,10 +2038,25 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 // every world — the silent pole included.
                 list_style: model::ListStyle::Pane,
                 facet_style: model::FacetStyle::Text,
+                // TWINKLING-STARS round: no ambient life on the silent pole
+                // (and a fractional-alpha breath is 1-bit-illegal besides).
+                ambient: model::AmbientStyle::None,
             },
-            // LIGHT-WORLD BORDER (composition round item 6): the four remaining
+            // DAWN ROUND (2026-07-18): Bilby is the LIGHT POLE — the roster
+            // decision ("the dark-line-on-light page frame is reserved for a
+            // future light-silent pole world") lands here: 1px of its own
+            // night-violet ink around the writing column, Wagtail's 2px white
+            // frame mirrored at the light end of the spectrum. Keeps the
+            // light-world card border.
+            // Dawn round: the proposed 1px light-pole page frame was REJECTED by
+            // the user live ("the frame is so weird") — Bilby ships frameless.
+            "Bilby" => RenderCaps {
+                elevation: Elevation::Bordered,
+                ..RenderCaps::DEFAULT
+            },
+            // LIGHT-WORLD BORDER (composition round item 6): the remaining
             // pale-ground worlds gain the summoned-card border, DATA-only.
-            "Gumtree" | "Bilby" | "Saltpan" | "Quokka" => {
+            "Gumtree" | "Saltpan" | "Quokka" => {
                 RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT }
             }
             "Tawny" | "Mopoke" | "Potoroo" | "Undertow" | "Kingfisher" | "Outback" => {
@@ -2100,6 +2253,93 @@ fn dialup_placard_inks_stay_on_the_ladder_below_full_ink() {
                     t.name
                 );
             }
+        }
+    }
+    set_active(DEFAULT_THEME);
+}
+
+/// WRITING-STREAKS HEATMAP tint law (`heatmap_colors`, one owner in
+/// `derive.rs`): for EVERY world the calendar squares must be figure/ground by
+/// value — the filled intensity rungs distinguishable FROM the card's own
+/// `base_300` ground AND from each other, climbing monotonically toward ink, and
+/// NEVER amber (the caret's alone). One-bit worlds (Wagtail) carry a DECLARED
+/// EXEMPTION: no intermediate grey is permitted there, so the heatmap degrades to
+/// BINARY (empty = ground, any writing = full ink), which the arm below asserts is
+/// pure black/white instead of a 5-step ramp.
+#[test]
+fn streaks_heatmap_levels_are_distinguishable_every_world() {
+    let _g = crate::testlock::serial();
+    // Gamma-correct Rec.709 relative luminance (the `rel_lum` recipe used across
+    // the theme laws) — perceived brightness, so "distinguishable" is perceptual.
+    fn rel_lum(c: Srgb) -> f32 {
+        fn lin(u: u8) -> f32 {
+            let s = u as f32 / 255.0;
+            if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        }
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    // A filled rung must clear the ground by at least this perceived-luminance
+    // step, and each rung must clear the previous by at least this much — small
+    // but non-zero, so even the tightest world's ink span reads as 4 steps.
+    const MIN_STEP: f32 = 0.012;
+    for t in THEMES.iter() {
+        set_active_by_name(t.name).unwrap();
+        let colors = heatmap_colors();
+        assert_eq!(colors.len(), crate::streaks::LEVELS);
+        let ground = base_300();
+
+        if t.is_one_bit() {
+            // 1-BIT DEGRADATION: empty = ground token, every filled rung = full ink,
+            // and both are pure (no forbidden intermediate grey). A written cell must
+            // still read against the ground.
+            assert_eq!(colors[0], base_200(), "{}: 1-bit empty rung is the ground token", t.name);
+            for c in &colors[1..] {
+                assert_eq!(*c, base_content(), "{}: 1-bit filled rung is full ink", t.name);
+            }
+            assert!(
+                (rel_lum(colors[4]) - rel_lum(ground)).abs() > 0.5,
+                "{}: 1-bit written cell reads against the ground",
+                t.name
+            );
+            continue;
+        }
+
+        // The direction ink climbs away from the ground (light world: down; dark:
+        // up). Every filled rung must move in that one direction, monotonically.
+        let ink_dir = (rel_lum(base_content()) - rel_lum(ground)).signum();
+        let mut prev = rel_lum(colors[0]); // the empty rung
+        for (i, c) in colors.iter().enumerate().skip(1) {
+            let y = rel_lum(*c);
+            // Distinguishable from the ground.
+            assert!(
+                (y - rel_lum(ground)).abs() >= MIN_STEP,
+                "{}: filled level {i} (Y {:.4}) not distinguishable from base_300 ground (Y {:.4})",
+                t.name, y, rel_lum(ground)
+            );
+            // Distinguishable from — and climbing past — the previous rung.
+            assert!(
+                (y - prev) * ink_dir >= MIN_STEP,
+                "{}: level {i} (Y {:.4}) is not a clear step up from level {} (Y {:.4})",
+                t.name, y, i - 1, prev
+            );
+            prev = y;
+            // NEVER THE ACCENT: every square rides the world's own ink ladder (a
+            // blend of `base_200`↔`base_content`), so it can never manufacture
+            // chroma BEYOND that ladder — the caret's saturated accent is never a
+            // decorative fill here. A warm world's `base_content` legitimately
+            // shares the accent's HUE (it's the reading ink every glyph uses), so
+            // the guard bounds SATURATION to the ladder's own, not the hue: a cell
+            // must be no more saturated than the ink endpoints, and never literally
+            // `primary`.
+            let (_, s, _) = c.to_hsl();
+            let (_, s_ink, _) = base_content().to_hsl();
+            let (_, s_empty, _) = base_200().to_hsl();
+            assert!(
+                s <= s_ink.max(s_empty) + 0.02,
+                "{}: heatmap level {i} (sat {:.2}) manufactures chroma beyond the ink ladder (max {:.2})",
+                t.name, s, s_ink.max(s_empty)
+            );
+            assert_ne!(*c, primary(), "{}: heatmap level {i} must never be literally the accent", t.name);
         }
     }
     set_active(DEFAULT_THEME);

@@ -323,6 +323,104 @@ fn every_shipped_placard_world_wordmark_stays_on_canvas() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
+// --- PLACARD ATLAS-SAFETY (AtlasFull fix, 2026-07-17) --------------------
+//
+// The proportional placard sizing tracked the window short side CONTINUOUSLY, so a
+// live resize sweep asked the shaper for a fresh giant Archivo-Black size every drag
+// pixel; each distinct size rasterized its own glyphs into the ONE shared atlas
+// (document text included) and filled it faster than the per-frame trim reclaimed →
+// `glyphon::PrepareError::AtlasFull`, blanking the card and starving the body text.
+// The fix SNAPS the size to a ~3% geometric ladder (`snap_placard_size`) so a whole
+// resize produces a BOUNDED set of distinct sizes.
+
+/// The pure quantizer's law: the reference anchor is an EXACT fixed point (so the
+/// 1200×800 reference capture stays byte-identical); the FLOOR variant never exceeds
+/// its target (the shrink-to-fit fit invariant); the NEAREST variant lands within one
+/// ~3% step; and degenerate inputs pass through without NaN or panic.
+#[test]
+fn snap_placard_size_anchors_the_reference_and_floors_fit_targets() {
+    use crate::render::chrome::snap_placard_size;
+    // A world's reference-canvas size is a fixed point at either rounding.
+    for anchor in [56.0_f32, 129.6, 194.4] {
+        assert!(
+            (snap_placard_size(anchor, anchor, false) - anchor).abs() < 1e-3,
+            "nearest fixes the anchor {anchor}"
+        );
+        assert!(
+            (snap_placard_size(anchor, anchor, true) - anchor).abs() < 1e-3,
+            "floor fixes the anchor {anchor}"
+        );
+    }
+    let anchor = 194.4_f32; // Firetail's reference size.
+    // FLOOR ≤ target — the snapped mark still fits `avail`.
+    for target in [50.0_f32, 88.3, 126.4, 130.0, 193.0, 260.0, 511.0] {
+        let snapped = snap_placard_size(target, anchor, true);
+        assert!(snapped <= target + 1e-3, "floor {snapped} must not exceed target {target}");
+        assert!(snapped > 0.0, "floor stays positive for {target}");
+    }
+    // NEAREST within one ~3% step (ratio inside [step^-0.5, step^0.5]).
+    for target in [50.0_f32, 88.3, 126.4, 260.0, 511.0] {
+        let ratio = snap_placard_size(target, anchor, false) / target;
+        assert!(ratio > 0.985 && ratio < 1.015, "nearest within a step of {target} (ratio {ratio})");
+    }
+    // Degenerate inputs pass through, never NaN/panic.
+    assert_eq!(snap_placard_size(0.0, anchor, false), 0.0);
+    assert_eq!(snap_placard_size(-5.0, anchor, true), -5.0);
+    assert_eq!(snap_placard_size(100.0, 0.0, false), 100.0);
+}
+
+/// THE OUTCOME LAW: a live resize sweep across a wide span of window sizes produces
+/// only a BOUNDED number of distinct placard font sizes (so continuous sizing can't
+/// fill the shared atlas), AND every frame's full `prepare()` succeeds — never
+/// `PrepareError::AtlasFull`. Drives the loudest shipped placard (Firetail's scale
+/// 4.5 Bold) with a long title so BOTH the main and the shrink-to-fit paths run.
+/// Without the quantization the distinct-size count runs into the hundreds and this
+/// bound fails — the guard the user-reported live bug lacked.
+#[test]
+fn placard_resize_sweep_stays_atlas_bounded_and_error_free() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping placard_resize_sweep_stays_atlas_bounded_and_error_free: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    set_title_style_test_override(Some(theme::TitleStyle::Placard {
+        corner: theme::PlacardCorner::BL,
+        scale: 4.5,
+        ink: theme::PlacardInk::Bold,
+    }));
+    let mut v = view("hello world\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_title = "version history"; // long → the shrink-to-fit path fires too
+    v.overlay_items = (0..12).map(|i| format!("Command {i}")).collect();
+
+    let mut sizes = std::collections::BTreeSet::new();
+    let h = 800u32;
+    let mut w = 360u32;
+    while w <= 2600 {
+        p.set_size(w as f32, h as f32);
+        p.set_view(&v);
+        let geom = p.overlay_geometry(w);
+        if let Some((_x, _y, _pw, ph)) = p.overlay_shape_placard(&geom) {
+            // The atlas keys on the integer rasterized size; font size = line_height / 1.1.
+            sizes.insert((ph / 1.1).round() as u32);
+        }
+        // A full frame prepare must never AtlasFull anywhere in the sweep.
+        p.prepare(&device, &queue, w, h)
+            .expect("prepare must not fail during a placard resize sweep");
+        p.atlas.trim(); // the off-frame reclaim the live loop does after present.
+        w += 9;
+    }
+    assert!(sizes.len() >= 3, "the sweep must actually vary the size, not clamp flat");
+    assert!(
+        sizes.len() <= 90,
+        "quantization must bound distinct placard sizes across the sweep (got {}), \
+         else continuous sizing fills the shared atlas",
+        sizes.len()
+    );
+
+    set_title_style_test_override(None);
+}
+
 // --- byte identity: every world's overlay renders exactly as before --
 
 /// The HARD GATE: with NO override active (the shipped default on every

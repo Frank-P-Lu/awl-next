@@ -290,6 +290,25 @@ pub(super) fn settled_viewstate(
     vstate.search_replacement = opts.search_replacement.clone();
     vstate.search_editing_replacement = opts.search_editing_replacement;
     vstate.overlay_active = opts.overlay.as_ref().map(|o| o.active).unwrap_or(false);
+    // FORMAT POPOVER force-summon (capture-only probe): the live summon is a MOUSE
+    // gesture the headless capture has no pointer for, so the `AWL_POPOVER` env knob
+    // floats the format toolbar over the current selection instead — making the
+    // popover (its lit toggles, the `H` level, the button geometry) verifiable from
+    // a `--keys`-driven capture. Unset (every ordinary capture) → `None`, byte-
+    // identical. Gated like the live path: markdown + config-on + a real selection +
+    // no overlay/search owning the screen.
+    if crate::popover::popover_on()
+        && !search_active
+        && !vstate.overlay_active
+        && (opts.force_popover || std::env::var_os("AWL_POPOVER").is_some())
+    {
+        if let Some(((l0, c0), (l1, c1))) = vstate.selection {
+            let a = buffer.line_col_to_char(l0, c0);
+            let c = buffer.line_col_to_char(l1, c1);
+            vstate.popover =
+                crate::actions::popover::plan(&buffer.text(), Some(a), c, buffer.is_markdown());
+        }
+    }
     // CRISP-BACKDROP exception: the THEME / CARET / HISTORY pickers keep the doc
     // crisp (no frosted blur) — the theme/caret cards preview live document state,
     // and the history timeline previews the highlighted VERSION in the document
@@ -300,14 +319,22 @@ pub(super) fn settled_viewstate(
         .map(|o| o.mode == "theme" || o.mode == "caret" || o.mode == "history")
         .unwrap_or(false);
     vstate.overlay_query = opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default();
-    // Rename/InsertLink already orient via their own modal prompt (`foot_hint`), so
-    // the render path skips the title prefix for them (mirrors `App::sync_view`'s
-    // `draws_title_prefix` gate); the sidecar's own `overlay.title` field, built in
-    // `main/run.rs`, still reports every kind's title unconditionally.
+    // The modal-prompt minibuffers (Rename/InsertLink/KeepName) already orient via
+    // their own `foot_hint`, so the render path skips the title prefix for them —
+    // consulted through the ONE owner (`OverlayKind::draws_title_prefix`, resolved
+    // from the mode string via `from_mode`), the same gate `App::sync_view` reads,
+    // so a future opt-out kind can't drift this copy (the hand-listed
+    // `mode != "rename" && …` string pair this replaces DID drift when KeepName
+    // landed). An unrecognized mode keeps its title (fail-visible). The sidecar's
+    // own `overlay.title` field, built in `main/run.rs`, still reports every
+    // kind's title unconditionally.
     vstate.overlay_title = opts
         .overlay
         .as_ref()
-        .filter(|o| o.mode != "rename" && o.mode != "insert_link")
+        .filter(|o| {
+            crate::overlay::OverlayKind::from_mode(o.mode)
+                .map_or(true, |k| k.draws_title_prefix())
+        })
         .map(|o| o.title)
         .unwrap_or("");
     vstate.overlay_items = opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default();

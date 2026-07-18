@@ -240,17 +240,26 @@ in beats an infinite palette you'd never finish tuning. (The full contract each
 world is measured against — every law, and the test that enforces it — lives in
 `THEMES.md`.)
 
+**Amendment (settled 2026-07-14, the two-layer model):** the worlds got their
+organizing principle. awl is a **chameleon** — one *creature*, many *skins* —
+and every skin is two layers: **the Room** (the writing column, calm and
+identical in every world) and **the Frame** (ground, margins, chrome — where all
+of a world's personality lives). Every "is this too much?" question resolves to
+*Room or Frame?* And a chameleon is one simple system with rich pigment: the
+personality is **data, never machinery**. (`DESIGN.md` §1 carries the working
+detail.)
+
 ### What gets bundled — every MB earns its place
 
 awl ships as one binary with everything it needs to write, offline, from the
 first launch: no plugin marketplace, no "download language pack," no first-run
 network fetch. That promise costs disk, so the cost is *tracked*, not assumed:
 
-- **Bundle identity — the world faces.** Fourteen worlds each name a real
+- **Bundle identity — the world faces.** Sixteen worlds each name a real
   display font + code mono (`THEMES.md` §1); a theme switch reskins glyph
   *shapes*, not just color. That only works if the fonts are actually bundled
-  (~2.4 MB today), so a fresh install on a machine with none of these faces
-  installed still looks exactly right.
+  (a few MB of Latin display + mono faces today), so a fresh install on a
+  machine with none of these faces installed still looks exactly right.
 - **The offline writing promise — dictionaries.** Spellcheck (`spell.rs`) is a
   bundled Hunspell dictionary set (~2.3 MB today), not a network call — awl
   writes on a plane exactly as well as it writes at a desk.

@@ -421,6 +421,7 @@ fn history_arrows_cycle_the_lens() {
         id: id.to_string(),
         timestamp: id.parse().unwrap_or(0),
         pinned: false,
+        name: None,
     };
     let mut overlay = Some(OverlayState::new_history(
         vec![row("300"), row("200"), row("100")],
@@ -719,6 +720,69 @@ fn theme_move_previews_live() {
     crate::theme::set_active(0);
 }
 
+/// LAW (a) — JUMP-TO-ENDS, no-wildcard over every OverlayKind. While a modal picker
+/// is open it OWNS Home/End (which the document keymap resolves to LineStart/LineEnd)
+/// and the very-start/end pair Cmd-↑/↓ + Ctrl-Home/End (BufferStart/BufferEnd): each
+/// JUMPS the selection to the FIRST / LAST row instead of leaking a no-op — the fix
+/// for the user's "you can't jump, you go up or down one by one" report. Swept over
+/// `OverlayKind::ALL` so no picker kind is left arrowing one-by-one (a new kind rides
+/// the generic list nav the instant it exists). (Real Rename/InsertLink overlays arm a
+/// modal text edit that swallows these keys — correct for a single-row edit — but the
+/// generic `new()` state here has no edit armed, so the sweep exercises the list-nav
+/// jump uniformly, which is exactly the intercept arm under test.)
+#[test]
+fn overlay_home_end_jump_to_first_and_last_for_every_kind() {
+    let _g = crate::testlock::serial();
+    let corpus = || vec!["r0".to_string(), "r1".into(), "r2".into(), "r3".into()];
+    for k in OverlayKind::ALL {
+        for (to_last, to_first) in [
+            (Action::LineEnd, Action::LineStart),   // End / Home, C-e / C-a, Cmd-→/←
+            (Action::BufferEnd, Action::BufferStart), // Cmd-↓/↑, Ctrl-End/Home
+        ] {
+            let mut overlay = Some(OverlayState::new(k, corpus(), vec![], vec![]));
+            let last = overlay.as_ref().unwrap().item_strings().len() - 1;
+            assert!(last >= 1, "{k:?}: sweep corpus lists multiple rows");
+            let mut accept = None;
+            // Start in the middle so each jump is a real, observable move.
+            drive(&mut overlay, &mut accept, &Action::NextLine);
+            drive(&mut overlay, &mut accept, &to_last);
+            assert_eq!(
+                overlay.as_ref().unwrap().selected, last,
+                "{k:?}: {to_last:?} jumps to the LAST row"
+            );
+            drive(&mut overlay, &mut accept, &to_first);
+            assert_eq!(
+                overlay.as_ref().unwrap().selected, 0,
+                "{k:?}: {to_first:?} jumps to the FIRST row"
+            );
+        }
+    }
+}
+
+/// LAW (b) — the END/HOME jump FIRES THE LIVE PREVIEW in the Theme picker, exactly
+/// like ↑/↓ does: jumping to a world auditions its motion/palette immediately (the
+/// user's actual use case — browsing the theme picker's live motion previews). End
+/// previews the LAST world, Home the FIRST.
+#[test]
+fn theme_picker_jump_previews_the_end_worlds_live() {
+    let _g = crate::testlock::serial();
+    crate::theme::set_active(0); // open on Tawny (index 0)
+    let mut overlay = theme_overlay();
+    let mut accept = None;
+    assert_eq!(overlay.as_ref().unwrap().selected, 0, "opens on the active world");
+    // END → last world, previewed LIVE (the process-global theme flips to it).
+    drive(&mut overlay, &mut accept, &Action::LineEnd);
+    let last = overlay.as_ref().unwrap().selected_value().unwrap().to_string();
+    assert_eq!(overlay.as_ref().unwrap().selected, crate::theme::THEMES.len() - 1);
+    assert_ne!(last, "Tawny", "the jump moved off the first world");
+    assert_eq!(crate::theme::active().name, last, "End previews the LAST world live");
+    // HOME → first world, previewed LIVE.
+    drive(&mut overlay, &mut accept, &Action::LineStart);
+    assert_eq!(overlay.as_ref().unwrap().selected, 0);
+    assert_eq!(crate::theme::active().name, "Tawny", "Home previews the FIRST world live");
+    crate::theme::set_active(0);
+}
+
 #[test]
 fn theme_enter_commits_previewed_world() {
     let _g = crate::testlock::serial();
@@ -747,6 +811,63 @@ fn theme_cancel_reverts_to_starting_world() {
     assert!(overlay.is_none(), "Cancel closes the picker");
     assert_eq!(crate::theme::active().name, "Tawny", "reverted to the opening world");
     crate::theme::set_active(0);
+}
+
+/// THEME x SPELLCHECK (the user's own question: "does changing theme somehow
+/// affect the [spellcheck] toggle?"): a theme picker PREVIEW / COMMIT / CANCEL
+/// must never touch the spell-check global — the two are unrelated process-
+/// globals sharing no writer (`spell::set_spellcheck_on` has exactly three real
+/// call sites: `App::setting_toggle`, `App::reload_config`, and
+/// `Config::apply_sticky_globals` — none in theme/overlay code). Swept over
+/// EVERY world via the picker's own live-preview arrow-through, both starting
+/// states of the toggle, and all three picker exits.
+#[test]
+fn theme_picker_preview_commit_cancel_never_touch_spellcheck_global() {
+    let _g = crate::testlock::serial();
+    let _sp = crate::testlock::serial();
+    let saved_theme = crate::theme::active().name.to_string();
+    let saved_spell = crate::spell::spellcheck_on();
+
+    for &start_on in &[true, false] {
+        crate::spell::set_spellcheck_on(start_on);
+        crate::theme::set_active(0);
+        let mut overlay = theme_overlay();
+        let mut accept = None;
+        // Arrow through EVERY world, previewing each in turn.
+        for _ in 0..crate::theme::THEMES.len() {
+            drive(&mut overlay, &mut accept, &Action::NextLine);
+            assert_eq!(
+                crate::spell::spellcheck_on(),
+                start_on,
+                "world {:?}: a theme PREVIEW step must never touch spellcheck",
+                crate::theme::active().name
+            );
+        }
+        // COMMIT.
+        drive(&mut overlay, &mut accept, &Action::Newline);
+        assert!(overlay.is_none(), "Enter closes the picker");
+        assert_eq!(
+            crate::spell::spellcheck_on(),
+            start_on,
+            "a theme COMMIT must never touch spellcheck"
+        );
+
+        // CANCEL path: open again, preview away, Esc reverts the WORLD but must
+        // leave spellcheck alone too.
+        let mut overlay2 = theme_overlay();
+        let mut accept2 = None;
+        drive(&mut overlay2, &mut accept2, &Action::NextLine);
+        drive(&mut overlay2, &mut accept2, &Action::Cancel);
+        assert!(overlay2.is_none(), "Esc closes the picker");
+        assert_eq!(
+            crate::spell::spellcheck_on(),
+            start_on,
+            "a theme CANCEL/revert must never touch spellcheck"
+        );
+    }
+
+    crate::theme::set_active_by_name(&saved_theme);
+    crate::spell::set_spellcheck_on(saved_spell);
 }
 
 /// BREADCRUMB POP — a Theme picker opened FROM the palette (return_to = Command)

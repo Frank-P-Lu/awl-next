@@ -146,8 +146,7 @@ impl TextPipeline {
         let text_w = card_w - 2.0 * hpad;
         // Foot hint (item 5) rides a SHORTER line — reclaim `lh - hint_h` per hint
         // row so the card hugs the tighter footer (matching the flat owner).
-        let card_h = total_rows as f32 * lh + header_gap + 2.0 * pad
-            - self.overlay_footer_reclaim(hint_rows);
+        let card_h = self.overlay_card_h(total_rows, header_gap, hint_rows, pad);
         // MOTION-JUICE ENTRANCE: folded in AFTER the `avail_px`/row-fit math
         // above (which reads the SETTLED `card_y` — the transient drop must
         // never change how many rows fit), mirroring `overlay_geometry`'s own
@@ -165,8 +164,6 @@ impl TextPipeline {
             n_items,
             hint,
             hint_rows,
-            footer: Vec::new(),
-            footer_rows: 0,
             theme: true,
             strip: self.overlay_lens.clone(),
             plan,
@@ -181,6 +178,8 @@ impl TextPipeline {
             text_top,
             text_w,
             card_narrow,
+            // The theme picker draws no keybindings-tips footer.
+            ..OverlayGeom::base()
         }
     }
 
@@ -198,14 +197,12 @@ impl TextPipeline {
         if !geom.theme || px < geom.card_x || px > geom.card_x + geom.card_w {
             return None;
         }
-        let lh = self.overlay_lh();
         // Strip is display line 1, whose HEIGHT is inflated to `lh + header_gap` by
         // the query BEAT (the labels center in that tall box, so they sit lower than
         // a plain `lh` band — the whole inflated line is the strip's clickable region,
-        // meeting row 0's top exactly). Using the plain `lh` band would leave the
-        // lower half of the labels un-clickable once the beat widened.
-        let strip_top = geom.text_top + lh;
-        let strip_lh = lh + geom.header_gap;
+        // meeting row 0's top exactly). Through the ONE strip-band owner so the
+        // clickable region tracks the shaped labels exactly.
+        let (strip_top, strip_lh) = self.overlay_strip_band(&geom);
         if py < strip_top || py >= strip_top + strip_lh {
             return None;
         }
@@ -343,7 +340,6 @@ impl TextPipeline {
         //     mark draws).
         // The x-spans come from the SAME shaped glyphs the strip hit-test reads, so
         // the skin can never disagree with where a label is clicked.
-        let lh = self.overlay_lh();
         // Scan line 1 for a strip-range's glyph x-span (min_x, max_x) + the shaped
         // baseline (C2 y-owner), `None` if empty.
         let span_of = |buf: &GlyphBuffer, r: &std::ops::Range<usize>| -> Option<(f32, f32, f32)> {
@@ -389,9 +385,12 @@ impl TextPipeline {
         // `chip_h` is sized off the strip's own gap-independent text line height (not
         // `lh`, which swells with a Bars row-gap), so the pill hugs the label the same
         // whether or not Bars is also active.
-        let strip_lh = lh + geom.header_gap;
-        let mark_cy = geom.text_top + lh + strip_lh * 0.5;
-        let strip_text_lh = self.metrics.line_height * super::overlay::OVERLAY_UI_SCALE;
+        // The strip band through the ONE owner: the mark centers on the strip's own
+        // vertical middle (`strip_top + strip_lh/2`), so a hugging pill tracks the
+        // beat-inflated labels no matter the query gap.
+        let (strip_top, strip_lh) = self.overlay_strip_band(geom);
+        let mark_cy = strip_top + strip_lh * 0.5;
+        let strip_text_lh = self.metrics.line_height * crate::render::effective_overlay_scale();
         let chip_h = (strip_text_lh - 2.0 * CHIP_VPAD).max(1.0);
         // A PILL rect from an already-resolved (left, right) glyph-x pair (device
         // px): centered on the strip glyphs' vertical middle. The active band
@@ -528,7 +527,7 @@ impl TextPipeline {
         // LINE HEIGHTS stay the uniform UI row height (`overlay_lh`) so the plan line
         // offsets, the selected band, and the underline `y` never drift from a per-span
         // metric taller than the row.
-        let ui = super::overlay::OVERLAY_UI_SCALE;
+        let ui = crate::render::effective_overlay_scale();
         let lh = self.overlay_lh();
         let header_metrics = GlyphMetrics::new(m.font_size * ui * label, lh);
         let base = panel_attrs();
@@ -620,7 +619,7 @@ impl TextPipeline {
             // (the Wagtail selected-row bug's second half). `strip_lh` on the labels
             // makes text and band agree; the "\n" keeps the row's scale-invariant
             // baseline size.
-            let strip_lh = lh + geom.header_gap;
+            let strip_lh = self.overlay_strip_band(geom).1;
             spans.push((&strip_s[0..1], mk(faint).metrics(GlyphMetrics::new(m.font_size * ui, lh))));
             cursor += 1;
             for (r, c) in pushes {
@@ -681,18 +680,7 @@ impl TextPipeline {
                     // muted, on the SAME item line so the bar hugs label + gap +
                     // shortcut. Symbol-split so ⌘ ⇧ ⌥ ⌃ shape from the bundled face.
                     if let Some(t) = trailing.get(idx).filter(|t| !t.is_empty()) {
-                        let mut last = 0usize;
-                        for sr in symbol_runs(t) {
-                            if sr.start > last {
-                                spans.push((&t[last..sr.start], mk(muted)));
-                            }
-                            let end = sr.end;
-                            spans.push((&t[sr], sym(muted)));
-                            last = end;
-                        }
-                        if last < t.len() {
-                            spans.push((&t[last..], mk(muted)));
-                        }
+                        push_symbol_split(&mut spans, t, || mk(muted), || sym(muted));
                     }
                 }
             }

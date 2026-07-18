@@ -277,9 +277,12 @@ pub enum PlacardInk {
 /// `Placard` is the OVERLAY-PERSONALITY-AS-DATA round's capability: a
 /// large, corner-anchored, DIM wordmark of the SAME title text drawn BEHIND
 /// the card's rows (Persona 3 Reload's CONFIG-screen watermark is the
-/// reference) — `scale` multiplies the markdown heading TITLE type rung
-/// (`markdown::headings::type_scale::TITLE`) over the document's own body
-/// font size, so a world can dial how loud its wordmark reads without a
+/// reference) — `scale` multiplies the FROZEN placard calibration anchor
+/// (`render::chrome::overlay_shape::PLACARD_CALIBRATION_TITLE`, the TITLE
+/// rung as it stood when the wordmark fractions were picked by eye —
+/// deliberately decoupled from the live document ladder, so a heading-ladder
+/// retune never silently resizes a world's wordmark) over the document's own
+/// body font size, so a world can dial how loud its wordmark reads without a
 /// second magic number; `ink` picks how it draws off the ink ladder (see
 /// [`PlacardInk`]). **BLEED IS THE CONTRACT** (the user-settled semantics,
 /// pinned by `render::tests::overlay_personality`'s corner-placement tests):
@@ -538,7 +541,8 @@ pub enum ChipVariant {
 /// it). DISTINCT from the summoned card's border ([`Elevation::Bordered`] —
 /// that one rims a transient overlay card; this one is document furniture in
 /// the DESIGN §5 "orientation" sense: it makes the page read as a deliberate
-/// OBJECT, the WORLD-ROLES "dark-line page-frame" idea). `Line`'s
+/// OBJECT, the "dark-line page-frame" idea — retired; decision recorded in
+/// THEMES.md). `Line`'s
 /// `weight_px` is the stroke weight; the INK is never carried here — it is
 /// derived in ONE owner ([`super::derive::page_frame_ink`], the world's own
 /// `base_content`, the full-ink ladder rung: a "dark line" on a light world,
@@ -641,6 +645,83 @@ pub enum HighlightTexture {
     Stipple { color: Srgb, density: f32 },
 }
 
+/// AMBIENT PAGE-GROUND LIFE — the TWINKLING-STARS round's capability (2026-07-18,
+/// the user's "aliveness ≠ loudness" principle: most worlds should feel ALIVE,
+/// including quiet ones; twinkling stars are the maximally-quiet pole). `Stars`
+/// scatters tiny points across the page-mode MARGINS (never the writing column —
+/// the placement law is a hard geometric gate, `crate::stars::in_margin`) that
+/// TWINKLE: each star breathes its brightness on its own slow, individually
+/// phased cycle, riding the SAME ambient phase clock the lava lamp drives
+/// (`TextPipeline::lava_phase` — one clock, two consumers; `App::about_to_wait`'s
+/// single ~10 fps `WaitUntil` tick, paused on blur, frozen under Reduce Motion
+/// and in every headless capture). All params are DATA (a second world adopts
+/// stars by setting this field alone — `theme_caps_law` bans a world-name branch
+/// in the renderer); the star field's LAYOUT is a pure position-hash
+/// (`crate::stars::layout` — deterministic, never OS entropy), so captures stay
+/// byte-deterministic and a resize keeps every star anchored to its pixel cell.
+///
+/// The laws fencing this (all in `theme::tests`): the QUIET-BAND law (a star's
+/// peak composited brightness deviates from its local ground by no more than the
+/// world's own `muted` rung does — the value-ladder-derived ceiling — and by at
+/// least a visibility floor), the AMBER GUARD (a chromatic tint sits ≥30° of hue
+/// from `primary`), and the ONE-BIT GUARD (a translucent breath is structurally
+/// illegal on a two-value world).
+// NOTE: no `Eq` — the `Stars` params are floats (same reasoning as `TitleStyle`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AmbientStyle {
+    /// No ambient layer — every world today except Currawong. A `None` world
+    /// uploads ZERO star instances (byte-identical to before the capability).
+    None,
+    /// The twinkling star field (Currawong's assignment — the quiet dark, alive).
+    Stars {
+        /// Star ink (sRGB). Law-bound inside the world's own quiet band (see
+        /// the enum doc) — visible-but-recessive, never the accent.
+        tint: Srgb,
+        /// Layout grid cell (px): one CANDIDATE star position per cell
+        /// (jittered by the position hash), so density reads uniform without
+        /// clumping.
+        cell_px: f32,
+        /// Fraction of cells that actually carry a star, in `[0, 1]`.
+        density: f32,
+        /// Star dot diameter (px) — tiny points, not marks.
+        size_px: f32,
+        /// The TOP of a star's brightness breath: the alpha its tint reaches
+        /// at peak, in `(0, 1]`. The quiet-band law binds the COMPOSITED
+        /// result of this over the margin ground.
+        peak: f32,
+        /// The BOTTOM of the breath, in `[0, peak)`: stars never fully vanish
+        /// (present, breathing — alive, not blinking).
+        floor: f32,
+    },
+}
+
+impl AmbientStyle {
+    /// True iff this ambient layer is ANIMATED — the term
+    /// [`Theme::has_ambient_motion`] (the one scheduling/crossing gate) reads.
+    pub fn is_animated(&self) -> bool {
+        matches!(self, AmbientStyle::Stars { .. })
+    }
+    /// The star params `(tint, cell_px, density, size_px, peak, floor)`, or
+    /// `None` for a starless world — the pipeline uploads when `Some` and
+    /// skips the layer entirely when `None` (so every non-stars world stays
+    /// byte-identical). Mirrors [`Background::lava_params`]'s shape.
+    pub fn stars_params(&self) -> Option<(Srgb, f32, f32, f32, f32, f32)> {
+        match self {
+            AmbientStyle::Stars { tint, cell_px, density, size_px, peak, floor } => {
+                Some((*tint, *cell_px, *density, *size_px, *peak, *floor))
+            }
+            AmbientStyle::None => None,
+        }
+    }
+    /// Lowercase style name for the capture sidecar.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AmbientStyle::None => "none",
+            AmbientStyle::Stars { .. } => "stars",
+        }
+    }
+}
+
 /// The declarative capability bundle a world's render behavior is built from.
 /// See the module-level doc above. `DEFAULT` is what fifteen of the sixteen
 /// worlds carry, byte-identical to the pre-capabilities-as-data render paths;
@@ -689,6 +770,11 @@ pub struct RenderCaps {
     /// its labels. [`FacetStyle::Text`] everywhere (byte-identical) until a
     /// world flips to `Band`.
     pub facet_style: FacetStyle,
+    /// THE TWINKLING-STARS round's ambient page-ground capability (see
+    /// [`AmbientStyle`]'s own doc): tiny individually-phased twinkling points
+    /// in the page-mode margins. [`AmbientStyle::None`] everywhere
+    /// (byte-identical, zero instances) except Currawong.
+    pub ambient: AmbientStyle,
 }
 
 impl RenderCaps {
@@ -720,6 +806,10 @@ impl RenderCaps {
         // one-line DATA in the later flip round after the user's gallery pick.
         list_style: ListStyle::Pane,
         facet_style: FacetStyle::Text,
+        // TWINKLING-STARS round: the ambient layer lands as data with NO
+        // default life — every world is byte-identical until it opts in
+        // (Currawong is the one assignment).
+        ambient: AmbientStyle::None,
     };
 
 }
@@ -1028,6 +1118,20 @@ pub struct Theme {
     /// each world's doc). Code needs the true fixed grid a proportional face can't
     /// give; the mono is selected in `render.rs::doc_attrs` when the buffer is code.
     pub mono: &'static str,
+    /// ONE BIT of per-world HEADING-WEIGHT data (the heading-weight round,
+    /// user-decided shape): `true` ⇒ a markdown SECTION (`##`) and SUBHEAD
+    /// (`###`+) heading shapes at real `Weight::BOLD` — the world's own bundled
+    /// 700 companion face (`render::FONT_THEME_BOLD_FACES`), never synthetic;
+    /// `false` ⇒ every heading stays Regular and reads by SIZE alone. The TITLE
+    /// (`#`) NEVER bolds on any world — Ladder J spends pure size there — and
+    /// that gate lives with the bit's ONE composition owner,
+    /// [`crate::markdown::heading_weight_bold`] (the render seam + the capture
+    /// sidecar both route through it). Assignment leans on the display face's
+    /// own construction: serif worlds `false` (stroke contrast carries
+    /// hierarchy structurally), mono-display worlds `true` (uniform strokes
+    /// need weight), sans worlds judged by eye — the per-world call is a
+    /// one-line comment on each world literal in `worlds.rs`.
+    pub heading_bold: bool,
     /// PRIORITIZED CJK fallback family list for this world (bundled Noto JP
     /// first, then mac primary, then linux fallback). The bundled Latin/display
     /// faces carry NO Japanese glyphs, so Japanese text resolves through this
@@ -1239,14 +1343,26 @@ impl Theme {
             && pure_bw(self.base_content)
             && pure_bw(self.primary)
     }
+
+    /// True iff this world's GROUND carries AMBIENT MOTION — the lava lamp
+    /// ([`Background::is_lava`]) or the twinkling stars
+    /// ([`AmbientStyle::is_animated`]). THE ONE gate every ambient-scheduling
+    /// decision reads (the App's ~10 fps tick arm, `lava::preview_crossing`'s
+    /// cadence boundary, the move-stream present hold, the launch-time
+    /// auto-page-on) — never a per-world name comparison and never a
+    /// re-derived OR at a call site, so the lava and stars consumers can
+    /// never disagree about "does this world tick".
+    pub fn has_ambient_motion(&self) -> bool {
+        self.background.is_lava() || self.render_caps.ambient.is_animated()
+    }
 }
 
 // --- The THEME AXES (a build-time coverage ruler) + per-world tags -----------
 //
 // These four axes ([`Lens`]) once drove a runtime lens-switcher in the theme
 // picker (LEFT/RIGHT cycled them, grouping worlds into faint sections). That strip
-// was RETIRED (user decision, 2026-07-15 — WORLD-ROLES.md "DECIDED — retire the
-// runtime LENS picker; the axes become a build-time ruler"); the picker is now a
+// was RETIRED (user decision, 2026-07-15 — retired; decision recorded in
+// THEMES.md); the picker is now a
 // flat browsable list. The axes survive here ONLY as a BUILD-TIME coverage ruler:
 // every world carries a value on EACH of the four axes ([`ThemeTags`]), and
 // `tests::axis_coverage_ruler` asserts every section stays covered by a curated

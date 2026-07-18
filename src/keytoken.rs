@@ -94,9 +94,9 @@ pub fn render_key_tokens(text: &str, convention: Convention, platform: Platform)
 mod tests {
     use super::*;
 
-    const WELCOME: &str = include_str!("../samples/welcome.md");
-    const TOUR: &str = include_str!("../samples/tour.md");
-    const GUIDE: &str = include_str!("../GUIDE.md");
+    const WELCOME: &str = crate::embedded_docs::WELCOME_MD;
+    const TOUR: &str = crate::embedded_docs::TOUR_MD;
+    const GUIDE: &str = crate::embedded_docs::GUIDE_MD;
 
     fn extract_token_slugs(text: &str) -> Vec<String> {
         let mut out = Vec::new();

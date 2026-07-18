@@ -23,14 +23,24 @@ const PLACARD_INSET: f32 = 12.0;
 /// byte-identical to before the round.
 const PLACARD_REFERENCE_SHORT_SIDE: f32 = crate::capture::CANVAS_HEIGHT as f32;
 
+/// PROPORTIONAL PLACARD SIZING — the FROZEN calibration anchor: the value of the
+/// markdown TITLE rung at the moment the placard fractions were calibrated by eye
+/// (pre-Ladder-J `type_scale::TITLE`, 1.8). Deliberately a LITERAL, decoupled from
+/// the live document ladder: the per-world placard look is a user-picked identity,
+/// and a later document-ladder retune (Ladder J moved TITLE to 1.6) must never
+/// silently resize every world's wordmark. Chrome reads THIS anchor; only the
+/// document reads the live rung.
+const PLACARD_CALIBRATION_TITLE: f32 = 1.8;
+
 /// PROPORTIONAL PLACARD SIZING — the wordmark height as a fraction of the window
 /// short side PER UNIT of a world's `scale` dial, chosen so that at the reference
 /// short side ([`PLACARD_REFERENCE_SHORT_SIDE`]) the height equals the old
-/// `FONT_SIZE · TITLE · scale`. Derivation: `FONT_SIZE · TITLE / REFERENCE` =
+/// `FONT_SIZE · TITLE · scale` (TITLE as calibrated —
+/// [`PLACARD_CALIBRATION_TITLE`]). Derivation: `FONT_SIZE · TITLE / REFERENCE` =
 /// `24 · 1.8 / 800` = `0.054`. So Firetail (`scale` 4.5) reproduces at `24.3%` of
 /// the short side, the `scale` 3.0 posters at `16.2%` — the board's "~20%" band.
 const PLACARD_HEIGHT_PER_SCALE: f32 =
-    crate::render::FONT_SIZE * crate::markdown::type_scale::TITLE / PLACARD_REFERENCE_SHORT_SIDE;
+    crate::render::FONT_SIZE * PLACARD_CALIBRATION_TITLE / PLACARD_REFERENCE_SHORT_SIDE;
 
 /// PROPORTIONAL PLACARD SIZING — the clamp FLOOR (px): a wordmark never shapes
 /// smaller than this however small the window (below the card's narrow-fallback
@@ -45,6 +55,41 @@ const PLACARD_MIN_HEIGHT: f32 = 56.0;
 /// drive a `scale` 4.5 poster past ~500 px). Comfortably above every shipped
 /// world's reference height, so the clamp is inert at the reference canvas.
 const PLACARD_MAX_HEIGHT: f32 = 512.0;
+
+/// PLACARD ATLAS-SAFETY (AtlasFull fix, 2026-07-17) — the geometric step the
+/// wordmark's font size is SNAPPED to. The proportional sizing above tracks the
+/// window short side CONTINUOUSLY, so a live resize sweep asked the shaper for a
+/// fresh giant Archivo-Black size every pixel of drag travel; each distinct size
+/// rasterizes its own glyph set into the ONE shared glyph atlas
+/// (`TextPipeline::atlas` — document body text, rows and placard all live there),
+/// and a fast sweep on a large display filled it faster than the per-frame
+/// `atlas.trim()` reclaimed → [`glyphon::PrepareError::AtlasFull`], which blanked
+/// the card AND starved the document text sharing the atlas. Snapping to a ~3%
+/// ladder bounds the whole clamp band [`PLACARD_MIN_HEIGHT`]..[`PLACARD_MAX_HEIGHT`]
+/// to ≈ `log(512/56)/log(1.03) ≈ 75` distinct rungs — a wordmark this large moves
+/// a pixel or two between rungs, imperceptible, while the atlas stays bounded no
+/// matter how long the drag. 3–4% was the board's call; 1.03 sits at the calm end.
+const PLACARD_SIZE_STEP: f32 = 1.03;
+
+/// Snap a placard font target (px) to the geometric ladder of
+/// [`PLACARD_SIZE_STEP`], anchored at `anchor` (the world's REFERENCE-canvas
+/// size — so the 1200×800 reference short side is an EXACT fixed point and every
+/// default-zoom placard capture stays byte-identical). `round_down` FLOORS to the
+/// ladder (used by the shrink-to-fit path, so the snapped size never exceeds the
+/// fit target and the wordmark still fits the canvas); otherwise rounds to the
+/// nearest rung. Because BOTH the main and shrink paths anchor at the same
+/// `anchor`, every size either path can produce is `anchor · step^k` for integer
+/// `k` — ONE ladder, so the two paths' union stays bounded (never a product). Pure
+/// → the bounded-ladder law is unit-testable without a GPU (see
+/// `render::tests::overlay_personality`).
+pub(in crate::render) fn snap_placard_size(target: f32, anchor: f32, round_down: bool) -> f32 {
+    if !(target > 0.0) || !(anchor > 0.0) {
+        return target;
+    }
+    let steps = (target / anchor).ln() / PLACARD_SIZE_STEP.ln();
+    let k = if round_down { steps.floor() } else { steps.round() };
+    anchor * (k * PLACARD_SIZE_STEP.ln()).exp()
+}
 
 /// The glyph-coverage cut for a STIPPLE placard ([`theme::PlacardInk::Stipple`]):
 /// a rasterized wordmark pixel joins the stipple's candidate set iff its swash
@@ -135,8 +180,8 @@ impl TextPipeline {
     /// empty for the two kinds that orient via their own modal prompt
     /// instead) as a large, corner-anchored, DIM wordmark into
     /// `placard_buffer` — sized by `scale` over the document body's own font
-    /// size × the markdown heading TITLE rung
-    /// (`markdown::type_scale::TITLE`), so a world dials how loud its
+    /// size × the frozen calibration TITLE anchor
+    /// ([`PLACARD_CALIBRATION_TITLE`]), so a world dials how loud its
     /// wordmark reads with ONE number, never a second magic constant — and
     /// CAPPED by the canvas itself (the fit-to-canvas shrink below): the
     /// window's own width is the ceiling the dial can never shout past.
@@ -213,7 +258,15 @@ impl TextPipeline {
         // 4K/5K window never blows it up. `line_height = font_size · 1.1` below, so
         // this drives the whole box.
         let short_side = self.window_w.min(self.window_h);
-        let font_size = (scale * PLACARD_HEIGHT_PER_SCALE * short_side)
+        // The world's REFERENCE-canvas height (short side == PLACARD_REFERENCE_SHORT_SIDE):
+        // the anchor the size ladder is pinned to, so the reference canvas is an exact
+        // fixed point (byte-identical there) and both this main size and the shrink-to-fit
+        // size below land on the SAME ladder (see `snap_placard_size`).
+        let reference_size = scale * PLACARD_HEIGHT_PER_SCALE * PLACARD_REFERENCE_SHORT_SIDE;
+        // ATLAS-SAFETY: snap the continuous window-tracked size to the ladder BEFORE the
+        // clamp, so a live resize sweep produces a BOUNDED set of distinct giant sizes
+        // (never a fresh atlas entry per drag pixel — the AtlasFull fix).
+        let font_size = snap_placard_size(scale * PLACARD_HEIGHT_PER_SCALE * short_side, reference_size, false)
             .clamp(PLACARD_MIN_HEIGHT, PLACARD_MAX_HEIGHT);
         // A generous plain leading — no body text ever sits inside a
         // single-line wordmark box to match against.
@@ -267,11 +320,18 @@ impl TextPipeline {
         // free.
         let avail = anchor.2 - 2.0 * PLACARD_INSET;
         if avail > 0.0 && w > avail {
-            let shrink = avail / w;
-            line_height *= shrink;
+            // ATLAS-SAFETY: snap the fit target DOWN to the same ladder the main size
+            // rode. Flooring guarantees the shrunk mark still fits `avail` (the snapped
+            // size never exceeds `font_size · avail/w`), and anchoring at the same
+            // `reference_size` keeps every width-only-resize shrink size on the ONE
+            // bounded ladder — so a horizontal drag of a long title can't fill the atlas
+            // either (the width-sweep the main clamp alone never covered).
+            let shrunk =
+                snap_placard_size(font_size * (avail / w), reference_size, true);
+            line_height = shrunk * 1.1;
             self.placard_buffer.set_metrics(
                 &mut self.font_system,
-                GlyphMetrics::new(font_size * shrink, line_height),
+                GlyphMetrics::new(shrunk, line_height),
             );
             self.placard_buffer
                 .shape_until_scroll(&mut self.font_system, false);
@@ -399,13 +459,7 @@ impl TextPipeline {
         // so prefer bindings, then times, then git. It is drawn FLUSH at the card's
         // right text edge by a SEPARATE buffer laid out with cosmic-text `Align::Right`,
         // so the column is a clean right edge regardless of the proportional name width.
-        let right_labels: &[String] = if !self.overlay_bindings.is_empty() {
-            &self.overlay_bindings
-        } else if !self.overlay_times.is_empty() {
-            &self.overlay_times
-        } else {
-            &self.overlay_git
-        };
+        let right_labels = self.overlay_right_labels();
         let has_right = !right_labels.is_empty();
         // One line per name row, aligned to the candidate rows through the shared
         // `right_bind_lines` owner: the flat card's ONE header line (the `› query`
@@ -545,16 +599,10 @@ impl TextPipeline {
         // selected item (byte-identical).
         covered: Option<&[usize]>,
     ) -> bool {
-        // The dim RIGHT column: the SAME precedence the flat path uses (bindings →
-        // times → git; only one is ever populated). Empty on the literal Theme
-        // picker → no right column, byte-identical.
-        let right_labels: &[String] = if !self.overlay_bindings.is_empty() {
-            &self.overlay_bindings
-        } else if !self.overlay_times.is_empty() {
-            &self.overlay_times
-        } else {
-            &self.overlay_git
-        };
+        // The dim RIGHT column through the SAME one-owner precedence the flat path
+        // reads (bindings → times → git; only one is ever populated). Empty on the
+        // literal Theme picker → no right column, byte-identical.
+        let right_labels = self.overlay_right_labels();
         let has_right = !right_labels.is_empty();
         // V7 TASTE-GATE — under `HugText` bars a right column rides INLINE on each
         // ITEM row (trailing the label, `INLINE_SHORTCUT_GAP` between) so the bar
@@ -669,18 +717,9 @@ impl TextPipeline {
         };
         // Break the last content line at its OWN (normal) height first.
         spans.push(("\n", base.clone().color(muted)));
-        let mut last = 0usize;
-        for run in symbol_runs(hint) {
-            if run.start > last {
-                spans.push((&hint[last..run.start], hk_hint(muted)));
-            }
-            let end = run.end;
-            spans.push((&hint[run], sym_hint(muted)));
-            last = end;
-        }
-        if last < hint.len() {
-            spans.push((&hint[last..], hk_hint(muted)));
-        }
+        // The compact foot hint through the ONE symbol-split owner (⌘ ⇧ ⌥ ⌃ ↵ ⇥
+        // ride SYMBOL_FAMILY, the rest the chrome face) at the LABEL rung.
+        push_symbol_split(spans, hint, || hk_hint(muted), || sym_hint(muted));
     }
 
     /// Shape the overlay's LEFT column into `panel_buffer`: the `› query` line (when
@@ -827,18 +866,7 @@ impl TextPipeline {
             // Symbol-split so ⌘ ⇧ ⌥ ⌃ shape from the bundled face (real advances),
             // exactly like the right-aligned column + the foot hint.
             if let Some(t) = trailing.get(row).filter(|t| !t.is_empty()) {
-                let mut last = 0usize;
-                for sr in symbol_runs(t) {
-                    if sr.start > last {
-                        spans.push((&t[last..sr.start], mk(muted)));
-                    }
-                    let end = sr.end;
-                    spans.push((&t[sr], sym_name(muted)));
-                    last = end;
-                }
-                if last < t.len() {
-                    spans.push((&t[last..], mk(muted)));
-                }
+                push_symbol_split(&mut spans, t, || mk(muted), || sym_name(muted));
             }
         }
         // EMPTY STATE: with no candidate rows, one dim, non-selectable message row
@@ -877,18 +905,7 @@ impl TextPipeline {
             let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
             spans.push(("\n", mk(faint))); // the blank separator line
             for line in &footer_lines {
-                let mut last = 0usize;
-                for run in symbol_runs(line) {
-                    if run.start > last {
-                        spans.push((&line[last..run.start], mk(faint)));
-                    }
-                    let end = run.end;
-                    spans.push((&line[run], sym(faint)));
-                    last = end;
-                }
-                if last < line.len() {
-                    spans.push((&line[last..], mk(faint)));
-                }
+                push_symbol_split(&mut spans, line, || mk(faint), || sym(faint));
             }
         }
 
@@ -931,20 +948,40 @@ impl TextPipeline {
         // shaped run width, so once the modifier glyphs carry their REAL width the
         // chord column lands flush and `⌘⇧O` lines up with the `C-x` text chords.
         let sym = |c| Attrs::new().family(Family::Name(SYMBOL_FAMILY)).color(c);
-        let mut bind_spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
-        for s in bind_strs {
-            let mut last = 0usize;
-            for run in symbol_runs(s) {
-                if run.start > last {
-                    bind_spans.push((&s[last..run.start], mono(muted)));
+        // SECONDARY-INK FLIP (Potoroo taste-gate defect — the primary flip landed
+        // but the dim right column never followed, so the selected row's chord
+        // hints washed into a saturated band, invisible). The SELECTED display
+        // line's chord recolors to [`theme::selected_row_secondary_ink`] (the ONE
+        // derive owner) when the band would drop `muted` below the contrast floor;
+        // every OTHER line — and every world whose band already clears the floor —
+        // stays `muted`, byte-identical. The selected line is the SAME index the
+        // band uses ([`overlay_selected_display_line`]), so recolor and highlight
+        // can never disagree.
+        let sel_line = self.overlay_selected_display_line(geom);
+        // The flip is CORRECT only when the chord actually sits ON the band. Under a
+        // HUGGING plate (`HugLabel`) the bare right chord rides the GROUND, not the
+        // plate, so contrasting the band drives it into the ground — the chord stays
+        // `muted` there (legible, identical to the unselected rows). One owner:
+        // `selected_secondary_on_band`.
+        let sel_muted = if !super::selected_secondary_on_band() {
+            None
+        } else {
+            let band = crate::render::effective_overlay_selrow_band();
+            match theme::active().highlight_treatment(band) {
+                theme::HighlightTreatment::InverseFill { ink, .. } => Some(ink.to_glyphon()),
+                theme::HighlightTreatment::ValueBand(b) => {
+                    let flipped = theme::selected_row_secondary_ink(b);
+                    (flipped != theme::muted()).then(|| flipped.to_glyphon())
                 }
-                let end = run.end;
-                bind_spans.push((&s[run], sym(muted)));
-                last = end;
             }
-            if last < s.len() {
-                bind_spans.push((&s[last..], mono(muted)));
-            }
+        };
+        let mut bind_spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
+        for (li, s) in bind_strs.iter().enumerate() {
+            let c = match (sel_line, sel_muted) {
+                (Some(sl), Some(flip)) if sl == li => flip,
+                _ => muted,
+            };
+            push_symbol_split(&mut bind_spans, s, || mono(c), || sym(c));
         }
         let default_attrs = base.clone().color(ink);
         self.panel_bind_buffer
@@ -1030,6 +1067,21 @@ impl TextPipeline {
             }
         }
         w
+    }
+
+    /// TEST HOOK (jump-hint round): the widest shaped FOOTER line (the foot hint,
+    /// plus any keybindings tips) vs the card's inner text width, for the
+    /// currently-shaped flat overlay — so the discoverability law can assert the
+    /// enriched jump hint NEVER CLIPS (`footer_px <= text_w`), an OUTCOME measured
+    /// over the shaped GLYPHS (the Wagtail tripwire: appearance from pixels, not
+    /// from the hint STRING). Reads the private `geom.visible`/`text_w` inside the
+    /// chrome module and routes the width through the ONE footer-measure owner
+    /// [`Self::overlay_footer_content_px`]. Flat cards only (the narrowest card, so
+    /// the tightest clip budget); call after a frame has shaped `panel_buffer`.
+    #[cfg(test)]
+    pub(in crate::render) fn overlay_footer_fit_probe(&self, width: u32) -> (f32, f32) {
+        let geom = self.overlay_geometry(width);
+        (self.overlay_footer_content_px(&geom, geom.visible), geom.text_w)
     }
 
 }

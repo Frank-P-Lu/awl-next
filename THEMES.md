@@ -13,7 +13,7 @@ world the design got wrong.
 ## 1. What a world is
 
 A **world** (`theme::Theme`, `src/theme.rs`) is a complete, curated mood — not a
-swatch. Fifteen ship today (nine dark, six light; `theme::THEMES`), each with:
+swatch. Sixteen ship today (ten dark, six light; `theme::THEMES`), each with:
 
 - **An identity**: a name (Tawny, Saltpan, Potoroo, …), a one-line character
   description in its doc comment, and — critically — its own **display font**
@@ -225,7 +225,7 @@ new law here, not a bypass of this one.
 ### Structural / identity laws
 
 Enforced by the `theme::tests` module (see file for exact assertions):
-`worlds_nine_dark_six_light`, `every_world_has_a_valid_background`,
+`worlds_ten_dark_six_light`, `every_world_has_a_valid_background`,
 `every_world_has_a_bundled_mono`, `cjk_fallback_matches_world_character`,
 `zh_hans_ladder_matches_world_character_with_klee_override`,
 `zh_hant_uniform_ko_splits_serif_from_sans`,
@@ -260,7 +260,7 @@ Enforced by `render::tests::syntax_roles::every_monochrome_world_renders_zero_sa
   from-comment-wash laws apply UNCHANGED — a monochrome highlight must still
   read as a highlight, by value instead of hue.
 - This is a property test layered ON TOP of, not a replacement for, the
-  ordinary structural laws above (`worlds_nine_dark_six_light`,
+  ordinary structural laws above (`worlds_ten_dark_six_light`,
   `role_style_laws_hold_for_every_world`, …) — those still separately pin
   Wagtail's exact hex literals; this law is what stops a future hand-edit from
   quietly nudging one of those greys toward a hue and surviving unnoticed.
@@ -602,6 +602,83 @@ exemption (flat is correct here, like the 1-bit exemption), and
 `ground == base_100` keeps the flat page column and the margin floor one seamless
 den.
 
+### The ambient-stars law (`RenderCaps::ambient` — the TWINKLING-STARS round, 2026-07-18)
+
+Currawong's differentiator, and the QUIET pole of the user's decided principle
+(*"Aliveness ≠ loudness. Most worlds should feel ALIVE, including quiet ones —
+twinkling-stars: maximally quiet, unmistakably alive."*): tiny points in the
+page-mode MARGINS, each breathing its brightness on its own slow,
+individually-phased seconds-scale cycle. A CAPABILITY, not a code path —
+`theme::AmbientStyle { None | Stars { tint, cell_px, density, size_px, peak,
+floor } }` on `RenderCaps.ambient`, `None` on every world but Currawong; a
+second world adopts stars by data alone (`theme_caps_law` bans a world-name
+branch in the renderer). The machinery deliberately RIDES the lava lamp's,
+one register quieter:
+
+- **One ambient clock, two consumers.** The twinkle phase IS the lava phase
+  (`TextPipeline::lava_phase`), advanced by the App's single ~10 fps
+  `WaitUntil` ambient tick behind the SAME cadence gate
+  (`lava::lava_should_tick` fed by `Theme::has_ambient_motion()` — THE one
+  lava-OR-stars owner every scheduling/crossing/page-force decision reads),
+  paused on blur/move/resize, killed by the `ambient_motion` config, FROZEN
+  under Reduce Motion (static stars — present, not twinkling) and to `t=0` in
+  every headless capture (`lava::lava_phase_for`, the one resolver; the dev
+  `AWL_STARS_PHASE` knob pins a gallery phase). A stars world forces page
+  mode ON at the same launch seam a lava world does (no margins = no sky),
+  and crossing INTO or OUT OF an ambient world in the theme-picker preview
+  arms the same present-transaction bracket
+  (`lava::preview_crossing`, `preview_crossing_arms_exactly_on_the_ambient_or_one_bit_boundary`).
+- **Layout is a position hash, never entropy.** `stars::layout` scatters one
+  candidate per fixed pixel grid cell via a pure INTEGER hash (bit-exact —
+  deliberately not a float `sin`-fract hash, whose libm results vary across
+  platforms); two captures are byte-identical and a resize keeps every star
+  anchored to its cell. Per-star rates are INTEGER cycles per ambient loop,
+  so the breath meets its own endpoint at the phase wrap. Laws:
+  `stars::tests::layout_is_deterministic_and_stays_in_viewport`,
+  `twinkle_is_seamless_across_the_ambient_loop_wrap`,
+  `stars_are_individually_phased_never_in_unison`,
+  `twinkle_stays_inside_its_band_and_actually_breathes`.
+- **Margins only, by a hard gate.** `stars::in_margin` (one owner, shared by
+  the renderer's cull and the laws) rejects any star whose quad + AA fringe
+  could touch the writing column band + a breathing gap, against the LIVE
+  column geometry (`page_geometry()` — the adaptive column composes for
+  free); the outline's pill rects + the gutter's corner rect (the same
+  owners the lava frost/carve reads) are additional no-star zones, so a
+  point never crowds the rail's dim ink. Laws:
+  `stars::tests::margin_gate_rejects_the_whole_column_band_and_gap` (pure) +
+  `render::tests::stars::currawong_stars_twinkle_in_the_margins_only_at_real_pixels`
+  (REAL GPU pixels: the two-phase twinkle-diff is non-empty, lives in both
+  margins, and NEVER inside the column — appearance proven over bytes, the
+  Wagtail lesson).
+- **The quiet band (value-ladder-derived ceiling + visibility floor).** A
+  star's PEAK composited pixel (linear-light alpha blend over each margin
+  gradient endpoint — the GPU's own math) deviates from its local ground by
+  NO MORE than the world's own `muted` rung deviates from `base_100`, and by
+  at least ΔY 0.02 (visible — never the invisible-band trap); the AMBER
+  GUARD holds (a chromatic tint ≥30° off `primary`, never literally the
+  accent) and a true 1-bit world can never carry stars (a fractional-alpha
+  breath composites a forbidden third value). Law:
+  `theme::tests::ambient_stars_laws_hold_for_every_world` (the real-pixel
+  test above re-asserts the luminance ceiling over the rendered bytes).
+- **Byte-identity for the starless roster.** An `AmbientStyle::None` world
+  uploads ZERO star instances through the same prepare path, and page-off
+  culls everything even on the stars world. Law: `render::tests::stars::
+  starless_worlds_and_page_off_upload_zero_star_instances`; verified as
+  byte-identical PNGs across all fifteen non-Currawong worlds against the
+  pre-round base at landing time.
+- The dots render through the EXISTING quad owner
+  (`SelectionPipeline::prepare_multicolor`, fully-rounded corners — the
+  writing-streaks per-instance-color path): no new pipeline, no new shader,
+  nothing new for the WebGL2 fallback to validate. Sidecar: the `page`
+  block's `ambient` field (schema `/173`) reports style/tint/drawn-count/
+  effective-phase — a STATE oracle; placement + brightness are asserted over
+  the PNG.
+
+All star numbers (tint, cell, density, size, peak/floor) are TASTE TUNABLE
+data on `worlds.rs::CURRAWONG` — the round shipped BUILD + GALLERY + HOLD,
+landing only on the user's gallery pick; the twinkle's FEEL over real seconds
+is live-only and flagged for human confirmation, never claimed verified.
+
 ### Render capabilities as data (`Theme::render_caps` — the 2026-07 refactor)
 
 Everything above (selection, elevation, decorative washes, backdrop, the
@@ -613,7 +690,7 @@ behaviors would have had to grow another `is_one_bit()`-shaped special case
 rather than simply setting a field — exactly the "a theme needing its own
 code path means the design is wrong" smell `CLAUDE.md`'s engineering
 principles warn against. This round is a pure REFACTOR (behavior-preserving,
-verified by byte-identical before/after captures across all fifteen worlds —
+verified by byte-identical before/after captures across all sixteen worlds —
 no visual change to any world) that replaces every one of those branches with
 a read of a declarative field on `Theme::render_caps` (`theme::model::
 RenderCaps`):
@@ -628,7 +705,12 @@ RenderCaps`):
 | `image_reveal` | `Translucent` \| `Opaque` | The inline-image reveal caption scrim (`image_reveal_scrim`) — translucent veil vs. full opaque occlusion. | Wagtail (`Opaque`) |
 | `highlight_texture` | `Wash` \| `Stipple { color, density }` | THE ONE emphasis texture `==highlight==` spans and search matches share (`highlight_wash`, `wagtail_dither_density`) — a hue-derived translucent wash vs. a fixed-color Bayer-ordered dither stipple at `density`. | Wagtail (`Stipple { white, 0.25 }`) |
 | `title_style` | `InlinePrefix` \| `Placard { corner, scale, ink }` | How a summoned overlay card announces its title: the quiet inline `"<title> › "` prefix, or a large corner-anchored dim WORDMARK behind the rows (the P3R watermark; **bleed is the contract** — it anchors to the CANVAS corner and may bleed past the card; rows always composite over it; the inline prefix is suppressed so titles never double). `ink` ∈ Faint / Ghost / **Stipple** (Bayer pixel-stipple of the wordmark — see the personality section below). | Galah, Magpie (`BL 3.0 Ghost` — the gallery reference), Mangrove (`BL 3.0 Stipple` — the dither is its own language), Firetail (`BL 3.0 Faint`, deliberately smooth — the foil) |
-| `page_frame` | `None` \| `Line { weight_px }` | A thin FRAME around the WRITING COLUMN (distinct from the card border) — four hard-edged quads straddling the column boundary over the document's vertical extent, ink always `theme::page_frame_ink()` = the world's own `base_content` (the WORLD-ROLES "dark-line page-frame"; graduated from the `AWL_PAGE_BORDER` probe). | Wagtail (`Line { 2.0 }`, its ladder white — the 2px pick from the probe gallery) |
+| `page_frame` | `None` \| `Line { weight_px }` | A thin FRAME around the WRITING COLUMN (distinct from the card border) — four hard-edged quads straddling the column boundary over the document's vertical extent, ink always `theme::page_frame_ink()` = the world's own `base_content` (the "dark-line page-frame" idea, recorded in the roster-decisions note below; graduated from the `AWL_PAGE_BORDER` probe). | Wagtail (`Line { 2.0 }`, its ladder white — the 2px pick from the probe gallery); Bilby (`Line { 1.0 }`, its night-violet ink — the DAWN round's light-pole assignment, the reserved dark-line-on-light variant landed) |
+| `card_anchor` | `TopLeft` \| `TopCenter` \| `Inset { x_frac }` \| `TopRight` | Where the summoned overlay card anchors horizontally (one owner `render::effective_card_anchor` → `overlay_card_x`). `TopRight` is more than placement — it also mirrors the selected-BAR growth direction toward the anchored edge under `Bars` (never text alignment). | Currawong, Mangrove, Galah, Magpie, Wagtail, Firetail (`TopLeft`; the GLOBAL DEFAULT is `TopCenter`) |
+| `chrome_face` | `Body` \| `Named(family)` | Which FACE the overlay chrome (placard wordmark / title prefix / strip labels) shapes in — `Body` (the world's own display face) everywhere, byte-identical, until a world names another family. | Firetail (`Named("Archivo Black")`) |
+| `motion` | `MotionJuice { entrance, band }` | Live-only overlay ENTRANCE + selection-band response. `CALM` (zero animators, settled state byte-identical in capture) on every world today. | none ship non-`CALM` yet |
+| `list_style` | `Pane` \| `Bars { radius, gap, grow_px, extent, coverage }` | How a summoned picker draws the surfaces behind its candidate rows — one pane (default) vs. per-row plates that grow under the selection. | Mangrove, Galah, Magpie, Firetail (`Bars`, the poster worlds) |
+| `facet_style` | `Text` \| `Band` \| `Chips(variant)` | How the faceted picker's lens strip skins its labels. **Chips is rebuilt-for-real but ships INERT** (poster facets render `Text`) pending the user's variant pick. | Mangrove, Galah, Magpie, Firetail carry `Chips(…)` data (held inert) |
 
 `RenderCaps::DEFAULT` is what the QUIET worlds carry — every field at its
 ordinary value, byte-identical to the pre-capabilities render paths.
@@ -760,6 +842,49 @@ at the Galah-reference scale 3.0 (its higher-contrast paper may want a dial);
 Mangrove's stipple-vs-flat call has its A/B pair in
 `gallery/personality-assigned/` (plus a Magpie stipple PROBE — not shipped —
 and the Wagtail frame 1px-vs-2px pair).
+
+### Roster decisions (harvested from the retired WORLD-ROLES working doc, 2026-07-15)
+
+The WORLD-ROLES working doc — a build-time planning sheet that scored the
+roster by role and drafted the path to a larger world count — was retired once
+its decisions landed; the two that bind the world contract are recorded here,
+and the still-open roster PLANNING (the light/dark balance, the light-silent /
+light-statement poles, the "stunning bar" quality gate, the ~20-world target and
+the hue gaps) moved to `ROADMAP.md`.
+
+- **The runtime lens picker is retired; the axes are a build-time ruler
+  (user decision, 2026-07-15).** The theme picker's runtime lens strip
+  (Time / Register / Voice / Temperature, cycled ←/→) is GONE — the picker is a
+  flat browsable list you scan by look-today, not a query surface. The four axes
+  survive ONLY as a build-time coverage check that the roster still spans the
+  space: every world carries a tag on every axis (`ThemeTags`) and
+  `theme::tests::axis_coverage_ruler` asserts no section goes uncovered. No
+  runtime code consults the axes. (Recorded in `src/facets.rs`,
+  `src/theme/model.rs`, `src/theme/tests.rs`.)
+- **The dark-line page-frame is a world capability, not a per-world code path.**
+  The "page reads as a deliberate object" idea — a thin full-ink frame around
+  the writing column — graduated from the `AWL_PAGE_BORDER` gallery probe into
+  the `page_frame` `RenderCaps` field above (Wagtail's 2px ladder-white frame
+  was its first assignment; the reserved dark-line-on-light variant landed in
+  the DAWN round, 2026-07-18 — Bilby, retuned into the light pole ("first
+  light": palest rose-gold ground, night-violet ink), carries a 1px frame of
+  its own ink — the two poles now mirror each other's frames).
+
+### Per-world heading weight (`Theme::heading_bold` — the HEADING-WEIGHT round, 2026-07-18)
+
+One BIT of world data: does this world's face need WEIGHT to carry markdown
+heading hierarchy? `true` ⇒ `##`/`###` shape at the family's real bundled Bold;
+the TITLE (`#`) never bolds in any world (Ladder J carries it by size alone —
+1.6/1.3/1.15, `markdown/headings.rs::type_scale`). The assignment is taste
+derived from the FACE, one line of reasoning per world in `worlds.rs`: serif
+display faces (Gumtree, Bilby, Saltpan, Undertow, Outback, Magpie) carry
+hierarchy structurally → regular; monospace + sans faces (the other ten) need
+the weight → bold. Its laws: `heading_bold_worlds_shape_bold_in_their_own_family`
+(a bold world's heading resolves the SAME family at weight ≥ 600 — the guard
+against the foreign-face fallback bug class) and
+`heading_levels_stay_measurably_distinct_from_body_in_every_world` (pixel row
+heights, strictly descending, all 16 under their own bit). Sidecar:
+`theme.heading_bold` (the effective bit, force-knob honest).
 
 ### Per-script font resolution (i18n round — `FontId`; Chinese round — the zh-Hans/ko floors)
 
@@ -1095,7 +1220,7 @@ Checklist:
    wash and let `role_style_laws_hold_for_every_world` prove the pins still
    clear every law on their own.
 6. Add the const to `THEMES`; run `cargo test` — the structural laws
-   (`worlds_nine_dark_six_light` will need its counts updated), the role-style
+   (`worlds_ten_dark_six_light` will need its counts updated), the role-style
    laws, and the ink-ladder/selection laws all sweep `THEMES` automatically, so a
    new world is enrolled in every law the moment it's in the array. A new WORLD
    CLASS (Wagtail's monochrome one) may also need its own new law, per §2/§3's

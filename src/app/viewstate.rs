@@ -73,7 +73,16 @@ impl App {
         // the overlay and the next sync pushes the buffer's own text again —
         // "back to now exactly". `None` whenever the picker isn't open / the row
         // is the empty-state one.
-        let preview = self.history_preview_text();
+        // THE WRITER'S DIFF takes priority over the history preview (they are mutually
+        // exclusive — entering the diff view closes any History overlay): its
+        // pre-rendered marked-up transcript is what the writing column shows, IN PLACE
+        // OF the buffer text, exactly like the history preview override. The buffer is
+        // never touched, so Esc just drops `diff_view` and the next sync shows the live
+        // document again.
+        let preview = match self.diff_view.as_ref().map(|d| d.transcript.clone()) {
+            Some(t) => Some(t),
+            None => self.history_preview_text(),
+        };
         // ROPE-CLONE SHORT-CIRCUIT: reuse the last materialised rope clone while the
         // buffer version is unchanged (see [`Self::view_text`]). A PREVIEW bypasses
         // `view_text` entirely — the version-keyed `sync_text_cache` must never hold
@@ -105,6 +114,27 @@ impl App {
         // One-shot, like `caret_edit_streaks`: consumed here so a following
         // non-keyboard sync (IME/wheel) doesn't inherit a stale held flag.
         let held = std::mem::take(&mut self.caret_held);
+
+        // FORMAT POPOVER: recompute the lit/label model from the LIVE selection
+        // each sync (so it reflects a format apply the instant it lands), gated on
+        // the mouse-summoned flag + the config toggle + an actual selection + no
+        // modal surface (overlay / search) owning the screen. A pure fn of the
+        // buffer state (`actions::popover::plan`); `None` parks every popover quad.
+        let popover = if self.popover_open
+            && crate::popover::popover_on()
+            && self.overlay.is_none()
+            && self.search.is_none()
+            && self.buffer.has_selection()
+        {
+            crate::actions::popover::plan(
+                &self.buffer.text(),
+                self.buffer.anchor_char(),
+                self.buffer.cursor_char(),
+                self.buffer.is_markdown(),
+            )
+        } else {
+            None
+        };
 
         // Map the active isearch state (if any) into render-facing fields: each
         // match CHAR range -> ((l,c),(l,c)) so highlight quads reuse the
@@ -229,8 +259,18 @@ impl App {
                 .and_then(|o| o.selected_caret_mode()),
             // PAGE-MODE GUTTER: the buffer's display name (saved file name, or the
             // derived scratch/slug name for an unsaved note) over the project name.
-            gutter_name: self.buffer.display_name(),
-            gutter_project: self.project.name.clone(),
+            // THE WRITER'S DIFF: while comparing, the gutter names WHAT is being
+            // compared against ("comparing · 3 hr ago") so the read-only context stays
+            // visible after the transcript's title scrolls off — the buffer's file
+            // name still rides the project line below.
+            gutter_name: match &self.diff_view {
+                Some(d) => format!("comparing · {}", d.label),
+                None => self.buffer.display_name(),
+            },
+            gutter_project: match &self.diff_view {
+                Some(_) => self.buffer.display_name(),
+                None => self.project.name.clone(),
+            },
             // MARKDOWN STYLING gate: a buffer is "markdown" only once it has a
             // `.md`/`.markdown` path. An unnamed scratch / `.rs` / `.txt` buffer is
             // left untouched (no markup dimming of `#` comments etc.).
@@ -263,6 +303,9 @@ impl App {
             // LINE ENDINGS: the active buffer's on-disk ending, for the held stats
             // HUD's LINE ENDINGS row (a pure buffer fact, not re-derivable from text).
             eol: self.buffer.eol(),
+            // FORMAT POPOVER: the mouse-summoned format toolbar's model (computed
+            // above), or `None` when down.
+            popover,
         };
         // HISTORY PREVIEW geometry safety: the pushed text is a DIFFERENT (possibly
         // shorter) version than the buffer, so every field whose line/col spans
@@ -277,6 +320,18 @@ impl App {
                 crate::history::clamp_line_col(&view.text, view.cursor_line, view.cursor_col);
             view.cursor_line = l;
             view.cursor_col = c;
+            // THE WRITER'S DIFF: park the caret on the transcript's blank line 1
+            // (between the `# title` and the first diff block) so NO line's WYSIWYG
+            // conceal reveals — the reveal is caret-line-scoped and line 1 carries no
+            // markup, so the title's `#` and every `==`/`>`/strike marker stay
+            // concealed: the clean marked-up manuscript, never a revealed-raw line.
+            // The ONE reveal-suppression rule, shared with the `AWL_DIFF_*` capture
+            // harness (`main/run.rs` parks the same way), so live == capture.
+            if self.diff_view.is_some() {
+                let (dl, dc) = crate::history::clamp_line_col(&view.text, 1, 0);
+                view.cursor_line = dl;
+                view.cursor_col = dc;
+            }
             view.selection = None;
             view.preedit = String::new();
             view.misspelled = Vec::new();
@@ -288,6 +343,9 @@ impl App {
             view.search_replace_active = false;
             view.search_replacement = String::new();
             view.search_editing_replacement = false;
+            // A history preview shows a DIFFERENT version's text; the popover's
+            // spans would index the wrong bytes, so it never rides a preview frame.
+            view.popover = None;
         }
         {
             let gpu = self.gpu.as_mut().unwrap();
@@ -353,6 +411,11 @@ impl App {
         // so its odometer rows stay the "—" placeholder).
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_sync_hud();
+
+        // WRITING STREAKS: push the live year-view so a summoned card this frame
+        // reads the real heatmap (live-only; a capture shows the placeholder).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_sync_card();
 
         // NOTES VERBS round: push the SAVED stat's live state (dirty, or clean +
         // elapsed seconds since the last successful write) — live-only, mirroring

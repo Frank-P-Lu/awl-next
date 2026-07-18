@@ -204,6 +204,24 @@ impl OverlayState {
         self.scroll_to_selected();
     }
 
+    /// JUMP the selection to the FIRST visible item (the Home/End-in-picker jump — see
+    /// [`crate::actions::overlay_nav::overlay_intercept`]'s LineStart/BufferStart arm),
+    /// then scroll the window to it. A saturating counterpart to [`Self::move_sel`] that
+    /// can't over/underflow on a huge delta; an empty list floors at 0. The ONE owner of
+    /// "go to the top row", so the keyboard jump and any future caller land identically.
+    pub fn select_first(&mut self) {
+        self.selected = 0;
+        self.scroll_to_selected();
+    }
+
+    /// JUMP the selection to the LAST visible item (the End/Home-in-picker jump — the
+    /// LineEnd/BufferEnd arm), then scroll the window to it. The ONE owner of "go to the
+    /// bottom row"; an empty list floors at 0 (mirrors [`Self::move_sel`]'s empty guard).
+    pub fn select_last(&mut self) {
+        self.selected = self.items.len().saturating_sub(1);
+        self.scroll_to_selected();
+    }
+
     /// A HOVER re-highlights the row `target` ONLY when it is already within the current
     /// visible band `[scroll, scroll + window_rows)` (and is a real item). Returns whether
     /// the highlight moved. Crucially it NEVER touches `scroll`, so hovering the top /

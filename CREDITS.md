@@ -45,8 +45,8 @@ Hunspell dictionary pairs, `assets/dict/`. Full per-variant table: [`assets/dict
 | Variant | License | Note |
 |---|---|---|
 | en_GB | LGPL 2.1 | In-file license notice present (Copyright Björn Jacke et al., maintained by Marco A.G.Pinto). |
-| en_US | Not stated in-file | No copyright/license block in the `.aff`/`.dic`. Same maintainer attribution as en_GB. Upstream: github.com/marcoagpinto/aoo-mozilla-en-dict. |
-| en_AU | Not stated in-file | No copyright/license block in the `.aff`/`.dic`. Same maintainer attribution as en_GB. Upstream: github.com/marcoagpinto/aoo-mozilla-en-dict. |
+| en_US | SCOWL permissive grant + Ispell BSD | License travels in the bundled `README_en_AU.txt`, which expressly covers both en_US and en_AU: Kevin Atkinson's SCOWL grant to use/copy/modify/distribute/sell the word lists, plus Geoff Kuenning's Ispell BSD terms for the affix file. Upstream: LibreOffice `dictionaries` (`.aff`) + Chromium `hunspell_dictionaries` (`.dic`), verified byte-for-byte. |
+| en_AU | SCOWL permissive grant + Ispell BSD | Same `README_en_AU.txt` grant; Australian variant data by Benjamin Titze. Upstream: LibreOffice `dictionaries` (`.aff`) + Chromium `hunspell_dictionaries` (`.dic`), verified byte-for-byte. |
 
 ## Rust dependencies
 

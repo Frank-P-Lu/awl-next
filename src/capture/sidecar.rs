@@ -155,7 +155,7 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"tables\": {tables},\n  \"xray\": {xray},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp}, \"heading_bold\": {thb} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"popover\": {popover},\n  \"tables\": {tables},\n  \"xray\": {xray},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"streaks\": {streaks},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers},\n  \"diff\": {diff}{caret_extra}\n}}\n",
         schema_json = json_string(&schema),
         caret_extra = caret_extra,
         cjk = cjk_json(pipeline),
@@ -168,9 +168,11 @@ pub(super) fn write_sidecar(
         hud = hud_json(pipeline),
         about = about_json(pipeline),
         lifetime = lifetime_json(pipeline),
+        streaks = streaks_json(pipeline),
         peek = peek_json(pipeline),
         caret_preview = caret_preview_json(pipeline),
         wysiwyg = wysiwyg_json(pipeline),
+        popover = popover_json(pipeline),
         tables = tables_json(pipeline),
         xray = xray_json(pipeline),
         images = images_json(pipeline),
@@ -196,6 +198,13 @@ pub(super) fn write_sidecar(
         tm = json_string(if active.dark { "dark" } else { "light" }),
         tb100 = json_string(&active.base_100.hex()),
         tp = json_string(&active.primary.hex()),
+        // The EFFECTIVE heading-weight bit this capture rendered with: the active
+        // world's `Theme::heading_bold` folded through THE one owner
+        // (`markdown::heading_weight_bold`, at the SECTION level — the first rung
+        // the bit can reach; the TITLE never bolds), so the sidecar honestly
+        // reflects the `AWL_HEADING_BOLD_FORCE` gallery knob too and can never
+        // drift from the renderer's own gate.
+        thb = crate::markdown::heading_weight_bold(active.heading_bold, 2),
         cm = json_string(caret_mode),
         left = pipeline.text_left(),
         top = render::TEXT_TOP + pipeline.menubar_reserve(),
@@ -218,6 +227,7 @@ pub(super) fn write_sidecar(
         project = project_json(opts),
         overlay = overlay_json(opts, pipeline),
         buffers = buffers_json(opts, view),
+        diff = diff_json(opts),
     );
 
     let mut f = std::fs::File::create(&json_path)
@@ -233,6 +243,27 @@ fn selection_json(view: &ViewState) -> String {
     match view.selection {
         Some(((l0, c0), (l1, c1))) => format!(
             "{{ \"start\": {{ \"line\": {l0}, \"col\": {c0} }}, \"end\": {{ \"line\": {l1}, \"col\": {c1} }} }}"
+        ),
+        None => "null".to_string(),
+    }
+}
+
+/// THE WRITER'S DIFF block: `null` for every ordinary capture (a plain
+/// `--screenshot` is byte-identical), else `{ active, label, struck, washed,
+/// modified, moved, folds }` — the STATE of the prose-diff view the capture harness
+/// rendered (`AWL_DIFF_OLD`/`AWL_DIFF_NEW`). A STATE oracle only: the struck/washed
+/// APPEARANCE is asserted over the PNG's pixels (the sidecar-vs-appearance tripwire).
+fn diff_json(opts: &CaptureOpts) -> String {
+    match &opts.diff {
+        Some(d) => format!(
+            "{{ \"active\": {}, \"label\": {}, \"struck\": {}, \"washed\": {}, \"modified\": {}, \"moved\": {}, \"folds\": {} }}",
+            d.active,
+            json_string(&d.label),
+            d.struck,
+            d.washed,
+            d.modified,
+            d.moved,
+            d.folds
         ),
         None => "null".to_string(),
     }
@@ -462,7 +493,7 @@ fn page_json(pipeline: &TextPipeline) -> String {
         crate::page::PageClass::Code => "code",
     };
     format!(
-        "{{ \"on\": {}, \"measure\": {}, \"class\": \"{}\", \"column\": {{ \"left\": {}, \"width\": {} }}, \"background\": {} }}",
+        "{{ \"on\": {}, \"measure\": {}, \"class\": \"{}\", \"column\": {{ \"left\": {}, \"width\": {} }}, \"background\": {}, \"ambient\": {} }}",
         page_on,
         page_measure,
         class,
@@ -474,7 +505,30 @@ fn page_json(pipeline: &TextPipeline) -> String {
         // of the fifteen non-lava worlds reports exactly as before (byte-identical
         // content; `phase` appears only on the lava arm).
         background_json(pipeline.effective_background(), pipeline.lava_render_phase()),
+        // TWINKLING STARS (`/173`): the ambient capability — style + the star
+        // instances actually drawn + the effective twinkle phase (fixed 0.0
+        // headlessly; the `AWL_STARS_PHASE` knob pins another).
+        ambient_json(pipeline),
     )
+}
+
+/// Serialize the active world's `AmbientStyle` capability for the page sidecar
+/// (`/173`). `{ "style": "none" }` for a starless world; a stars world adds the
+/// authored tint, the DRAWN instance count (post margin/ink-zone cull — the
+/// pipeline's own uploaded count, so the oracle reports what actually rendered),
+/// and the effective twinkle phase.
+fn ambient_json(pipeline: &TextPipeline) -> String {
+    let ambient = crate::theme::active().render_caps.ambient;
+    match ambient.stars_params() {
+        None => format!("{{ \"style\": {} }}", json_string(ambient.as_str())),
+        Some((tint, _cell, _density, _size, _peak, _floor)) => format!(
+            "{{ \"style\": {}, \"tint\": {}, \"count\": {}, \"phase\": {} }}",
+            json_string(ambient.as_str()),
+            json_string(&tint.hex()),
+            pipeline.stars_pipeline.instance_count(),
+            pipeline.stars_render_phase(),
+        ),
+    }
 }
 
 /// WYSIWYG block: `on` mirrors `crate::markdown::wysiwyg_on()`, and `concealed`
@@ -489,6 +543,41 @@ fn wysiwyg_json(pipeline: &TextPipeline) -> String {
         "{{ \"on\": {on}, \"concealed\": {} }}",
         span_array_json(&concealed)
     )
+}
+
+/// FORMAT POPOVER block: `{ on, shown, card, buttons }`. `on` mirrors
+/// `crate::popover::popover_on()` (the config gate). `shown` is whether the popover
+/// is actually up THIS frame (a mouse selection summoned it live, or the
+/// `AWL_POPOVER` capture probe forced it). When shown, `card` is the popover's
+/// `[x, y, w, h]` and `buttons` is one `{ label, active, x0, x1 }` per button — the
+/// SAME laid-out geometry the buttons draw + the click hit-test reads
+/// (`TextPipeline::popover_report`), so a reviewer can assert each button is
+/// in-bounds + distinct + that the lit toggles / `H` level are correct. When down:
+/// `shown: false`, `card: null`, `buttons: []` — so a default capture (no probe) is
+/// byte-identical apart from the always-present block.
+fn popover_json(pipeline: &TextPipeline) -> String {
+    let on = crate::popover::popover_on();
+    match pipeline.popover_report() {
+        Some((card, rows)) => {
+            let card_json = format!("[{}, {}, {}, {}]", card[0], card[1], card[2], card[3]);
+            let buttons: Vec<String> = rows
+                .iter()
+                .map(|(label, active, span)| {
+                    format!(
+                        "{{ \"label\": {}, \"active\": {active}, \"x0\": {}, \"x1\": {} }}",
+                        json_string(label),
+                        span[0],
+                        span[1]
+                    )
+                })
+                .collect();
+            format!(
+                "{{ \"on\": {on}, \"shown\": true, \"card\": {card_json}, \"buttons\": [{}] }}",
+                buttons.join(", ")
+            )
+        }
+        None => format!("{{ \"on\": {on}, \"shown\": false, \"card\": null, \"buttons\": [] }}"),
+    }
 }
 
 /// PERSISTENT MARGIN OUTLINE block: `{ on, headings, current, ancestors }`. `on`
@@ -839,6 +928,27 @@ fn about_json(pipeline: &TextPipeline) -> String {
         crate::about::about_open(),
         checked,
         pipeline.hud_pending_crash()
+    )
+}
+
+/// The summoned WRITING STREAKS card's state (`streaks.rs`): `open` is false by
+/// default (a default capture is byte-identical), true when opened via the palette
+/// "Writing streaks" command / the `--streaks` capture flag / `--keys` replaying
+/// it. `view` is which PAGE is showing — `"heatmap"` (the default on every
+/// summon) or `"cumulative"` (flipped by a `--keys "Left"`/`"Right"` replay
+/// while the card is open, the same `apply_core` intercept the live keys ride).
+/// The figures (`streak`/`today_words`/`total_words`) + the `cells` intensity
+/// grid are the LIVE year the App pushed OR the fixed synthetic
+/// `streaks::placeholder` in a capture (no persisted store), via the SAME
+/// `streaks_effective_view` + `card_view` owners the pixels use — so a
+/// `--streaks` capture is deterministic + byte-stable and the sidecar can never
+/// claim a figure (or a page) the card doesn't draw.
+fn streaks_json(pipeline: &TextPipeline) -> String {
+    let s = pipeline.streaks_report();
+    let cells = s.cells.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",");
+    format!(
+        "{{ \"open\": {}, \"view\": \"{}\", \"streak\": {}, \"today_words\": {}, \"total_words\": {}, \"cells\": [{}] }}",
+        s.open, s.view, s.streak, s.today_words, s.total_words, cells
     )
 }
 

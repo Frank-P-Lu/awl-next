@@ -707,7 +707,8 @@ fn every_overlay_kind_is_classified_and_the_two_families_render_as_declared() {
             | OverlayKind::Settings
             | OverlayKind::Assets
             | OverlayKind::Rename
-            | OverlayKind::InsertLink => CardFamily::CenteredPanel,
+            | OverlayKind::InsertLink
+            | OverlayKind::KeepName => CardFamily::CenteredPanel,
         };
         match family {
             CardFamily::FloatAnchored => spell_count += 1,

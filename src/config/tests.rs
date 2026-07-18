@@ -591,6 +591,7 @@ fn write_pref_persists_settings_menu_toggles() {
             "history",
             "session_restore",
             "wysiwyg",
+            "popover",
             "inline_images",
             "code_ligatures",
             "outline",
@@ -604,6 +605,7 @@ fn write_pref_persists_settings_menu_toggles() {
                 "history" => cfg.history,
                 "session_restore" => cfg.session_restore,
                 "wysiwyg" => cfg.wysiwyg,
+                "popover" => cfg.popover,
                 "inline_images" => cfg.inline_images,
                 "code_ligatures" => cfg.code_ligatures,
                 "outline" => cfg.outline,
@@ -716,6 +718,27 @@ fn apply_sticky_globals_restores_wysiwyg() {
     Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
     assert!(crate::markdown::wysiwyg_on(), "absent pref leaves the global as-is");
     crate::markdown::set_wysiwyg_on(saved);
+}
+
+#[test]
+fn apply_sticky_globals_restores_popover() {
+    // The remembered FORMAT POPOVER value lands on the `popover::POPOVER_ON`
+    // process-global (no CLI flag, so it applies unconditionally) — mirrors
+    // `apply_sticky_globals_restores_wysiwyg` exactly. OFF makes the
+    // mouse-summon a total no-op; absent leaves the global as-is (default ON).
+    let _w = crate::testlock::serial();
+    let saved = crate::popover::popover_on();
+    crate::popover::set_popover_on(true);
+    let cfg = Config { popover: Some(false), ..Config::empty() };
+    cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+    assert!(!crate::popover::popover_on(), "popover=false restored to off");
+    let cfg_on = Config { popover: Some(true), ..Config::empty() };
+    cfg_on.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+    assert!(crate::popover::popover_on(), "popover=true restored to on");
+    crate::popover::set_popover_on(true);
+    Config::empty().apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+    assert!(crate::popover::popover_on(), "absent pref leaves the global as-is");
+    crate::popover::set_popover_on(saved);
 }
 
 #[test]

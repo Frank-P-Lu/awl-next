@@ -195,7 +195,14 @@ impl App {
     pub(in crate::app) fn mark_zoom_dirty(&mut self) {
         self.zoom_persist_at = Some(Instant::now());
         self.zoom_reflow.queue();
-        if let Some(gpu) = self.gpu.as_ref() {
+        // ZOOM READOUT: a quiet muted percentage near the pointer while the gesture is
+        // in flight (mirrors the page-drag readout). Armed on EVERY zoom step (this is
+        // the ONE owner both the keyboard ⌘± and wheel ⌘-scroll paths funnel through),
+        // floated at the last pointer position; cleared on settle in `about_to_wait`.
+        let (px, py) = self.cursor_px;
+        let zoom = self.zoom;
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.pipeline.set_zoom_readout(Some((px, py, zoom)));
             gpu.window.request_redraw();
         }
     }
@@ -379,6 +386,13 @@ impl App {
                 return;
             }
         }
+        // FORMAT POPOVER: it is a MOUSE affordance (reveal-on-select) — any real
+        // (non-modifier) key press dismisses it, so a keyboard selection / edit
+        // never leaves it hanging and can never SUMMON it (the mouse-only rule).
+        // Inert when already down. A popover BUTTON click never routes through here
+        // (it fires its Action directly via `App::apply`), so the popover stays open
+        // across its own applies.
+        self.popover_open = false;
         // WEB/LINUX MENU BAR: a real (non-modifier) key press dismisses an open
         // dropdown — the awl bar's dropdown is mouse-driven (no keyboard nav in v1), so
         // any key closes it (and is otherwise processed normally, exactly like clicking

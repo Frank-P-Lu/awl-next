@@ -429,6 +429,45 @@ impl SelectionPipeline {
         self.instance_count = instances.len() as u32;
     }
 
+    /// Build instances from PER-QUAD-COLORED rectangles — each `([x,y,w,h], srgba)`
+    /// its own fill (the WRITING-STREAKS heatmap, where every calendar square carries
+    /// a different intensity tint off the world's value ladder). Unlike [`Self::prepare`]
+    /// (one shared color for every quad) this spends the per-instance `color` field the
+    /// WGSL already forwards, so no shader change is needed. Globals (corner/dither/
+    /// stroke) still apply uniformly. An empty slice draws nothing.
+    pub fn prepare_multicolor(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        quads: &[([f32; 4], [u8; 4])],
+    ) {
+        let globals = Globals {
+            viewport: [width as f32, height as f32],
+            corner: self.corner,
+            dither: self.dither,
+            stroke: self.stroke,
+            _pad: [0.0; 3],
+        };
+        queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
+
+        let mut instances: Vec<SelInstance> = Vec::with_capacity(quads.len());
+        for (r, srgba) in quads {
+            let (x, y, w, h) = (r[0], r[1], r[2], r[3]);
+            if w <= 0.0 || h <= 0.0 {
+                continue;
+            }
+            instances.push(SelInstance {
+                center: [x + w * 0.5, y + h * 0.5],
+                half: [w * 0.5, h * 0.5],
+                color: srgba_u8_to_linear(*srgba),
+            });
+        }
+        self.upload_instances(device, queue, &instances);
+        self.instance_count = instances.len() as u32;
+    }
+
     fn upload_instances(
         &mut self,
         device: &wgpu::Device,

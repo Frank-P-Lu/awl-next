@@ -9,10 +9,10 @@ use super::cjk::{
 };
 use super::color::Srgb;
 use super::model::{
-    Backdrop, Background, CardAnchor, CaretBlockStyle, ChipVariant, ChromeFace, DecorativeWash,
-    Elevation, FacetStyle, HighlightTexture, ImageReveal, LavaEdge, ListStyle, MotionJuice, PageFrame,
-    PlacardCorner, PlacardInk, RenderCaps, RoleOverrides, SelectionStyle, Theme, ThemeTags,
-    TitleStyle, WashOverride,
+    AmbientStyle, Backdrop, Background, CardAnchor, CaretBlockStyle, ChipVariant, ChromeFace,
+    DecorativeWash, Elevation, FacetStyle, HighlightTexture, ImageReveal, LavaEdge, ListStyle,
+    MotionJuice, PageFrame, PlacardCorner, PlacardInk, RenderCaps, RoleOverrides, SelectionStyle,
+    Theme, ThemeTags, TitleStyle, WashOverride,
 };
 use super::ornament::{
     Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, ORNAMENT_GARAMOND,
@@ -64,6 +64,8 @@ pub const GUMTREE: Theme = Theme {
     // Literary serif world → the slab-serif Monaspace Xenon: a mono that keeps a
     // whisper of the serif so the code page still reads as this world's kin.
     mono: "Monaspace Xenon",
+    // Literata's serif contrast carries hierarchy structurally — size alone reads.
+    heading_bold: false,
     cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -114,6 +116,8 @@ pub const POTOROO: Theme = Theme {
     font: "Monaspace Xenon",
     // Display face is ALREADY a monospace → reuse it for code (no second grid).
     mono: "Monaspace Xenon",
+    // Monaspace Xenon's uniform mono strokes need weight to mark a section head.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -132,30 +136,57 @@ pub const POTOROO: Theme = Theme {
     render_caps: RenderCaps::DEFAULT,
 };
 
-/// Bilby — light desert dawn (deep pyrite-gold caret on a pale-blue page).
+/// Bilby — FIRST LIGHT: the palest, warmest-horizon light world (sunrise-gold
+/// caret on a pale rose-gold page; the night's violet still in the ink).
+///
+/// DAWN ROUND (2026-07-18, user verdict on the Bilby/Gumtree near-pair: no
+/// merge — DIFFERENTIATE; "Bilby → DAWN"): the bilby is a dawn-active desert
+/// marsupial, so its world became dawn itself. The old pale-BLUE day room read
+/// as Gumtree's pale-green sibling (same literary serif + Xenon + cool pale
+/// ground); this retune flips the TEMPERATURE STRUCTURE outright — dawn's own
+/// complementary split: a warm rose-gold horizon in the ground planes, the
+/// night's cool violet-grey left in the whole ink ladder. Nothing else in the
+/// roster pairs a warm ground with a violet ink end.
+///
+/// - **Ground**: the palest warm ground of any world (relY 0.940 — above
+///   Saltpan's 0.929; only Magpie's NEUTRAL paper is brighter). Placed by a
+///   max-min-redmean sweep over the crowded pale-warm band: ~19 to each of
+///   Saltpan / Galah / Magpie's grounds is that band's measured ceiling.
+/// - **Ink**: deep night-violet content, violet-grey muted (its low chroma is
+///   deliberate — the Constant role tint anchors at 290° and the pairwise
+///   role-vs-muted law needs the daylight between them), pale lilac faint.
+/// - **Caret**: the first spark of sun — a deeper sunrise amber than the old
+///   pyrite (hue ~37°, more present on the paler ground).
+/// - **Selection**: pools the night's violet — dawn's cool side, ~135° off
+///   the caret's gold.
 pub const BILBY: Theme = Theme {
     name: "Bilby",
     dark: false,
-    base_100: Srgb::rgb(0xE8, 0xFA, 0xFF),
-    base_200: Srgb::rgb(0xCF, 0xF3, 0xFF),
-    base_300: Srgb::rgb(0xB3, 0xE7, 0xFB),
-    base_content: Srgb::rgb(0x10, 0x24, 0x2C),
-    muted: Srgb::rgb(0x55, 0x70, 0x79),
-    faint: Srgb::rgb(0x8A, 0xA2, 0xA9),
-    primary: Srgb::rgb(0xAA, 0x94, 0x34),
-    primary_content: Srgb::rgb(0xFB, 0xF6, 0xE4),
+    base_100: Srgb::rgb(0xFF, 0xF7, 0xEF),
+    base_200: Srgb::rgb(0xFB, 0xE9, 0xDC),
+    base_300: Srgb::rgb(0xF6, 0xD9, 0xC6),
+    base_content: Srgb::rgb(0x26, 0x20, 0x38),
+    muted: Srgb::rgb(0x6B, 0x65, 0x7A),
+    faint: Srgb::rgb(0xA7, 0x9D, 0xB6),
+    primary: Srgb::rgb(0xBC, 0x7E, 0x16),
+    primary_content: Srgb::rgb(0xFD, 0xF4, 0xE2),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
-    selection: Srgb::rgba(0x5B, 0xA3, 0xC5, 0x52),
+    selection: Srgb::rgba(0x8F, 0x7B, 0xB8, 0x52),
+    // The margin is the horizon itself: a VERTICAL gradient warming downward —
+    // cooler pale rose above, rose-gold at the bottom edge, where first light
+    // actually lives.
     background: Background::Gradient {
-        from: Srgb::rgb(0xCF, 0xF3, 0xFF),
-        to: Srgb::rgb(0xB3, 0xE7, 0xFB),
-        dir: (0.7, 0.7),
+        from: Srgb::rgb(0xFB, 0xE9, 0xDC),
+        to: Srgb::rgb(0xF6, 0xD9, 0xC6),
+        dir: (0.0, 1.0),
     },
     // Newsreader registers under this exact fontdb family name (it ships as the
     // "16pt" optical-size master), so `Family::Name` must match it verbatim.
     font: "Newsreader 16pt 16pt",
     // Refined display serif → the slab-serif Monaspace Xenon for a literary code page.
     mono: "Monaspace Xenon",
+    // Newsreader's display-serif contrast IS its hierarchy — bold would coarsen it.
+    heading_bold: false,
     cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -167,13 +198,24 @@ pub const BILBY: Theme = Theme {
     // Refined editorial serif → refined Renaissance fleuron bullets.
     bullets: ('❧', '❦'),
     bullet_scale: BULLET_SCALE_ORNAMENT,
-    // Pale blue ground → Day; Newsreader display serif → Refined / Literary; blue hue → Cool.
-    // Curated: shows under Day / Refined; opts OUT of Voice (Literary crowded) + Temperature (Cool crowded).
-    tags: ThemeTags { time: Some("Day"), register: Some("Refined"), voice: None, temperature: None },
+    // Pale rose-gold first-light ground → Dawn (the bilby is dawn-active); Newsreader
+    // display serif → Refined / Literary; warm horizon → Warm.
+    // Curated: shows under Dawn / Refined; opts OUT of Voice (Literary crowded) +
+    // Temperature (Warm crowded — Quokka/Galah/Potoroo/Firetail hold the cap).
+    tags: ThemeTags { time: Some("Dawn"), register: Some("Refined"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
-    // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries the
-    // card edge off the pale ground. DATA, no code path.
-    render_caps: RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT },
+    render_caps: RenderCaps {
+        // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries the
+        // card edge off the pale ground. DATA, no code path.
+        elevation: Elevation::Bordered,
+        // DAWN ROUND: rose-gold horizon ground + night-violet ink landed on the
+        // user's word ("rose gold is fine... i like it"). The 1px hairline
+        // page frame the round PROPOSED for the light pole was REJECTED by the
+        // user's eyes ("the frame is so weird") — Bilby stays frameless; the
+        // roster's reserved dark-line-on-light assignment goes back on the
+        // shelf for some future light-pole world.
+        ..RenderCaps::DEFAULT
+    },
 };
 
 /// Saltpan — light sun-bleached salt flat (cinnamon-clay caret on warm ecru).
@@ -209,6 +251,8 @@ pub const SALTPAN: Theme = Theme {
     // Old-style literary serif → Monaspace Xenon: the slab-serif mono echoes
     // Fraunces' serifed warmth on the code grid.
     mono: "Monaspace Xenon",
+    // The origin of the serif instinct: Fraunces' wonk + contrast carry it Regular.
+    heading_bold: false,
     cjk: CJK_MINCHO,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -253,6 +297,8 @@ pub const QUOKKA: Theme = Theme {
     font: "Fira Sans",
     // Warm friendly humanist sans → the warm humanist IBM Plex Mono for code.
     mono: "IBM Plex Mono",
+    // Fira Sans' low-contrast humanist strokes blur into body at 1.3x — weight marks the head.
+    heading_bold: true,
     cjk: CJK_JA_KLEE,
     zh_hans: CJK_ZH_HANS_KLEE,
     zh_hant: CJK_ZH_HANT,
@@ -303,6 +349,8 @@ pub const UNDERTOW: Theme = Theme {
     // Classic Garamond serif nocturne → Monaspace Xenon: a refined slab-serif mono
     // for a literary code page.
     mono: "Monaspace Xenon",
+    // EB Garamond's old-style modelling carries hierarchy; its bold reads foreign to the page.
+    heading_bold: false,
     cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -361,6 +409,8 @@ pub const OUTBACK: Theme = Theme {
     font: "Zilla Slab",
     // Slab-serif display → Monaspace Xenon: the only slab-serif mono, matching Zilla.
     mono: "Monaspace Xenon",
+    // Zilla Slab's chunky slab serifs already assert structure — Regular keeps it calm.
+    heading_bold: false,
     cjk: CJK_MINCHO,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -407,6 +457,8 @@ pub const TAWNY: Theme = Theme {
     font: "IBM Plex Mono",
     // The home mono IS the display face → reuse it for code.
     mono: "IBM Plex Mono",
+    // Plex Mono's Light-300 body makes the 700 head a real jump — mono needs the weight.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -453,6 +505,8 @@ pub const MOPOKE: Theme = Theme {
     font: "iA Writer Quattro S",
     // Warm cosy charcoal → the warm humanist IBM Plex Mono (kin to Tawny's home look).
     mono: "IBM Plex Mono",
+    // Quattro is a mono at heart (Plex Mono-derived, near-uniform strokes) — weight marks it.
+    heading_bold: true,
     cjk: CJK_JA_KLEE,
     zh_hans: CJK_ZH_HANS_KLEE,
     zh_hant: CJK_ZH_HANT,
@@ -499,6 +553,8 @@ pub const KINGFISHER: Theme = Theme {
     font: "IBM Plex Sans",
     // Cool technical navy → the crisp JetBrains Mono (a coding face for a coding den).
     mono: "JetBrains Mono",
+    // Plex Sans' even grotesque strokes give size little help — weight does the sectioning.
+    heading_bold: true,
     cjk: CJK_JA_ZENMARU,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -543,6 +599,8 @@ pub const CURRAWONG: Theme = Theme {
     font: "Iosevka",
     // Display face is ALREADY the narrow, mechanical Iosevka mono → reuse it for code.
     mono: "Iosevka",
+    // Iosevka's narrow mechanical grid is all uniform strokes — weight marks the head.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -566,9 +624,27 @@ pub const CURRAWONG: Theme = Theme {
     // stays quiet chrome.
     // COMPOSITION-C2: the iconic dark-technical statement world anchors its card
     // TOP-LEFT (a deliberate object, not a centred dialog).
+    // TWINKLING STARS (2026-07-18, the user's morning verdict): Currawong stays,
+    // differentiated by ambient TWINKLING STARS — the "aliveness ≠ loudness"
+    // pole (maximally quiet, unmistakably alive; the Pied Currawong's voice is
+    // the quiet dark). Tiny cool starlight points (#9DB0CF, ~217° — a night-sky
+    // steel-blue, ~170° clear of the gold caret) scattered sparsely through the
+    // page margins, each breathing its brightness on its own slow seconds-scale
+    // cycle between a `faint`-adjacent whisper (floor 0.12) and a sub-`muted`
+    // glint (peak 0.55 — the quiet-band law holds the composited peak under the
+    // world's own muted rung). All numbers are TASTE TUNABLE — flagged for the
+    // user's gallery pick (this round ships BUILD + GALLERY + HOLD).
     render_caps: RenderCaps {
         elevation: Elevation::Bordered,
         card_anchor: CardAnchor::TopLeft,
+        ambient: AmbientStyle::Stars {
+            tint: Srgb::rgb(0x9D, 0xB0, 0xCF),
+            cell_px: 34.0,
+            density: 0.16,
+            size_px: 2.6,
+            peak: 0.55,
+            floor: 0.12,
+        },
         ..RenderCaps::DEFAULT
     },
 };
@@ -624,6 +700,8 @@ pub const MANGROVE: Theme = Theme {
     font: "JetBrains Mono",
     // Display face is ALREADY JetBrains Mono → reuse it for code.
     mono: "JetBrains Mono",
+    // JetBrains Mono's uniform coding strokes need weight to lift a section head.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -693,6 +771,8 @@ pub const GALAH: Theme = Theme {
     font: "Figtree",
     // Warm friendly humanist sans → the warm humanist IBM Plex Mono.
     mono: "IBM Plex Mono",
+    // Figtree's geometric sans is stroke-uniform by design — weight does the sectioning.
+    heading_bold: true,
     cjk: CJK_JA_ZENMARU,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -760,6 +840,8 @@ pub const MAGPIE: Theme = Theme {
     font: "Bitter",
     // Sharp high-contrast slab display → Monaspace Xenon: the slab-serif mono matches Bitter's stance.
     mono: "Monaspace Xenon",
+    // Bitter's sharp slab contrast carries hierarchy on its own — Regular stays sharp.
+    heading_bold: false,
     cjk: CJK_MINCHO,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -1009,6 +1091,8 @@ pub const WAGTAIL: Theme = Theme {
     // greyscale round's logged font-sharing consequence).
     font: "JetBrains Mono",
     mono: "JetBrains Mono",
+    // A 1-bit world has NO ink rungs to spend — weight is the only second axis it owns.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -1067,7 +1151,8 @@ pub const WAGTAIL: Theme = Theme {
         // PERSONALITY ASSIGNMENT (2026-07-15): the PAGE FRAME's first (and
         // only) assignment — a 2px frame around the writing column in this
         // world's ladder white (`theme::page_frame_ink` = `base_content`),
-        // the WORLD-ROLES "page reads as a deliberate object" idea. Drawn
+        // the "page reads as a deliberate object" idea (retired; decision
+        // recorded in THEMES.md). Drawn
         // hard-edged (dither-1.0 fill, no fractional-alpha AA rim) so it is
         // 1-bit-legal by construction. Graduated from the AWL_PAGE_BORDER
         // gallery probe (2px white was the user's pick over 1px).
@@ -1086,6 +1171,12 @@ pub const WAGTAIL: Theme = Theme {
         // because this literal names every field (no `..DEFAULT` spread).
         list_style: ListStyle::Pane,
         facet_style: FacetStyle::Text,
+        // TWINKLING-STARS round: NO ambient life — a fractional-alpha star
+        // breath is structurally illegal on a true 1-bit world (any
+        // intermediate composite is a forbidden third value; the theme-side
+        // law `ambient_stars_laws_hold_for_every_world` guards it), and the
+        // silent pole would decline the personality anyway.
+        ambient: AmbientStyle::None,
     },
 };
 
@@ -1143,6 +1234,8 @@ pub const FIRETAIL: Theme = Theme {
     // remains Firetail's own. The display face IS mono, so code reuses it.
     font: "Monaspace Xenon",
     mono: "Monaspace Xenon",
+    // The poster world's mono display: uniform slab-mono strokes take the bold head.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,

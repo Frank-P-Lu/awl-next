@@ -147,6 +147,15 @@ static COMMAND_SEED: &[Command] = &[
     // VERSION HISTORY (the local-history timeline): renamed from "History" so it no
     // longer shadows the "Local history" setting; says it is the version timeline.
     Command { name: "Version history…",  action: Action::OpenHistory,     native: "", emacs: ""        , native_only: true, web_only: false },
+    // THE WRITER'S DIFF: open the READ-ONLY prose-diff view (the marked-up manuscript
+    // — struck deletions, washed insertions, moves, folds; `crate::prosediff`)
+    // comparing the current buffer against a past version. From the buffer it compares
+    // the most-recent version (a loose file's newest snapshot / a git file's HEAD);
+    // also reachable from the Version-history picker (compare the highlighted row).
+    // Markdown buffers only (an accept-time gate in the core — a `.rs`/scratch buffer
+    // is a calm no-op). No default chord (a palette command like Version history),
+    // rebindable via `[keys] compare_with_version`.
+    Command { name: "Compare with version…", action: Action::CompareVersion, native: "", emacs: ""       , native_only: true, web_only: false },
     // CLEAN UNUSED ASSETS: summon the Asset Cleaner — a picker of the ORPHAN image
     // files under the active project (an `assets/` image no document references,
     // `crate::assets`). Enter moves the row's file to the macOS Trash (recoverable).
@@ -155,10 +164,13 @@ static COMMAND_SEED: &[Command] = &[
     // independently rebindable via `[keys] clean_unused_assets`.
     Command { name: "Clean unused assets…", action: Action::OpenAssetClean, native: "",       emacs: ""        , native_only: true, web_only: false },
     // KEEP VERSION: THE CONSCIOUS MARK — pin the current file's state as a
-    // prune-exempt local-history snapshot ("I care about this one"). No default
-    // chord — the palette IS its entry point, like Settings/About; a real `Action`,
-    // independently rebindable via `[keys] keep_version`.
-    Command { name: "Keep version",      action: Action::KeepVersion,     native: "",        emacs: ""        , native_only: true, web_only: false },
+    // prune-exempt local-history snapshot ("I care about this one"), via a
+    // minibuffer prompt for an optional NAME (the NAMED SAVE POINT — hence the
+    // ellipsis, the picker/prompt-naming convention; the slug stays
+    // `keep_version`, ellipsis-stripped). No default chord — the palette IS its
+    // entry point, like Settings/About; a real `Action`, independently
+    // rebindable via `[keys] keep_version`.
+    Command { name: "Keep version…",     action: Action::KeepVersion,     native: "",        emacs: ""        , native_only: true, web_only: false },
     Command { name: "Last file",         action: Action::LastBuffer,      native: "",   emacs: ""        , native_only: false, web_only: false },
     Command { name: "New note",          action: Action::NewNote,         native: "",   emacs: ""        , native_only: false, web_only: false },
     Command { name: "Move note…",        action: Action::MoveNote,        native: "",        emacs: ""        , native_only: false, web_only: false },
@@ -242,6 +254,12 @@ static COMMAND_SEED: &[Command] = &[
     // (like Settings/About); a real `Action`, independently rebindable via `[keys]
     // lifetime_stats`. See `lifetime.rs`.
     Command { name: "Lifetime stats",    action: Action::LifetimeStats,   native: "",        emacs: ""        , native_only: true, web_only: false },
+    // WRITING STREAKS: the summoned year-calendar HEATMAP of daily net words +
+    // the current streak. No default chord — the palette IS its entry point (like
+    // Settings/About/Lifetime); a real `Action`, independently rebindable via
+    // `[keys] writing_streaks`. Native-only (the recording engine + `streaks.toml`
+    // are native-only, same as the lifetime odometer). See `streaks.rs`.
+    Command { name: "Writing streaks",   action: Action::WritingStreaks,  native: "",        emacs: ""        , native_only: true, web_only: false },
     // LINE ENDINGS: toggle the active file's on-disk ending (LF <-> CRLF). No default
     // chord — the palette IS its entry point (a rare command, like Settings/About); a
     // real `Action` (`ConvertLineEndings`), independently rebindable via `[keys]`.
@@ -292,6 +310,10 @@ static COMMAND_SEED: &[Command] = &[
     Command { name: "Numbered list",     action: Action::ToggleNumberedList, native: "",         emacs: ""        , native_only: false, web_only: false },
     Command { name: "Task list",         action: Action::ToggleTaskList,     native: "",  emacs: ""        , native_only: false, web_only: false },
     Command { name: "Heading",           action: Action::ToggleHeading,      native: "",         emacs: ""        , native_only: false, web_only: false },
+    // The format popover's ONE `H` button fires this — a LEVEL CYCLE (off→H1→H2→H3→off),
+    // distinct from "Heading" above (a single `# ` toggle). Palette-only, no native
+    // convention (like the other block toggles); rebindable via `[keys]`.
+    Command { name: "Cycle heading",     action: Action::HeadingCycle,       native: "",         emacs: ""        , native_only: false, web_only: false },
     Command { name: "Code block",        action: Action::ToggleCodeBlock,    native: "",         emacs: ""        , native_only: false, web_only: false },
     Command { name: "Bold",              action: Action::Bold,               native: "",    emacs: ""        , native_only: false, web_only: false },
     Command { name: "Italic",            action: Action::Italic,             native: "",    emacs: ""        , native_only: false, web_only: false },
@@ -1310,6 +1332,7 @@ mod tests {
             "Credits",
             "Guide",
             "Lifetime stats",
+            "Writing streaks",
             "Line endings…",
             "Align table",
             "Report a Problem",
@@ -1319,8 +1342,9 @@ mod tests {
             "Go to heading…",
             "Toggle typewriter scroll",
             "Toggle menu bar",
-            "Keep version",
+            "Keep version…",
             "Clean unused assets…",
+            "Compare with version…",
             // Emacs C-x default retired, no native chord assigned (identity round):
             "Browse files…",
             "Move note…",
@@ -1337,6 +1361,7 @@ mod tests {
             "Bullet list",
             "Numbered list",
             "Heading",
+            "Cycle heading",
             "Code block",
             "Highlight",
             "Strikethrough",
@@ -1357,6 +1382,24 @@ mod tests {
         // names()/bindings() stay parallel to the catalog.
         assert_eq!(names().len(), COMMANDS.len());
         assert_eq!(bindings().len(), COMMANDS.len());
+    }
+
+    #[test]
+    fn every_popover_button_fires_a_catalog_command() {
+        // THE FORMAT POPOVER's STRUCTURAL LAW (the menu-bar precedent): every button
+        // in the no-wildcard roster (`popover::ALL`) fires an EXISTING catalog
+        // Action — there is no popover-only edit path. A new button that forgot its
+        // catalog wiring fails HERE (and the roster is enumerated, so a new button
+        // can't dodge the check). The pure half (each maps to SOME formatting Action)
+        // lives in `popover::tests`; this is the catalog cross-check.
+        for &b in crate::popover::ALL {
+            let action = b.action();
+            assert!(
+                COMMANDS.iter().any(|c| c.action == action),
+                "format popover button {b:?} fires {action:?}, which is not a catalog \
+                 command — every popover button must route through an existing catalog Action"
+            );
+        }
     }
 
     #[test]
@@ -1717,10 +1760,12 @@ mod tests {
 
     #[test]
     fn keep_version_command_present_named_and_rebindable() {
-        // THE CONSCIOUS MARK: "Keep version" is a palette-only command (no default
+        // THE CONSCIOUS MARK: "Keep version…" is a palette-only command (no default
         // chord, like Settings/About) — summonable by name AND resolvable by its slug
-        // for `[keys] keep_version = "..."`.
+        // for `[keys] keep_version = "..."`. NAMED SAVE POINTS gave it the prompt
+        // ellipsis; the ellipsis-stripping slug rule keeps `keep_version` stable.
         assert!(COMMANDS.iter().any(|c| c.action == Action::KeepVersion));
+        assert_eq!(action_for_name("Keep version…"), Some(Action::KeepVersion));
         assert_eq!(action_for_name("Keep version"), Some(Action::KeepVersion));
         assert_eq!(action_for_name("keep_version"), Some(Action::KeepVersion));
         let cmd = COMMANDS.iter().find(|c| c.action == Action::KeepVersion).unwrap();
@@ -2124,8 +2169,10 @@ mod tests {
         "Quit",
         "Finish file",
         "Version history…",
-        "Keep version",
+        "Compare with version…",
+        "Keep version…",
         "Lifetime stats",
+        "Writing streaks",
         "Clean unused assets…",
         "Recent projects…",
         "Check for Updates",

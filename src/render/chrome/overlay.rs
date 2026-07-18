@@ -191,9 +191,12 @@ impl TextPipeline {
     /// reader shares — so shaping and geometry can never drift on the row size.
     pub(in crate::render) fn overlay_metrics(&self) -> GlyphMetrics {
         let m = self.metrics;
+        let scale = crate::render::effective_overlay_scale();
         GlyphMetrics::new(
-            m.font_size * OVERLAY_UI_SCALE,
-            m.line_height * OVERLAY_UI_SCALE + self.overlay_row_gap(),
+            m.font_size * scale,
+            m.line_height * scale
+                + crate::render::effective_overlay_leading()
+                + self.overlay_row_gap(),
         )
     }
 
@@ -233,7 +236,9 @@ impl TextPipeline {
     /// row-Y ([`overlay_row_top`]), the hit-test ([`overlay_row_of`]), and the
     /// selected-row band all read, so a click always lands on the row it highlights.
     pub(in crate::render) fn overlay_lh(&self) -> f32 {
-        self.metrics.line_height * OVERLAY_UI_SCALE + self.overlay_row_gap()
+        self.metrics.line_height * crate::render::effective_overlay_scale()
+            + crate::render::effective_overlay_leading()
+            + self.overlay_row_gap()
     }
 
     /// THE ONE OWNER of the summoned takeover card's horizontal BOX — its
@@ -300,6 +305,61 @@ impl TextPipeline {
     /// IDENTICAL bottom geometry the card-fits-content law now asserts no-wildcard.
     pub(in crate::render) fn overlay_footer_reclaim(&self, hint_rows: usize) -> f32 {
         hint_rows as f32 * (self.overlay_lh() - self.overlay_hint_h() - OVERLAY_FOOTER_PAD).max(0.0)
+    }
+
+    /// THE ONE CARD-HEIGHT OWNER — every takeover/popup card's `card_h`. The card
+    /// hugs its content exactly: `total_rows` display lines at [`Self::overlay_lh`],
+    /// PLUS the query-beat `header_gap` ([`Self::overlay_header_gap`], `0.0` on the
+    /// contextual spell popup) and `2 * pad` top/bottom padding, LESS the compact
+    /// foot-hint reclaim ([`Self::overlay_footer_reclaim`], `0.0` when `hint_rows ==
+    /// 0`). All three card-height sites — the flat picker ([`Self::overlay_geometry`]),
+    /// the faceted theme picker ([`TextPipeline::theme_overlay_geometry`]), and the
+    /// spell popup ([`Self::spell_overlay_geometry`]) — route through here, so a
+    /// footer/gap tweak can never drift the bottom edge per `OverlayKind` again (the
+    /// C2 divergence class the `overlay_card_geometry_agrees_per_kind` law now pins).
+    /// `pad` stays a parameter: the flat/theme cards breathe at `12.0`, the small
+    /// contextual spell popup at `10.0`.
+    pub(in crate::render) fn overlay_card_h(
+        &self,
+        total_rows: usize,
+        header_gap: f32,
+        hint_rows: usize,
+        pad: f32,
+    ) -> f32 {
+        total_rows as f32 * self.overlay_lh() + header_gap + 2.0 * pad
+            - self.overlay_footer_reclaim(hint_rows)
+    }
+
+    /// THE ONE STRIP-BAND OWNER — the faceted theme picker's lens STRIP sits on
+    /// display line 1, whose height is inflated to `lh + header_gap` by the query
+    /// BEAT (cosmic-text half-leads the labels into that taller box, so they center
+    /// below a plain `lh` band). Returns `(strip_top, strip_lh)`: the strip's top
+    /// edge (`text_top + lh`) and its inflated line height. The lens hit-test
+    /// ([`TextPipeline::overlay_lens_at`]), the active-facet pill center, and the
+    /// strip-label glyph metrics all read THIS — so the clickable band, the pill,
+    /// and the shaped glyphs can never disagree about where the strip sits (the
+    /// misaligned-chip / half-row band-vs-text drift class). Flat pickers have no
+    /// strip; this is meaningful only when `geom.theme`.
+    pub(in crate::render) fn overlay_strip_band(&self, geom: &OverlayGeom) -> (f32, f32) {
+        let lh = self.overlay_lh();
+        (geom.text_top + lh, lh + geom.header_gap)
+    }
+
+    /// THE ONE RIGHT-COLUMN LABEL OWNER — which dim right-aligned column a picker
+    /// draws. Exactly one of the three slices is ever populated, so the precedence
+    /// (key `bindings` → relative `times` → repo `git` tag) is arbitrary but must be
+    /// IDENTICAL between the flat ([`TextPipeline::overlay_shape_text`]) and faceted
+    /// ([`TextPipeline::shape_faceted`]) shapers, which both read it. `&[]` when no
+    /// column applies. One owner so a fourth column kind (or a reordering) lands in
+    /// one place, never diverging the two shapers.
+    pub(in crate::render) fn overlay_right_labels(&self) -> &[String] {
+        if !self.overlay_bindings.is_empty() {
+            &self.overlay_bindings
+        } else if !self.overlay_times.is_empty() {
+            &self.overlay_times
+        } else {
+            &self.overlay_git
+        }
     }
 
     /// Shape + upload the SUMMONED navigation overlay for this frame: a tall
@@ -384,44 +444,14 @@ impl TextPipeline {
     /// Bars or empty picker, or no selection), where the shaper is byte-identical
     /// (the old `overlay_selected` flip). Applies to BOTH the flat and the FACETED
     /// (Cmd-P palette / Settings) layouts — the target row is placed through the
-    /// shared [`Self::overlay_selected_disp`] owner so it matches the fill exactly
+    /// shared [`Self::overlay_selected_display_line`] owner so it matches the fill exactly
     /// on either. Reads the SAME phase + rects owner (`living_band_phase` /
     /// `living_band_rects`) `overlay_draw_card` draws from, so the flipped rows can
     /// never disagree with the fill's position — the exact phase-seam fix the
-    /// outcome audit demands.
-    /// The selected candidate's 0-based DISPLAY row (0 == the first candidate /
-    /// plan line, at `overlay_row_top(text_top, header_rows, header_gap, 0, lh)`),
-    /// per layout family; `None` for an empty picker. THE ONE OWNER shared by the
-    /// selected-band FILL ([`Self::overlay_draw_card`]) and the living-band INK
-    /// flip ([`Self::living_covered_rows`]), so the band the fill draws and the
-    /// target row whose ink flips can never read a different row (the exact
-    /// fill/ink phase-seam the outcome audit demands).
-    pub(in crate::render) fn overlay_selected_disp(&self, geom: &OverlayGeom) -> Option<usize> {
-        if geom.n_items == 0 {
-            None
-        } else if geom.theme {
-            // FACETED card (theme picker AND the Cmd-P palette / Settings / Browse
-            // once a lens strip is populated): the selected item's DISPLAY row = its
-            // position in the plan (section headers push it down); the `header_rows`
-            // (query + strip) offset is folded in by `overlay_row_top`, not here.
-            Some(
-                geom.plan
-                    .iter()
-                    .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
-                    .unwrap_or(0),
-            )
-        } else {
-            // 0-based row among the visible window. `OverlayState` keeps the selection
-            // inside `[top_idx, top_idx+visible)`; saturate + clamp defensively so a
-            // transient mismatch (e.g. the list just shrank) can never underflow/overflow.
-            Some(
-                self.overlay_selected
-                    .saturating_sub(geom.top_idx)
-                    .min(geom.visible.saturating_sub(1)),
-            )
-        }
-    }
-
+    /// outcome audit demands. The target row is placed through
+    /// [`Self::overlay_selected_display_line`] — the ONE owner also read by the
+    /// selected-band fill and the secondary right-column recolor — so the band, the
+    /// hint recolor, and the flipped ink can never read a different row.
     pub(in crate::render) fn living_covered_rows(&mut self, geom: &OverlayGeom) -> Option<Vec<usize>> {
         let motion = crate::render::livingband::overlay_motion_force()?;
         if !matches!(crate::render::effective_list_style(), theme::ListStyle::Pane) {
@@ -429,7 +459,7 @@ impl TextPipeline {
         }
         // The band flies to (and covers) the selected candidate's DISPLAY row —
         // the SAME per-layout-family owner `overlay_draw_card` places the fill on
-        // (`overlay_selected_disp`, handling the faceted plan-position case), so
+        // (`overlay_selected_display_line`, handling the faceted plan-position case), so
         // the rows whose ink flips can never read a different target than the fill
         // draws. `None` (empty picker) → no covered rows. FIXED: the old
         // `geom.theme` bail made this dead code on every FACETED surface (the Cmd-P
@@ -437,7 +467,7 @@ impl TextPipeline {
         // while the ink stayed state-tied → covered rows washed out (white-on-white
         // on Wagtail). The shaper's `covered` seam threads through the faceted path
         // too now, so ink rides the band wherever the fill does.
-        let sel_disp = self.overlay_selected_disp(geom)?;
+        let sel_disp = self.overlay_selected_display_line(geom)?;
         let lh = self.overlay_lh();
         let target =
             overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, sel_disp, lh);
@@ -471,7 +501,7 @@ impl TextPipeline {
     /// law (the Wagtail fill/ink-divergence class): the covered display rows, the
     /// selected TARGET display row, the candidate-row band (`first_top`, `lh`), and
     /// the LEADING band's drawn rect `[x, top, w, h]` this frame. Reads the SAME
-    /// owners the renderer draws from (`living_covered_rows`, `overlay_selected_disp`,
+    /// owners the renderer draws from (`living_covered_rows`, `overlay_selected_display_line`,
     /// `overlay_row_top`, `living_band_phase`/`living_band_rects`), so a pixel test
     /// samples exactly where the fill lands. Panics unless the motion probe is armed.
     #[cfg(test)]
@@ -482,7 +512,7 @@ impl TextPipeline {
         let motion = crate::render::livingband::overlay_motion_force()
             .expect("living_probe_geom needs the motion probe armed");
         let covered = self.living_covered_rows(geom).unwrap_or_default();
-        let target = self.overlay_selected_disp(geom).expect("a selected row");
+        let target = self.overlay_selected_display_line(geom).expect("a selected row");
         let lh = self.overlay_lh();
         let first_top = overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, 0, lh);
         let sel_top =
@@ -723,7 +753,7 @@ impl TextPipeline {
         let label = crate::markdown::type_scale::LABEL;
         self.panel_bind_buffer.set_metrics(
             &mut self.font_system,
-            GlyphMetrics::new(m.font_size * OVERLAY_UI_SCALE * label, lh),
+            GlyphMetrics::new(m.font_size * crate::render::effective_overlay_scale() * label, lh),
         );
     }
 
@@ -822,8 +852,7 @@ impl TextPipeline {
         // so the card still FITS its content exactly (bottom padding == `pad`). The
         // foot hint (item 5) rides a SHORTER line, so reclaim `lh - hint_h` per
         // hint row — the card hugs the tighter footer instead of the old lip.
-        let card_h = total_rows as f32 * self.overlay_lh() + header_gap + 2.0 * pad
-            - self.overlay_footer_reclaim(hint_rows);
+        let card_h = self.overlay_card_h(total_rows, header_gap, hint_rows, pad);
         // vertical anchor near the top third (summoned, transient).
         // `self.menubar_reserve()` (`0.0` unless the WEB/LINUX MENU BAR is shown) —
         // the SAME accessor `doc_top`/the margin Outline/the search panel/the debug
@@ -847,9 +876,6 @@ impl TextPipeline {
             hint_rows,
             footer,
             footer_rows,
-            theme: false,
-            strip: Vec::new(),
-            plan: Vec::new(),
             header_rows,
             header_gap,
             empty,
@@ -861,6 +887,8 @@ impl TextPipeline {
             text_top,
             text_w,
             card_narrow,
+            // theme / strip / plan are the faceted-only trio — inert on a flat card.
+            ..OverlayGeom::base()
         }
     }
 
@@ -971,7 +999,11 @@ impl TextPipeline {
         // At least one row tall so a (rare) flagged word with no suggestions still
         // reads as a small present card rather than a zero-height sliver.
         let rows = header_rows + visible.max(1) + hint_rows;
-        let card_h = rows as f32 * self.overlay_lh() + 2.0 * pad;
+        // Through the ONE card-height owner: the popup has no query beat
+        // (`header_gap == 0.0`) and no foot hint (`hint_rows == 0`), so this reduces
+        // to `rows * lh + 2 * pad` byte-for-byte — but it can never drift from the
+        // takeover cards' bottom geometry.
+        let card_h = self.overlay_card_h(rows, 0.0, 0, pad);
 
         // Anchor the LEFT edge to the word start, clamped so the card stays on-canvas.
         let mut card_x = word_x;
@@ -994,14 +1026,7 @@ impl TextPipeline {
             n_items,
             hint,
             hint_rows,
-            footer: Vec::new(),
-            footer_rows: 0,
-            theme: false,
-            strip: Vec::new(),
-            plan: Vec::new(),
             header_rows,
-            // The contextual popup has no header rows to divide from.
-            header_gap: 0.0,
             empty,
             card_x,
             card_y,
@@ -1010,9 +1035,10 @@ impl TextPipeline {
             text_left,
             text_top,
             text_w,
-            // The contextual spell popup carries no title and never a placard, so
-            // the fold flag is inert here.
-            card_narrow: false,
+            // The contextual popup is inert on every faceted/footer field:
+            // no footer, no lens strip/plan, no query beat (`header_gap == 0`), no
+            // title/placard (`card_narrow`) — all from `base()`.
+            ..OverlayGeom::base()
         }
     }
 
@@ -1230,17 +1256,39 @@ impl TextPipeline {
                 }],
                 _ => Vec::new(),
             };
-            self.placard_renderer
-                .prepare(
-                    device,
-                    queue,
-                    &mut self.font_system,
-                    &mut self.atlas,
-                    &self.viewport,
-                    placard_pass,
-                    &mut self.swash_cache,
-                )
-                .map_err(|e| anyhow::anyhow!("glyphon placard prepare failed: {e:?}"))?;
+            // GRACEFUL DEGRADATION (AtlasFull fix, 2026-07-17): the quantized sizing
+            // keeps the shared atlas bounded, but if it ever DOES fill (a huge display,
+            // an exotic GPU with a small `max_texture_dimension_2d`), SKIP the placard
+            // for this frame rather than erroring — prepare an empty pass so no stale
+            // wordmark lingers, and let the next frame retry after the off-frame
+            // `atlas.trim()` reclaims space. NEVER a print (the `gpu.rs` `prepare error:`
+            // eprintln is the thing this silences for the placard's own overflow); a
+            // non-AtlasFull error still propagates.
+            let placard_prepare = self.placard_renderer.prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                placard_pass,
+                &mut self.swash_cache,
+            );
+            match placard_prepare {
+                Ok(()) => {}
+                Err(glyphon::PrepareError::AtlasFull) => {
+                    self.placard_renderer
+                        .prepare(
+                            device,
+                            queue,
+                            &mut self.font_system,
+                            &mut self.atlas,
+                            &self.viewport,
+                            Vec::new(),
+                            &mut self.swash_cache,
+                        )
+                        .map_err(|e| anyhow::anyhow!("glyphon placard skip-prepare failed: {e:?}"))?;
+                }
+            }
         }
         // The placard wordmark is FIRST in the panel batch under `Pane` (drawn
         // behind everything that follows), clipped to the WHOLE CANVAS — a
@@ -1249,6 +1297,10 @@ impl TextPipeline {
         // Under `Bars` it was uploaded to `placard_renderer` above instead, so it
         // is withheld here.
         let mut areas: Vec<TextArea> = Vec::new();
+        // Whether the placard rides THIS (Pane) panel batch as the FIRST area — the
+        // one entry whose giant glyphs could overflow the shared atlas. Tracked so the
+        // graceful-degradation retry below can drop exactly it (see the prepare site).
+        let mut placard_in_panel = false;
         if let Some((px, py, _pw, _ph)) = placard {
             if !bars {
                 areas.push(TextArea {
@@ -1260,6 +1312,7 @@ impl TextPipeline {
                     default_color: ink,
                     custom_glyphs: &[],
                 });
+                placard_in_panel = true;
             }
         }
         // WILD-MENU SLANT PROBE (env-gated; `None` on every normal run, which
@@ -1279,7 +1332,7 @@ impl TextPipeline {
                 // chords flush.
                 areas.push(panel_area);
             }
-            Some(s) => {
+            Some(_) => {
                 let lh = self.overlay_lh();
                 let n_lines = if geom.theme { geom.plan.len() } else { geom.visible };
                 let first_top =
@@ -1300,12 +1353,15 @@ impl TextPipeline {
                     default_color: ink,
                     custom_glyphs: &[],
                 });
-                // One shifted slice per candidate display row.
+                // One shifted slice per candidate display row. The per-row DRAW
+                // offset rides the ONE `overlay_slant_dx` owner (the fan-in
+                // progress folded in — motion choreography 3), so the text and the
+                // bar plates below cascade by the same amount every frame.
                 for k in 0..n_lines {
                     let row_top = first_top + k as f32 * lh;
                     areas.push(TextArea {
                         buffer: &self.panel_buffer,
-                        left: text_left + crate::render::slant_offset(&s, k),
+                        left: text_left + self.overlay_slant_dx(k),
                         top: text_top,
                         scale: 1.0,
                         bounds: clip(row_top, row_top + lh),
@@ -1343,18 +1399,75 @@ impl TextPipeline {
                 custom_glyphs: &[],
             });
         }
-        self.panel_renderer
-            .prepare(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.atlas,
-                &self.viewport,
-                areas,
-                &mut self.swash_cache,
-            )
-            .map_err(|e| anyhow::anyhow!("glyphon overlay prepare failed: {e:?}"))?;
+        // GRACEFUL DEGRADATION (AtlasFull fix, 2026-07-17): under `Pane` the placard
+        // rides this batch as `areas[0]` (drawn behind the rows). If its giant glyphs
+        // ever overflow the shared atlas, re-prepare WITHOUT the placard (the rows are
+        // the affordance that must survive; the watermark is the sacrificeable one), so
+        // an AtlasFull never blanks the whole card. The next frame retries after the
+        // off-frame `atlas.trim()`. A retry area-set is built only when the placard is
+        // actually in this batch — every other run pays nothing and never re-prepares.
+        // The placard-free fallback batch, built ONLY when the placard is in this batch
+        // (every other run keeps `None` and never clones).
+        let panel_retry: Option<Vec<TextArea>> =
+            placard_in_panel.then(|| areas.iter().skip(1).cloned().collect());
+        match self.panel_renderer.prepare(
+            device,
+            queue,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            areas,
+            &mut self.swash_cache,
+        ) {
+            Ok(()) => {}
+            Err(glyphon::PrepareError::AtlasFull) => match panel_retry {
+                Some(retry) => self
+                    .panel_renderer
+                    .prepare(
+                        device,
+                        queue,
+                        &mut self.font_system,
+                        &mut self.atlas,
+                        &self.viewport,
+                        retry,
+                        &mut self.swash_cache,
+                    )
+                    .map_err(|e| anyhow::anyhow!("glyphon overlay skip-placard prepare failed: {e:?}"))?,
+                None => return Err(anyhow::anyhow!("glyphon overlay prepare failed: AtlasFull")),
+            },
+        }
         Ok(())
+    }
+
+    /// THE ONE owner of the selected candidate's DISPLAY-line index (0-based
+    /// among the shown candidate lines, past the header). The selected-row band
+    /// ([`overlay_draw_card`]) and the secondary right-column recolor
+    /// ([`shape_overlay_right`]) both read it, so they can never disagree on which
+    /// row is highlighted. Two layout families: a faceted/theme plan's selected
+    /// world sits at its POSITION in the plan (section headers push it down); a
+    /// flat picker's selection is its offset in the visible window (saturated +
+    /// clamped defensively so a transient list-shrink can never over/underflow).
+    /// `None` iff there are no items.
+    pub(in crate::render) fn overlay_selected_display_line(
+        &self,
+        geom: &OverlayGeom,
+    ) -> Option<usize> {
+        if geom.n_items == 0 {
+            None
+        } else if geom.theme {
+            Some(
+                geom.plan
+                    .iter()
+                    .position(|l| matches!(l, ThemeLine::Item(i) if *i == self.overlay_selected))
+                    .unwrap_or(0),
+            )
+        } else {
+            Some(
+                self.overlay_selected
+                    .saturating_sub(geom.top_idx)
+                    .min(geom.visible.saturating_sub(1)),
+            )
+        }
     }
 
     /// Upload the card behind everything + the muted selected-row highlight quad
@@ -1478,10 +1591,12 @@ impl TextPipeline {
             theme::HighlightTreatment::InverseFill { band, .. } => band,
         };
         self.overlay_rows.set_color(band_color.rgba_bytes());
-        // The selected row's DISPLAY index + settled row-top, per layout family —
-        // the ONE owner shared with the living-band ink flip (`living_covered_rows`
-        // → `overlay_selected_disp`), so band fill and flipped ink read the same row.
-        let sel_disp: Option<usize> = self.overlay_selected_disp(geom);
+        // The selected row's DISPLAY index + settled row-top, per layout family.
+        // The ONE owner (`overlay_selected_display_line`) feeds the secondary
+        // (right-column) shaper's selected-row recolor AND the living-band ink flip
+        // (`living_covered_rows`), so band fill, hint recolor, and flipped ink can
+        // never disagree on WHICH row is selected.
+        let sel_disp: Option<usize> = self.overlay_selected_display_line(geom);
         // PER-ITEM LIST SURFACES round: `Pane` (default) draws the byte-identical
         // full-width selected BAND; `Bars` gives each candidate row its own
         // rounded surface (unselected → `overlay_bars`, quiet; selected →
@@ -1547,10 +1662,10 @@ impl TextPipeline {
                         (Some(disp), Some(top)) => {
                             // WILD-MENU SLANT PROBE (env-gated, `None` on every normal
                             // run): the band's left edge follows the selected row's own
-                            // stair offset so the highlight hugs its slanted row.
-                            let dx = crate::render::overlay_slant()
-                                .map(|s| crate::render::slant_offset(&s, disp))
-                                .unwrap_or(0.0);
+                            // stair offset (fan-in progress folded in via the ONE
+                            // `overlay_slant_dx` owner) so the highlight hugs its
+                            // slanted row.
+                            let dx = self.overlay_slant_dx(disp);
                             vec![[geom.card_x + dx, top, geom.card_w - dx, lh]]
                         }
                         _ => Vec::new(),
@@ -1641,6 +1756,13 @@ impl TextPipeline {
                                 lh,
                             );
                             let (x, w) = span_of(k);
+                            // SLANT-ON-BARS (choreography 2, fan-in folded in): the
+                            // plate cascades right with its row through the ONE
+                            // `overlay_slant_dx` owner. A full-width plate keeps its
+                            // right edge flush (width shed by dx, mirroring the Pane
+                            // band); a hug plate just slides. `0.0` unslanted →
+                            // byte-identical.
+                            let (x, w) = slant_bar_span(x, w, hug, self.overlay_slant_dx(k));
                             [x, top + bar_off, w, bar_h]
                         })
                         .collect(),
@@ -1686,7 +1808,15 @@ impl TextPipeline {
                 let sel = match (sel_disp, sel_top) {
                     (Some(disp), Some(top)) => {
                         let (bx, bw) = span_of(disp);
-                        let (x, w) = super::grow_span(bx, bw, grow_px, mirror);
+                        // SLANT-ON-BARS: the selected plate cascades with its row
+                        // too, THEN grows its ledge — so a slanted selected bar
+                        // still steps out of formation.
+                        let (bx, bw) = slant_bar_span(bx, bw, hug, self.overlay_slant_dx(disp));
+                        // GROW-POP (choreography 4): the `grow_px` ledge eases in on
+                        // each selection move via the ONE `overlay_grow_progress`
+                        // owner. Full `grow_px` in every capture (byte-identical).
+                        let grow = grow_px * self.overlay_grow_progress();
+                        let (x, w) = super::grow_span(bx, bw, grow, mirror);
                         vec![[x, top + bar_off, w.max(1.0), bar_h]]
                     }
                     _ => Vec::new(),

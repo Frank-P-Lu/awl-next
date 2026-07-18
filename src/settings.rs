@@ -73,7 +73,7 @@ pub struct SettingRow {
     pub kind: SettingKind,
 }
 
-/// The 27-setting corpus, in stable display order (grouped by category). The ONE
+/// The 28-setting corpus, in stable display order (grouped by category). The ONE
 /// owner — the FacetScheme bucket + the value readout both key off this table.
 pub static SETTINGS: &[SettingRow] = &[
     // Editor —
@@ -87,6 +87,7 @@ pub static SETTINGS: &[SettingRow] = &[
     // Appearance —
     SettingRow { name: "Theme",             category: "Appearance",  kind: SettingKind::Picker },
     SettingRow { name: "WYSIWYG",           category: "Appearance",  kind: SettingKind::Toggle },
+    SettingRow { name: "Format popover",    category: "Appearance",  kind: SettingKind::Toggle },
     SettingRow { name: "Inline images",     category: "Appearance",  kind: SettingKind::Toggle },
     SettingRow { name: "Code ligatures",    category: "Appearance",  kind: SettingKind::Toggle },
     SettingRow { name: "Outline",           category: "Appearance",  kind: SettingKind::Toggle },
@@ -227,6 +228,7 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
         // Appearance —
         "Theme" => crate::theme::active().name.to_string(),
         "WYSIWYG" => on_off(crate::markdown::wysiwyg_on()).to_string(),
+        "Format popover" => on_off(crate::popover::popover_on()).to_string(),
         "Inline images" => on_off(crate::markdown::inline_images_on()).to_string(),
         "Code ligatures" => on_off(crate::render::code_ligatures_on()).to_string(),
         // Outline + Menu bar read their PROCESS GLOBALS live — the SAME owners the
@@ -281,6 +283,7 @@ pub fn toggle_key(name: &str) -> Option<&'static str> {
         "Reduce motion" => "reduce_motion",
         // Appearance —
         "WYSIWYG" => "wysiwyg",
+        "Format popover" => "popover",
         "Inline images" => "inline_images",
         "Code ligatures" => "code_ligatures",
         "Outline" => "outline",
@@ -551,7 +554,7 @@ mod tests {
         assert_eq!(SETTINGS.len(), seen.len());
         assert_eq!(
             SETTINGS.len(),
-            27,
+            28,
             "corpus size changed — update this count deliberately (and the doc comments \
              at the top of settings.rs) rather than let it drift"
         );

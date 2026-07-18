@@ -61,6 +61,8 @@ mod rowgeom;
 /// cluster, carved out verbatim. The corner readouts share one body, `prepare_corner_label`.
 mod chrome;
 pub use chrome::PanelHit;
+#[cfg(test)]
+pub(crate) use chrome::POPOVER_VPAD;
 
 /// ROW LAYOUT — the ONE owner of picker-row column budgets: how a summoned
 /// overlay row splits its width between the PRIMARY cell (name/path — never
@@ -1170,6 +1172,17 @@ pub struct ViewState {
     /// real value in a headless capture (unlike the dropped clock/fs HUD fields)
     /// and the sidecar asserts it (`hud.eol`).
     pub eol: crate::buffer::Eol,
+    /// THE FORMAT POPOVER model for this frame ([`crate::popover::PopoverModel`]),
+    /// or `None` when the popover is down. Built by the caller — the live App's
+    /// `sync_view` (mouse-summoned + config-gated) or the capture force-summon
+    /// probe (`AWL_POPOVER`) — from [`crate::actions::popover::plan`] over the
+    /// current selection, so the lit toggles + the `H` button's level stay live
+    /// and reflective across format applies. Drives the floating button row + its
+    /// hit-test + the sidecar `popover` block. The row is ANCHORED off `selection`
+    /// (its earlier endpoint), so a `Some` model always rides a live selection.
+    /// `None` parks every popover quad/glyph empty, so a default capture is
+    /// byte-identical.
+    pub popover: Option<crate::popover::PopoverModel>,
 }
 
 impl ViewState {
@@ -1233,6 +1246,7 @@ impl ViewState {
             notice: String::new(),
             cjk_priority: crate::frontmatter::DEFAULT_CJK_PRIORITY.to_vec(),
             eol: crate::buffer::Eol::Lf,
+            popover: None,
         }
     }
 }
@@ -2459,6 +2473,203 @@ pub(crate) fn effective_facet_style() -> theme::FacetStyle {
     }
 }
 
+// --- THE OVERLAY-EXPLORATION round's dev probes ------------------------------
+//
+// INERT dials for the per-world summoned-menu personality exploration, each
+// byte-identical by default and reachable only through the established
+// `AWL_*_FORCE` idiom (read once, memoized, malformed → the world default, total
+// no-op unset, no config key, no CLI flag, no `RenderCaps` field — probe-gated
+// until a later gallery win):
+//   1. DENSITY   (`AWL_OVERLAY_DENSITY_FORCE`)  — the whole-menu type scale +
+//      leading, the cheapest per-line distinctness (proposal 1). Default is the
+//      shipped `OVERLAY_UI_SCALE` with zero extra leading.
+//   2. SLANT-ON-BARS — the EXISTING `AWL_OVERLAY_SLANT_FORCE` stair, now applied
+//      to the BAR PLATES too (each bar cascades with its label) and MIRRORED
+//      under a right-anchored card so it steps toward the open margin. No new env
+//      knob: it composes with `AWL_OVERLAY_LIST_FORCE=bars` +
+//      `AWL_OVERLAY_ANCHOR_FORCE`.
+//   3+4. TWO MOTION CHOREOGRAPHIES — the slant FAN-IN (the diagonal unfurls as
+//      the card springs in, riding `overlay_enter_t`) and the selected-bar
+//      GROW-POP (the ledge juts into the margin on each selection move, riding
+//      `overlay_band_t`). Both are LIVE-ONLY (the `juice_live` gate; settled in
+//      every capture, folded to nothing under Reduce Motion) and both compose
+//      with the slant/bars dials. The MID-ANIMATION frame-dump probe below
+//      (`AWL_OVERLAY_MOTION_FORCE`) pins their phase so a headless `--screenshot`
+//      can witness a frame partway through (the `--screenshot-motion` idiom for
+//      the overlay).
+
+/// THE OVERLAY DENSITY PROBE's parsed shape (proposal 1): the whole-menu UI
+/// `scale` (a step below the reading body — dense chrome, DESIGN §4) and extra
+/// `leading` (device px added to the row line-height). Both feed the ONE row
+/// owners [`TextPipeline::overlay_metrics`] / [`TextPipeline::overlay_lh`], so
+/// the card height, row-Y, hit-test, band, and bars inherit the new texture for
+/// free. PROBE-ONLY — no `RenderCaps` field; ships only on a later gallery win.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TypeDensity {
+    pub scale: f32,
+    pub leading: f32,
+}
+
+impl TypeDensity {
+    /// The shipped default: the historical [`chrome::OVERLAY_UI_SCALE`] with zero
+    /// extra leading, so an unset probe is byte-identical.
+    pub(crate) fn shipped() -> Self {
+        TypeDensity { scale: chrome::OVERLAY_UI_SCALE, leading: 0.0 }
+    }
+}
+
+/// `AWL_OVERLAY_DENSITY_FORCE` grammar: `"<scale>"` (a positive finite float — a
+/// tight `0.78` timetable, an airy `1.0` table-of-contents) or
+/// `"<scale>:<leading>"` (leading = non-negative device px added per row).
+/// Malformed / non-positive scale / negative leading → `None` (the shipped
+/// density, byte-identical).
+fn parse_overlay_density_force(s: &str) -> Option<TypeDensity> {
+    let s = s.trim();
+    let (scale_s, leading) = match s.split_once(':') {
+        Some((sc, ld)) => {
+            let ld: f32 = ld.trim().parse().ok()?;
+            if !ld.is_finite() || ld < 0.0 {
+                return None;
+            }
+            (sc, ld)
+        }
+        None => (s, 0.0),
+    };
+    let scale: f32 = scale_s.trim().parse().ok()?;
+    if scale.is_finite() && scale > 0.0 {
+        Some(TypeDensity { scale, leading })
+    } else {
+        None
+    }
+}
+
+/// The `AWL_OVERLAY_DENSITY_FORCE` dev knob, read ONCE and memoized.
+fn awl_overlay_density_force() -> &'static Option<TypeDensity> {
+    static ONCE: std::sync::OnceLock<Option<TypeDensity>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        read_forced_knob(
+            "AWL_OVERLAY_DENSITY_FORCE",
+            "<scale> | <scale>:<leading>",
+            parse_overlay_density_force,
+        )
+    })
+}
+
+/// TEST-ONLY escape hatch for the overlay density (mirrors
+/// [`set_slant_test_override`]; `serial()`-guarded at call sites).
+#[cfg(test)]
+static DENSITY_TEST_OVERRIDE: std::sync::Mutex<Option<TypeDensity>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_overlay_density_test_override(d: Option<TypeDensity>) {
+    *DENSITY_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = d;
+}
+
+/// The EFFECTIVE overlay type density for this frame: a `cfg(test)` override if
+/// set, else the `AWL_OVERLAY_DENSITY_FORCE` dev probe if set, else the shipped
+/// [`TypeDensity::shipped`] — so an unset, non-test run is BYTE-IDENTICAL.
+pub(crate) fn effective_overlay_density() -> TypeDensity {
+    #[cfg(test)]
+    {
+        if let Some(d) = *DENSITY_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return d;
+        }
+    }
+    match awl_overlay_density_force() {
+        Some(d) => *d,
+        None => TypeDensity::shipped(),
+    }
+}
+
+/// The EFFECTIVE overlay UI SCALE this frame — the density probe's `scale`,
+/// [`chrome::overlay::OVERLAY_UI_SCALE`] by default. The ONE reader every row +
+/// strip metric consults so shaping and geometry can never drift on the size.
+pub(crate) fn effective_overlay_scale() -> f32 {
+    effective_overlay_density().scale
+}
+
+/// The EFFECTIVE extra overlay LEADING this frame (device px) — the density
+/// probe's `leading`, `0.0` by default (byte-identical). Added into the row
+/// line-height alongside the row gap.
+pub(crate) fn effective_overlay_leading() -> f32 {
+    effective_overlay_density().leading
+}
+
+/// THE OVERLAY MOTION frame-dump PROBE's parsed shape (choreographies 3+4): a
+/// pinned ENTRANCE phase (the slant fan-in progress) and BAND phase (the
+/// selected-bar grow-pop progress), each in `[0, 1]` (`0` = start, `1` =
+/// settled). PROBE-ONLY — the mid-animation still the `--screenshot` path can
+/// witness (the overlay's `--screenshot-motion`). Unset, the live animators run
+/// off `overlay_enter_t` / `overlay_band_t` and every capture stays settled.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct OverlayMotionProbe {
+    pub enter: f32,
+    pub band: f32,
+}
+
+/// `AWL_OVERLAY_MOTION_FORCE` grammar: `"<enter>"` (band = same phase) or
+/// `"<enter>:<band>"`, each a finite float CLAMPED to `[0, 1]`. Empty /
+/// non-numeric → `None` (the settled state, byte-identical).
+fn parse_overlay_motion_force(s: &str) -> Option<OverlayMotionProbe> {
+    let s = s.trim();
+    let (enter_s, band_s) = match s.split_once(':') {
+        Some((e, b)) => (e, Some(b)),
+        None => (s, None),
+    };
+    let enter: f32 = enter_s.trim().parse().ok()?;
+    if !enter.is_finite() {
+        return None;
+    }
+    let band: f32 = match band_s {
+        Some(b) => {
+            let b: f32 = b.trim().parse().ok()?;
+            if !b.is_finite() {
+                return None;
+            }
+            b
+        }
+        None => enter,
+    };
+    Some(OverlayMotionProbe { enter: enter.clamp(0.0, 1.0), band: band.clamp(0.0, 1.0) })
+}
+
+/// The `AWL_OVERLAY_MOTION_FORCE` dev knob, read ONCE and memoized.
+fn awl_overlay_motion_force() -> &'static Option<OverlayMotionProbe> {
+    static ONCE: std::sync::OnceLock<Option<OverlayMotionProbe>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        read_forced_knob(
+            "AWL_OVERLAY_MOTION_FORCE",
+            "<enter> | <enter>:<band>  (each 0..1)",
+            parse_overlay_motion_force,
+        )
+    })
+}
+
+/// TEST-ONLY escape hatch for the overlay motion frame-dump probe (mirrors
+/// [`set_slant_test_override`]; `serial()`-guarded at call sites).
+#[cfg(test)]
+static OVERLAY_MOTION_TEST_OVERRIDE: std::sync::Mutex<Option<OverlayMotionProbe>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_overlay_motion_test_override(m: Option<OverlayMotionProbe>) {
+    *OVERLAY_MOTION_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = m;
+}
+
+/// The EFFECTIVE overlay motion frame-dump phase this frame, or `None` (the
+/// live/settled path): a `cfg(test)` override if set, else the
+/// `AWL_OVERLAY_MOTION_FORCE` dev probe. `None` on every ordinary run, so the
+/// animators read their live timers and captures stay settled.
+pub(crate) fn overlay_motion_probe() -> Option<OverlayMotionProbe> {
+    #[cfg(test)]
+    {
+        if let Some(m) = *OVERLAY_MOTION_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return Some(m);
+        }
+    }
+    *awl_overlay_motion_force()
+}
+
 /// Remove [`BAD_FALLBACK_FAMILIES`] from the font system's database so cosmic-text
 /// never selects them during fallback. Safe no-op if none are present (e.g. on
 /// non-macOS, or if the system set changes). Only affects fallback for glyphs the
@@ -2653,6 +2864,26 @@ pub struct TextPipeline {
     /// this fixed while the page mask follows the current window, then snaps it
     /// once the resize debounce settles.
     lava_field_viewport: [f32; 2],
+    /// TWINKLING STARS (`theme::AmbientStyle::Stars`, the TWINKLING-STARS
+    /// round): tiny individually-phased breathing points in the page-mode
+    /// MARGINS — Currawong's ambient differentiator. A reused
+    /// `SelectionPipeline` (fully-rounded tiny quads via `set_corner`,
+    /// per-star alpha via `prepare_multicolor` — the writing-streaks
+    /// per-instance-color path; no new shader, nothing new for WebGL2).
+    /// ZERO instances for every `AmbientStyle::None` world (fifteen of
+    /// sixteen — byte-identical), and for page-off (no margins → no stars).
+    /// The twinkle rides [`Self::lava_phase`] — ONE ambient clock, two
+    /// consumers. See [`Self::prepare_stars_layer`] + [`crate::stars`].
+    pub stars_pipeline: SelectionPipeline,
+    /// The star-field PROTOS (the proto-cache shape): the scattered layout,
+    /// built once per (viewport size, star params) by [`crate::stars::layout`]
+    /// and re-culled/re-tinted per frame against the LIVE column geometry +
+    /// twinkle phase. Rebuilt only when [`Self::stars_proto_key`] misses.
+    stars_protos: Vec<crate::stars::Star>,
+    /// The proto cache key: `(width, height, cell_px bits, density bits)` —
+    /// a resize or a theme switch onto different star data rebuilds the
+    /// layout; everything else is pure per-frame arithmetic over the protos.
+    stars_proto_key: Option<(u32, u32, u32, u32)>,
     /// THE PAGE FRAME (`theme::PageFrame`, the personality-assignment round's
     /// graduated capability — subsumes the never-shipped `AWL_PAGE_BORDER`
     /// gallery probe): four thin quads framing the writing column over the
@@ -2879,6 +3110,12 @@ pub struct TextPipeline {
     /// muted neutral ink, so a nit reads as a calm hint distinct from the wavy
     /// error-red spell squiggle. Gated per-frame on [`crate::nits::nits_on`].
     pub nit_pipeline: SpellUnderlinePipeline,
+    /// The GPU quad pipeline that draws the markdown `~~strikethrough~~` STRIKE
+    /// LINES — the same flat-line trick as `nit_pipeline` (amplitude 0), tinted
+    /// THE strike ink (`spans::strike_srgba_bytes`, the one owner the struck
+    /// TEXT's muted transform and the popover's `S` demo share). Geometry from
+    /// [`rects`]' strike bucket (`strike_lines`); empty for a strike-less buffer.
+    pub strike_pipeline: SpellUnderlinePipeline,
     /// Spring + shape-morph animation state for the caret.
     pub caret: CaretAnim,
     /// Last view state applied (for caret placement + scroll during draw).
@@ -3186,6 +3423,15 @@ pub struct TextPipeline {
     /// every `--keys` replay — stays byte-identical.
     pub page_drag_renderer: TextRenderer,
     pub page_drag_buffer: GlyphBuffer,
+    /// Renderer + buffer for the ZOOM READOUT — a quiet muted percentage (e.g.
+    /// "120%") floating near the pointer while a zoom gesture is IN FLIGHT (the
+    /// sticky-zoom debounce window). Its own glyph buffer so it composes
+    /// independently; parked off-screen while `zoom_readout` is `None` (and no
+    /// `AWL_ZOOM_READOUT` probe), which is the ONLY state a headless capture ever
+    /// sees by default (it is set only by the live App's zoom debounce), so a
+    /// default capture — and every `--keys` replay — stays byte-identical.
+    pub zoom_readout_renderer: TextRenderer,
+    pub zoom_readout_buffer: GlyphBuffer,
     /// Renderer + buffer for the opt-in DEBUG panel, drawn DIM in the top-LEFT
     /// corner ONLY when [`crate::debug::debug_on`]. Its own glyph buffer so it
     /// composes independently of the wordcount text. Parked off-screen when the
@@ -3267,6 +3513,13 @@ pub struct TextPipeline {
     pub hud_shadow: SelectionPipeline,
     pub hud_border: SelectionPipeline,
     pub hud_card: SelectionPipeline,
+    /// WRITING-STREAKS HEATMAP: the calendar squares of the summoned Writing
+    /// streaks card, drawn ON the `hud_card` ground (between the card and its
+    /// text). Uses PER-INSTANCE colors (`SelectionPipeline::prepare_multicolor`)
+    /// so each square carries its own intensity tint off the world's value ladder
+    /// (`theme::heatmap_colors`). Empty (0 instances) whenever the card is closed,
+    /// so a default render is byte-identical.
+    pub streak_cells: SelectionPipeline,
     /// HELD STATS HUD: renderer + buffer for the centered stacked stats text (the big
     /// figures in CONTENT ink at BODY size over their captions in FAINT ink at LABEL
     /// size). Its own glyph buffer so it composes independently of the other chrome;
@@ -3280,6 +3533,13 @@ pub struct TextPipeline {
     /// renders the fixed placeholder — the determinism boundary that keeps a
     /// `--hud` capture byte-stable. Set via [`Self::set_hud_stats`].
     hud_stats: Option<crate::hud::HudStats>,
+    /// WRITING-STREAKS view snapshot: the live App pushes `Some` every `sync_view`
+    /// (`App::streaks_sync_card`) from its persisted `streaks.toml`; the headless
+    /// capture never calls that seam, so this stays `None` and the card renders the
+    /// fixed synthetic [`crate::streaks::placeholder`] year + streak numbers — the
+    /// determinism boundary keeping a `--streaks` capture byte-stable. Set via
+    /// [`Self::set_streaks`].
+    streaks_view: Option<crate::streaks::StreaksView>,
     /// NOTES VERBS round: the held HUD's SAVED stat state (dirty, or clean +
     /// elapsed seconds since the last successful write). The live App pushes
     /// `Some` every `sync_view` (`App::sync_hud_saved`); the headless capture
@@ -3327,6 +3587,43 @@ pub struct TextPipeline {
     /// down. Set by [`Self::set_whichkey`]; a settled/idle frame leaves it `None`, so a
     /// default capture is byte-identical.
     whichkey_rows: Option<Vec<(String, String)>>,
+    /// THE FORMAT POPOVER (`crate::popover`) — its OWN float-elevation trio +
+    /// active-button wash + button-label text renderer, drawn in `draw_chrome_tail`
+    /// (over the document, like the which-key panel) so it never races the shared
+    /// `float_*`/`panel_*` quads the overlay + caret-preview + search panels own.
+    /// Parked (nothing drawn) unless [`Self::popover_model`] is `Some` — set from
+    /// [`ViewState::popover`], so a popover-down frame is byte-identical.
+    pub popover_shadow: SelectionPipeline,
+    pub popover_border: SelectionPipeline,
+    pub popover_card: SelectionPipeline,
+    /// The value-step wash quad behind each LIT (active-toggle) button — a
+    /// `base_content` value ladder step, NEVER amber (DESIGN §3; the caret keeps
+    /// the one accent). ALSO carries the `C` button's ALWAYS-ON inline-code demo
+    /// pill: the doc pill's own `base_200` tint IS this pipeline's tint (one
+    /// derivation), so the pill rides here rather than a third quad pipeline.
+    pub popover_wash: SelectionPipeline,
+    /// SELF-DEMONSTRATING `A` button: the real `==highlight==` wash pill behind
+    /// its letter — tinted by THE doc wash's own derivation
+    /// (`spans::highlight_wash_rgba_bytes`) + the one-bit dither density, both
+    /// re-fed at the same two sites the doc pipeline reads (construction +
+    /// `sync_theme_colors`).
+    pub popover_hl_wash: SelectionPipeline,
+    /// SELF-DEMONSTRATING `S` button: a real strike line through its letter,
+    /// positioned by THE ONE strike-line owner (`spans::strike_line_band`) and
+    /// tinted THE strike ink (`spans::strike_srgba_bytes`) — the same fn pair
+    /// the document's `~~strike~~` quads read, so the demo IS the effect.
+    pub popover_strike: SpellUnderlinePipeline,
+    pub popover_renderer: TextRenderer,
+    pub popover_buffer: GlyphBuffer,
+    /// The format popover's model this frame (mirrored from [`ViewState::popover`]),
+    /// or `None` when down. Drives the button row + the sidecar `popover` block.
+    popover_model: Option<crate::popover::PopoverModel>,
+    /// The popover's laid-out geometry (card rect + per-button pixel spans),
+    /// computed in `prepare_popover` and read by the pure `&self` hit-test
+    /// [`Self::popover_hit`] + the sidecar — the SAME geometry the buttons draw
+    /// from, so a click can never disagree with where a button is painted. `None`
+    /// when the popover is down.
+    popover_geom: Option<crate::render::chrome::PopoverGeom>,
     /// The CALM NOTICE text mirrored from [`ViewState::notice`]; empty parks the
     /// label off-screen (nothing drawn). Live-only content by construction.
     notice: String,
@@ -3360,6 +3657,18 @@ pub struct TextPipeline {
     /// [`ViewState`] — mirrors the debug perf fields, which are also fed straight
     /// by the live loop rather than riding the deterministic view snapshot.
     page_drag_readout: Option<(f32, f32, usize)>,
+    /// LIVE-ONLY: the pointer position (physical px) + the zoom factor while a zoom
+    /// gesture (Cmd-± / Cmd-scroll) is IN FLIGHT (the sticky-zoom debounce window),
+    /// or `None` when the zoom has settled — the default, and the ONLY state a
+    /// headless capture/replay ever constructs (zoom mirrors through `apply_core`,
+    /// never the live-App-only `App::mark_zoom_dirty`), so a default capture stays
+    /// byte-identical. Set (and cleared on settle) by the live App's zoom debounce
+    /// via [`Self::set_zoom_readout`]; deliberately NOT part of [`ViewState`] —
+    /// mirrors `page_drag_readout`, fed straight by the live loop rather than the
+    /// deterministic view snapshot. A capture-only `AWL_ZOOM_READOUT` env probe
+    /// synthesizes it at canvas-center for the gallery (see
+    /// [`Self::prepare_zoom_readout`]).
+    zoom_readout: Option<(f32, f32, f32)>,
     /// Latest completed frame's cost + the worst over the last 120 drawn frames
     /// (ms), fed by the live loop for the debug panel's frame line, or `None` when
     /// there is no clock (the headless capture) or before the first measured frame
@@ -3620,6 +3929,11 @@ impl TextPipeline {
         let mut page_frame_pipeline =
             SelectionPipeline::new(device, format, theme::page_frame_ink().rgba_bytes());
         page_frame_pipeline.set_dither(1.0);
+        // TWINKLING STARS (theme::AmbientStyle): tiny fully-rounded quads in the
+        // margins, per-star color/alpha via `prepare_multicolor` (the stored
+        // pipeline color is inert — a placeholder). Starts empty; every
+        // AmbientStyle::None world uploads zero instances, forever.
+        let stars_pipeline = SelectionPipeline::new(device, format, [0, 0, 0, 0]);
         // SYNTAX WASH quads (under selection, over the ground): the warm band
         // behind prose comments + the green band behind dark-world strings. The
         // tints come from THE role style provider (`role_style_for`, via
@@ -3796,6 +4110,11 @@ impl TextPipeline {
         let page_drag_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let page_drag_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // Zoom readout renderer + buffer (quiet, muted, floats at the pointer; only
+        // while the live App has a zoom gesture in flight).
+        let zoom_readout_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let zoom_readout_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // DEBUG panel renderer + buffer (quiet, dim, top-left; only when
         // `debug::debug_on()`).
         let debug_renderer =
@@ -3841,6 +4160,12 @@ impl TextPipeline {
         let hud_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
         let hud_border = SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
         let hud_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        // WRITING-STREAKS heatmap squares: per-instance colored (the construction
+        // color is a placeholder overridden every draw), with a gentle corner so the
+        // small squares read as soft tiles, not hard pixels.
+        let mut streak_cells =
+            SelectionPipeline::new(device, format, theme::base_content().rgba_bytes());
+        streak_cells.set_corner(1.5);
         let hud_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let hud_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
@@ -3854,6 +4179,25 @@ impl TextPipeline {
         let wk_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let wk_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
+        // FORMAT POPOVER: its own float-panel elevation (shadow -> raised border ->
+        // base_300 card) + an active-button value-step wash + a button-label text
+        // renderer, kept separate from every shared float/panel quad. Empty/off
+        // until a mouse selection summons it (or the `AWL_POPOVER` capture probe).
+        let popover_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
+        let popover_border =
+            SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
+        let popover_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        let popover_wash = SelectionPipeline::new(device, format, theme::base_200().rgba_bytes());
+        // SELF-DEMONSTRATING buttons: the `A` highlight pill (the doc wash's own
+        // derivation + one-bit dither) and the `S` strike line (THE strike ink).
+        let mut popover_hl_wash =
+            SelectionPipeline::new(device, format, highlight_wash_rgba_bytes());
+        popover_hl_wash.set_dither(wagtail_dither_density());
+        let popover_strike =
+            SpellUnderlinePipeline::new(device, format, strike_srgba_bytes());
+        let popover_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        let popover_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
         // Wavy spell-check underlines, also drawn under the text.
         let spell_pipeline =
             SpellUnderlinePipeline::new(device, format, theme::error().rgba_bytes());
@@ -3861,6 +4205,10 @@ impl TextPipeline {
         // tinted the neutral muted ink so they read as a quiet "tidy this" hint.
         let nit_pipeline =
             SpellUnderlinePipeline::new(device, format, nit_underline_srgba());
+        // Markdown `~~strikethrough~~` lines (same flat-line pipeline shape),
+        // tinted THE strike ink — the one owner the struck text shares.
+        let strike_pipeline =
+            SpellUnderlinePipeline::new(device, format, strike_srgba_bytes());
 
         let mut me = Self {
             font_system,
@@ -3880,6 +4228,9 @@ impl TextPipeline {
             lava_pipeline,
             lava_phase: crate::lava::LAVA_FROZEN_PHASE,
             lava_field_viewport: [0.0, 0.0],
+            stars_pipeline,
+            stars_protos: Vec::new(),
+            stars_proto_key: None,
             page_frame_pipeline,
             wash_comment_pipeline,
             wash_string_pipeline,
@@ -3914,6 +4265,7 @@ impl TextPipeline {
             preview_buffer,
             spell_pipeline,
             nit_pipeline,
+            strike_pipeline,
             caret: CaretAnim::new(),
             cursor_line: 0,
             cursor_col: 0,
@@ -3986,6 +4338,8 @@ impl TextPipeline {
             notice_buffer,
             page_drag_renderer,
             page_drag_buffer,
+            zoom_readout_renderer,
+            zoom_readout_buffer,
             debug_renderer,
             debug_buffer,
             gutter_renderer,
@@ -4012,6 +4366,7 @@ impl TextPipeline {
             hud_shadow,
             hud_border,
             hud_card,
+            streak_cells,
             hud_renderer,
             hud_buffer,
             wk_shadow,
@@ -4019,7 +4374,18 @@ impl TextPipeline {
             wk_card,
             wk_renderer,
             wk_buffer,
+            popover_shadow,
+            popover_border,
+            popover_card,
+            popover_wash,
+            popover_hl_wash,
+            popover_strike,
+            popover_renderer,
+            popover_buffer,
+            popover_model: None,
+            popover_geom: None,
             hud_stats: None,
+            streaks_view: None,
             hud_saved: None,
             hud_update_checked: None,
             hud_pending_crash: false,
@@ -4035,6 +4401,7 @@ impl TextPipeline {
             overlay_band_t: 1.0,
             overlay_band_last: None,
             page_drag_readout: None,
+            zoom_readout: None,
             debug_frame_cost: None,
             debug_latency_ms: None,
             debug_redraws: None,
@@ -4179,6 +4546,21 @@ impl TextPipeline {
         self.wk_shadow.set_color(float_shadow_srgba());
         self.wk_border.set_color(theme::surface_selected().rgba_bytes());
         self.wk_card.set_color(theme::base_300().rgba_bytes());
+        // FORMAT POPOVER elevation + active-button wash re-tint with the world
+        // (same float tokens as which-key; the wash is a `base_200` value step,
+        // never amber). O(1); geometry is theme-independent.
+        self.popover_shadow.set_color(float_shadow_srgba());
+        self.popover_border
+            .set_color(theme::surface_selected().rgba_bytes());
+        self.popover_card.set_color(theme::base_300().rgba_bytes());
+        self.popover_wash.set_color(theme::base_200().rgba_bytes());
+        // SELF-DEMONSTRATING buttons: `A`'s pill re-tints from the doc highlight
+        // wash's own derivation (+ the one-bit dither density — a switch AWAY
+        // from a one-bit world must reset it, mirroring `wash_highlight_pipeline`);
+        // `S`'s line from THE strike ink.
+        self.popover_hl_wash.set_color(highlight_wash_rgba_bytes());
+        self.popover_hl_wash.set_dither(wagtail_dither_density());
+        self.popover_strike.set_color(strike_srgba_bytes());
         // WEB/LINUX MENU BAR: re-tint from the world's own tokens (O(1) — the bar/
         // dropdown GEOMETRY is theme-independent, so the theme-picker preview re-tints
         // it for free). Bar ground = a value step off the room (`base_200`); the open
@@ -4226,6 +4608,9 @@ impl TextPipeline {
         self.spell_pipeline.set_color(theme::error().rgba_bytes());
         // Re-tint the WRITING-NIT underline to the new world's MUTED ink.
         self.nit_pipeline.set_color(nit_underline_srgba());
+        // Re-tint the `~~strikethrough~~` line from THE strike-ink owner (the
+        // struck text's own muted transform re-reads the theme each reshape).
+        self.strike_pipeline.set_color(strike_srgba_bytes());
         // Re-tint the PAGE-MODE margin ground to the new world's tokens.
         self.background_pipeline.set_gradient(background_desc());
         // THE PAGE FRAME: re-tint from the one ink owner (`base_content`).
@@ -4503,6 +4888,10 @@ impl TextPipeline {
         self.search_replace_active = view.search_replace_active;
         self.search_replacement = view.search_replacement.clone();
         self.search_editing_replacement = view.search_editing_replacement;
+        // FORMAT POPOVER: mirror the model (built by the App / capture probe); the
+        // geometry is (re)computed in `prepare_popover`, which also parks the quads
+        // when this is `None`.
+        self.popover_model = view.popover.clone();
         // A summoned overlay appears + disappears INSTANTLY (no rise-in / sink-out
         // motion) on every CALM world: the overlay content syncs verbatim from the
         // view every frame, so a close snaps the card off the frame the App clears
@@ -4859,6 +5248,57 @@ impl TextPipeline {
         }
     }
 
+    /// The slant FAN-IN progress this frame (motion choreography 3): the fraction
+    /// of the diagonal stair currently drawn. `1.0` (full stagger) in EVERY
+    /// capture and on every unarmed / CALM pipeline (byte-identical to the settled
+    /// slant), so the determinism law holds by construction; the mid-animation
+    /// frame-dump probe ([`crate::render::overlay_motion_probe`]) pins it; a live
+    /// SpringIn world eases it from `0` as the card springs in (the stair
+    /// UNFURLS). Reduce Motion → `1.0` (settled instantly). It multiplies the
+    /// per-row DRAW offset only — the width TAX stays at the full max offset, so
+    /// rows never reflow mid-flight (they are pre-elided for the settled stair and
+    /// merely slide into place).
+    pub(in crate::render) fn overlay_slant_progress(&self) -> f32 {
+        if let Some(m) = crate::render::overlay_motion_probe() {
+            return crate::ease::out_back(m.enter);
+        }
+        if !self.juice_live || crate::motion::reduced() {
+            return 1.0;
+        }
+        crate::ease::out_back(self.overlay_enter_t)
+    }
+
+    /// The selected-bar GROW-POP progress this frame (motion choreography 4): the
+    /// fraction of the `grow_px` ledge currently extended. `1.0` (full ledge) in
+    /// every capture / unarmed / CALM pipeline (byte-identical); pinned by the
+    /// frame-dump probe; on a live Slide world it rides `overlay_band_t` so the
+    /// ledge COLLAPSES then juts back out on each selection move (the grow and the
+    /// band slide share one timer, one spring). Reduce Motion → `1.0`.
+    pub(in crate::render) fn overlay_grow_progress(&self) -> f32 {
+        if let Some(m) = crate::render::overlay_motion_probe() {
+            return crate::ease::out_back(m.band);
+        }
+        if !self.juice_live || crate::motion::reduced() {
+            return 1.0;
+        }
+        crate::ease::out_back(self.overlay_band_t)
+    }
+
+    /// The per-DISPLAY-ROW slant DRAW offset (device px) this frame — the ONE
+    /// owner every slant consumer (the row text areas, the Pane selected band,
+    /// and the Bars plates) reads, so the stair, its fan-in, and every surface
+    /// that rides it can never disagree. `0.0` when the slant probe is unset
+    /// (byte-identical); else [`crate::render::slant_offset`] scaled by the
+    /// fan-in progress. Unsigned (always steps right, width-taxed on the right);
+    /// the right-anchor composition rides the EXISTING grow mirror, not a slant
+    /// mirror (banked — a left-stepping stair clips the text bounds' left edge).
+    pub(in crate::render) fn overlay_slant_dx(&self, row: usize) -> f32 {
+        match crate::render::overlay_slant() {
+            None => 0.0,
+            Some(s) => crate::render::slant_offset(&s, row) * self.overlay_slant_progress(),
+        }
+    }
+
     /// THE EFFECTIVE margin background this frame — the active world's own
     /// [`theme::Background`], UNLESS the dev gallery knob (`AWL_LAVA=...`) forces a
     /// [`Background::Lava`] over it (`crate::lava::env_override`). For every one of
@@ -4880,6 +5320,21 @@ impl TextPipeline {
             self.lava_phase,
             crate::motion::reduced(),
             crate::lava::env_phase(),
+        )
+    }
+
+    /// THE EFFECTIVE TWINKLE PHASE this frame — the SAME determinism ladder as
+    /// [`Self::lava_render_phase`] (one resolver, [`crate::lava::lava_phase_for`]),
+    /// fed the stars' own dev gallery knob (`AWL_STARS_PHASE`): env override >
+    /// Reduce-Motion freeze (static stars — present, not twinkling) > the
+    /// App-driven ambient [`Self::lava_phase`] (ONE clock, two consumers; the
+    /// frozen 0.0 in every headless capture, since the capture never ticks).
+    /// Read by [`Self::prepare_stars_layer`] + the capture sidecar.
+    pub fn stars_render_phase(&self) -> f32 {
+        crate::lava::lava_phase_for(
+            self.lava_phase,
+            crate::motion::reduced(),
+            crate::stars::env_phase(),
         )
     }
 
@@ -5011,6 +5466,9 @@ impl TextPipeline {
         // THE LAVA-LAMP GROUND: over the flat margin ground, before the washes.
         // A no-op (draws nothing) for every non-lava world.
         self.prepare_lava_layer(queue, width, height);
+        // TWINKLING STARS: the ambient star field in the margins (zero
+        // instances for every AmbientStyle::None world — byte-identical).
+        self.prepare_stars_layer(device, queue, width, height);
         // THE PAGE FRAME: the thin writing-column frame (zero rects for every
         // PageFrame::None world, so those stay byte-identical).
         self.prepare_page_frame(device, queue, width, height);
@@ -5034,6 +5492,7 @@ impl TextPipeline {
         self.prepare_chrome_layer(device, queue, width, height)?;
         self.prepare_spell_layer(device, queue, width, height);
         self.prepare_nit_layer(device, queue, width, height);
+        self.prepare_strike_layer(device, queue, width, height);
         self.prepare_blur(device, queue, width, height);
         Ok(())
     }
@@ -5090,6 +5549,7 @@ impl TextPipeline {
         self.overlay_blur()
             || self.hud_showing()
             || crate::lifetime::lifetime_open()
+            || crate::streaks::streaks_open()
             || self.peek_showing()
     }
 
@@ -5255,6 +5715,10 @@ impl TextPipeline {
         // foreground layer. A total no-op (draws nothing) for every non-lava
         // world — so all fifteen shipped worlds render byte-identically.
         self.lava_pipeline.draw(pass);
+        // TWINKLING STARS: the ambient star field, over the margin ground and
+        // under everything foreground. Zero instances (draws nothing) for
+        // every AmbientStyle::None world.
+        self.stars_pipeline.draw(pass);
         // THE PAGE FRAME (theme::PageFrame): the thin writing-column frame,
         // right after the ground and before every wash/text layer — so text,
         // washes, selection all composite OVER it if they ever meet it (they
@@ -5300,6 +5764,10 @@ impl TextPipeline {
         self.match_pipeline.draw(pass);
         self.spell_pipeline.draw(pass);
         self.nit_pipeline.draw(pass);
+        // `~~strikethrough~~` lines — same under-text slot as the nit hint: the
+        // stroke shares the struck text's own muted ink, so under vs over the
+        // glyphs composites identically where they meet.
+        self.strike_pipeline.draw(pass);
         self.caret_pipeline.draw(pass);
         self.caret_trail_pipeline.draw(pass);
         self.renderer
@@ -5451,10 +5919,18 @@ impl TextPipeline {
         self.page_drag_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon page-drag-readout render failed: {e:?}"))?;
+        // The ZOOM READOUT (floats at the pointer while a zoom gesture is in flight):
+        // parked off-screen while settled, so a default render is byte-identical.
+        self.zoom_readout_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon zoom-readout render failed: {e:?}"))?;
         // Float-panel elevation, painter's order: drop shadow -> raised border -> card.
         self.hud_shadow.draw(pass);
         self.hud_border.draw(pass);
         self.hud_card.draw(pass);
+        // WRITING-STREAKS heatmap squares ride ON the card, under its text (empty
+        // unless the Writing streaks card is the summoned one this frame).
+        self.streak_cells.draw(pass);
         self.hud_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon hud render failed: {e:?}"))?;
@@ -5492,6 +5968,22 @@ impl TextPipeline {
         self.menu_chord_renderer
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon menu-drop chord render failed: {e:?}"))?;
+        // THE FORMAT POPOVER, drawn LAST so it floats over the document (like the
+        // which-key panel): float elevation (shadow -> raised border -> card) ->
+        // active-button value-step wash -> button labels. ALL parked off-screen/empty
+        // when the popover is down, so a default render is byte-identical.
+        self.popover_shadow.draw(pass);
+        self.popover_border.draw(pass);
+        self.popover_card.draw(pass);
+        self.popover_wash.draw(pass);
+        // SELF-DEMONSTRATING quads: `A`'s highlight pill over the value-step
+        // washes, `S`'s strike line — both UNDER the labels (the doc's own
+        // wash-under-text / line-in-own-ink layering).
+        self.popover_hl_wash.draw(pass);
+        self.popover_strike.draw(pass);
+        self.popover_renderer
+            .render(&self.atlas, &self.viewport, pass)
+            .map_err(|e| anyhow::anyhow!("glyphon popover render failed: {e:?}"))?;
         Ok(())
     }
 

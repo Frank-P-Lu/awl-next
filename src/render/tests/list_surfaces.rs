@@ -806,7 +806,8 @@ fn bars_drop_the_pane_for_every_overlay_kind() {
             | OverlayKind::Keybindings
             | OverlayKind::Assets
             | OverlayKind::Rename
-            | OverlayKind::InsertLink => false,
+            | OverlayKind::InsertLink
+            | OverlayKind::KeepName => false,
         };
 
         let mut v = view("the quick brown fox jumps\n", 0, 0);

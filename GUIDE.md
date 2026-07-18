@@ -38,8 +38,10 @@ ladder: everything from the last ~15 minutes, then one per writing
 session, then one per day, then one per week — never a flat FIFO
 cutoff. {{key:version_history}} opens the timeline for the current
 file; Enter on any entry restores it as one ordinary undoable edit.
-"Keep version" ({{key:command_palette}}) pins a snapshot the retention
-ladder will never prune. A file under git skips awl's own history
+"Keep version…" ({{key:command_palette}}) pins a snapshot the retention
+ladder will never prune, and prompts for an optional name — Enter with
+text keeps a named point (the timeline shows the name), a blank Enter
+keeps it unnamed. A file under git skips awl's own history
 entirely — `git log` is that file's timeline.
 
 **A corrupted store never eats your data.** Session state, usage
@@ -122,8 +124,9 @@ markers below, byte for byte).
 | Go to heading… |  |  |
 | Spell suggestions… | ⌘; | Ctrl+; |
 | Version history… | ⌘⇧H | Ctrl+Shift+H |
+| Compare with version… |  |  |
 | Clean unused assets… |  |  |
-| Keep version |  |  |
+| Keep version… |  |  |
 | Last file | ⌃Tab | Ctrl+Tab |
 | New note | ⌘N | Ctrl+N |
 | Move note… |  |  |
@@ -150,6 +153,7 @@ markers below, byte for byte).
 | Credits |  |  |
 | Guide |  |  |
 | Lifetime stats |  |  |
+| Writing streaks |  |  |
 | Line endings… |  |  |
 | Align table |  |  |
 | Report a Problem |  |  |
@@ -160,6 +164,7 @@ markers below, byte for byte).
 | Numbered list |  |  |
 | Task list | ⌘⇧L | Ctrl+Shift+L |
 | Heading |  |  |
+| Cycle heading |  |  |
 | Code block |  |  |
 | Bold | ⌘B | Ctrl+B |
 | Italic | ⌘I | Ctrl+I |
@@ -203,7 +208,7 @@ offer Word and HTML export.
 
 ## Looks
 
-**Fifteen worlds, one chord away.** {{key:switch_theme}} opens the
+**Sixteen worlds, one chord away.** {{key:switch_theme}} opens the
 theme picker — each world pairs its own display face with its own ink
 ladder. Wagtail is the exception: awl's one monochrome world, drawn in
 black, white, and nothing between.
@@ -215,7 +220,8 @@ touches the other. Drag the column's edge, or use "Widen page" /
 "Narrow page" / "Reset page width" in the palette.
 
 **WYSIWYG, reveal-on-caret.** Markdown markup — a heading's `#`,
-`**bold**`, `` `code` ``, `==highlight==`, a fenced code block's fence
+`**bold**`, `` `code` ``, `==highlight==`, `~~strikethrough~~`, a
+fenced code block's fence
 lines — renders concealed except on the line your caret is on, where
 it shows in full for editing. The file on disk is always plain
 markdown; only the render is rich. `wysiwyg = false` disables the
@@ -254,10 +260,10 @@ running in a `<canvas>` with no native filesystem underneath it.
 | Paste | From the OS clipboard | From awl's own kill ring only — an external copy doesn't appear until you've copied something from awl at least once |
 | Getting a file out | Already on disk | "Download file" ({{key:command_palette}}) — saves the active buffer as a plain-text download |
 
-**Hidden on web:** Recent projects…, Version history…, Clean unused
-assets…, Keep version, Finish file, Lifetime stats, Quit, Check for
-Updates — daemon, session-restore, and local-version-history machinery
-with nothing to attach to in a browser tab.
+**Hidden on web:** Recent projects…, Version history…, Compare with
+version…, Clean unused assets…, Keep version…, Finish file, Lifetime stats,
+Writing streaks, Quit, Check for Updates — daemon, session-restore, and
+local-version-history machinery with nothing to attach to in a browser tab.
 
 **A couple of native chords belong to the browser itself** (new tab,
 new window, and similar). {{key:new_note}} and {{key:switch_theme}}

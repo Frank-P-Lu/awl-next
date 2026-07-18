@@ -5,7 +5,7 @@
 //! `chrome_overlay` for the gutter + caret-preview-panel tests.
 
 use super::super::*;
-use super::{headless_pipeline, view};
+use super::{headless_dqp, headless_pipeline, pixeldiff, view};
 
 /// The CONTEXTUAL SPELL PANEL: the spell overlay renders as a SMALL floating panel
 /// anchored AT the misspelled word (its left edge at the word start, hanging just
@@ -1319,7 +1319,8 @@ fn footer_contract(kind: crate::overlay::OverlayKind) -> FooterContract {
         | K::Settings
         | K::Assets
         | K::Rename
-        | K::InsertLink => FooterContract::TakeoverCard,
+        | K::InsertLink
+        | K::KeepName => FooterContract::TakeoverCard,
     }
 }
 
@@ -1426,6 +1427,56 @@ fn overlay_hint_footer_is_compact_and_identical_across_kinds() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
+/// LAW (c) — the JUMP HINT is PRESENT on every picker and never CLIPS. The universal
+/// lead teaches the affordance the user couldn't find ("type to filter"):
+/// this pins (1) every kind's hint carries the discoverable jump as DATA (the spans
+/// exist), and (2) fed into the NARROWEST (flat) card — the tightest budget, tighter
+/// than the wider faceted card the lens kinds actually use — the shaped footer glyphs
+/// stay WITHIN the card's inner text width at the default render zoom (0.8, the config
+/// default the `--screenshot` capture renders at). An OUTCOME measured over the shaped
+/// run widths through the ONE footer-measure owner, NOT inferred from the hint STRING
+/// (the Wagtail tripwire: appearance from pixels). Swept no-wildcard over every kind ×
+/// three worlds (a world whose font mis-shaped a glyph would widen the footer here).
+#[test]
+fn jump_hint_is_present_and_never_clips_for_every_kind() {
+    use crate::overlay::OverlayKind;
+    // (1) PRESENT — no adapter needed: every kind's foot hint teaches the jump.
+    for k in OverlayKind::ALL {
+        let h = k.hint();
+        assert!(h.contains("type to filter"), "{k:?} hint must teach type-to-filter: {h:?}");
+    }
+    // (2) IN-BOUNDS — the shaped footer fits the flat card at the default zoom.
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping jump_hint_is_present_and_never_clips_for_every_kind: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let width = 1200u32;
+    for world in ["Tawny", "Mopoke", "Wagtail"] {
+        theme::set_active_by_name(world).unwrap();
+        for k in OverlayKind::ALL {
+            let mut v = view("hello\n", 0, 0);
+            v.overlay_active = true;
+            v.zoom = 0.8; // the config-default render zoom (what `--screenshot` uses)
+            v.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+            v.overlay_selected = 0;
+            // The REAL per-kind hint (universal lead + kind actions). FLAT card (no
+            // lens strip) = the narrowest card, the worst clip budget.
+            v.overlay_hint = k.hint();
+            p.set_view(&v);
+            p.prepare(&device, &queue, width, 800).unwrap();
+            let _ = pixeldiff::render_frame(&mut p, &device, &queue, width, 800);
+            let (footer_px, text_w) = p.overlay_footer_fit_probe(width);
+            assert!(footer_px > 1.0, "{world}/{k:?}: the footer hint actually shaped glyphs");
+            assert!(
+                footer_px <= text_w,
+                "{world}/{k:?}: footer {footer_px:.1}px must fit the flat card text {text_w:.1}px (no clip)"
+            );
+        }
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 #[test]
 fn overlay_card_anchor_is_data_center_default_top_left_for_statement_worlds() {
     let Some(mut p) = headless_pipeline() else {
@@ -1476,4 +1527,189 @@ fn overlay_card_anchor_is_data_center_default_top_left_for_statement_worlds() {
 
     set_card_anchor_test_override(None);
     theme::set_active(theme::DEFAULT_THEME);
+}
+
+// ===== CHROME GEOMETRY ONE-OWNER SWEEP (2026-07-18) =====================
+//
+// The architecture pass found chrome geometry re-growing the exact duplication
+// class the module was reorganized to kill: `card_h` computed in three places
+// (one already diverged), the theme-strip Y band computed 3×, the right-column
+// label precedence copied 2×, and the symbol-split span-push loop hand-rolled at
+// 5 sites. The sweep merged each into ONE owner (`overlay_card_h`,
+// `overlay_strip_band`, `overlay_right_labels`, and `spans::push_symbol_split`);
+// these laws are the no-wildcard cap so copy #2 fails a test instead of shipping.
+
+/// The card PADDING each `OverlayKind` breathes at, classified NO-WILDCARD so a
+/// new picker must declare its value here or fail to compile. The Spell
+/// contextual popup is a small word-anchored card (`10.0`); every takeover picker
+/// breathes at the roomier `12.0`. This pins Spell's divergence as DATA (a
+/// deliberate smaller popup), never accidental drift — and it is the `pad` the
+/// ONE card-height owner ([`TextPipeline::overlay_card_h`]) is fed per kind.
+fn card_pad_for(kind: crate::overlay::OverlayKind) -> f32 {
+    use crate::overlay::OverlayKind as K;
+    match kind {
+        K::Spell => 10.0,
+        K::Goto
+        | K::Project
+        | K::Browse
+        | K::Theme
+        | K::Caret
+        | K::MoveDest
+        | K::Dictionary
+        | K::CjkLang
+        | K::Command
+        | K::Keybindings
+        | K::History
+        | K::Settings
+        | K::Assets
+        | K::Rename
+        | K::InsertLink
+        | K::KeepName => 12.0,
+    }
+}
+
+/// CARD-HEIGHT ONE-OWNER LAW (behavioral). Every picker's `card_h` now comes from
+/// [`TextPipeline::overlay_card_h`]; before the sweep the flat, faceted, and spell
+/// geometries each spelled the formula out (the faceted copy had already diverged
+/// once — the C2 footer drift). Here the flat takeover card and the Spell
+/// contextual popup are DRIVEN, their real `card_h` read back from the card rect,
+/// and independently reproduced by feeding the owner the same `(total_rows,
+/// header_gap, hint_rows, pad)` — with `pad` sourced from the no-wildcard
+/// [`card_pad_for`] classification. If a future geometry re-derives the height off
+/// the owner, its value drifts from `overlay_card_h`'s and this fails.
+#[test]
+fn overlay_card_h_owner_reproduces_every_kinds_card_height() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping overlay_card_h_owner_reproduces_every_kinds_card_height: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    use crate::overlay::OverlayKind as K;
+
+    // NO-WILDCARD sweep: exactly one kind (Spell) is the small popup pad; the rest
+    // are takeover cards. A new kind must classify itself in `card_pad_for` above.
+    const ALL_KINDS: &[K] = &[
+        K::Goto, K::Project, K::Browse, K::Theme, K::Caret, K::MoveDest,
+        K::Dictionary, K::CjkLang, K::Command, K::Spell, K::Keybindings,
+        K::History, K::Settings, K::Assets, K::Rename, K::InsertLink,
+    ];
+    let popups = ALL_KINDS.iter().filter(|k| card_pad_for(**k) == 10.0).count();
+    assert_eq!(popups, 1, "exactly the Spell popup breathes at the small pad");
+
+    for world in ["Kingfisher", "Saltpan", "Wagtail"] {
+        theme::set_active_by_name(world).unwrap();
+        p.sync_theme();
+        let gap = p.overlay_header_gap();
+
+        // FLAT takeover (query line, no hint): header_rows == 1, no footer/empty.
+        let mut vf = view("hello\n", 0, 0);
+        vf.overlay_active = true;
+        vf.overlay_items = vec!["Alpha".into(), "Beta".into(), "Gamma".into()];
+        vf.overlay_selected = 0;
+        p.set_view(&vf);
+        let [_xf, _yf, _wf, ch_f] = p.overlay_card_rect().expect("an open flat card");
+        let (_tf, lines_f, _sf, _rhf, _cf) = p.overlay_window_report().expect("a flat report");
+        // total_rows = header(1) + candidate lines; the owner is fed the takeover pad.
+        let expect_f = p.overlay_card_h(1 + lines_f, gap, 0, card_pad_for(K::Command));
+        assert!(
+            (expect_f - ch_f).abs() < 0.01,
+            "{world} flat: card_h {ch_f:.2} must come from overlay_card_h ({expect_f:.2})"
+        );
+
+        // SPELL contextual popup: header_rows == 0, no hint, no query beat, pad 10.
+        let mut vs = view("teh quick brown fox\n", 0, 0);
+        vs.overlay_active = true;
+        vs.overlay_items = vec!["the".into(), "tea".into(), "ten".into()];
+        vs.overlay_selected = 0;
+        vs.overlay_spell = Some((0, 0, 3));
+        p.set_view(&vs);
+        let [_xs, _ys, _ws, ch_s] = p.overlay_card_rect().expect("an open spell popup");
+        let (_ts, lines_s, _ss, _rhs, _cs) = p.overlay_window_report().expect("a spell report");
+        // rows = visible.max(1); no header, no gap, no hint — the reduced owner call.
+        let expect_s = p.overlay_card_h(lines_s.max(1), 0.0, 0, card_pad_for(K::Spell));
+        assert!(
+            (expect_s - ch_s).abs() < 0.01,
+            "{world} spell: card_h {ch_s:.2} must come from overlay_card_h ({expect_s:.2})"
+        );
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// `push_symbol_split` is the ONE owner of the chrome symbol-split span-push loop.
+/// It must SEGMENT `text` at exactly the [`symbol_runs`] boundaries — a symbol-free
+/// string yields a single plain span (byte-identical to a bare push), and a mixed
+/// string alternates plain / symbol runs tiling the whole string with no gap or
+/// overlap. Segmentation is asserted from the pushed `&str` slices (the attrs are
+/// each caller's own concern), so a regression in the split shape is caught here.
+#[test]
+fn push_symbol_split_tiles_text_at_symbol_run_boundaries() {
+    // Two distinguishable attrs so a pushed span reveals which arm produced it.
+    let plain = glyphon::Attrs::new().color(glyphon::Color::rgb(1, 2, 3));
+    let sym = glyphon::Attrs::new().color(glyphon::Color::rgb(4, 5, 6));
+
+    // A symbol-free string: exactly one plain span covering the whole text.
+    let mut a: Vec<(&str, glyphon::Attrs)> = Vec::new();
+    let s1 = "plain ascii row";
+    push_symbol_split(&mut a, s1, || plain.clone(), || sym.clone());
+    assert_eq!(a.len(), 1, "symbol-free text pushes a single span");
+    assert_eq!(a[0].0, s1, "…covering the whole string (byte-identical to a bare push)");
+
+    // A mixed string: the pushed slices concatenate back to the original, in order,
+    // and each symbol run matches `symbol_runs` (the ⌘ modifier glyph isolated).
+    let mut b: Vec<(&str, glyphon::Attrs)> = Vec::new();
+    let s2 = "\u{2318}O  Go to file";
+    push_symbol_split(&mut b, s2, || plain.clone(), || sym.clone());
+    let rebuilt: String = b.iter().map(|(t, _)| *t).collect();
+    assert_eq!(rebuilt, s2, "the pushed slices tile the whole string with no gap/overlap");
+    let runs = symbol_runs(s2);
+    let sym_slices: Vec<&str> = runs.iter().map(|r| &s2[r.clone()]).collect();
+    assert_eq!(sym_slices, vec!["\u{2318}"], "the ⌘ modifier is the one isolated symbol run");
+    assert!(b.len() >= 2, "a mixed row splits into at least a symbol + a plain span");
+}
+
+/// STRUCTURAL ONE-OWNER GREP-LAW — each merged chrome-geometry formula/precedence
+/// must appear at exactly ONE site in `src/render/chrome`. This is the no-wildcard
+/// cap the sweep leans on: a future round that hand-re-derives a card height, the
+/// theme-strip Y band, or the right-column label precedence trips this test instead
+/// of quietly re-growing the duplication (mirrors `theme_caps_law`'s grep shape).
+#[test]
+fn chrome_geometry_owner_formulas_are_single_site() {
+    let chrome =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/render/chrome");
+    // (signature substring, human name) — each is CODE that lives only in its owner.
+    let owners: &[(&str, &str)] = &[
+        (
+            "total_rows as f32 * self.overlay_lh() + header_gap + 2.0 * pad",
+            "overlay_card_h (the card-height formula)",
+        ),
+        (
+            "(geom.text_top + lh, lh + geom.header_gap)",
+            "overlay_strip_band (the lens-strip Y band)",
+        ),
+        (
+            "if !self.overlay_bindings.is_empty() {",
+            "overlay_right_labels (the bindings→times→git precedence)",
+        ),
+    ];
+    let mut counts = vec![0usize; owners.len()];
+    let entries = std::fs::read_dir(&chrome).expect("chrome dir readable");
+    let mut files: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    files.sort();
+    for path in files {
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        for (i, (sig, _)) in owners.iter().enumerate() {
+            counts[i] += text.matches(sig).count();
+        }
+    }
+    for (i, (_, name)) in owners.iter().enumerate() {
+        assert_eq!(
+            counts[i], 1,
+            "the {name} formula must live at exactly ONE site under src/render/chrome, \
+             found {} — a copy re-grew the duplication the one-owner sweep killed",
+            counts[i]
+        );
+    }
 }

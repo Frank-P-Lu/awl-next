@@ -38,7 +38,23 @@ impl App {
     /// Landing back on the SAME world (arrowing away and back) cancels the pending
     /// deferral outright (nothing left to restyle). Live-only: the shared headless
     /// replay never routes through here.
-    pub(super) fn retint_theme_preview(&mut self) {
+    ///
+    /// PRESENT-RACE BRACKET (the vanishing-page fix, 2026-07-17; widened
+    /// 2026-07-18): a preview step that crosses a HEAVYWEIGHT-PIPELINE BOUNDARY
+    /// changes the present cadence or reconfigures costly GPU state under the
+    /// compositor, so the crossing frame can be left blank/stale unless it joins
+    /// the compositor's transaction. `lava::preview_crossing` decides purely over
+    /// the OUTGOING world (`prev`) and the now-active one — arming on EITHER the
+    /// lava boundary (the ~10 fps ambient cadence starts/stops) OR the one-bit
+    /// boundary (leaving/entering Wagtail flips the dither/InverseFill pipeline
+    /// state; Wagtail→Magpie is a non-lava hop that the lava test alone missed).
+    /// On a crossing we stamp `crossing_settle_at` and arm the present-transaction
+    /// sync (`sync_present_txn`, the one owner shared with resize/move) BEFORE the
+    /// caller's post-apply redraw runs — so the crossing frame joins the
+    /// compositor's transaction instead of racing it, and the `CROSSING_SYNC_SETTLE`
+    /// debounce fires one guaranteed follow-up present at rest. A same-side hop
+    /// (both boundaries) leaves it untouched.
+    pub(super) fn retint_theme_preview(&mut self, prev: crate::theme::Theme) {
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.pipeline.sync_theme_colors();
             self.theme_font_at = if gpu.pipeline.needs_theme_reshape() {
@@ -46,6 +62,12 @@ impl App {
             } else {
                 None
             };
+        }
+        if crate::lava::preview_crossing(&prev, &crate::theme::active())
+            == crate::lava::CrossingAction::SyncAcrossCrossing
+        {
+            self.crossing_settle_at = Some(Instant::now());
+            self.sync_present_txn();
         }
         self.update_title();
     }
@@ -265,6 +287,28 @@ impl App {
             return false;
         }
 
+        // THE WRITER'S DIFF read-only gate: while the "Compare with version…" view is
+        // up, the writing column shows a DERIVED transcript, not the buffer — so the
+        // core (`apply_core`) is never reached for anything that would EDIT it. The
+        // pure classifier [`Self::diff_view_gate`] owns the decision; here we act on
+        // it. Placed before every edit/overlay path below, and before
+        // `page_scroll_intercept` so the two allowed scroll actions fall through to it.
+        if let Some(gate) = self.diff_view_gate(&action) {
+            match gate {
+                // Esc / a second Compare returns to the live document exactly.
+                DiffGate::Exit => {
+                    self.exit_diff_view();
+                    return false;
+                }
+                // Zoom + page-scroll pass through so a long diff stays readable
+                // (none mutate the buffer — the wheel reads it regardless).
+                DiffGate::Pass => {}
+                // Read-only: typing, delete, paste, format, undo, a buffer switch,
+                // opening a picker — every other action is a calm no-op.
+                DiffGate::Swallow => return false,
+            }
+        }
+
         // The buffer/zoom/search core is shared with the headless `--keys`
         // replay via `actions::apply_core`, so live editing and captured replay
         // behave identically. Everything that core can't reach — the system
@@ -319,6 +363,12 @@ impl App {
             .as_ref()
             .map(|o| o.kind == crate::overlay::OverlayKind::Theme)
             .unwrap_or(false);
+        // The OUTGOING world, snapshotted BEFORE `apply_core` runs a theme-picker
+        // live preview (which mutates the process-global active theme).
+        // `retint_theme_preview` compares it against the now-active world to detect
+        // a heavyweight-pipeline boundary crossing (lava OR one-bit) — the
+        // present-race bracket. `Theme` is Copy; only read on the preview branch below.
+        let theme_before = crate::theme::active();
         // Whether the HISTORY timeline is open BEFORE the core runs: its live
         // preview state (the derived document preview + the saved scroll) must be
         // put down the moment the overlay closes, accept or not.
@@ -695,6 +745,11 @@ impl App {
                 // filesystem, no deferred Effect needed) and closes the overlay
                 // itself. This arm is for match exhaustiveness only.
                 crate::overlay::OverlayKind::InsertLink => {}
+                // NAMED SAVE POINTS: the Keep-version minibuffer never emits an
+                // OverlayAccept — Enter signals `Effect::KeepVersion { name }`
+                // (handled below) and closes the overlay at the core seam. This
+                // arm is for match exhaustiveness only.
+                crate::overlay::OverlayKind::KeepName => {}
             },
             // Go-to's HEADINGS lens accepted (the retired Outline picker): move the
             // cursor to the chosen heading's document line.
@@ -745,9 +800,18 @@ impl App {
             // waiting on this buffer (native-only — no daemon on wasm) and switch
             // to the previously-open buffer (the LastBuffer swap).
             actions::Effect::FinishBuffer => self.finish_buffer(),
-            // "Keep version": THE CONSCIOUS MARK — pin the current buffer as a
-            // prune-exempt local-history snapshot (the store owns the git/off gates).
-            actions::Effect::KeepVersion => self.keep_version(),
+            // "Keep version…": THE CONSCIOUS MARK — pin the current buffer as a
+            // prune-exempt local-history snapshot, optionally NAMED (the naming
+            // minibuffer's commit; the store owns the git/off gates).
+            actions::Effect::KeepVersion { name } => self.keep_version(name.as_deref()),
+            // THE WRITER'S DIFF from the HISTORY picker: open the read-only prose-diff
+            // view against the highlighted version (its restore id). The overlay was
+            // already closed by the core's `dispose_after_accept`.
+            actions::Effect::CompareVersion(id) => self.enter_diff_view_for(&id),
+            // THE WRITER'S DIFF from the buffer ("Compare with version…"): resolve the
+            // most-recent version's id (a loose file's newest snapshot / a git file's
+            // HEAD) and open the diff view; a buffer with no history is a calm no-op.
+            actions::Effect::CompareLatest => self.compare_with_latest(),
             // C-c C-o: open the markdown link under the caret in the OS default
             // browser (a user-initiated handoff — see `App::follow_link`).
             actions::Effect::FollowLink(url) => self.follow_link(&url),
@@ -805,7 +869,7 @@ impl App {
         if history_overlay_before && self.overlay.is_none() {
             self.history_overlay_closed(history_accepted);
         }
-        self.post_apply_effects(&action, theme_overlay_before, theme_committed);
+        self.post_apply_effects(&action, theme_overlay_before, theme_committed, theme_before);
 
         if quit {
             event_loop.exit();
@@ -1027,11 +1091,12 @@ impl App {
     /// OS-clipboard mirror after a cut/copy, and the delete-word caret streak. Keyed off
     /// `action` (the Save/clipboard pattern), never an interception that bypasses the
     /// core. Runs straight through with no early return.
-    fn post_apply_effects(
+    pub(super) fn post_apply_effects(
         &mut self,
         action: &Action,
         theme_overlay_before: bool,
         theme_committed: bool,
+        theme_before: crate::theme::Theme,
     ) {
         // RENDER-ONLY TOGGLES — post-`apply_core` side effects. The core already
         // flipped the process-global (caret look / page mode) on the
@@ -1189,6 +1254,16 @@ impl App {
                     gpu.window.request_redraw();
                 }
             }
+            // WRITING STREAKS: summoning the card FLUSHES the pending word-delta
+            // first, so "written today" reads LIVE rather than up to ~1s stale (the
+            // idle flush may not have fired since the last keystroke). The trailing
+            // `sync_view` in the caller then re-pushes the now-current year-view via
+            // `streaks_sync_card`. Native-only (the recording engine is); a no-op
+            // arm on wasm, which draws only the synthetic placeholder card.
+            Action::WritingStreaks => {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.streaks_flush();
+            }
             _ => {}
         }
         // LIVE CONFIG RELOAD: a Save of the config file (Settings buffer) re-applies
@@ -1213,7 +1288,7 @@ impl App {
         if theme_committed || (theme_overlay_before && self.overlay.is_none()) {
             self.retint_theme_now();
         } else if theme_overlay_before {
-            self.retint_theme_preview();
+            self.retint_theme_preview(theme_before);
         }
         // STICKY THEME write-on-change: persist ONLY on the picker's COMMIT/revert
         // (`theme_committed`), never on a live PREVIEW (`theme_overlay_before` while

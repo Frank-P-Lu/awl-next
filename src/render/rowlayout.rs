@@ -387,10 +387,18 @@ mod tests {
                 vec!["https://example.com/a/rather-long/path/to/something".into()],
                 None,
             ),
+            // NAMED SAVE POINTS: the Keep-version minibuffer's single editable
+            // row — a free-text name, no secondary column, same shape as Rename.
+            // (The HISTORY picker's own named rows — name primary, "when · +N −M"
+            // secondary — are covered by the History arm's shape above.)
+            OverlayKind::KeepName => (
+                vec!["a rather long name for the draft I want back".into()],
+                None,
+            ),
         }
     }
 
-    const ALL_KINDS: [OverlayKind; 16] = [
+    const ALL_KINDS: [OverlayKind; 17] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -407,6 +415,7 @@ mod tests {
         OverlayKind::Assets,
         OverlayKind::Rename,
         OverlayKind::InsertLink,
+        OverlayKind::KeepName,
     ];
 
     /// The min-window / default-canvas char budgets the flat pickers see at

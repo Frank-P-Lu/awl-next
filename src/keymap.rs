@@ -234,6 +234,16 @@ pub enum Action {
     /// `lifetime::lifetime_open()`) or mouse click. Render-only (no buffer
     /// change). See `lifetime.rs`.
     LifetimeStats,
+    /// Palette "Writing streaks": OPEN the summoned Writing streaks card — the
+    /// year-calendar heatmap of how much you've written each day (net words),
+    /// plus the current streak + today's words. A calm `apply_core`-routed card,
+    /// mirroring About/Lifetime: stays open until dismissed by ANY key
+    /// (`apply_core`'s top-of-function intercept while `streaks::streaks_open()`)
+    /// or mouse click — EXCEPT ←/→, which flip the card between its per-day
+    /// heatmap and cumulative running-total pages (`apply_core`'s streaks-view
+    /// intercept; every summon opens on the heatmap). Render-only (no buffer
+    /// change). See `streaks.rs`.
+    WritingStreaks,
     /// Palette "Line endings…": TOGGLE the active buffer's line-ending
     /// discipline (`LF`↔`CRLF`, [`crate::buffer::Eol`]) — the rope is byte-identical
     /// either way (always pure `\n`); only the ON-DISK encoding a save restores
@@ -309,6 +319,13 @@ pub enum Action {
     ToggleTaskList,
     /// HEADING toggle: prefix the caret/selected line(s) with one `# ` (cycle out of scope).
     ToggleHeading,
+    /// HEADING CYCLE: the state-reflective heading cycler behind the format
+    /// popover's ONE `H` button — off → H1 → H2 → H3 → off on the caret/selected
+    /// line(s). A real palette command ("Cycle heading"), markdown-only, applied as
+    /// one undoable edit (`actions::format::heading_cycle`). Distinct from
+    /// [`ToggleHeading`](Action::ToggleHeading) (a single `# ` on/off): the popover
+    /// wants a level cycle, so it fires THIS.
+    HeadingCycle,
     /// FENCED CODE BLOCK toggle: wrap the caret line / selected range in ``` fences.
     ToggleCodeBlock,
     /// BOLD toggle: wrap the selection / word under the caret in `**…**`.
@@ -419,6 +436,16 @@ pub enum Action {
     /// a plain Cmd-H free; also a palette command ("Version history…"), rebindable via `[keys]`.
     /// See `overlay/` (`OverlayKind::History`) + `history/`.
     OpenHistory,
+    /// THE WRITER'S DIFF (palette "Compare with version…", markdown buffers only):
+    /// open the READ-ONLY prose-diff view comparing the CURRENT buffer against a
+    /// past version — the marked-up manuscript (`crate::prosediff`: struck deletions,
+    /// washed insertions, moves, folds). From the BUFFER (no overlay) it compares
+    /// against the most-recent version (a loose file's newest history snapshot, or a
+    /// git-managed file's HEAD via `git show`); from the open HISTORY picker it
+    /// compares against the HIGHLIGHTED row. Esc returns to the live document exactly
+    /// (the buffer is never touched). No default chord (a palette command like
+    /// Version history / Settings), rebindable via `[keys] compare_with_version`.
+    CompareVersion,
     /// Clean unused assets (summon by name, Cmd-P): open the ASSET CLEANER — a
     /// summoned, transient picker listing the ORPHAN image files under the active
     /// project (an image under an `assets/` directory that no document references, per
@@ -428,14 +455,19 @@ pub enum Action {
     /// rebindable via `[keys] clean_unused_assets`. See `overlay/`
     /// (`OverlayKind::Assets`) + `assets.rs`.
     OpenAssetClean,
-    /// THE CONSCIOUS MARK ("Keep version"): record the CURRENT buffer state as
+    /// THE CONSCIOUS MARK ("Keep version…"): record the CURRENT buffer state as
     /// a PINNED local-history snapshot — the deliberate "I care about this one"
-    /// action. A pinned snapshot is prune-EXEMPT (it survives the aged retention
-    /// ladder / the cap unconditionally; see [`crate::history::prune_ladder`]). The
-    /// pure core only SIGNALS it ([`crate::actions::Effect::KeepVersion`]); the
-    /// live App does the actual store write (needs the buffer path + config + fs),
-    /// so the headless replay no-ops it (the history determinism gate). No default
-    /// chord — a palette command ("Keep version"), rebindable via `[keys]`.
+    /// action — via a MINIBUFFER PROMPT for an optional NAME (the NAMED SAVE
+    /// POINT; the Rename/InsertLink precedent, `OverlayKind::KeepName`). Enter
+    /// with text keeps a NAMED point; a blank Enter is the plain keep (zero
+    /// friction preserved); Esc cancels. A pinned/named snapshot is prune-EXEMPT
+    /// (it survives the aged retention ladder / the cap unconditionally; see
+    /// [`crate::history::prune_ladder`]). The core owns the whole prompt flow
+    /// (drivable under `--keys`) and only SIGNALS the commit
+    /// ([`crate::actions::Effect::KeepVersion`]); the live App does the actual
+    /// store write (needs the buffer path + config + fs), so the headless replay
+    /// no-ops the commit (the history determinism gate). No default chord — a
+    /// palette command ("Keep version…"), rebindable via `[keys] keep_version`.
     KeepVersion,
     /// FINISH the active buffer (the emacsclient "server-edit" convention; the emacs
     /// `C-x #` default is retired, so it is palette-only now): save it, notify any
@@ -521,6 +553,7 @@ impl Action {
                 | Action::ToggleNumberedList
                 | Action::ToggleTaskList
                 | Action::ToggleHeading
+                | Action::HeadingCycle
                 | Action::ToggleCodeBlock
                 | Action::Bold
                 | Action::Italic
@@ -1609,6 +1642,7 @@ browse_files|||
 go_to_heading|||
 spell_suggestions|Cmd-;|C-;|
 version_history|Cmd-S-h|C-S-h|
+compare_with_version|||
 clean_unused_assets|||
 keep_version|||
 last_file|C-Tab|C-Tab|
@@ -1637,6 +1671,7 @@ about|||
 credits|||
 guide|||
 lifetime_stats|||
+writing_streaks|||
 line_endings|||
 align_table|||
 report_a_problem|||
@@ -1647,6 +1682,7 @@ bullet_list|||
 numbered_list|||
 task_list|Cmd-S-l|C-S-l|
 heading|||
+cycle_heading|||
 code_block|||
 bold|Cmd-B|C-b|
 italic|Cmd-I|C-i|

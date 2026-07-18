@@ -51,7 +51,7 @@ pub struct SpellUnderlinePipeline {
 /// One squiggle's geometry, in pixels. `x`,`y`,`w`,`h` is the band the wave is
 /// drawn into; `amp`/`period`/`thickness` are the wave params (already zoom-
 /// scaled by the caller).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Squiggle {
     pub x: f32,
     pub y: f32,
@@ -414,5 +414,55 @@ mod tests {
         pipe.prepare(&device, &queue, 800, 600, &squiggles(65));
         pipe.prepare(&device, &queue, 800, 600, &squiggles(100));
         assert_eq!(pipe.instance_count(), 100);
+    }
+
+    /// SQUIGGLE VISIBILITY LAW (the spell-toggle-x-theme investigation,
+    /// 2026-07-18 — user report: "a note with obvious typos showed NO spell
+    /// squiggles" on Magpie). The state-side hypothesis (something resets the
+    /// `spellcheck` toggle) did not reproduce — see `app::files::tests` +
+    /// `actions::tests::pickers_nav::theme_picker_preview_commit_cancel_never_touch_spellcheck_global`.
+    /// This is the APPEARANCE-side check: the pipeline always draws the
+    /// squiggle in `theme::error()` (see `render.rs`'s three
+    /// `SpellUnderlinePipeline::new` call sites) directly over the flat
+    /// `base_100` clear the writing column always shows ("Punches a hole for
+    /// the page column so the flat base_100 clear shows there" — `render.rs`).
+    /// A `--screenshot` sweep over all 16 worlds with a real misspelled fixture
+    /// confirmed pixel-for-pixel that the squiggle's crest renders at EXACTLY
+    /// `error`'s byte value (distance 0 in 14/16 worlds, ≤2.2 in the other two
+    /// from anti-aliasing) directly on the page ground — so a WCAG contrast
+    /// check between the two DATA tokens is a faithful, no-GPU proxy for "is
+    /// the squiggle visible against the page," at the same 3:1 floor WCAG uses
+    /// for non-text graphical/UI-component contrast. No world in the sweep
+    /// fell below 3.99:1 (Galah, the tightest); this law pins that floor going
+    /// forward. No-wildcard over `theme::THEMES`, so a future 17th world is
+    /// swept automatically.
+    #[test]
+    fn squiggle_color_has_sufficient_contrast_against_the_page_ground_in_every_world() {
+        fn relative_luminance(c: crate::theme::Srgb) -> f64 {
+            fn lin(v: u8) -> f64 {
+                let c = v as f64 / 255.0;
+                if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+            }
+            0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+        }
+        fn contrast_ratio(a: crate::theme::Srgb, b: crate::theme::Srgb) -> f64 {
+            let (la, lb) = (relative_luminance(a), relative_luminance(b));
+            let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
+            (hi + 0.05) / (lo + 0.05)
+        }
+        // WCAG 2.x's floor for non-text graphical objects / UI-component states.
+        const FLOOR: f64 = 3.0;
+        for th in crate::theme::THEMES {
+            let ratio = contrast_ratio(th.error, th.base_100);
+            assert!(
+                ratio >= FLOOR,
+                "{}: squiggle color #{:02x}{:02x}{:02x} against page ground \
+                 #{:02x}{:02x}{:02x} has only {ratio:.2}:1 contrast (floor {FLOOR}:1) — \
+                 the misspelling squiggle would read as near-invisible on this world",
+                th.name,
+                th.error.r, th.error.g, th.error.b,
+                th.base_100.r, th.base_100.g, th.base_100.b,
+            );
+        }
     }
 }

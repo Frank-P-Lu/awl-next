@@ -48,6 +48,11 @@ pub struct TimelineRow {
     /// [`Snapshot::pinned`] so the timeline picker can draw a calm, dim marker in
     /// its secondary column (see `crate::overlay::OverlayState::new_history`).
     pub pinned: bool,
+    /// NAMED SAVE POINT: the user's optional name for a kept version — carried
+    /// from [`Snapshot::name`]. A named row renders its NAME as the PRIMARY cell
+    /// (the timestamp demoted to the secondary column); `None` renders the
+    /// ordinary WHEN · WHICH row (see `OverlayState::new_history`).
+    pub name: Option<String>,
 }
 
 /// Build the timeline picker's ROWS for `path`, NEWEST-FIRST: read the store
@@ -108,6 +113,7 @@ pub fn rows_from(
                 id: snap.id.clone(),
                 timestamp: snap.timestamp,
                 pinned: snap.pinned,
+                name: snap.name.clone(),
             }
         })
         .collect()

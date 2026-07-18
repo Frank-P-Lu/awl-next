@@ -160,7 +160,7 @@ mod tests {
         let cands = vec![
             "src/lib.rs".to_string(),
             "src/main.rs".to_string(),
-            "README.md".to_string(),
+            "doc-fixture.md".to_string(),
         ];
         let r = rank("mn", &cands, corpus);
         assert!(!r.is_empty());
@@ -169,10 +169,11 @@ mod tests {
 
     #[test]
     fn prefix_beats_scattered() {
-        // "rea" is a contiguous prefix of "README.md" but scattered in "src/area.rs".
-        let cands = vec!["src/area.rs".to_string(), "README.md".to_string()];
-        let r = rank("rea", &cands, corpus);
-        assert_eq!(cands[r[0].index], "README.md", "prefix should win: {r:?}");
+        // "doc" is a boundary-anchored prefix of "doc-fixture.md" but only a
+        // mid-word run in "src/undocked.rs" (no boundary bonus, later start).
+        let cands = vec!["src/undocked.rs".to_string(), "doc-fixture.md".to_string()];
+        let r = rank("doc", &cands, corpus);
+        assert_eq!(cands[r[0].index], "doc-fixture.md", "prefix should win: {r:?}");
     }
 
     #[test]

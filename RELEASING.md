@@ -1,10 +1,13 @@
 # RELEASING.md — cutting a release + deploying the website
 
-Two independent GitHub Actions pipelines, both `workflow_dispatch` (deliberate,
-never automatic): `.github/workflows/deploy-web.yml` (the site + `/editor/`
-demo, on Fly.io) and `.github/workflows/release.yml` (macOS / Linux / web
-downloadable artifacts, on a `v*` tag push or a manual dry run). This doc is
-the one-time setup for both, plus how to actually cut a release.
+Three GitHub Actions workflows. Two are release/deploy pipelines, both
+`workflow_dispatch` (deliberate, never automatic): `.github/workflows/deploy-web.yml`
+(the site + `/editor/` demo, on Fly.io) and `.github/workflows/release.yml`
+(macOS / Linux / web downloadable artifacts, on a `v*` tag push or a manual dry
+run). The third, `.github/workflows/ci.yml`, runs automatically on every push /
+pull request (linux build + test, wasm build + smoke) — the merge gate, not a
+release step. This doc is the one-time setup for the two release pipelines, plus
+how to actually cut a release.
 
 ## 1. Apple setup (macOS signing + notarization)
 
@@ -123,8 +126,11 @@ both closed:
 
 - **The Hunspell dictionaries** now have `assets/dict/LICENSES.md` — an
   honest per-variant audit (`en_GB` = confirmed LGPL 2.1 in-file; `en_US`/
-  `en_AU` = no in-file license statement, flagged as a genuinely open
-  question rather than assumed).
+  `en_AU` = SCOWL permissive grant + Ispell BSD license, resolved via the
+  bundled `README_en_AU.txt`, which expressly covers BOTH variants — no longer
+  an open question). Provenance verified byte-for-byte against versioned
+  LibreOffice / Chromium upstream commits; all three pairs are GPL-3.0-compatible
+  as bundled plain-text data.
 - **Copyright on awl's own code** is stated in `NOTICE` + `Cargo.toml`'s
   header comment. A CONTRIBUTORS file remains unnecessary (`NOTICE`'s
   "CONTRIBUTIONS" section already states the project isn't soliciting

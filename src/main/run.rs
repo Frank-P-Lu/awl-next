@@ -346,6 +346,18 @@ impl<'a> ReplaySession<'a> {
             });
             return Ok(());
         };
+        // SHIFT = SELECT-INTENT, the live dispatch's exact derivation
+        // (`app/input/keys.rs::on_keyboard_input`): the chord's `S-` modifier
+        // extends a selection across a motion, routed through the ONE owner
+        // `crate::app::motion_honors_shift_select` (so `M-<` / `M->`, whose
+        // Shift is incidental to typing the glyph, stay pure motion). Derived
+        // ONCE per pressed chord from the FIRST resolved action and carried
+        // into a palette-chained re-dispatch unchanged — mirroring the live
+        // `Effect::RunAction` arm, which re-applies with the same `shift` bool.
+        // (This retired the old "replay is unshifted" hole: `--keys "S-Right"`
+        // silently ran the motion unshifted and left `selection: null`.)
+        let shift = chord.mods.state().contains(winit::keyboard::ModifiersState::SHIFT)
+            && crate::app::motion_honors_shift_select(&resolved);
         // A tiny worklist so the COMMAND PALETTE's run-on-Enter chains: Enter on a
         // command writes `run_action`, which we then feed back through the core
         // (slot now empty) so an overlay-opening command opens its sub-overlay as
@@ -482,9 +494,7 @@ impl<'a> ReplaySession<'a> {
             browse_to: &mut browse_to,
             oracle: self.oracle.as_deref().map(|op| op.as_oracle()),
         };
-        // Replay is unshifted: selection comes from an explicit C-Space mark,
-        // matching the emacs-style sticky region the key-spec expresses.
-        let effect = actions::apply_core(&mut ctx, &action, false);
+        let effect = actions::apply_core(&mut ctx, &action, shift);
         drop(ctx);
         // STRICT REPLAY TRUTHFULNESS: consult the ONE classification
         // (`crate::replay::classify`, a no-wildcard match over `Effect`) BEFORE
@@ -710,11 +720,22 @@ impl<'a> ReplaySession<'a> {
             | actions::Effect::SettingValueCommit { .. }
             | actions::Effect::SettingPathPick { .. }
             | actions::Effect::FinishBuffer
-            // KEEP THIS VERSION: pinning a snapshot writes the local-history store,
-            // a live-App-only concern (`App::keep_version`) — the history determinism
-            // gate keeps every store write off the capture path, so this is a no-op
-            // here (the pin/exemption logic is unit-tested in `history/` instead).
-            | actions::Effect::KeepVersion
+            // KEEP THIS VERSION: pinning a (possibly NAMED) snapshot writes the
+            // local-history store, a live-App-only concern (`App::keep_version`) —
+            // the history determinism gate keeps every store write off the capture
+            // path, so this is a no-op here (the pin/name/exemption logic is
+            // unit-tested in `history/` instead; the naming MINIBUFFER's
+            // open/type/cancel flow IS core-driven and stays fully
+            // `--keys`-drivable, mirroring Rename — only the commit is inert).
+            | actions::Effect::KeepVersion { .. }
+            // THE WRITER'S DIFF (Compare with version…): entering the read-only diff
+            // view resolves a history version + renders the transcript, a live-App-only
+            // concern (`App::enter_diff_view_for` / `compare_with_latest`). The capture
+            // renders the diff VIEW through its own env harness (`AWL_DIFF_OLD`/`_NEW`)
+            // instead, so both compare effects are no-ops here; the transcript's pure
+            // serializer + the view's read-only enforcement are unit-tested.
+            | actions::Effect::CompareVersion(_)
+            | actions::Effect::CompareLatest
             // FollowLink (C-c C-o): opening the OS browser is a live-App-only
             // handoff (`App::follow_link`) — a capture must never spawn a browser,
             // so it is a no-op here (the URL extraction itself is unit-tested pure).
@@ -883,6 +904,32 @@ fn capture_screenshot(
             });
 
             let mut buffer = load_buffer(&file);
+            // PROSE-DIFF VIEW (capture harness, env-gated — a no-op unless
+            // AWL_DIFF_OLD/NEW are set): render the marked-up-manuscript transcript
+            // (the pure `prosediff` core → awl's own strike / highlight / blockquote-
+            // dim vocabulary) as a markdown scratch buffer, so `--screenshot` renders
+            // the READ-ONLY diff view (a live `App` feature) pixel-for-pixel and the
+            // sidecar `diff` block reports its state. See `src/prosediff.rs`.
+            if let Some((md, counts, label)) = crate::prosediff::env_capture_render() {
+                buffer = crate::buffer::Buffer::from_str(&md);
+                // Park the caret on the blank line 1 (between the title and the first
+                // diff block) so NO line's WYSIWYG conceal reveals — the reveal is
+                // caret-line-scoped and line 1 carries no markup, so the title's `#`
+                // and every `==`/`>`/strike marker below stay concealed: the clean
+                // marked-up manuscript, never a revealed-raw line. Mirrors
+                // `App::diff_view` (the live read-only view parks the caret the same
+                // way — the ONE reveal-suppression rule, shared, so live == capture).
+                buffer.set_cursor(buffer.line_col_to_char(1, 0));
+                opts.diff = Some(capture::DiffInfo {
+                    active: true,
+                    label,
+                    struck: counts.struck,
+                    washed: counts.washed,
+                    modified: counts.modified,
+                    moved: counts.moved,
+                    folds: counts.folds,
+                });
+            }
             // Replay `--keys` FIRST so the cursor/selection/search the spec
             // produces are what the capture reflects. Fold the App-level state
             // (zoom / selection / search) the replay produced into the capture
@@ -1401,6 +1448,137 @@ mod tests {
         assert_eq!(res.selection, Some(((0, 1), (0, 3))), "mark@3 + two Lefts -> [1,3)");
     }
 
+    // ── REPLAY SHIFT-SELECT LAWS: `S-` on a motion is select-intent, exactly
+    // as a live held Shift (the retired "replay is unshifted" hole). The
+    // replay derives its `apply_core` shift flag through the ONE owner
+    // (`crate::app::motion_honors_shift_select`), so these laws pin the
+    // OUTCOME: a spec's `S-` chord builds the same selection live Shift+motion
+    // does, and the documented non-movers stay non-movers. ──
+
+    /// The shared fixture the shift-select laws replay over: three lines, so
+    /// every catalog motion has somewhere to go from the middle.
+    const SHIFT_FIXTURE: &str = "alpha beta\ngamma delta\nepsilon zeta\n";
+
+    /// Replay `spec` against a fresh [`SHIFT_FIXTURE`] buffer, returning the
+    /// post-replay `(selection, cursor)` — the exact pair the capture sidecar
+    /// publishes (`ReplayResult::selection` feeds `CaptureOpts::selection`
+    /// feeds the sidecar `selection` field; `cursor` is read off the buffer
+    /// the same way the capture's `ViewState` is).
+    #[allow(clippy::type_complexity)]
+    fn shift_replay(
+        spec: &str,
+    ) -> (Option<((usize, usize), (usize, usize))>, (usize, usize)) {
+        let mut buffer = Buffer::from_str(SHIFT_FIXTURE);
+        let keys = keyspec::parse_keys(spec).unwrap();
+        let root = PathBuf::from("/tmp");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        (res.selection, buffer.cursor_line_col())
+    }
+
+    #[test]
+    fn replay_shift_arrow_extends_a_real_selection_then_unshifted_motion_collapses() {
+        // THE LAW that closes the trap: `--keys "S-Right S-Right"` extends a
+        // real two-char selection headlessly (the sidecar `selection` is this
+        // exact value — see `shift_replay`'s doc), where the old unshifted
+        // replay silently produced `selection: null` with the cursor at (0,2).
+        let (sel, cursor) = shift_replay("S-Right S-Right");
+        assert_eq!(cursor, (0, 2), "the motion itself still runs");
+        assert_eq!(
+            sel,
+            Some(((0, 0), (0, 2))),
+            "S-Right S-Right spans exactly the two chars the live Shift+Right pair selects"
+        );
+        // And the OTHER half of the live transient-selection contract: the next
+        // UNSHIFTED motion collapses it (GUI style), exactly like live.
+        let (sel, cursor) = shift_replay("S-Right S-Right Right");
+        assert_eq!(cursor, (0, 3));
+        assert_eq!(sel, None, "an unshifted motion collapses the transient shift-selection");
+    }
+
+    #[test]
+    fn replay_shift_extends_every_catalog_motion_exactly_as_live() {
+        // Enumerate the keymap's own motion roster — every catalog command whose
+        // action `is_motion()`, over BOTH binding slots — rather than a hand
+        // list that can drift: a new motion command is swept automatically.
+        // For each, replay its chord with an `S-` prefix from mid-document and
+        // assert the LIVE equivalence through the one owner: the selection
+        // extends iff `motion_honors_shift_select` says the Shift is
+        // select-intent (BufferStart/BufferEnd carry an incidental Shift live
+        // — `M-<`/`M->` — so they stay pure motion), and when it extends it
+        // spans exactly (pre-cursor, post-cursor).
+        // Setup: plain arrows walk to (1,3) — unshifted motions build no selection.
+        const SETUP: &str = "Down Right Right Right";
+        let (pre_sel, pre_cursor) = shift_replay(SETUP);
+        assert_eq!(pre_sel, None);
+        assert_eq!(pre_cursor, (1, 3), "setup parks the cursor mid-document");
+        let mut swept = 0usize;
+        for cmd in crate::commands::COMMANDS.iter().filter(|c| c.action.is_motion()) {
+            for chord in [cmd.native, cmd.emacs] {
+                if chord.is_empty() {
+                    continue;
+                }
+                swept += 1;
+                let (sel, cursor) = shift_replay(&format!("{SETUP} S-{chord}"));
+                assert_ne!(
+                    cursor, pre_cursor,
+                    "{} (S-{chord}): the motion must actually move (witness)",
+                    cmd.name
+                );
+                if crate::app::motion_honors_shift_select(&cmd.action) {
+                    let expected = (pre_cursor.min(cursor), pre_cursor.max(cursor));
+                    assert_eq!(
+                        sel,
+                        Some(expected),
+                        "{} (S-{chord}): Shift+motion extends exactly like live",
+                        cmd.name
+                    );
+                } else {
+                    assert_eq!(
+                        sel, None,
+                        "{} (S-{chord}): incidental Shift stays pure motion, like live",
+                        cmd.name
+                    );
+                }
+            }
+        }
+        assert!(swept >= 10, "the catalog motion roster shrank? swept only {swept} chords");
+    }
+
+    #[test]
+    fn replay_shift_named_key_arms_extend_like_live() {
+        // The KEYMAP-ONLY named-key arms (plain arrows, Home/End, and the
+        // convention-free Ctrl-arrow word aliases live as hand-written input
+        // policy in `resolve_named` — no data table exists to enumerate, so
+        // these pins mirror `keymap.rs`'s own arm-by-arm style). Each replays
+        // with `S-` from mid-document and must extend, spanning exactly
+        // (pre, post) — including Shift COMPOSED with M-/C- (the shifted-
+        // variant fill / Ctrl-arrow alias, resolving identically to live).
+        const SETUP: &str = "Down Right Right Right";
+        let (_, pre) = shift_replay(SETUP);
+        for chord in ["S-Left", "S-Right", "S-Up", "S-Down", "S-Home", "S-End", "S-M-Right", "S-M-Left", "S-C-Right", "S-C-Left"] {
+            let (sel, cursor) = shift_replay(&format!("{SETUP} {chord}"));
+            assert_ne!(cursor, pre, "{chord}: the motion must actually move (witness)");
+            assert_eq!(
+                sel,
+                Some((pre.min(cursor), pre.max(cursor))),
+                "{chord}: Shift extends the selection exactly like live"
+            );
+        }
+    }
+
+    #[test]
+    fn replay_shift_page_scroll_stays_a_documented_non_mover() {
+        // Shift-PageDown/PageUp deliberately do NOT extend a selection (the
+        // documented divergence — `is_motion` excludes PageScroll*, so the
+        // shift-select block never arms). Pin it so the replay-shift fix can
+        // never silently promote them; promoting is a conscious follow-up.
+        let (sel, cursor) = shift_replay("S-PageDown");
+        assert_ne!(cursor, (0, 0), "the page scroll still moves the cursor");
+        assert_eq!(sel, None, "Shift-PageDown stays a non-extending non-mover");
+        let (sel, _) = shift_replay("S-PageDown S-PageUp");
+        assert_eq!(sel, None, "Shift-PageUp stays a non-extending non-mover");
+    }
+
     // ── STRICT REPLAY TRUTHFULNESS: the mode-aware replay engine ──
 
     #[test]
@@ -1852,6 +2030,54 @@ mod tests {
         assert!(res.overlay.is_none(), "nothing to rename on a pathless buffer");
     }
 
+    // ── NAMED SAVE POINTS: the Keep-version minibuffer stays --keys-drivable ──
+
+    #[test]
+    fn replay_keys_drives_the_keep_version_minibuffer_prompt_and_sidecar_reflects_typing() {
+        // Cmd-P → "keep" → Enter opens the naming minibuffer (empty — a fresh
+        // point has no old name); typing builds the optional name live — all
+        // through the shared core, so both the overlay STATE and its
+        // sidecar-facing `foot_hint()` (the same seam Rename/InsertLink ride)
+        // reflect the in-progress edit with zero live App involved.
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e e p RET d r a f t").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        let ov = res.overlay.expect("Keep version… opens the naming minibuffer");
+        assert_eq!(ov.kind, crate::overlay::OverlayKind::KeepName);
+        assert_eq!(ov.corpus, vec!["draft".to_string()], "typing builds the name from empty");
+        assert_eq!(
+            ov.foot_hint(),
+            "name this version: draft   Enter keep   Esc cancel",
+            "the live prompt is sidecar-visible via the same foot_hint seam Rename uses"
+        );
+    }
+
+    #[test]
+    fn replay_keys_keep_version_minibuffer_esc_cancels_with_no_overlay_left() {
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("s-p k e e p RET x Esc").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "Esc closes the minibuffer outright, nothing kept");
+    }
+
+    #[test]
+    fn replay_keys_keep_version_commit_closes_and_defers_the_store_write() {
+        // Enter commits through the REAL keymap: the overlay closes and the
+        // deferred Effect::KeepVersion { name } is the documented headless no-op
+        // (the history determinism gate — a capture never touches the store), so
+        // the buffer and fs stay untouched.
+        use crate::fs::InMemoryFs;
+        let _g = crate::fs::FsGuard::install(std::sync::Arc::new(InMemoryFs::new()));
+        let mut buffer = Buffer::scratch();
+        let keys = keyspec::parse_keys("h i s-p k e e p RET d r a f t RET").unwrap();
+        let root = PathBuf::from("/proj");
+        let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
+        assert!(res.overlay.is_none(), "commit closes the minibuffer");
+        assert_eq!(buffer.text(), "hi", "the keep never edits the buffer");
+    }
+
     // ── LINKS V2: Cmd-K stays --keys-drivable through the shared core ──
 
     #[test]
@@ -2114,14 +2340,14 @@ mod tests {
         // IN the file with NO overlay left open (like a palette value-pick keep, and
         // unlike the Esc breadcrumb pop).
         let mut buffer = Buffer::scratch();
-        let corpus = vec!["README.md".to_string()];
+        let corpus = vec!["doc-fixture.md".to_string()];
         let root = PathBuf::from("/tmp");
         let keys = keyspec::parse_keys("s-o RET").unwrap();
         let res = replay_keys(&mut buffer, &keys, &corpus, &root, None, &root, &Config::empty(), None);
         assert!(res.overlay.is_none(), "opening a file closes the overlay to the buffer");
         assert_eq!(
             res.accept,
-            Some((crate::overlay::OverlayKind::Goto, "README.md".to_string())),
+            Some((crate::overlay::OverlayKind::Goto, "doc-fixture.md".to_string())),
             "the file open still fired",
         );
     }
@@ -2135,7 +2361,7 @@ mod tests {
         let corpus = vec![
             ".gitignore".to_string(),
             ".env".to_string(),
-            "README.md".to_string(),
+            "doc-fixture.md".to_string(),
             "src/main.rs".to_string(),
         ];
         let root = PathBuf::from("/tmp");
@@ -2148,7 +2374,7 @@ mod tests {
         let shown = ov.item_strings();
         assert!(!shown.iter().any(|s| s == ".gitignore"), "dotfile hidden by default: {shown:?}");
         assert!(shown.iter().any(|s| s == ".env"), ".env stays visible: {shown:?}");
-        assert!(shown.iter().any(|s| s == "README.md"));
+        assert!(shown.iter().any(|s| s == "doc-fixture.md"));
         // Now open + toggle: the reveal chord flips show_hidden and .gitignore appears.
         let mut buffer = Buffer::scratch();
         let keys = keyspec::parse_keys("s-o s-S-.").unwrap();
@@ -3284,9 +3510,14 @@ mod tests {
         );
 
         // Byte-identical captures: render both buffers and diff the PNG bytes.
+        // PID-suffixed (not just `serial()`-guarded): `serial()` is a per-process
+        // reentrant lock, so a SECOND concurrent `cargo test` process (e.g. a
+        // parallel native + AWL_CONVENTION_FORCE=linux run) can't be excluded by
+        // it — only a unique path can (mirrors every other temp-file test).
         let dir = std::env::temp_dir();
-        let pv = dir.join("awl_vl_visual.png");
-        let pl = dir.join("awl_vl_logical.png");
+        let pid = std::process::id();
+        let pv = dir.join(format!("awl_vl_visual_{pid}.png"));
+        let pl = dir.join(format!("awl_vl_logical_{pid}.png"));
         capture::capture_with(&pv, &visual, &opts).expect("render visual");
         capture::capture_with(&pl, &logical, &opts).expect("render logical");
         let bv = std::fs::read(&pv).expect("read visual png");
@@ -3509,8 +3740,14 @@ mod tests {
                 crate::caret::clear_override();
                 return;
             };
+            // PID-suffixed: `serial()` only excludes other tests IN THIS SAME
+            // process — a second concurrent `cargo test` process (e.g. a
+            // parallel native + AWL_CONVENTION_FORCE=linux run) has its own
+            // `serial()` and would clobber a fixed name (the ~1-in-3 flake
+            // under a full parallel suite; 6/6 clean in isolation).
             let dir = std::env::temp_dir();
-            let base_png = dir.join(format!("awl_caret_stateless_base_{mode:?}.png"));
+            let pid = std::process::id();
+            let base_png = dir.join(format!("awl_caret_stateless_base_{mode:?}_{pid}.png"));
             capture::capture_with(&base_png, &base_buf, &opts).expect("baseline capture");
 
             // DETOUR: the SAME (mode, world), reached via a real committed
@@ -3522,7 +3759,7 @@ mod tests {
             replay_keys(&mut detour_buf, &detour_keys, &[], &root, None, &root, &Config::empty(), None);
             assert_eq!(crate::theme::active().name, "Gumtree", "the detour lands back on Gumtree");
             assert_eq!(crate::caret::mode(), mode, "the detour never touched the pinned mode");
-            let detour_png = dir.join(format!("awl_caret_stateless_detour_{mode:?}.png"));
+            let detour_png = dir.join(format!("awl_caret_stateless_detour_{mode:?}_{pid}.png"));
             capture::capture_with(&detour_png, &detour_buf, &opts).expect("detour capture");
 
             let b1 = std::fs::read(&base_png).expect("read baseline png");

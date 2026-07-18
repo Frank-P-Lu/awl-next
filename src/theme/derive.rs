@@ -186,6 +186,43 @@ fn rel_lum(c: Srgb) -> f32 {
     0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
 }
 
+/// WRITING-STREAKS HEATMAP: the [`crate::streaks::LEVELS`] intensity fills a
+/// calendar square can take, DERIVED from the active world's own value ladder —
+/// never a per-world hand palette, never amber (the caret's alone; the near-
+/// neutral base tokens keep every square well clear of `primary`'s hue). The
+/// ramp rides FROM `base_200` (level 0, the EMPTY-day well — a quiet rung just
+/// off the card's own `base_300` ground) UP TO `base_content` (level 4, a peak
+/// writing day at full ink), so it reads correctly on light AND dark grounds
+/// (the ink always climbs away from the ground, whichever direction that is).
+/// The interior stops are spaced so each filled rung is perceptibly brighter
+/// than the last. THE ONE owner of the square tint; the pixels (`render/chrome/
+/// hud.rs`) and the [`tests::streaks_heatmap_levels_are_distinguishable_every_
+/// world`] law both read it, so they can never drift.
+pub fn heatmap_colors() -> [Srgb; crate::streaks::LEVELS] {
+    let empty = base_200();
+    let ink = base_content();
+    // 1-BIT DEGRADATION (Wagtail): the ladder collapses to two values and no
+    // intermediate grey is permitted (the pixel law). The heatmap becomes BINARY
+    // — an empty day is the ground token; ANY writing day is full ink — a legible
+    // white-on-black contribution grid. (`is_one_bit` is read HERE in the theme
+    // layer, where it pins Wagtail's identity; the render layer never reads it.)
+    if active().is_one_bit() {
+        let mut out = [empty; crate::streaks::LEVELS];
+        for c in out.iter_mut().skip(1) {
+            *c = ink;
+        }
+        return out;
+    }
+    // t=0 is the empty well; the four filled rungs climb toward full ink with a
+    // slight ease so the low rungs stay quiet while the top rungs separate.
+    let stops = [0.0_f32, 0.34, 0.56, 0.78, 1.0];
+    let mut out = [empty; crate::streaks::LEVELS];
+    for (i, t) in stops.iter().enumerate() {
+        out[i] = empty.lerp(ink, *t);
+    }
+    out
+}
+
 /// The floor/ceiling a stipple placard's DENSITY may occupy — below the floor
 /// too few pixels survive to read as letterforms at all (the legibility floor
 /// the dark-ground taste note demands, asserted over Mangrove's lava ground by
@@ -220,7 +257,8 @@ pub fn placard_stipple_density() -> f32 {
 /// THE ONE owner of the PAGE-FRAME ink ([`super::model::PageFrame`], the
 /// writing-column frame capability): the world's own `base_content` — the
 /// full-ink ladder rung, never a free color and never the amber accent. The
-/// WORLD-ROLES "dark-line page-frame" idea IS full ink (a dark line on a
+/// "dark-line page-frame" idea (retired; decision recorded in THEMES.md) IS
+/// full ink (a dark line on a
 /// light world; on Wagtail, the first assignment, this is its ladder's pure
 /// white). Weight lives on the capability; ink derivation lives here, so a
 /// frame can never invent a color (law-tested).
@@ -342,6 +380,34 @@ pub fn selected_row_ink(band: Srgb) -> Srgb {
         return content;
     }
     let ground = base_100();
+    if contrast_ratio(band, ground) > contrast_ratio(band, content) {
+        ground
+    } else {
+        content
+    }
+}
+
+/// SIBLING of [`selected_row_ink`] for the picker row's SECONDARY (right-column)
+/// cell — the dim key-chord / time / git hints that ride `muted` on an ordinary
+/// row. The selected-row value band can wash `muted` out exactly as it washes
+/// `base_content`: Potoroo's saturated gold band drove its muted hints to an 8.8
+/// luminance delta — invisible (the Wagtail invisible-row class, SECONDARY
+/// edition — the primary flip landed but the secondary column never followed).
+/// The cell KEEPS `muted` UNLESS the band drops it below
+/// [`SELECTED_ROW_INK_CONTRAST_FLOOR`], in which case the ink FLIPS to whichever
+/// ladder POLE (`base_100` ground vs `base_content` ink) reads harder against
+/// the fill — the SAME reading-pole derive the primary uses, one register
+/// quieter by construction (it starts from `muted`, not `base_content`). Returns
+/// `muted` unchanged on every world whose band already clears the floor
+/// (byte-identical). Derived purely from the fill's own luminance, never a
+/// per-world hand value.
+pub fn selected_row_secondary_ink(band: Srgb) -> Srgb {
+    let dim = muted();
+    if contrast_ratio(band, dim) >= SELECTED_ROW_INK_CONTRAST_FLOOR {
+        return dim;
+    }
+    let ground = base_100();
+    let content = base_content();
     if contrast_ratio(band, ground) > contrast_ratio(band, content) {
         ground
     } else {

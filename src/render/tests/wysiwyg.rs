@@ -5,11 +5,11 @@
 
 use super::{headless_pipeline, view};
 
-/// WYSIWYG (the PHILOSOPHY.md amendment): the four LINE-scoped conceal kinds
-/// — heading, emphasis, inline code, highlight — each conceal (transparent
-/// ink) when the caret is on a DIFFERENT line, and reveal independently the
-/// instant the caret lands on their own line, exactly mirroring the
-/// pre-existing hr/bullet reveal-on-cursor toggle.
+/// WYSIWYG (the PHILOSOPHY.md amendment): the five LINE-scoped conceal kinds
+/// — heading, emphasis, inline code, highlight, strikethrough — each conceal
+/// (transparent ink) when the caret is on a DIFFERENT line, and reveal
+/// independently the instant the caret lands on their own line, exactly
+/// mirroring the pre-existing hr/bullet reveal-on-cursor toggle.
 #[test]
 fn wysiwyg_conceals_each_line_scoped_kind_off_cursor_and_reveals_on() {
     let _w = crate::testlock::serial();
@@ -19,18 +19,20 @@ fn wysiwyg_conceals_each_line_scoped_kind_off_cursor_and_reveals_on() {
         return;
     };
     // Line 0: heading '#' at byte 0. Line 1: emphasis '**' at byte 0. Line 2:
-    // inline-code backtick at byte 0. Line 3: highlight '==' at byte 0. Line 4
-    // is a blank line the caret can sit on with NOTHING concealable on it.
-    let text = "# Title\n**bold**\n`code`\n==mark==\n";
-    let mut off = view(text, 4, 0);
+    // inline-code backtick at byte 0. Line 3: highlight '==' at byte 0. Line 4:
+    // strikethrough '~~' at byte 0. Line 5 is a blank line the caret can sit on
+    // with NOTHING concealable on it.
+    let text = "# Title\n**bold**\n`code`\n==mark==\n~~cut~~\n";
+    let mut off = view(text, 5, 0);
     off.is_markdown = true;
     p.set_view(&off);
     assert!(p.concealed_at(0, 0), "heading '#' concealed off its own line");
     assert!(p.concealed_at(1, 0), "emphasis '**' concealed off its own line");
     assert!(p.concealed_at(2, 0), "inline-code backtick concealed off its own line");
     assert!(p.concealed_at(3, 0), "highlight '==' concealed off its own line");
+    assert!(p.concealed_at(4, 0), "strikethrough '~~' concealed off its own line");
 
-    // Caret on the HEADING line: only it reveals; the other three stay concealed.
+    // Caret on the HEADING line: only it reveals; the other four stay concealed.
     let mut on0 = view(text, 0, 0);
     on0.is_markdown = true;
     p.set_view(&on0);
@@ -38,6 +40,7 @@ fn wysiwyg_conceals_each_line_scoped_kind_off_cursor_and_reveals_on() {
     assert!(p.concealed_at(1, 0), "emphasis stays concealed (caret elsewhere)");
     assert!(p.concealed_at(2, 0), "code stays concealed (caret elsewhere)");
     assert!(p.concealed_at(3, 0), "highlight stays concealed (caret elsewhere)");
+    assert!(p.concealed_at(4, 0), "strikethrough stays concealed (caret elsewhere)");
 
     // Caret on the EMPHASIS line: only it reveals now; the heading re-conceals.
     let mut on1 = view(text, 1, 0);
@@ -46,6 +49,14 @@ fn wysiwyg_conceals_each_line_scoped_kind_off_cursor_and_reveals_on() {
     assert!(p.concealed_at(0, 0), "heading re-conceals once the caret leaves");
     assert!(!p.concealed_at(1, 0), "caret on the emphasis line reveals its '**'");
     assert!(p.concealed_at(2, 0), "code stays concealed");
+    assert!(p.concealed_at(3, 0), "highlight stays concealed");
+    assert!(p.concealed_at(4, 0), "strikethrough stays concealed");
+
+    // Caret on the STRIKETHROUGH line: its raw '~~' reveals for editing.
+    let mut on4 = view(text, 4, 0);
+    on4.is_markdown = true;
+    p.set_view(&on4);
+    assert!(!p.concealed_at(4, 0), "caret on the struck line reveals its '~~'");
     assert!(p.concealed_at(3, 0), "highlight stays concealed");
 
     crate::markdown::set_wysiwyg_on(true);

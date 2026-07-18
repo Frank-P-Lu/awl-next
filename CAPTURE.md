@@ -46,6 +46,11 @@ Spec grammar — space-separated emacs chords:
 - Named keys: `Left Right Up Down Home End Enter Tab Backspace Delete Space Esc`.
 - Bare/shifted printable chars self-insert (`a`, `Z`, `<`, `>`).
 - `C-x` two-chord prefixes compose: `"C-x C-s"` → save.
+- `S-` on a motion chord is select-intent, exactly like a live held Shift:
+  `--keys "S-Right S-Right"` leaves a two-char selection (sidecar `selection`),
+  and the next unshifted motion collapses it. `C-Space` still sets the sticky
+  emacs mark. Shift-PageDown/PageUp deliberately do not extend (documented
+  non-movers), and `M-<`/`M->`'s Shift stays incidental (pure motion).
 
 Because replay drives the same keymap + `apply_core` seam as live editing, a
 capture exercises the real edit logic — not a parallel mock. The visual-line
@@ -361,9 +366,48 @@ would otherwise assert a MECHANISM (an instance count, a dither flag, a
 computed color) and stop there — the mechanism proves the renderer INTENDED
 to draw something; the pixel diff proves it actually did.
 
-## The sidecar JSON — schema `awl-capture/99` (`/100` timeline, `/101` held)
+## The sidecar JSON — schema `awl-capture/169` (`/170` timeline, `/171` held)
 
 Field order is stable; consumers may parse positionally or by key.
+
+**Where the authoritative history lives.** The append-only per-round history
+table is the doc comment above `capture::SCHEMA_VERSION` in `src/capture.rs` —
+that is the one place the number and its per-bump rationale are maintained (the
+one-const rule; never hand-copy the number). The detailed prose entries below
+document the earlier rounds; rather than transcribe every bump since `/99`, this
+is the CURRENT-STATE summary of what the sidecar carries now.
+
+Vocabulary note (STRIKETHROUGH render round — **no schema bump**; the shape is
+unchanged, only existing STRING fields gain a value, per `capture.rs`'s
+"bump once per sidecar-SHAPE change" criterion): `md_spans` gains the
+`"strikethrough"` content tag for GFM `~~struck~~` (its `~~` delimiters stay
+ordinary `"markup"`, like every other syntax character; exactly-two tildes only
+— a single `~x~` is inert, the `==` exactly-two precedent), and
+`wysiwyg.concealed` gains the LINE-scoped `"strikethrough"` marker-conceal tag.
+The struck text renders in the world's `muted` ink with a drawn strike line
+(`render::spans::strike_line_band`/`strike_ink`, the ONE owner the format
+popover's `S` button shares); the writer's-diff transcript serializes deletions
+as real `~~…~~` now (the combining-stroke `\u{0336}` mechanism is retired). The
+`popover.buttons` labels changed VALUE (not shape) to the self-demonstrating
+letters `B I A C S H Link`.
+
+Schema `/169` (`/170` timeline, `/171` held) is the state after the rounds
+between `/99` and here. Blocks/fields added or changed since the `/99` About
+card, each detailed in `capture.rs`'s table: `hud.eol` (line-endings, `/100`)
+and `hud.saved` (`/165`); `font.ornament` (`/103`); `overlay.show_hidden`
+(hide-dotfiles, `/106`), `overlay.empty` (`/115`), `overlay.git` (`/118`),
+`overlay.window` (bounded scroll-window, `/121`), `overlay.return_to`
+(breadcrumb, `/154`), `overlay.title` (self-announcement, `/167`); `md_spans`
+GFM table tags (`/109`); the theme-picker `swatches` array added (`/112`) then
+DROPPED (`/124`); new top-level blocks `tables` (`/127`), `images` (`/130`),
+`outline` (`/133`, with `ancestors` at `/139`), and `lifetime` (`/142`, split
+out of `hud`); the `focus` block REMOVED (`/145`); new overlay modes `assets`
+(`/148`) and `cjk_lang` (`/157`); the held `peek` block (`/151`); the `menubar`
+block (`/160`-`/162`); the `xray` block + `tables.revealed` meaning (`/163`-
+`/165`); `project.keymap_flavor` (`/164`); `about.checked` (Check for Updates,
+`/166`); `page.background`'s `lava` arm (`/168`); and `about.pending_crash`
+(passive crash recovery, `/169`). Every one of these bumps preserved
+byte-identical DEFAULT captures apart from the named field — see the table.
 
 Schema `/99` (was `/98`; timeline `/100`, held `/101`) is the **SUMMONED
 ABOUT CARD** (`about.rs` + `menu.rs`'s routed About item, which replaced

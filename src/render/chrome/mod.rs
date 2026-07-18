@@ -34,18 +34,37 @@ const PREFIX_HEADER: &str = "C-x";
 /// top [`outline`] so BOTH hug the column by the exact same amount and move with it.
 pub(in crate::render) const MARGIN_COLUMN_GAP_CHARS: f32 = 1.5;
 
+/// How much of the float trio draws around a summoned card's opaque fill — the
+/// ONE elevation vocabulary every [`set_float_quads`] caller names explicitly
+/// (no bare bool a new panel can pass without thinking).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::render) enum FloatElevation {
+    /// Drop shadow + raised border + card — the large summoned panels
+    /// (overlay cards, which-key, HUD, menus, the caret/spell float).
+    Shadowed,
+    /// Raised border + card, NO shadow — the FORMAT POPOVER's shape. Its card
+    /// is barely two line-heights tall, so the hard-edged shadow quad hanging
+    /// ~9px below the rim OUT-MASSED the card's own 7px pad and read as a "fat
+    /// chin" under the button row (on a dark world the ink-alpha "shadow"
+    /// composites LIGHTER than the page — a bright slab, not depth). The 1px
+    /// rim + the `base_300` value step carry a micro-strip's elevation alone
+    /// (DESIGN §5: depth by value, not drop-shadows).
+    Rimmed,
+    /// Card fill alone — a caller whose OWN backdrop (blur/scrim) already
+    /// carries the card's contrast, so only a TRUE 1-BIT world (where that
+    /// backdrop is disabled outright) needs the crisp border to read at all.
+    Flat,
+}
+
 /// Upload the three FLOAT-PANEL elevation quads (drop `shadow` -> raised `border` ->
 /// opaque `card`) for `rect`, or PARK all three empty when `rect` is `None`. Shared by
 /// the reusable [`TextPipeline::prepare_float_panel`] (the caret-preview / spell
 /// panels), the which-key panel, and the centered-overlay card (`overlay.rs`) — each
 /// passes ITS OWN three pipelines, so summoned micro-panels never race the same
 /// quads. `card` is drawn last (on top of its shadow + border), matching the
-/// painter's-order draw in `render.rs`. `elevated = false` still draws the CARD at
-/// `rect` (the fill always shows) but parks the shadow + border empty — the shape a
-/// caller uses when its OWN backdrop (blur/scrim) already carries the card's
-/// contrast, so only a TRUE 1-BIT world (where that backdrop is disabled outright)
-/// needs the crisp white border to read at all. Every EXISTING caller passes
-/// `elevated: true` (unconditional elevation, its pre-existing behaviour).
+/// painter's-order draw in `render.rs`. `elevation` picks how much of the trio
+/// draws ([`FloatElevation`]); the quads a shape omits are prepared EMPTY, never
+/// left stale from a previous frame.
 #[allow(clippy::too_many_arguments)]
 fn set_float_quads(
     shadow: &mut SelectionPipeline,
@@ -56,20 +75,23 @@ fn set_float_quads(
     width: u32,
     height: u32,
     rect: Option<[f32; 4]>,
-    elevated: bool,
+    elevation: FloatElevation,
 ) {
     match rect {
         Some([x, y, w, h]) => {
-            if elevated {
+            if elevation == FloatElevation::Shadowed {
                 // Drop SHADOW: offset DOWN + a touch wider, translucent ink, so the
                 // card reads as risen a step above the document (depth by value,
                 // DESIGN §8).
                 shadow.prepare(device, queue, width, height, &[[x - 2.0, y + 4.0, w + 4.0, h + 6.0]]);
+            } else {
+                shadow.prepare(device, queue, width, height, &[]);
+            }
+            if elevation != FloatElevation::Flat {
                 // Crisp raised BORDER edge: a slightly larger surface-step rect whose
                 // 1px rim peeks past the card, giving the box a clean, present edge.
                 border.prepare(device, queue, width, height, &[[x - 1.0, y - 1.0, w + 2.0, h + 2.0]]);
             } else {
-                shadow.prepare(device, queue, width, height, &[]);
                 border.prepare(device, queue, width, height, &[]);
             }
             card.prepare(device, queue, width, height, &[[x, y, w, h]]);
@@ -244,6 +266,42 @@ pub(super) struct OverlayGeom {
     card_narrow: bool,
 }
 
+impl OverlayGeom {
+    /// The INERT base — every field at its no-op value, so each of the three
+    /// geometry sites ([`TextPipeline::overlay_geometry`], its spell-popup arm, and
+    /// [`TextPipeline::theme_overlay_geometry`]) assembles by overriding only the
+    /// fields it owns and finishing with `..OverlayGeom::base()`, instead of
+    /// hand-listing all 22 fields (three of which — the `theme`/`strip`/`plan`
+    /// faceted-only trio — every flat card had to spell out as `false`/empty). A new
+    /// field lands here ONCE with an inert default; the three sites inherit it unless
+    /// they mean to set it. Mirrors the `ViewState::base()` convention.
+    fn base() -> Self {
+        OverlayGeom {
+            visible: 0,
+            top_idx: 0,
+            n_items: 0,
+            hint: String::new(),
+            hint_rows: 0,
+            footer: Vec::new(),
+            footer_rows: 0,
+            theme: false,
+            strip: Vec::new(),
+            plan: Vec::new(),
+            header_rows: 0,
+            header_gap: 0.0,
+            empty: None,
+            card_x: 0.0,
+            card_y: 0.0,
+            card_w: 0.0,
+            card_h: 0.0,
+            text_left: 0.0,
+            text_top: 0.0,
+            text_w: 0.0,
+            card_narrow: false,
+        }
+    }
+}
+
 // The chrome cluster is decomposed into cohesive per-subsystem submodules; each
 // carries its own `impl TextPipeline { .. }` block (Rust merges the inherent impls
 // across the module tree). This file keeps the SHARED items every submodule needs —
@@ -251,6 +309,10 @@ pub(super) struct OverlayGeom {
 // owner, the sidecar report structs — plus the hit-test unit sweep.
 mod panel;
 mod overlay;
+// The shipped overlay UI scale, re-exported so the OVERLAY-EXPLORATION density
+// probe's default ([`crate::render::TypeDensity::shipped`]) can name it without
+// hand-copying the magic number (it stays the ONE owner in `overlay`).
+pub(in crate::render) use overlay::OVERLAY_UI_SCALE;
 // Re-export the card horizontal-box policy + its tokens so the width-sweep law
 // can reach them without naming the private `overlay` submodule (test-only).
 #[cfg(test)]
@@ -259,6 +321,10 @@ pub(in crate::render) use overlay::{
     CARD_MAX_W, CARD_MAX_W_FACETED,
 };
 mod overlay_shape;
+// Test-only re-export so `render::tests` can name the pure placard-size quantizer
+// without traversing the private `overlay_shape` submodule (the AtlasFull ladder law).
+#[cfg(test)]
+pub(in crate::render) use overlay_shape::snap_placard_size;
 mod theme_picker;
 mod gutter;
 mod outline;
@@ -272,6 +338,13 @@ mod debug_text;
 mod hud;
 mod whichkey;
 mod preview;
+mod popover;
+#[allow(unused_imports)] // PopoverButtonGeom named only inside the popover module
+pub(in crate::render) use popover::{PopoverButtonGeom, PopoverGeom};
+/// The popover's inner vertical pad token — re-exported to the crate so the
+/// card-fits law asserts `card_bottom − glyph_bottom == POPOVER_VPAD`.
+#[cfg(test)]
+pub(crate) use popover::VPAD as POPOVER_VPAD;
 
 impl TextPipeline {
     // ===== FLOATING PANEL PRIMITIVE + CARET-STYLE PREVIEW PANEL ============
@@ -302,7 +375,7 @@ impl TextPipeline {
             width,
             height,
             rect,
-            true, // this primitive's every use wants unconditional elevation
+            FloatElevation::Shadowed, // this primitive's every use wants full elevation
         );
     }
 
@@ -332,8 +405,13 @@ impl TextPipeline {
         // dev probe (the PALETTE-COMPOSITION round's light-world-border A/B; no
         // world's data flips). Composes with the new anchor + header gap freely —
         // the rim just traces the card rect, wherever it sits.
-        let elevated = rect.is_some()
-            && crate::render::effective_card_elevation() == theme::Elevation::Bordered;
+        let elevation = if rect.is_some()
+            && crate::render::effective_card_elevation() == theme::Elevation::Bordered
+        {
+            FloatElevation::Shadowed
+        } else {
+            FloatElevation::Flat
+        };
         set_float_quads(
             &mut self.panel_shadow,
             &mut self.panel_border,
@@ -343,7 +421,7 @@ impl TextPipeline {
             width,
             height,
             rect,
-            elevated,
+            elevation,
         );
     }
 }
@@ -436,6 +514,26 @@ pub(super) fn bars_inline_shortcut() -> bool {
     )
 }
 
+/// Whether the SELECTED row's SECONDARY (right-column) chord sits ON the
+/// selected-row value band — the ONE reader [`TextPipeline::shape_overlay_right`]
+/// consults to decide whether the band-contrast ink FLIP
+/// ([`theme::selected_row_secondary_ink`]) applies. TRUE when the fill spans the
+/// whole row under the chord: [`theme::ListStyle::Pane`] (the band is the row) and
+/// FULL-WIDTH bars (the plate spans the card, chord included). FALSE for a HUGGING
+/// plate ([`theme::BarExtent::HugLabel`], the poster hybrid): its plate hugs the
+/// LABEL alone, leaving the bare right chord over the GROUND, where `muted` is
+/// already legible EXACTLY as on the unselected rows — flipping it to contrast the
+/// band there drives it INTO the ground (the slant-on-bars invisible-selected-chord
+/// regression: Firetail's selected `⌘O` washed to a background 13.5 maxlum while
+/// the unselected rows read 135). `HugText` composes its chord INLINE and never
+/// reaches this path (`bars_inline_shortcut`), so it is inert here.
+pub(super) fn selected_secondary_on_band() -> bool {
+    match crate::render::effective_list_style() {
+        theme::ListStyle::Bars { extent, .. } => !extent.hugs(),
+        theme::ListStyle::Pane => true,
+    }
+}
+
 /// PURE geometry — the FULL-WIDTH bar span `(x, w)` inside a card
 /// `[card_x, card_x+card_w]`, inset [`BAR_SIDE_INSET`] each side. The shipped v5
 /// bar ([`theme::BarExtent::FullWidth`]); the ONE owner every full-width bar
@@ -478,6 +576,25 @@ pub(super) fn grow_span(x: f32, w: f32, grow: f32, mirror: bool) -> (f32, f32) {
     } else {
         // Grow RIGHT: the LEFT edge stays put; the right edge juts `g` into the room.
         (x, w + g)
+    }
+}
+
+/// PURE geometry (SLANT-ON-BARS) — shift a bar's `(x, w)` right by the stair
+/// offset `dx` for its display row. A `hug` plate (never at the card's right
+/// edge) simply translates; a FULL-WIDTH plate keeps its RIGHT edge flush and
+/// sheds `dx` of width (mirroring the Pane band's `[card_x + dx, w - dx]`), so a
+/// slanted full-width bar can never paint past the card. `dx == 0.0` (the
+/// unslanted default, or a fan-in at rest) → the input span verbatim
+/// (byte-identical). The ONE owner both the unselected and selected slanted
+/// plates read, so the two extents cascade identically.
+pub(super) fn slant_bar_span(x: f32, w: f32, hug: bool, dx: f32) -> (f32, f32) {
+    if dx <= 0.0 {
+        return (x, w);
+    }
+    if hug {
+        (x + dx, w)
+    } else {
+        (x + dx, (w - dx).max(1.0))
     }
 }
 
@@ -760,6 +877,28 @@ pub struct LifetimeReport {
 pub struct PeekReport {
     pub open: bool,
     pub rows: Vec<crate::peek::PeekRow>,
+}
+
+/// The summoned WRITING STREAKS card's machine-readable state for the capture
+/// sidecar (see [`TextPipeline::streaks_report`]). `open` mirrors
+/// [`crate::streaks::streaks_open`] (OFF by default → a default capture is
+/// byte-identical); the figures are the LIVE year the App pushed OR the fixed
+/// synthetic [`crate::streaks::placeholder`] in a headless capture (no persisted
+/// store), via the SAME `streaks_effective_view` owner the pixels use — so the
+/// sidecar can never claim a figure the card doesn't show, and a `--streaks`
+/// capture is deterministic + byte-stable across machines. `view` is which PAGE
+/// is showing (`"heatmap"`, the default on every summon, or `"cumulative"` —
+/// flipped with ←/→ while the card is open, `crate::streaks::card_view`);
+/// `total_words` is the cumulative window's final running total (the figure the
+/// progress chart tops out at); `cells` is the row-major (`col*7 + row`)
+/// intensity-bucket grid.
+pub struct StreaksReport {
+    pub open: bool,
+    pub view: &'static str,
+    pub streak: u64,
+    pub today_words: u64,
+    pub total_words: u64,
+    pub cells: Vec<u8>,
 }
 
 /// The DEBUG panel's machine-readable perf state — the raw values behind the

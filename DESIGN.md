@@ -31,6 +31,17 @@ awl is the marriage of those two. Most "designed" editors pick one (austere OR
 playful). The whole bet is that you can have both *if* you keep them in their
 lanes (§3).
 
+**Amendment (settled 2026-07-14, the two-layer model — the Room and the
+Frame):** as the worlds multiplied, the thesis gained a second reading. awl is a
+**chameleon** — one *creature*, many *skins* — and every skin is exactly two
+layers: **the Room** (the writing column — calm, disciplined, the same in every
+world; it never shouts) and **the Frame** (ground, margins, overlays, chrome —
+where *all* of a world's personality lives, and the only place it may vary).
+Every "is this too much?" question resolves by asking *Room or Frame?* —
+personality in the Frame is a world being itself; personality in the Room is a
+violation. And the chameleon's complexity stays **data, never machinery**: one
+simple system with rich pigment.
+
 ---
 
 ## 2. Lineage (where this comes from)
@@ -61,6 +72,15 @@ instrument), **N++ + Mini Metro** (Swiss + juice + sliding surfaces).
 
 The common thread: none of them are decoration. They're **instruments and
 systems where the restraint is the function.**
+
+**Addition (settled 2026-07-14, Persona — clean core, loud frame):** *Persona 5*
+is the reference for how loud a Frame (§1) may go. It keeps the functional,
+*reading* content dead clean and pours all the spectacle into the frame and
+margins — loud type only ever on labels, never on prose. awl already has that
+architecture (calm column; character in the margins). So steal Persona's
+**composition** — no dead space, defined edges, one divider — never its
+**volume**. And when a world does go loud, the two awl-native loud dials are
+**type + motion**: a type tool shouts in type and motion, never in decoration.
 
 ---
 
@@ -179,16 +199,27 @@ Named tiers, not scattered magic numbers, so the ratios tune in one place:
 
 | rung      | scale | role |
 |-----------|-------|------|
-| `TITLE`   | 1.8×  | h1 — the document / top title |
-| `SECTION` | 1.5×  | h2 — a section head |
-| `SUBHEAD` | 1.25× | h3+ — a subhead (nudged from 1.3 to ease the steps down the ladder) |
+| `TITLE`   | 1.6×  | h1 — the document / top title (Ladder J; was 1.8) |
+| `SECTION` | 1.3×  | h2 — a section head (Ladder J; was 1.5) |
+| `SUBHEAD` | 1.15× | h3+ — a subhead (Ladder J; was 1.25) |
 | `BODY`    | 1.0×  | body prose / code — the baseline rung |
 | `LABEL`   | 0.8×  | UI metadata smaller than body (the future gutter / stats) |
+
+**Amendment (settled 2026-07-18, the heading-weight round — Ladder J + one bit
+of per-world weight):** the heading rungs eased to 1.6/1.3/1.15, and WEIGHT
+joined size as a *per-world* hierarchy leg: each world carries one bit
+(`Theme::heading_bold`) — set, its `##`/`###` heads shape in the face's own
+bundled Bold; clear, everything stays Regular. The TITLE (`#`) never bolds on
+any world — it spends pure size. The lean: serif worlds Regular (a serif's
+stroke contrast carries hierarchy structurally), mono-display worlds Bold
+(uniform strokes need weight), sans worlds judged by eye. Still no accent —
+amber stays the caret's alone (§3).
 
 ### Worked examples (one ink × one size)
 
 - **A heading title** = `TITLE` (or `SECTION`/`SUBHEAD`) × `base_content`. Size
-  carries the hierarchy; the ink stays full content — no bold, no accent (§3).
+  carries the hierarchy (plus, on the worlds whose bit says so, real bold on
+  `##`/`###` — the amendment above); the ink stays full content — no accent (§3).
 - **Markdown markup** (the `#`, `*`, backticks) = `BODY` × `muted`. Same size as
   the prose around it, one value rung quieter, so it recedes but stays editable.
 - **A future gutter label** (line numbers, the stats readout) = `LABEL` × `faint`.
@@ -264,6 +295,21 @@ example: below its labeled `find` / `replace` rows sits `Enter replace+next ·
 The **mouse points** (caret, selection, a summoned list row, right-click); it never
 presses an action. List rows in a picker stay click-*selectable* — that's pointing
 at a choice, not a button. (See `PHILOSOPHY.md` §1.)
+
+**Amendment (settled 2026-07-16, the format popover — taste-exception #3):** the
+WYSIWYG formatting amendment (§3) said "never a floating format bar," and this
+reverses it, narrowly, by name — the third logged taste-exception, beside images
+and the Outline. A **reveal-on-select popover** — the small inline-format row
+that appears over a fresh *mouse* selection — is permitted, because the deeper
+rule, **summoned not furniture**, holds: the selection *gesture* IS the summons.
+It appears only on a mouse-made selection (mouse-up on a drag, a double-click
+word — never a keyboard selection), and it dismisses with the selection: never
+on screen when you aren't mid-gesture. Its buttons fire only Actions the palette
+already dispatches (the menu-bar law — no popover-only path), it obeys the calm
+laws (float-panel, value-based, never amber), it lives in markdown buffers only,
+and a sticky config switch turns it off. What it genuinely costs is named: the
+button-free rule bends — these ARE clickable actions — and it bends exactly this
+far: one bounded mouse-gesture affordance, not a licence for toolbars.
 
 ---
 

@@ -100,6 +100,41 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             _ => return Effect::None,
         }
     }
+    // NAMED SAVE POINTS — "Keep version…" MINIBUFFER: while the KeepName overlay's
+    // typed-name sub-state is active (armed the instant the overlay is BUILT — see
+    // `OverlayState::new_keep_name`), it OWNS every key modally: ANY printable char
+    // extends the typed name (no filter — a name is free display text), Backspace
+    // deletes, Enter COMMITS (closes the overlay itself and signals
+    // `Effect::KeepVersion { name }` — `Some(trimmed)` for real text, `None` for a
+    // blank Enter, the plain zero-friction keep), Esc CANCELS (closes, nothing
+    // recorded). Checked alongside the Rename/InsertLink blocks above — never open
+    // together with either.
+    if ctx.overlay.as_ref().unwrap().keep_edit.is_some() {
+        match action {
+            Action::InsertChar(c) => {
+                ctx.overlay.as_mut().unwrap().keep_edit_push(*c);
+                return Effect::None;
+            }
+            Action::DeleteBackward | Action::DeleteWordBackward => {
+                ctx.overlay.as_mut().unwrap().keep_edit_pop();
+                return Effect::None;
+            }
+            Action::Newline => {
+                let target = ctx.overlay.as_ref().unwrap().keep_edit_target();
+                *ctx.overlay = None;
+                return match target {
+                    Some(name) => Effect::KeepVersion { name },
+                    None => Effect::None,
+                };
+            }
+            Action::Cancel => {
+                *ctx.overlay = None;
+                return Effect::None;
+            }
+            // Every other key is swallowed (the edit is modal to the one row).
+            _ => return Effect::None,
+        }
+    }
     // SETTINGS VALUE EDIT: while an inline numeric edit is active (Enter landed on a
     // page-width / zoom row), the Settings menu OWNS every key modally — digits (plus
     // `.`/`%` for zoom) build the value in the row's own cell, Backspace deletes, Enter
@@ -193,6 +228,25 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
         }
         Action::PageScrollUp => {
             ctx.overlay.as_mut().unwrap().move_sel(-OVERLAY_PAGE);
+            preview_overlay(ctx.overlay.as_ref().unwrap());
+            return Effect::None;
+        }
+        // JUMP-TO-ENDS: a modal picker OWNS Home/End (and the very-start/end pair
+        // Cmd-↑/↓ + Ctrl-Home/End), which the document keymap resolves to
+        // LineStart/LineEnd + BufferStart/BufferEnd — none of which mean anything in a
+        // modal list, so they leaked to a no-op (the "you can't jump, you arrow one by
+        // one" report). Here they land the selection on the FIRST / LAST row (via the
+        // one-owner nav jumps) and — like every move above — fire the live PREVIEW, so
+        // jumping in the Theme picker auditions that world's motion exactly like ↑/↓.
+        // This is the LOWER-CHURN seam: these Actions already fell through to the modal
+        // no-op, so no keymap change is needed to claim them while a picker is open.
+        Action::LineStart | Action::BufferStart => {
+            ctx.overlay.as_mut().unwrap().select_first();
+            preview_overlay(ctx.overlay.as_ref().unwrap());
+            return Effect::None;
+        }
+        Action::LineEnd | Action::BufferEnd => {
+            ctx.overlay.as_mut().unwrap().select_last();
             preview_overlay(ctx.overlay.as_ref().unwrap());
             return Effect::None;
         }
@@ -540,6 +594,28 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             // gates on the kind), so it's safe to route uniformly. Rebuilds the
             // listing with the new `show_hidden` flag; the sidecar reflects it.
             ctx.overlay.as_mut().unwrap().toggle_hidden();
+            return Effect::None;
+        }
+        Action::CompareVersion | Action::InsertTab => {
+            // THE WRITER'S DIFF from the HISTORY picker: open the read-only prose-diff
+            // view comparing the current buffer against the HIGHLIGHTED version. Reached
+            // by TAB (the picker's own "compare" affordance, taught in the foot hint —
+            // spending no global chord) or by a `[keys]`-rebound Compare chord. Emit the
+            // highlighted row's opaque restore id (which the caller resolves via
+            // `history::load` + renders through `prosediff`, exactly as the buffer-path
+            // Compare does) and CLOSE the stack — you've navigated into the diff, not
+            // configured the picker. The synthetic "no history yet" row has an empty id,
+            // so it is a calm no-op. In ANY OTHER picker Tab stays inert (it was already
+            // a no-op there), so nothing else changes.
+            let ov = ctx.overlay.as_ref().unwrap();
+            if ov.kind == crate::overlay::OverlayKind::History {
+                let eff = match ov.selected_history_id() {
+                    Some(id) => Effect::CompareVersion(id.to_string()),
+                    None => Effect::None,
+                };
+                dispose_after_accept(ctx);
+                return eff;
+            }
             return Effect::None;
         }
         Action::Cancel => {

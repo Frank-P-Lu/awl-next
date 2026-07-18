@@ -27,6 +27,7 @@ mod format; // the markdown formatting-command toggles (block + inline)
 mod link; // LINKS V2 — Cmd-K insert/edit-link (plan + commit, mirrors format.rs)
 mod motion; // the oracle-aware caret motions + page scroll + search open
 mod overlay_nav; // the modal overlay intercept + browse-path helpers + live preview
+pub(crate) mod popover; // the format-popover pure plan (reads format.rs's active-state)
 mod rebind; // the game-style rebind-menu key handling
 use edit::*;
 use flinch::*;
@@ -237,14 +238,36 @@ pub enum Effect {
     /// Headless replay treats this exactly like `LastBuffer` — a no-op (no daemon,
     /// no 2-deep history in a one-shot replay).
     FinishBuffer,
-    /// THE CONSCIOUS MARK ("Keep version"): record the current buffer as a
-    /// PINNED, prune-EXEMPT local-history snapshot. The pure core can't reach the
-    /// store (no fs / config / buffer path), so it signals this for the live App to
-    /// perform ([`crate::app::App::keep_version`] → [`crate::history::record_pinned`]).
-    /// LIVE-APP-ONLY: the headless `--keys` replay no-ops it (the history determinism
-    /// gate — a capture never touches the store), so a settled frame stays
-    /// byte-identical.
-    KeepVersion,
+    /// THE CONSCIOUS MARK ("Keep version…"): the naming minibuffer COMMITTED —
+    /// record the current buffer as a PINNED, prune-EXEMPT local-history snapshot,
+    /// optionally NAMED (`Some("draft A")` when the user typed a name, `None` for
+    /// a blank Enter — the plain, zero-friction keep). The pure core can't reach
+    /// the store (no fs / config / buffer path), so it signals this for the live
+    /// App to perform ([`crate::app::App::keep_version`] →
+    /// [`crate::history::record_pinned`]). LIVE-APP-ONLY: the headless `--keys`
+    /// replay no-ops it (the history determinism gate — a capture never touches
+    /// the store), so a settled frame stays byte-identical; the naming
+    /// minibuffer's open/type/cancel flow itself IS core-driven and fully
+    /// `--keys`-drivable (see `overlay_nav`'s `keep_edit` block).
+    KeepVersion { name: Option<String> },
+    /// THE WRITER'S DIFF, from the HISTORY picker: open the read-only prose-diff view
+    /// comparing the current buffer against the version whose restore `id` is carried
+    /// here (the highlighted row's — the same opaque id [`crate::history::load`]
+    /// resolves). The pure core can't reach the store or render the transcript
+    /// (no fs / no prosediff render seam in `ActionCtx`), so it signals this for the
+    /// live App to perform ([`crate::app::App::enter_diff_view_for`]). LIVE-APP-ONLY:
+    /// the headless `--keys` replay no-ops it (a capture renders the diff via the
+    /// `AWL_DIFF_*` harness instead), so a settled frame stays byte-identical.
+    CompareVersion(String),
+    /// THE WRITER'S DIFF, from the BUFFER (palette "Compare with version…", no
+    /// overlay): open the read-only prose-diff view comparing the current buffer
+    /// against its MOST-RECENT version — a loose file's newest history snapshot, or a
+    /// git-managed file's HEAD (`git show`). The core can't list the store, so it
+    /// signals this bare request for the live App to resolve the latest id + enter the
+    /// view ([`crate::app::App::compare_with_latest`]); a buffer with no history is a
+    /// calm no-op there. Only produced for a markdown buffer (a `.rs`/`.txt`/scratch
+    /// buffer is a calm no-op in the core). LIVE-APP-ONLY: headless replay no-ops it.
+    CompareLatest,
     /// C-c C-o (follow-link-at-point): the caret sat inside a markdown link, whose
     /// destination URL is carried here for the caller to open in the OS default
     /// browser (a user-initiated handoff — the app never fetches it, so the
@@ -441,15 +464,33 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         return Effect::None;
     }
 
-    // MODAL CARD DISMISSAL (About / Lifetime stats). While either summoned card is
-    // open it OWNS the very next key — ANY key closes it and is otherwise consumed
-    // (no other effect), mirroring the "any key/click dismisses" spec rather than
-    // the navigation overlay's narrower Esc/Enter contract (a card has nothing to
-    // navigate). ONE owner of the check+close (`card::dismiss_summoned_card`),
-    // shared verbatim with the live App's mouse-press handler. Checked BEFORE the
-    // overlay intercept: the two cards are never open at once, nor with an overlay
-    // (each opens via `Effect::RunAction` after the palette that summoned it has
-    // already closed).
+    // WRITING-STREAKS VIEW TOGGLE. While the streaks card is open, ←/→ FLIP it
+    // between its two pages (per-day heatmap ⇄ cumulative running total —
+    // `streaks::toggle_view`, a pure view flip over the same records) instead of
+    // dismissing — the overlay's Right/Left lens precedent, applied to the one
+    // summoned card with a second page. Consumed entirely (the caret never
+    // moves, the card stays open); every OTHER key still falls through to the
+    // modal dismiss just below, so the arrows are that door's ONE exception,
+    // and — sitting here in the shared core — the flip is `--keys "Left"`-
+    // drivable headlessly like everything else.
+    if crate::streaks::streaks_open()
+        && matches!(action, Action::ForwardChar | Action::BackwardChar)
+    {
+        crate::streaks::toggle_view();
+        return Effect::None;
+    }
+
+    // MODAL CARD DISMISSAL (About / Lifetime stats / Writing streaks). While a
+    // summoned card is open it OWNS the very next key — ANY key closes it and is
+    // otherwise consumed (no other effect; the streaks card's ←/→ page flip
+    // above is the one carve-out), mirroring the "any key/click dismisses" spec
+    // rather than the navigation overlay's narrower Esc/Enter contract (a card
+    // has nothing to navigate). ONE owner of the check+close
+    // (`card::dismiss_summoned_card`), shared verbatim with the live App's
+    // mouse-press handler. Checked BEFORE the overlay intercept: the cards are
+    // never open at once, nor with an overlay (each opens via
+    // `Effect::RunAction` after the palette that summoned it has already
+    // closed).
     if crate::card::dismiss_summoned_card() {
         return Effect::None;
     }
@@ -736,6 +777,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
             let _g = crate::testlock::serial();
             crate::lifetime::set_open(true);
         }
+        // OPEN the summoned Writing streaks card (the year-calendar heatmap). Stays
+        // open until this same function's top-of-function intercept consumes the
+        // next key (or the live App's mouse-press handler closes it on a click).
+        // Render-only (no buffer change). See `streaks.rs`.
+        Action::WritingStreaks => {
+            #[cfg(test)]
+            let _g = crate::testlock::serial();
+            crate::streaks::set_open(true);
+        }
         // Toggle the active buffer's line-ending discipline (LF <-> CRLF). The rope
         // is byte-identical (always pure `\n`); only the on-disk encoding a save
         // restores differs, so this is document-level METADATA, not an undoable
@@ -783,6 +833,9 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::ToggleNumberedList => apply_block_format(ctx, format::BlockKind::Numbered),
         Action::ToggleTaskList => apply_block_format(ctx, format::BlockKind::Task),
         Action::ToggleHeading => apply_block_format(ctx, format::BlockKind::Heading),
+        // The format popover's `H` button — a LEVEL CYCLE (off→H1→H2→H3→off), not the
+        // single `# ` toggle above; markdown-only, one undoable edit.
+        Action::HeadingCycle => format::apply_heading_cycle(ctx),
         Action::ToggleCodeBlock => apply_block_format(ctx, format::BlockKind::CodeBlock),
         Action::Bold => apply_inline_format(ctx, format::InlineKind::Bold),
         Action::Italic => apply_inline_format(ctx, format::InlineKind::Italic),
@@ -931,12 +984,28 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::OpenAssetClean => {
             *ctx.overlay = (ctx.make_overlay)(crate::overlay::OverlayKind::Assets);
         }
-        // "Keep version": THE CONSCIOUS MARK — record the current buffer as a
-        // PINNED, prune-exempt snapshot. The core can't reach the store (fs/config/
-        // path), so it signals the caller; the live App writes it, the headless
-        // replay no-ops it (history determinism gate). See `Effect::KeepVersion`.
+        // "Keep version…": THE CONSCIOUS MARK — summon the NAMED-SAVE-POINT
+        // minibuffer (an optional name for the kept version, the Rename/InsertLink
+        // precedent: a single editable row whose modal `keep_edit` sub-state owns
+        // every key). Enter commits `Effect::KeepVersion { name }` — a blank Enter
+        // is the plain keep, so today's zero-friction path is one extra Enter; Esc
+        // cancels with nothing recorded. Opened unconditionally, mirroring the old
+        // always-fire arm: the store's own gates (git-managed / history-off / no
+        // history key yet) still decide at commit, exactly as they always did.
         Action::KeepVersion => {
-            effect = Effect::KeepVersion;
+            *ctx.overlay = Some(OverlayState::new_keep_name());
+        }
+        // THE WRITER'S DIFF ("Compare with version…" from the BUFFER): open the
+        // read-only prose-diff view against the most-recent version. Markdown buffers
+        // only (a `.rs`/`.txt`/scratch buffer is a calm no-op, mirroring the format
+        // toggles); the core can't list the store, so it signals the caller to resolve
+        // the latest id + render the transcript. From the open HISTORY picker this
+        // action is intercepted earlier (`overlay_nav`, comparing the highlighted row)
+        // and never reaches here. See `Effect::CompareLatest`.
+        Action::CompareVersion => {
+            if ctx.buffer.is_markdown() {
+                effect = Effect::CompareLatest;
+            }
         }
         // Summon the one-level browse navigator at the ROOT level (browse_dir =
         // None). Descend/ascend then rebuild it via `browse_to`.

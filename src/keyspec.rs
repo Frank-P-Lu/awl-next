@@ -17,8 +17,9 @@
 //!                                    #       "Shift-" (case-insensitive).
 //!   key   := <named> | <single printable char>
 //!
-//! Named keys (case-insensitive): Left Right Up Down Home End Enter/Return/RET
-//! Tab Backspace/DEL Delete Space/SPC Esc/Escape. Anything else of length one is
+//! Named keys (case-insensitive): Left Right Up Down Home End PageUp/PgUp
+//! PageDown/PgDn Enter/Return/RET Tab Backspace/DEL Delete Space/SPC Esc/Escape.
+//! Anything else of length one is
 //! a self-insert / literal char (case + shifted glyphs like `<` `>` pass through
 //! verbatim, matching how the keymap reads them).
 
@@ -327,6 +328,8 @@ fn key_token(key: &Key) -> String {
             NamedKey::ArrowDown => "Down",
             NamedKey::Home => "Home",
             NamedKey::End => "End",
+            NamedKey::PageUp => "PageUp",
+            NamedKey::PageDown => "PageDown",
             NamedKey::Enter => "Enter",
             NamedKey::Tab => "Tab",
             NamedKey::Backspace => "Backspace",
@@ -487,6 +490,11 @@ fn named_key(tok: &str) -> Option<NamedKey> {
         "down" => NamedKey::ArrowDown,
         "home" => NamedKey::Home,
         "end" => NamedKey::End,
+        // PgUp/PgDn — the card-ful jump through a summoned picker. Named so
+        // `--keys "PageDown"` exercises the same overlay paging the live NamedKey
+        // does (the harness stays real); several spellings for muscle memory.
+        "pageup" | "pgup" => NamedKey::PageUp,
+        "pagedown" | "pgdn" | "pagedn" => NamedKey::PageDown,
         "enter" | "return" | "ret" => NamedKey::Enter,
         "tab" => NamedKey::Tab,
         "backspace" | "del" => NamedKey::Backspace,
@@ -693,6 +701,24 @@ mod tests {
     }
 
     #[test]
+    fn pageup_pagedown_tokens_parse_and_page_the_picker() {
+        // `--keys "PageUp"/"PageDown"` (several spellings) parse to the NamedKey the
+        // live overlay reads, so the harness can exercise the card-ful picker paging
+        // (the harness stays real).
+        for tok in ["PageUp", "pageup", "PgUp"] {
+            let chords = parse_chords(tok).unwrap();
+            assert_eq!(chords[0].key, Key::Named(NamedKey::PageUp), "{tok} -> PageUp");
+        }
+        for tok in ["PageDown", "pagedown", "PgDn", "pagedn"] {
+            let chords = parse_chords(tok).unwrap();
+            assert_eq!(chords[0].key, Key::Named(NamedKey::PageDown), "{tok} -> PageDown");
+        }
+        // Round-trips through the canonical token spelling.
+        assert_eq!(super::key_token(&Key::Named(NamedKey::PageUp)), "PageUp");
+        assert_eq!(super::key_token(&Key::Named(NamedKey::PageDown)), "PageDown");
+    }
+
+    #[test]
     fn text_chords_spell_each_char_as_its_keys_token() {
         // A storyboard `type` step's text becomes the same chords a --keys spec
         // would spell: bare printables verbatim, whitespace via the NAMED keys.
@@ -703,7 +729,10 @@ mod tests {
         assert_eq!(chords[2].key, Key::Named(NamedKey::Space));
         assert_eq!(chords[5].key, Key::Named(NamedKey::Enter));
         assert_eq!(chords[6].key, Key::Named(NamedKey::Tab));
-        // No modifiers on any typed char (replay is unshifted by design).
+        // No modifiers on any typed char — the char token itself carries its
+        // case ('H' self-inserts 'H'), so text chords never need `S-`. (Motion
+        // chords DO honor an explicit `S-` as select-intent; see
+        // `main/run.rs::ReplaySession::apply_chord`.)
         assert!(chords.iter().all(|c| c.mods.state().is_empty()));
         // And the chars resolve through the REAL keymap to self-inserts.
         let mut km = KeymapState::new_with_convention(crate::convention::Convention::Mac);

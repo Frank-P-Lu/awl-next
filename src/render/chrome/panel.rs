@@ -101,6 +101,18 @@ impl TextPipeline {
         // The dim key-hint line that teaches the replace actions — muted ink, present
         // only once the replace row is up (a plain find keeps the terse counter panel).
         let hint = "\u{21B5} replace+next   \u{2318}\u{21B5} all   \u{21E5} switch   \u{2318}\u{2325}c case   Esc done";
+        // DISCOVERABILITY: the "⌘⌥c case" chunk BRIGHTENS from muted to full ink when
+        // case-sensitivity is ON — the same value cue the `Aa` indicator carries (never
+        // amber; state by value), pointing the eye at the exact chord that toggles it.
+        // Brightens iff the `Aa` cell also does (case ON and there IS a match), so the
+        // two cues never disagree.
+        const CASE_HINT: &str = "\u{2318}\u{2325}c case";
+        let case_hint_on = self.search_case_sensitive && !no_match;
+        let case_hint_span = hint.find(CASE_HINT).map(|s| (s, s + CASE_HINT.len()));
+        let hint_color = |b: usize| match case_hint_span {
+            Some((s, e)) if case_hint_on && b >= s && b < e => ink,
+            _ => muted,
+        };
 
         // Row 0 — the find field.
         let mut spans: Vec<(&str, Attrs)> = vec![
@@ -117,19 +129,36 @@ impl TextPipeline {
             spans.push((replacement.as_str(), mk(ink)));
             spans.push((" ", mk(ink)));
             // Row 2 — the dim key-hint line. Split so ⌘/⌥ ride the symbol face; the
-            // rest stays in the world face, all muted.
+            // rest stays in the world face. Each run is FURTHER split at the case-chunk
+            // edges so a single span never mixes colors, letting ONLY "⌘⌥c case"
+            // brighten (`hint_color`) when case-sensitivity is on.
             spans.push(("\n", mk(muted)));
+            // The color-change boundaries within the hint: the case-chunk edges.
+            let bounds: [usize; 2] =
+                case_hint_span.map(|(s, e)| [s, e]).unwrap_or([hint.len(), hint.len()]);
+            // A run is emitted piecewise, cutting at any boundary strictly inside it, so
+            // each emitted piece is uniformly inside or outside the case chunk.
+            let emit = |spans: &mut Vec<(&str, Attrs)>, mut s: usize, e: usize, is_sym: bool| {
+                let mut cuts: Vec<usize> = bounds.iter().copied().filter(|&b| b > s && b < e).collect();
+                cuts.push(e);
+                for c in cuts {
+                    let col = hint_color(s);
+                    let attrs = if is_sym { sym(col) } else { mk(col) };
+                    spans.push((&hint[s..c], attrs));
+                    s = c;
+                }
+            };
             let mut last = 0usize;
             for run in symbol_runs(hint) {
                 if run.start > last {
-                    spans.push((&hint[last..run.start], mk(muted)));
+                    emit(&mut spans, last, run.start, false);
                 }
                 let end = run.end;
-                spans.push((&hint[run], sym(muted)));
+                emit(&mut spans, run.start, end, true);
                 last = end;
             }
             if last < hint.len() {
-                spans.push((&hint[last..], mk(muted)));
+                emit(&mut spans, last, hint.len(), false);
             }
         }
         let rows = if replace_active { 3.0 } else { 1.0 };

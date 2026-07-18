@@ -49,6 +49,12 @@ for arg in "$@"; do
   esac
 done
 
+# L0 — the site's repo-relative links (GitHub blob URLs to the contract docs +
+# license files) must point at files that exist. No network; catches a doc
+# rename that would 404 the published site.
+echo "==> L0: scripts/site-links.sh (repo-relative site links resolve)"
+"$SCRIPT_DIR/site-links.sh"
+
 # L1 — the whole crate must still compile to wasm.
 echo "==> L1: cargo build --target wasm32-unknown-unknown"
 cargo build --target wasm32-unknown-unknown

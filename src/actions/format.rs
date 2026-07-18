@@ -45,8 +45,10 @@ pub(super) enum BlockKind {
 }
 
 /// The INLINE format toggles — a symmetric delimiter pair around the selection.
+/// `pub(crate)`: the format POPOVER (`crate::actions::popover`) names these kinds
+/// to read each button's active/lit state through [`inline_active`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum InlineKind {
+pub(crate) enum InlineKind {
     Bold,
     Italic,
     InlineCode,
@@ -333,6 +335,144 @@ fn code_block_toggle(lines: &[String], first: usize, last: usize, _has_sel: bool
     }
 }
 
+// --- HEADING CYCLE (the format popover's `H` button) ------------------------
+
+/// The ATX heading level of one line's `chars` (measured AFTER `ind` leading
+/// indentation): the count of consecutive leading `#` immediately followed by a
+/// space, `1..=6`, else `0`. A bare `#word` (no space) or `####### ` (7+, past
+/// markdown's max) is NOT a heading — level `0`.
+fn line_heading_level(line: &[char], ind: usize) -> usize {
+    let mut h = ind;
+    while h < line.len() && line[h] == '#' {
+        h += 1;
+    }
+    let n = h - ind;
+    if (1..=6).contains(&n) && h < line.len() && line[h] == ' ' {
+        n
+    } else {
+        0
+    }
+}
+
+/// The char length of the heading prefix already present on `line` (after `ind`):
+/// `level + 1` (the `#`s plus the one space), or `0` when the line is not a heading.
+fn heading_prefix_char_len(line: &[char], ind: usize) -> usize {
+    let lvl = line_heading_level(line, ind);
+    if lvl > 0 {
+        lvl + 1
+    } else {
+        0
+    }
+}
+
+/// The next level in the popover `H` button's cycle: off → H1 → H2 → H3 → off. An
+/// already-deeper heading (H4–H6, only reachable by hand-typing) also cycles back
+/// to off, so the button always lands the user in the 1–3 band or clears it.
+fn next_heading_level(cur: usize) -> usize {
+    match cur {
+        0 => 1,
+        1 => 2,
+        2 => 3,
+        _ => 0,
+    }
+}
+
+/// The heading level the format popover's `H` button reflects: the level of the
+/// FIRST non-empty affected line (caret line / first selected line), `0` when none.
+/// PURE; the popover's state-reflective oracle.
+pub(crate) fn heading_level(text: &str, anchor: Option<usize>, cursor: usize) -> usize {
+    let lines = split_lines(text);
+    let (s, e, has_sel) = sel_range(anchor, cursor);
+    let (first, _) = char_to_line_col(&lines, s);
+    let (mut last, end_col) = char_to_line_col(&lines, e);
+    if has_sel && last > first && end_col == 0 {
+        last -= 1;
+    }
+    let chars: Vec<Vec<char>> = lines.iter().map(|s| s.chars().collect()).collect();
+    (first..=last)
+        .find(|&l| !lines[l].trim().is_empty())
+        .map(|l| line_heading_level(&chars[l], indent_len(&chars[l])))
+        .unwrap_or(0)
+}
+
+/// Run the popover `H` button's heading CYCLE over the caret line / selected
+/// lines, applying it as one undoable edit. Markdown-only; a calm no-op elsewhere.
+pub(super) fn apply_heading_cycle(ctx: &mut ActionCtx) {
+    if !ctx.buffer.is_markdown() {
+        return;
+    }
+    let text = ctx.buffer.text();
+    let anchor = ctx.buffer.anchor_char();
+    let cursor = ctx.buffer.cursor_char();
+    let r = heading_cycle(&text, anchor, cursor);
+    ctx.buffer.apply_format(&r.text, r.anchor, r.cursor);
+}
+
+/// Cycle the heading level of the caret line / selected lines: the target level is
+/// `next_heading_level` of the FIRST non-empty affected line's current level, and
+/// every non-empty affected line is rewritten to that level (its old `#…` prefix
+/// stripped, the target `#…` prefix applied at the indentation boundary). Blank
+/// lines are left untouched (mirrors `block_toggle`).
+fn heading_cycle(text: &str, anchor: Option<usize>, cursor: usize) -> FormatResult {
+    let lines = split_lines(text);
+    let (s, e, has_sel) = sel_range(anchor, cursor);
+    let (first, _) = char_to_line_col(&lines, s);
+    let (mut last, end_col) = char_to_line_col(&lines, e);
+    if has_sel && last > first && end_col == 0 {
+        last -= 1;
+    }
+    let chars: Vec<Vec<char>> = lines.iter().map(|s| s.chars().collect()).collect();
+    let cur = (first..=last)
+        .find(|&l| !lines[l].trim().is_empty())
+        .map(|l| line_heading_level(&chars[l], indent_len(&chars[l])))
+        .unwrap_or(0);
+    let target = next_heading_level(cur);
+    let prefix: String = if target > 0 {
+        format!("{} ", "#".repeat(target))
+    } else {
+        String::new()
+    };
+    let new_len = prefix.chars().count();
+
+    let mut new_lines = lines.clone();
+    // (signed delta at the caret line, indentation pos, old-prefix char len) — the
+    // no-selection cursor remap reads these off the caret's own line.
+    let mut first_op: (i64, usize, usize) = (0, 0, 0);
+    for l in first..=last {
+        if lines[l].trim().is_empty() {
+            continue;
+        }
+        let line = &chars[l];
+        let ind = indent_len(line);
+        let existing = heading_prefix_char_len(line, ind);
+        let mut v: Vec<char> = line[..ind].to_vec();
+        v.extend(prefix.chars());
+        v.extend_from_slice(&line[ind + existing..]);
+        if l == first {
+            first_op = (new_len as i64 - existing as i64, ind, existing);
+        }
+        new_lines[l] = v.into_iter().collect();
+    }
+
+    let new_text = new_lines.join("\n");
+    let (anchor, cursor) = if has_sel {
+        let a = line_start_char(&new_lines, first);
+        let c = line_start_char(&new_lines, last) + new_lines[last].chars().count();
+        (Some(a), c)
+    } else {
+        let (_, col) = char_to_line_col(&lines, cursor);
+        let (_, at, existing) = first_op;
+        // Model the prefix rewrite as STRIP the old `existing` chars at `at`, then
+        // INSERT the new `new_len` chars at `at` — composing the SAME `remap_col`
+        // the single-prefix block toggle uses, so a caret at the line start rides an
+        // inserted heading prefix (like typing) and clamps sanely on a strip.
+        let stripped = remap_col(col, -(existing as i64), at);
+        let new_col = remap_col(stripped, new_len as i64, at);
+        (None, line_start_char(&new_lines, first) + new_col)
+    };
+    FormatResult { text: new_text, anchor, cursor }
+}
+
 // --- INLINE toggle ----------------------------------------------------------
 
 /// True when a char is part of a word (for the no-selection word-wrap).
@@ -340,32 +480,63 @@ fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+/// The char span an inline toggle acts on: the selection, or the word under the
+/// caret, or (with neither) a bare caret (`want_caret`). Shared by [`inline_toggle`]
+/// and the popover's [`inline_active`] so the two can never disagree on WHICH span
+/// a button reads.
+fn inline_span(chars: &[char], anchor: Option<usize>, cursor: usize) -> (usize, usize, bool) {
+    let (s, e, has_sel) = sel_range(anchor, cursor);
+    if has_sel {
+        return (s, e, false);
+    }
+    let mut a = cursor;
+    while a > 0 && is_word_char(chars[a - 1]) {
+        a -= 1;
+    }
+    let mut b = cursor;
+    while b < chars.len() && is_word_char(chars[b]) {
+        b += 1;
+    }
+    if b > a {
+        (a, b, false)
+    } else {
+        (cursor, cursor, true) // no word → empty-delimiter insert
+    }
+}
+
+/// Whether span `[ws, we)` is currently WRAPPED by `kind`'s delimiters — either
+/// they immediately surround it (`**|foo|**`, and the empty-delimiter `**||**`
+/// case where `ws == we`), or the span itself opens+closes with them (a fully
+/// selected `**foo**`). This is exactly the STRIP condition [`inline_toggle`]
+/// tests, extracted so the popover's active-state oracle ([`inline_active`]) shares
+/// the ONE definition of "already formatted".
+fn inline_is_wrapped(kind: InlineKind, chars: &[char], ws: usize, we: usize) -> bool {
+    let d: Vec<char> = kind.delim().chars().collect();
+    let dl = d.len();
+    let eq = |from: usize| from + dl <= chars.len() && chars[from..from + dl] == d[..];
+    (ws >= dl && we + dl <= chars.len() && eq(ws - dl) && eq(we))
+        || (we - ws >= 2 * dl && eq(ws) && eq(we - dl))
+}
+
+/// Whether the format popover's inline button for `kind` should draw LIT — i.e.
+/// toggling it would STRIP (the selection / caret-word is already wrapped). PURE;
+/// the popover's active-state oracle, routed through the SAME [`inline_span`] +
+/// [`inline_is_wrapped`] the toggle uses.
+pub(crate) fn inline_active(kind: InlineKind, text: &str, anchor: Option<usize>, cursor: usize) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let (ws, we, _) = inline_span(&chars, anchor, cursor);
+    inline_is_wrapped(kind, &chars, ws, we)
+}
+
 /// Toggle an INLINE format over the selection / word under the caret. See module doc.
 fn inline_toggle(kind: InlineKind, text: &str, anchor: Option<usize>, cursor: usize) -> FormatResult {
     let chars: Vec<char> = text.chars().collect();
     let d: Vec<char> = kind.delim().chars().collect();
     let dl = d.len();
-    let (s, e, has_sel) = sel_range(anchor, cursor);
 
     // The span to (un)wrap: the selection, or the word under the caret. With neither,
     // insert empty delimiters with the caret between them.
-    let (ws, we, want_caret) = if has_sel {
-        (s, e, false)
-    } else {
-        let mut a = cursor;
-        while a > 0 && is_word_char(chars[a - 1]) {
-            a -= 1;
-        }
-        let mut b = cursor;
-        while b < chars.len() && is_word_char(chars[b]) {
-            b += 1;
-        }
-        if b > a {
-            (a, b, false)
-        } else {
-            (cursor, cursor, true) // no word → empty-delimiter insert
-        }
-    };
+    let (ws, we, want_caret) = inline_span(&chars, anchor, cursor);
 
     let eq = |from: usize| from + dl <= chars.len() && chars[from..from + dl] == d[..];
 
@@ -466,6 +637,68 @@ mod tests {
     fn heading_toggles_one_hash() {
         let r = blk(BlockKind::Heading, "Title\n", None, 0);
         assert_eq!(r.text, "# Title\n");
+    }
+
+    // --- HEADING CYCLE (the popover `H` button) ---------------------------
+
+    #[test]
+    fn heading_cycle_walks_off_1_2_3_off() {
+        // off → H1
+        let a = heading_cycle("Title\n", None, 0);
+        assert_eq!(a.text, "# Title\n");
+        assert_eq!(heading_level(&a.text, a.anchor, a.cursor), 1);
+        // H1 → H2
+        let b = heading_cycle(&a.text, a.anchor, a.cursor);
+        assert_eq!(b.text, "## Title\n");
+        // H2 → H3
+        let c = heading_cycle(&b.text, b.anchor, b.cursor);
+        assert_eq!(c.text, "### Title\n");
+        // H3 → off
+        let d = heading_cycle(&c.text, c.anchor, c.cursor);
+        assert_eq!(d.text, "Title\n");
+        assert_eq!(heading_level(&d.text, d.anchor, d.cursor), 0);
+    }
+
+    #[test]
+    fn heading_cycle_caret_rides_the_prefix() {
+        // Caret at col 0 of "Title": off→H1 pushes it past the inserted "# ".
+        let a = heading_cycle("Title\n", None, 0);
+        assert_eq!(a.cursor, 2, "caret rode the inserted `# ` prefix");
+        // A caret INSIDE the word stays with the word (shifts by the prefix len).
+        let b = heading_cycle("Title\n", None, 3);
+        assert_eq!(&b.text[..], "# Title\n");
+        assert_eq!(b.cursor, 5);
+    }
+
+    #[test]
+    fn heading_cycle_applies_one_level_to_all_selected_lines() {
+        // Two lines selected, mixed levels → both land at the FIRST line's next level.
+        let src = "# one\ntwo\n"; // first line is H1, second is plain
+        let r = heading_cycle(src, Some(0), 9);
+        // first line H1 → H2, and the whole range is rewritten to H2.
+        assert_eq!(r.text, "## one\n## two\n");
+    }
+
+    #[test]
+    fn heading_level_reads_the_first_nonempty_line() {
+        assert_eq!(heading_level("plain\n", None, 0), 0);
+        assert_eq!(heading_level("## sec\n", None, 3), 2);
+        // A bare `#word` (no space) is not a heading.
+        assert_eq!(heading_level("#notation\n", None, 2), 0);
+    }
+
+    // --- INLINE active-state oracle (the popover lit test) ----------------
+
+    #[test]
+    fn inline_active_matches_the_toggle_strip_condition() {
+        // Unformatted selection → not active.
+        assert!(!inline_active(InlineKind::Bold, "the quick fox", Some(4), 9));
+        // Inner selection of an existing wrap → active (surrounding delimiters).
+        assert!(inline_active(InlineKind::Bold, "the **quick** fox", Some(6), 11));
+        // Fully-selected wrapped span → active (span begins+ends with delimiters).
+        assert!(inline_active(InlineKind::Bold, "a **beta** c", Some(2), 10));
+        // Caret-word (no selection) inside a wrap → active.
+        assert!(inline_active(InlineKind::Italic, "a *word* here", None, 4));
     }
 
     #[test]

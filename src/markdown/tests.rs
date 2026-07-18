@@ -963,16 +963,16 @@ fn tag_maps_deep_heading_levels() {
 
 #[test]
 fn heading_scale_has_three_sizes_then_flattens() {
-    // The size ladder's named rungs: body 1.0 / subhead 1.25 / section 1.5 /
-    // title 1.8. h3 was nudged 1.3 -> 1.25 to ease the steps down the ladder.
+    // The size ladder's SHAPE, asserted off the named rungs themselves (never
+    // re-pinned literals — the rung VALUES are the consts' job, retuned by
+    // taste rounds like Ladder J's 1.8/1.5/1.25 -> 1.6/1.3/1.15): each level
+    // maps to its rung, the ladder descends strictly, and past ### the ramp
+    // flattens to the subhead rung.
     assert_eq!(heading_scale(0), type_scale::BODY, "no hash => body size");
-    assert_eq!(heading_scale(0), 1.0, "body rung is 1.0");
+    assert_eq!(heading_scale(0), 1.0, "body rung is the 1.0 baseline");
     assert_eq!(heading_scale(1), type_scale::TITLE, "h1 => title");
-    assert_eq!(heading_scale(1), 1.8, "title rung is 1.8");
     assert_eq!(heading_scale(2), type_scale::SECTION, "h2 => section");
-    assert_eq!(heading_scale(2), 1.5, "section rung is 1.5");
     assert_eq!(heading_scale(3), type_scale::SUBHEAD, "h3 => subhead");
-    assert_eq!(heading_scale(3), 1.25, "h3 nudged to the 1.25 subhead rung");
     // Strict ladder ordering, and 4+ hashes share the h3 (subhead) size.
     assert!(heading_scale(1) > heading_scale(2), "h1 > h2");
     assert!(heading_scale(2) > heading_scale(3), "h2 > h3");
@@ -994,6 +994,35 @@ fn heading_scale_has_three_sizes_then_flattens() {
 }
 
 #[test]
+fn heading_weight_gate_title_never_bolds_and_force_overrides_only_the_bit() {
+    use super::headings::heading_weight_bold_with_for_tests as gate;
+    // No force (the shipping default): the world's bit decides, but ONLY for
+    // level >= 2 — the TITLE (`#`) and a non-heading line (0) never bold.
+    for level in 0u8..=9 {
+        assert!(!gate(None, false, level), "bit off => never bold (level {level})");
+    }
+    assert!(!gate(None, true, 0), "level 0 (no heading) never bolds");
+    assert!(!gate(None, true, 1), "TITLE never bolds, even with the bit set");
+    for level in 2u8..=9 {
+        assert!(gate(None, true, level), "bit on => level {level} bolds");
+    }
+    // The A/B gallery force replaces the BIT, never the level gate: `on` bolds
+    // sections even on a bit-off world but STILL never the title; `off` kills
+    // the bit everywhere.
+    assert!(gate(Some(true), false, 2), "force on overrides a bit-off world at ##");
+    assert!(!gate(Some(true), false, 1), "force on still never bolds the TITLE");
+    assert!(!gate(Some(true), true, 1), "force on + bit on still never bolds the TITLE");
+    assert!(!gate(Some(false), true, 2), "force off overrides a bit-on world");
+    // And the public composition (env unset in the test process => no force)
+    // agrees with the pure core's no-force arm.
+    assert_eq!(
+        crate::markdown::heading_weight_bold(true, 2),
+        gate(None, true, 2),
+        "public fn rides the same core (no env force set in tests)"
+    );
+}
+
+#[test]
 fn is_thematic_break_matches_commonmark_breaks_only() {
     // The three break syntaxes, bare and spaced/indented, all qualify.
     assert!(is_thematic_break("---"));
@@ -1009,4 +1038,126 @@ fn is_thematic_break_matches_commonmark_breaks_only() {
     assert!(!is_thematic_break("# heading"), "a heading is not a break");
     assert!(!is_thematic_break("plain prose"), "prose is not a break");
     assert!(!is_thematic_break(""), "empty line is not a break");
+}
+
+// --- strikethrough (`~~struck~~`, the strikethrough-render round) ------------
+
+#[test]
+fn strikethrough_basic_pair_conceals_markers_and_marks_content() {
+    let s = spans("~~struck~~");
+    let st_markup = MdKind::ConcealMarkup(ConcealKind::Strikethrough);
+    assert!(has(&s, 0, 2, st_markup), "opening ~~ dim + concealable: {s:?}");
+    assert!(has(&s, 8, 10, st_markup), "closing ~~ dim + concealable: {s:?}");
+    assert!(has(&s, 2, 8, MdKind::Strikethrough), "inner content struck: {s:?}");
+}
+
+#[test]
+fn strikethrough_mid_sentence_pair() {
+    let s = spans("keep ~~cut this~~ keep");
+    assert!(has(&s, 7, 15, MdKind::Strikethrough), "inner run struck: {s:?}");
+    assert_eq!(
+        s.iter().filter(|(_, k)| *k == MdKind::Strikethrough).count(),
+        1,
+        "exactly one struck span: {s:?}"
+    );
+}
+
+#[test]
+fn single_tilde_never_strikes() {
+    // pulldown's GFM option also accepts single-tilde `~x~`; awl deliberately
+    // keeps it INERT (the `==` exactly-two precedent — the format command and
+    // the writer's-diff serializer both speak `~~`). Prose like `2~3 weeks and
+    // 4~5 days` must never be silently struck.
+    let s = spans("2~3 weeks and 4~5 days");
+    assert!(
+        !s.iter().any(|(_, k)| matches!(
+            k,
+            MdKind::Strikethrough | MdKind::ConcealMarkup(ConcealKind::Strikethrough)
+        )),
+        "a single '~' must never strike: {s:?}"
+    );
+}
+
+#[test]
+fn strikethrough_ignored_inside_inline_code() {
+    // Inline code is literal: `~~x~~` inside backticks stays plain mono Code.
+    let s = spans("`~~x~~`");
+    assert!(has(&s, 1, 6, MdKind::Code { inline: true }), "inner text is plain Code: {s:?}");
+    assert!(
+        !s.iter().any(|(_, k)| *k == MdKind::Strikethrough),
+        "inline code must never strike: {s:?}"
+    );
+}
+
+#[test]
+fn strikethrough_ignored_inside_fenced_code() {
+    let s = spans("```\n~~x~~\n```\n");
+    assert!(
+        !s.iter().any(|(_, k)| matches!(
+            k,
+            MdKind::Strikethrough | MdKind::ConcealMarkup(ConcealKind::Strikethrough)
+        )),
+        "a fence body must never strike: {s:?}"
+    );
+}
+
+#[test]
+fn strikethrough_is_additive_over_context_spans() {
+    // Struck text inside a blockquote: the content carries BOTH the Quote
+    // context span and (pushed AFTER, last-wins for ink) the Strikethrough span
+    // — the `Highlight` lift precedent, but receding. The strike-line bucket
+    // reads the Strikethrough span, so a struck quote still draws its line.
+    let s = spans("> keep ~~cut~~\n");
+    assert!(
+        s.iter().any(|(_, k)| *k == MdKind::Strikethrough),
+        "struck-inside-quote still emits Strikethrough: {s:?}"
+    );
+    assert!(
+        s.iter().any(|(_, k)| *k == MdKind::Quote),
+        "the quote context span is still present: {s:?}"
+    );
+}
+
+#[test]
+fn strikethrough_inside_diff_deletion_blockquote_line() {
+    // Exactly the writer's-diff serializer's Deleted shape: `> ~~line~~` —
+    // the transcript's struck deletions route through THIS parse (one strike
+    // mechanism, no diff-only path).
+    let s = spans("> ~~Drop this whole paragraph entirely.~~\n");
+    assert!(
+        s.iter().any(|(_, k)| *k == MdKind::Strikethrough),
+        "the diff's deletion line parses as struck: {s:?}"
+    );
+    assert!(
+        s.iter()
+            .any(|(_, k)| *k == MdKind::ConcealMarkup(ConcealKind::Strikethrough)),
+        "its ~~ markers conceal off-caret: {s:?}"
+    );
+}
+
+#[test]
+fn tilde_run_of_three_is_a_fence_not_a_strike() {
+    // `~~~` opens a FENCED code block (the tilde-fence test elsewhere); it must
+    // never read as strikethrough markers.
+    let s = spans("~~~\nbody\n~~~\n");
+    assert!(
+        !s.iter().any(|(_, k)| matches!(
+            k,
+            MdKind::Strikethrough | MdKind::ConcealMarkup(ConcealKind::Strikethrough)
+        )),
+        "a tilde fence must never strike: {s:?}"
+    );
+    assert!(
+        s.iter().any(|(_, k)| matches!(k, MdKind::Code { inline: false })),
+        "the tilde fence still parses as a code block: {s:?}"
+    );
+}
+
+#[test]
+fn strikethrough_tag_strings_for_sidecar() {
+    // The sidecar `md_spans` gains the new tag VALUES in the existing field —
+    // a data change, not a shape change (no schema bump).
+    assert_eq!(MdKind::Strikethrough.tag(), "strikethrough");
+    assert_eq!(MdKind::ConcealMarkup(ConcealKind::Strikethrough).tag(), "markup");
+    assert_eq!(ConcealKind::Strikethrough.tag(), "strikethrough");
 }

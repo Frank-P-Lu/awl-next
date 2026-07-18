@@ -208,6 +208,7 @@ impl App {
             "history" => self.config.history = Some(value == "true"),
             "session_restore" => self.config.session_restore = Some(value == "true"),
             "wysiwyg" => self.config.wysiwyg = Some(value == "true"),
+            "popover" => self.config.popover = Some(value == "true"),
             "inline_images" => self.config.inline_images = Some(value == "true"),
             "code_ligatures" => self.config.code_ligatures = Some(value == "true"),
             "outline" => self.config.outline = Some(value == "true"),
@@ -277,6 +278,7 @@ impl App {
             "page_mode" => crate::page::page_on(),
             "typewriter_scroll" => crate::typewriter::typewriter_on(),
             "wysiwyg" => crate::markdown::wysiwyg_on(),
+            "popover" => crate::popover::popover_on(),
             "inline_images" => crate::markdown::inline_images_on(),
             "code_ligatures" => crate::render::code_ligatures_on(),
             "spellcheck" => crate::spell::spellcheck_on(),
@@ -296,6 +298,7 @@ impl App {
             "page_mode" => crate::page::set_page_on(next),
             "typewriter_scroll" => crate::typewriter::set_typewriter_on(next),
             "wysiwyg" => crate::markdown::set_wysiwyg_on(next),
+            "popover" => crate::popover::set_popover_on(next),
             "inline_images" => crate::markdown::set_inline_images_on(next),
             "code_ligatures" => crate::render::set_code_ligatures_on(next),
             "spellcheck" => crate::spell::set_spellcheck_on(next),
@@ -703,7 +706,20 @@ impl App {
             crate::resolve_notes_root(&self.cli_notes_root.clone().or_else(|| cfg.notes_root.clone()));
         let workspace_opt = self.cli_workspace.clone().or_else(|| cfg.workspace.clone());
         self.workspace = Some(crate::resolve_workspace(&workspace_opt, &self.root));
-        crate::spell::set_spellcheck_on(cfg.spellcheck.unwrap_or(true));
+        // CACHE-KEY DISCIPLINE with `Config::apply_sticky_globals`: an ABSENT
+        // key must leave the global AS-IS (the built-in default already
+        // carries it), never force it back to ON. The old `unwrap_or(true)`
+        // broke that — reachable if a prior `persist_spellcheck`/
+        // `setting_toggle` write ever failed to land on disk (I/O error, no
+        // resolvable config path) while the runtime toggle sat OFF: the very
+        // next config-buffer save or Keybindings rebind (both route through
+        // this fn) would silently flip a still-intended-OFF toggle back ON.
+        // Mirrors `apply_sticky_globals_restores_spellcheck`'s law ("absent
+        // pref leaves the global as-is") — see
+        // `reload_config_absent_spellcheck_key_leaves_global_untouched`.
+        if let Some(on) = cfg.spellcheck {
+            crate::spell::set_spellcheck_on(on);
+        }
         self.config = cfg;
         // STICKY PAGE WIDTH: an edited `page_width_prose`/`page_width_code` takes
         // effect immediately too, re-resolved against the buffer that is CURRENTLY
@@ -839,6 +855,12 @@ impl App {
         // (locked decision: save on file switch).
         self.flush_note();
         self.autosave_flush();
+        // WRITING STREAKS: sample the LEAVING buffer's word-delta BEFORE it is
+        // replaced below, so words written in it this session are recorded against
+        // the right document; the anchor is reset after the swap so the arriving
+        // buffer's existing words are never miscounted (native only; gated inside).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_flush();
         // If the flush we just ran raised the clobber-guard notice (the file we
         // are LEAVING changed on disk outside awl, so its unsaved edit could
         // not be safely autosaved), that notice must survive the switch below
@@ -917,6 +939,11 @@ impl App {
         // the cross-document coordinate jump as travel.
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_reset_caret_anchor();
+        // WRITING STREAKS: the buffer just swapped — drop the word-delta anchor so
+        // the arriving document's existing words re-anchor (never counted as
+        // freshly written) on its first flush.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_reset_baseline();
         // LIFETIME STATS: flush on the file-SWITCH trigger (the same door the
         // autosave flush above rides), so the just-recorded touch + any pending
         // keystroke/caret increments survive the switch (native only; gated).
@@ -1223,6 +1250,11 @@ impl App {
             return;
         }
         self.prev_file = self.file.take();
+        // WRITING STREAKS: sample the LEAVING buffer's word-delta before it is
+        // replaced by the fresh note (the anchor is reset below), so words written
+        // in it are recorded before the swap (native only; gated inside).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_flush();
         // PARK the buffer we are leaving (registered under its own identity if
         // it has one) exactly like `load_path`, so a later C-x b / reopen finds
         // it live rather than re-reading disk.
@@ -1242,6 +1274,13 @@ impl App {
         // anchor so its first caret sample re-anchors (see `load_path`).
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_reset_caret_anchor();
+        // WRITING STREAKS: a fresh note is an awl-CREATED buffer born empty, so
+        // anchor EAGERLY at its birth count (0) rather than lazily — otherwise the
+        // words typed before the first idle flush would be anchored away on that
+        // flush (the anchor-swallow bug). See `streaks_anchor_now` vs the lazy
+        // `streaks_reset_baseline` an OPENED file uses.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_anchor_now();
         self.update_title();
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {
@@ -1453,23 +1492,27 @@ impl App {
         }
     }
 
-    /// THE CONSCIOUS MARK ("Keep version"): record the CURRENT buffer state as a
-    /// PINNED, prune-EXEMPT local-history snapshot ([`crate::history::record_pinned`]).
-    /// Keyed on the SAME path the snapshot store records/restores under
+    /// THE CONSCIOUS MARK ("Keep version…"): record the CURRENT buffer state as a
+    /// PINNED, prune-EXEMPT local-history snapshot ([`crate::history::record_pinned`]),
+    /// optionally NAMED (`name` = the naming minibuffer's typed text, `None` for a
+    /// blank Enter — the plain keep; a NAMED SAVE POINT renders its name as the
+    /// timeline's primary cell and is prune-exempt like any pin). Keyed on the SAME
+    /// path the snapshot store records/restores under
     /// ([`crate::history::source_path`]: the buffer's own path, else `self.file`, else
     /// the persistent scratch's stash path — so the scratch can be pinned too). A
     /// no-op for an unnamed note (no history key yet), a git-managed file (git owns
-    /// its versioning — awl pins nothing there), or `history = false`; the store
-    /// itself enforces those gates. Best-effort: any store error is swallowed inside
-    /// `record_pinned`, so a failed pin never disrupts the buffer.
-    pub(super) fn keep_version(&self) {
+    /// its versioning — awl pins nothing there, named or not: the pre-name story,
+    /// unchanged), or `history = false`; the store itself enforces those gates.
+    /// Best-effort: any store error is swallowed inside `record_pinned`, so a failed
+    /// pin never disrupts the buffer.
+    pub(super) fn keep_version(&self, name: Option<&str>) {
         let path = crate::history::source_path(
             self.buffer.path(),
             self.file.as_deref(),
             self.buffer.is_note(),
         );
         if let Some(path) = path {
-            crate::history::record_pinned(&path, &self.buffer.text(), &self.config);
+            crate::history::record_pinned(&path, &self.buffer.text(), &self.config, name);
         }
     }
 
@@ -1491,6 +1534,132 @@ impl App {
         if let Some(path) = path {
             if let Some(content) = crate::history::load(&path, id) {
                 self.buffer.set_text(&content);
+            }
+        }
+    }
+
+    /// THE WRITER'S DIFF — open the READ-ONLY prose-diff view comparing the CURRENT
+    /// buffer against the version whose restore `id` is given (the History picker's
+    /// highlighted row). Resolves the old content via [`crate::history::load`] (the
+    /// awl log for a loose file, `git show` for a git-managed one — the SAME seam
+    /// `restore_history` uses, keyed by the same shared [`crate::history::source_path`]),
+    /// renders the marked-up-manuscript transcript (`crate::prosediff`, the gate's
+    /// SENTENCE × 0.5 recipe), and parks it in `self.diff_view`. The BUFFER is never
+    /// touched — `sync_view` shows the transcript in place of the buffer text, Esc
+    /// (or a second Compare) drops the view. A no-op for an unnamed note / an
+    /// unresolvable id (best-effort — a failed compare must never disrupt the buffer).
+    pub(super) fn enter_diff_view_for(&mut self, id: &str) {
+        let Some(path) = crate::history::source_path(
+            self.buffer.path(),
+            self.file.as_deref(),
+            self.buffer.is_note(),
+        ) else {
+            return;
+        };
+        let Some(old) = crate::history::load(&path, id) else {
+            return;
+        };
+        // A human LABEL for "what am I comparing against": a git-managed version
+        // carries its commit SUBJECT; a loose snapshot uses its relative-time label
+        // (the same wording the timeline row shows). Best-effort — an id not found in
+        // the current listing falls back to a calm generic label.
+        let label = crate::history::list(&path)
+            .into_iter()
+            .find(|s| s.id == id)
+            .map(|s| {
+                s.subject.clone().unwrap_or_else(|| {
+                    crate::history::relative_label(crate::history::now_millis(), s.timestamp)
+                })
+            })
+            .unwrap_or_else(|| "an earlier version".to_string());
+        self.open_diff_view(&old, label);
+    }
+
+    /// THE WRITER'S DIFF — "Compare with version…" from the buffer: open the diff view
+    /// against the MOST-RECENT version. Lists the store ([`crate::history::list`],
+    /// newest-first) and compares against `[0]` — a loose file's newest snapshot, or
+    /// a git-managed file's HEAD (its git log's first entry, resolved by `git show`).
+    /// A buffer with NO history (an untracked loose file never saved, an unnamed note)
+    /// shows a calm notice and stays put — never an empty diff or a crash.
+    pub(super) fn compare_with_latest(&mut self) {
+        let Some(path) = crate::history::source_path(
+            self.buffer.path(),
+            self.file.as_deref(),
+            self.buffer.is_note(),
+        ) else {
+            self.set_toast_notice("no earlier version to compare");
+            return;
+        };
+        match crate::history::list(&path).into_iter().next() {
+            Some(latest) => self.enter_diff_view_for(&latest.id),
+            None => self.set_toast_notice("no earlier version to compare"),
+        }
+    }
+
+    /// Shared owner of ENTERING the diff view: render `old` (the compared version) vs
+    /// the current buffer into the marked-up transcript, park it in `self.diff_view`,
+    /// close any open overlay + drop its live-preview state, reset the viewport to the
+    /// top of the transcript, and resync. The ONE place `diff_view` is set, so the
+    /// two entry points (`enter_diff_view_for`, `compare_with_latest`) can't diverge.
+    fn open_diff_view(&mut self, old: &str, label: String) {
+        let new = self.buffer.text();
+        let title = format!("Comparing with {label}");
+        let transcript = crate::prosediff::render_markdown(
+            old,
+            &new,
+            crate::prosediff::Params::shipping(),
+            &title,
+        );
+        // Close any summoned overlay (the History picker this may have come from) and
+        // drop its derived-preview state, so the diff view owns the screen cleanly.
+        self.overlay = None;
+        self.history_preview = None;
+        self.history_scroll_before = None;
+        self.diff_view = Some(super::DiffView { transcript, label });
+        // Start at the TOP of the transcript (a fresh document); the caret parks on
+        // line 1 in `sync_view`, and Esc's resync re-clamps the buffer's own scroll.
+        self.scroll_lines = 0;
+        self.sync_view(false);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// THE WRITER'S DIFF read-only gate — the ONE classifier `App::apply` consults to
+    /// keep the "Compare with version…" view read-only. `None` when NOT comparing (the
+    /// normal apply path proceeds untouched). While comparing, EVERY action falls into
+    /// exactly one class: [`DiffGate::Exit`] (Esc / a second Compare — leave the view),
+    /// [`DiffGate::Pass`] (zoom + page-scroll — read affordances that never mutate the
+    /// buffer, so they run normally), or [`DiffGate::Swallow`] (everything else — typing,
+    /// delete, paste, format, undo, Save, a buffer switch, opening a picker — a calm
+    /// no-op, so the derived transcript can never be edited under the caret). Pure over
+    /// `(self.diff_view.is_some(), action)`, so the read-only law is unit-testable
+    /// without an event loop.
+    pub(super) fn diff_view_gate(&self, action: &crate::keymap::Action) -> Option<DiffGate> {
+        use crate::keymap::Action;
+        if self.diff_view.is_none() {
+            return None;
+        }
+        Some(match action {
+            Action::Cancel | Action::CompareVersion => DiffGate::Exit,
+            Action::ZoomIn
+            | Action::ZoomOut
+            | Action::ZoomReset
+            | Action::PageScrollDown
+            | Action::PageScrollUp => DiffGate::Pass,
+            _ => DiffGate::Swallow,
+        })
+    }
+
+    /// THE WRITER'S DIFF — leave the read-only view (Esc, or a second Compare): drop
+    /// `self.diff_view` and resync so the writing column shows the LIVE document again
+    /// (the buffer was never touched — "back to now exactly"). The follow-resync
+    /// re-clamps the viewport onto the buffer's own caret. A no-op when not comparing.
+    pub(super) fn exit_diff_view(&mut self) {
+        if self.diff_view.take().is_some() {
+            self.sync_view(true);
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window.request_redraw();
             }
         }
     }
@@ -2190,6 +2359,89 @@ mod tests {
 
             crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
         });
+    }
+
+    // ── SPELL-CHECK TOGGLE x CONFIG RELOAD (the spell-toggle-x-theme report):
+    // `App::reload_config` re-applies `spellcheck` LIVE (unlike theme/caret/
+    // dictionary, which only apply once at launch) so a hand-edited
+    // `spellcheck = false` in the Settings buffer takes effect on save. That
+    // special-casing must still obey `Config::apply_sticky_globals`'s law: an
+    // ABSENT key leaves the global AS-IS, never forces a default. ──────────
+
+    /// THE FIX this round makes: an absent `spellcheck` key on disk must NOT
+    /// force the global to the built-in ON default — it must leave whatever is
+    /// currently running untouched, exactly like `apply_sticky_globals`
+    /// (`apply_sticky_globals_restores_spellcheck` in `config/tests.rs` pins
+    /// the same law at the launch seam). Reachable if an earlier
+    /// `persist_spellcheck`/`setting_toggle` write never reached disk (I/O
+    /// error, unresolvable config path) while the runtime toggle sat OFF: the
+    /// very next config-buffer save or Keybindings rebind — both call
+    /// `reload_config` — used to silently flip a still-intended-OFF toggle
+    /// back ON.
+    #[test]
+    fn reload_config_absent_spellcheck_key_leaves_global_untouched() {
+        let _sp = crate::testlock::serial();
+        let saved = crate::spell::spellcheck_on();
+        let fake = Arc::new(crate::fs::InMemoryFs::new().with_dir("/w/proj"));
+        crate::fs::with_fs(fake, || {
+            let cfg_path = PathBuf::from("/cfg/config.toml");
+            // A config file that has never recorded a spellcheck preference —
+            // the common case for anyone who has never touched the toggle.
+            let mut config = Config::empty();
+            config.path = cfg_path.clone();
+            assert_eq!(config.spellcheck, None);
+            let mut app = App::new(None, PathBuf::from("/w/proj"), None, None, config);
+
+            // The runtime global sits OFF (e.g. a toggle whose persist never
+            // landed), but the disk file still has no `spellcheck` key.
+            crate::spell::set_spellcheck_on(false);
+            assert_eq!(Config::load(cfg_path.clone()).spellcheck, None, "disk still absent");
+
+            app.reload_config();
+
+            assert!(
+                !crate::spell::spellcheck_on(),
+                "an absent disk key must leave the global AS-IS, not force it back ON"
+            );
+
+            // The other direction too: ON stays ON across the same reload.
+            crate::spell::set_spellcheck_on(true);
+            app.reload_config();
+            assert!(crate::spell::spellcheck_on(), "and leaves an ON global alone too");
+        });
+        crate::spell::set_spellcheck_on(saved);
+    }
+
+    /// The POSITIVE half of the same seam: a hand-edited `spellcheck = false`
+    /// saved into the config file DOES take effect immediately on
+    /// `reload_config` — the documented "takes effect immediately, exactly
+    /// like the Toggle Spellcheck command" contract (`reload_config`'s own
+    /// doc comment). Round-trips through the real `persist_pref`/`Config::load`
+    /// pair, not a hand-built `Config`.
+    #[test]
+    fn reload_config_reapplies_a_persisted_spellcheck_value_immediately() {
+        let _sp = crate::testlock::serial();
+        let saved = crate::spell::spellcheck_on();
+        let fake = Arc::new(crate::fs::InMemoryFs::new().with_dir("/w/proj"));
+        crate::fs::with_fs(fake, || {
+            let cfg_path = PathBuf::from("/cfg/config.toml");
+            let mut config = Config::empty();
+            config.path = cfg_path.clone();
+            let mut app = App::new(None, PathBuf::from("/w/proj"), None, None, config);
+            crate::spell::set_spellcheck_on(true);
+
+            // Toggle OFF through the real seam (mirrors `Action::ToggleSpellcheck`
+            // + `App::persist_spellcheck`), then reload — mirrors saving the
+            // Settings buffer right after a hand-edit.
+            crate::spell::toggle();
+            app.persist_spellcheck();
+            assert_eq!(app.config.spellcheck, Some(false), "persist mirrors self.config");
+
+            crate::spell::set_spellcheck_on(true); // simulate reload starting from a stale global
+            app.reload_config();
+            assert!(!crate::spell::spellcheck_on(), "the persisted OFF value re-applies on reload");
+        });
+        crate::spell::set_spellcheck_on(saved);
     }
 
     #[test]

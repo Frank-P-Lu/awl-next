@@ -126,6 +126,9 @@ impl App {
         // only; config-gated + dirty-gated inside).
         #[cfg(not(target_arch = "wasm32"))]
         self.stats_flush();
+        // WRITING STREAKS: sample the day-delta on the SAME blur trigger.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_flush();
         // HOLD-⌘ SHORTCUT PEEK: the window losing focus breaks the hold — cancel a
         // pending peek / close an open one, so it never lingers behind another app
         // (the macOS focus-loss edge the HUD's own `hud_release_on_mods` covers for
@@ -229,7 +232,12 @@ impl App {
     /// structural guarantee) and its `Moved` events stay byte-identical to
     /// before the move machinery existed.
     pub(super) fn on_moved(&mut self, _position: winit::dpi::PhysicalPosition<i32>) {
-        if crate::theme::background().is_lava() {
+        // Gated on the AMBIENT capability (`Theme::has_ambient_motion` — lava
+        // OR twinkling stars, the one gate): both push the same ~10 fps async
+        // ambient presents this hold exists to keep out of the window-server's
+        // move transaction. A static world presents nothing around a move, so
+        // it takes this arm as a TOTAL no-op, byte-identical as ever.
+        if crate::theme::active().has_ambient_motion() {
             self.move_settle_at = Some(Instant::now());
             self.lava_tick_at = None;
             self.sync_present_txn();
@@ -247,6 +255,7 @@ impl App {
         let want = present_sync_armed(
             self.resize_settle_at.is_some(),
             self.move_settle_at.is_some(),
+            self.crossing_settle_at.is_some(),
         );
         if want == self.present_sync_on {
             return;
@@ -293,6 +302,25 @@ impl App {
     pub(super) fn finish_move_settle(&mut self) {
         self.move_settle_at = None;
         self.lava_tick_at = None;
+        self.sync_present_txn();
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// The THEME-PREVIEW CROSSING settle (the `CROSSING_SYNC_SETTLE` debounce
+    /// elapsed with no further boundary crossing): drop this source's claim on
+    /// the present-transaction sync (the one owner keeps it armed while a resize
+    /// or move stream is still live — a crossing can overlap a drag) and request
+    /// the ONE guaranteed follow-up present. The crossing frame itself already
+    /// presented in-transaction (the sync was armed the instant the crossing was
+    /// detected, before the keypress's redraw ran); this settle redraw is the
+    /// bracket's far edge — a second solid present after the cadence changed, so
+    /// the compositor can never be left holding a single stale drawable. Clearing
+    /// `crossing_settle_at` first is what makes the `about_to_wait` arm (gated on
+    /// the stamp) fire exactly once. Live-only: a headless capture never previews.
+    pub(super) fn finish_crossing_settle(&mut self) {
+        self.crossing_settle_at = None;
         self.sync_present_txn();
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();

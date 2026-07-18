@@ -27,6 +27,14 @@ pub enum ConcealKind {
     /// A `==highlight==` delimiter pair (the wash stroke IS the affordance once
     /// the `==` marks hide — see `MdKind::Highlight`).
     Highlight,
+    /// A `~~strikethrough~~` delimiter pair (GFM, gated to EXACTLY-two tildes,
+    /// mirroring the `==` exactly-two rule) — LINE-scoped exactly like
+    /// [`Emphasis`](Self::Emphasis): off the caret's line the `~~` marks hide to
+    /// zero-width and the drawn STRIKE LINE (see `render::spans::strike_line_band`,
+    /// the one strike-geometry owner) is the affordance; on the caret's own line
+    /// the raw markers reveal for editing. The struck CONTENT keeps its own
+    /// `MdKind::Strikethrough` span (muted ink + the line), never this kind.
+    Strikethrough,
     /// A FENCED code block's ENTIRE range — both fence lines (open + close) and
     /// the info string. The renderer only ever conceals the MARKER lines from
     /// this span (never the body, which carries its own `Code`/`CodeSyntax`
@@ -108,6 +116,7 @@ impl ConcealKind {
             ConcealKind::Emphasis => "emphasis",
             ConcealKind::Code => "code",
             ConcealKind::Highlight => "highlight",
+            ConcealKind::Strikethrough => "strikethrough",
             ConcealKind::Fence => "fence",
             ConcealKind::Frontmatter => "frontmatter",
             ConcealKind::Table => "table",

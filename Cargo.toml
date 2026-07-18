@@ -64,6 +64,12 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 # embedding-permission bits. This exact parser version is already locked through
 # cosmic-text/fontdb; making it direct adds no second parser to the graph.
 ttf-parser = "0.25.1"
+# WRITING STREAKS records each day under the user's LOCAL calendar day; std exposes
+# no local-timezone offset, so the native recording engine reads `tm_gmtoff` via
+# libc's `localtime_r` (see `app/streaks.rs`). Already present transitively in the
+# graph (winit/arboard), so making it direct adds nothing to the build; native-only
+# (the recording engine is native-only, like the daemon / session restore).
+libc = "0.2"
 
 # --- macOS-only dep ---------------------------------------------------------
 # The DEBUG panel's live `gpu N MB` line reads Metal's

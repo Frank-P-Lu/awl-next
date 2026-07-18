@@ -263,7 +263,61 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // `/169` — PASSIVE CRASH RECOVERY: the `about` block gains `pending_crash`.
 // False by default/headlessly; an explicit injected pending marker reports true
 // and adds the matching quiet About-card line. The startup center notice is gone.
-pub const SCHEMA_VERSION: u32 = 169;
+// `/170` — THE FORMAT POPOVER: a new top-level `popover` block (`{ on, shown,
+// card, buttons }`) reporting the reveal-on-select format toolbar — `on` mirrors
+// `crate::popover::popover_on()` (default ON), `shown` is whether it is up this
+// frame (a mouse selection live, or the `AWL_POPOVER` capture probe), and when
+// shown `card` is `[x,y,w,h]` + `buttons` is one `{label, active, x0, x1}` per
+// button (the SAME geometry the buttons draw + the click hit-test reads). Down by
+// default (no pointer in a capture), so a plain `--screenshot` reports
+// `shown: false, card: null, buttons: []` and is byte-identical apart from the
+// always-present block.
+// `/171` — WRITING STREAKS: a new top-level `streaks` block (`{ open, streak,
+// today_words, cells: [..] }`) — the summoned year-calendar heatmap card
+// (`streaks.rs`). `open` is false by default (a default capture is byte-identical
+// apart from the added block), true via the palette "Writing streaks" command /
+// the `--streaks` capture flag. The figures + `cells` intensity grid are the LIVE
+// year the App pushed OR the fixed synthetic `streaks::placeholder` in a capture
+// (no persisted store), so a `--streaks` capture is deterministic + byte-stable.
+// `/172` — THE WRITER'S DIFF: a new top-level `diff` block — `null` for every
+// ordinary capture (a plain `--screenshot` is byte-identical apart from the added
+// key), else `{ active, label, struck, washed, modified, moved, folds }` reporting
+// the STATE of the read-only prose-diff view (`crate::prosediff`) the capture
+// harness rendered (`AWL_DIFF_OLD`/`AWL_DIFF_NEW`). A state oracle only — the
+// struck/washed APPEARANCE is asserted over the PNG's pixels.
+// `/173` — TWINKLING STARS: the `page` block gains `ambient` — the active
+// world's `AmbientStyle` capability. `{ "style": "none" }` for the fifteen
+// starless worlds (their PNG stays byte-identical; only this sidecar key is
+// new); for a stars world `{ "style": "stars", tint, count, phase }` — the
+// authored tint, the number of star instances actually drawn this frame
+// (post margin/ink-zone cull — 0 when page mode is off), and the effective
+// twinkle phase (the FIXED 0.0 in every headless capture, the determinism
+// law; the dev `AWL_STARS_PHASE` gallery knob pins another). A state oracle
+// only — star PLACEMENT/brightness are asserted over the PNG's pixels.
+// `/174` — STREAKS VIEW TOGGLE: the `streaks` block gains `view` — which PAGE
+// of the summoned card is showing (`"heatmap"`, the default on every summon, or
+// `"cumulative"`, the running-total chart reached with ←/→ while the card is
+// open — a `--keys "Left"` replay flips it) — and `total_words`, the cumulative
+// window's final running total (the figure the chart tops out at; the fixed
+// synthetic placeholder total in a capture). Same `streaks_effective_view` +
+// `card_view` owners the pixels read.
+// `/175` — NAMED SAVE POINTS: "Keep version…" now opens a naming MINIBUFFER
+// (`OverlayKind::KeepName`, `overlay.mode == "keep_version"`, the Rename shape:
+// single editable row, prompt via `overlay.hint`). No new sidecar field — the
+// existing `overlay` block carries it; the version bumps because a new overlay
+// mode string is now reachable (the `/148`/`/157` precedent). A History picker's
+// NAMED row also re-shapes its existing cells (name as the primary `items` text,
+// "when · +N −M" in `bindings`); unnamed rows and a default capture are
+// byte-identical.
+// `/176` — PER-WORLD HEADING WEIGHT (+ Ladder J): the `theme` block gains
+// `heading_bold` — the EFFECTIVE section-heading weight bit this capture rendered
+// with (the active world's `Theme::heading_bold` folded through the ONE owner
+// `markdown::heading_weight_bold`, so the `AWL_HEADING_BOLD_FORCE` gallery knob is
+// reflected honestly). `true` ⇒ `##`/`###`+ shaped at the world's real bundled
+// Bold; the TITLE (`#`) never bolds regardless. The size ladder also retuned
+// (Ladder J: TITLE 1.6 / SECTION 1.3 / SUBHEAD 1.15), so markdown captures'
+// heading geometry changes everywhere — expected, not a schema matter.
+pub const SCHEMA_VERSION: u32 = 176;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {
@@ -294,7 +348,7 @@ pub use film::{FilmRenderer, FRAME_MS};
 pub use modes::{
     capture_motion, capture_motion_diagonal, capture_motion_vertical, capture_with,
 };
-pub use opts::{BuffersInfo, CaptureInfo, CaptureOpts, OverlayInfo, ProjectInfo};
+pub use opts::{BuffersInfo, CaptureInfo, CaptureOpts, DiffInfo, OverlayInfo, ProjectInfo};
 pub use oracle::build_oracle;
 // The sidecar module stays private (write-only); its JSON-string escaper is the
 // crate's ONE escaper, shared with the storyboard trace so the two artifacts
