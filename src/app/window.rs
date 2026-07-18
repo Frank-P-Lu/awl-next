@@ -261,10 +261,15 @@ impl App {
     /// tracked on every platform; the layer call is macOS-only (the artifact
     /// class is the macOS window-server transaction race).
     pub(super) fn sync_present_txn(&mut self) {
+        // The crossing source stays armed while EITHER the preview-settle debounce
+        // is pending (`crossing_settle_at`) OR the event-ordered teardown is still
+        // waiting for the post-reshape present (`crossing_teardown_pending`) — the
+        // latter is what holds the bracket ON across the reshape's present so it
+        // can never coalesce into an unbracketed frame.
         let want = present_sync_armed(
             self.resize_settle_at.is_some(),
             self.move_settle_at.is_some(),
-            self.crossing_settle_at.is_some(),
+            self.crossing_settle_at.is_some() || self.crossing_teardown_pending,
         );
         if want == self.present_sync_on {
             return;
@@ -272,11 +277,12 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         if crate::probe::live_active() {
             crate::probe::trace(format_args!(
-                "present_txn {} (resize={} move={} crossing={})",
+                "present_txn {} (resize={} move={} crossing={} teardown_pending={})",
                 if want { "ON" } else { "OFF" },
                 self.resize_settle_at.is_some(),
                 self.move_settle_at.is_some(),
                 self.crossing_settle_at.is_some(),
+                self.crossing_teardown_pending,
             ));
         }
         self.present_sync_on = want;
@@ -329,21 +335,47 @@ impl App {
         }
     }
 
-    /// The THEME-PREVIEW CROSSING settle (the `CROSSING_SYNC_SETTLE` debounce
-    /// elapsed with no further boundary crossing): drop this source's claim on
-    /// the present-transaction sync (the one owner keeps it armed while a resize
-    /// or move stream is still live — a crossing can overlap a drag) and request
-    /// the ONE guaranteed follow-up present. The crossing frame itself already
-    /// presented in-transaction (the sync was armed the instant the crossing was
-    /// detected, before the keypress's redraw ran); this settle redraw is the
-    /// bracket's far edge — a second solid present after the cadence changed, so
-    /// the compositor can never be left holding a single stale drawable. Clearing
-    /// `crossing_settle_at` first is what makes the `about_to_wait` arm (gated on
-    /// the stamp) fire exactly once. Live-only: a headless capture never previews.
+    /// The PREVIEW SETTLE (the `CROSSING_SYNC_SETTLE` debounce elapsed with no
+    /// further preview step) — PHASE 1 of an EVENT-ORDERED bracket teardown, NOT
+    /// an immediate disarm. By the time this fires, `apply_deferred_theme_font`
+    /// has ALREADY run earlier in this same `about_to_wait` pass (both debounces
+    /// are re-stamped together on every preview step, and the theme-font arm is
+    /// checked first), so the reshaped view is applied but has NOT yet presented.
+    /// If we disarmed the bracket here, that pass's coalesced redraw would carry
+    /// the heaviest frame of the whole preview to the compositor UNBRACKETED — the
+    /// exact vanishing-page race. Instead we clear the debounce but HAND OFF to
+    /// `crossing_teardown_pending`, which keeps the bracket armed
+    /// (`sync_present_txn`'s OR) until the post-present hook in
+    /// `on_redraw_requested` observes that the reshaped frame has presented INSIDE
+    /// the bracket, and only THEN disarms. Clearing `crossing_settle_at` first is
+    /// what makes the `about_to_wait` arm (gated on the stamp) fire exactly once.
+    /// A resize/move stream still live keeps the sync armed regardless (the one
+    /// owner composes all three). Live-only: a headless capture never previews.
     pub(super) fn finish_crossing_settle(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::probe::live_active() { crate::probe::trace(format_args!("finish_crossing_settle")); }
+        if crate::probe::live_active() { crate::probe::trace(format_args!("finish_crossing_settle -> teardown armed (bracket HELD through reshape present)")); }
         self.crossing_settle_at = None;
+        // Hand off to the event-ordered teardown: hold the bracket ON until the
+        // post-reshape present completes (see `finish_crossing_teardown`).
+        self.crossing_teardown_pending = true;
+        self.sync_present_txn(); // no-op transition: was ON via the debounce, stays ON via the hold.
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// PHASE 2 of the event-ordered bracket teardown, fired from the post-present
+    /// hook in `on_redraw_requested` once a frame has PRESENTED with
+    /// `crossing_teardown_pending` set — i.e. the reshaped frame has landed on the
+    /// compositor INSIDE the transaction. Only now do we drop the preview's claim
+    /// on the present-transaction sync (a live resize/move stream keeps it armed —
+    /// the one owner composes all three) and request one final clean async present.
+    /// This is the happens-after that replaces the old timer race: teardown
+    /// STRICTLY follows the bracketed reshape present, never coalesces with it.
+    pub(super) fn finish_crossing_teardown(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::live_active() { crate::probe::trace(format_args!("finish_crossing_teardown (reshape presented in-bracket) -> disarm")); }
+        self.crossing_teardown_pending = false;
         self.sync_present_txn();
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
@@ -513,6 +545,16 @@ impl App {
             if !is_stamp {
                 self.frame_costs.push(cost_ms);
             }
+        }
+
+        // EVENT-ORDERED PREVIEW-BRACKET TEARDOWN (phase 2): a frame just presented
+        // while a teardown was pending — that frame is the reshaped one, and it
+        // landed INSIDE the present transaction. Disarm the bracket now, strictly
+        // AFTER the bracketed present, instead of racing it on a timer. Gated on an
+        // actual present (`frame_presented`) so a skipped/occluded frame keeps the
+        // bracket held until a real present carries the reshape through.
+        if frame_presented && self.crossing_teardown_pending {
+            self.finish_crossing_teardown();
         }
 
         // Keep the loop hot ONLY while the spring animates — the debug panel

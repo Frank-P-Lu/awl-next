@@ -428,62 +428,21 @@ pub fn lava_paused(resizing: bool, moving: bool, blurred: bool) -> bool {
     resizing || moving || blurred
 }
 
-/// What a THEME-PICKER PREVIEW step must do about the present cadence / pipeline
-/// state when it swaps the active world out from under the compositor. See
-/// [`preview_crossing`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CrossingAction {
-    /// The preview step stays on the SAME side of every heavyweight-pipeline
-    /// boundary — both worlds tick the ambient lava lamp or NEITHER does, AND
-    /// both are one-bit or NEITHER is. The keypress's own redraw is the whole
-    /// story; no extra present machinery. (The vast majority of preview steps.)
-    Steady,
-    /// The preview CROSSED a heavyweight-pipeline boundary and the crossing frame
-    /// must be bracketed by the present-transaction sync (+ one guaranteed
-    /// follow-up present at settle) so the macOS compositor can never hold/blend
-    /// a stale drawable — the live "the writing surface vanishes" report class
-    /// (2026-07-17), the same present/compositor-race the landed resize-stretch +
-    /// move-flash fixes closed. TWO boundaries qualify, both symmetric:
-    /// - the **lava** boundary (a ticking lava world ⇄ a static non-lava world):
-    ///   the ~10 fps ambient present cadence STARTS or STOPS underfoot;
-    /// - the **one-bit** boundary (Wagtail ⇄ any hued world): leaving/entering the
-    ///   monochrome world reconfigures the dither/InverseFill pipeline state on the
-    ///   crossing frame. Wagtail→Magpie crosses NO lava boundary, so before this
-    ///   arm the vanish escaped the bracket entirely (the reopened 2026-07-18
-    ///   "still missing from mangrove/magpie, switching from wagtail" report).
-    SyncAcrossCrossing,
-}
-
-/// THE PREVIEW-CROSSING DECISION — pure over the OUTGOING and INCOMING worlds, so
-/// the whole world-pair matrix is law-testable without a window. A preview step
-/// gets the present-transaction bracket iff it crosses a HEAVYWEIGHT-PIPELINE
-/// BOUNDARY — one whose crossing frame changes the present cadence or reconfigures
-/// costly GPU state under the compositor:
-/// - **AMBIENT:** the ambient tick's cadence is gated on the active world's
-///   `Theme::has_ambient_motion()` (`App::about_to_wait`) — the lava lamp AND
-///   the twinkling stars ride the same ~10 fps clock — so flipping that bit
-///   changes how often frames present: an ambient world pushes ~10 fps async
-///   presents; the static world it lands on schedules none. (Formerly the
-///   narrower `is_lava()` boundary; the TWINKLING-STARS round widened it to the
-///   one shared gate the tick itself reads, so Currawong crossings bracket too.)
-/// - **ONE-BIT:** Wagtail is the monochrome world (dither uniforms on the search /
-///   highlight pipelines, the InverseFill machinery). Leaving or entering it flips
-///   that pipeline state on the crossing frame. This boundary is INDEPENDENT of
-///   the ambient one — Wagtail↔Magpie is static↔static, a same-side AMBIENT hop
-///   that would otherwise read `Steady`, which is exactly how the reopened vanish
-///   slipped the bracket.
-/// Either boundary (or both) arms `SyncAcrossCrossing`; a step on the same side of
-/// BOTH leaves the compositor alone. The decision is symmetric in each boundary
-/// (either direction crosses), matching the report's "or arrowing back".
-pub fn preview_crossing(prev: &crate::theme::Theme, next: &crate::theme::Theme) -> CrossingAction {
-    let ambient_boundary = prev.has_ambient_motion() != next.has_ambient_motion();
-    let one_bit_boundary = prev.is_one_bit() != next.is_one_bit();
-    if ambient_boundary || one_bit_boundary {
-        CrossingAction::SyncAcrossCrossing
-    } else {
-        CrossingAction::Steady
-    }
-}
+// THE PREVIEW-CROSSING CLASSIFICATION IS RETIRED (2026-07-18). It once decided
+// whether a theme-preview step got the present-transaction bracket by testing the
+// OUTGOING/INCOMING pair against a HEAVYWEIGHT-PIPELINE boundary (ambient cadence
+// or one-bit pipeline). A live probe of the reported Mangrove→Magpie gesture
+// proved the classification structurally wrong: the actual LANDING step
+// (`Galah→Magpie`) is same-side on both boundaries → it read `Steady` and armed
+// NO bracket, so the landing frame presented unbracketed while the bracket that
+// did arm (on the transient `Mangrove→Galah` boundary earlier in the nav) had
+// already torn down. Three successive widenings (is_lava → ambient → one-bit)
+// chased the boundary and never covered the landing. The fix is the simpler
+// truth: `App::retint_theme_preview` arms the bracket on EVERY preview step
+// unconditionally, and the teardown is event-ordered (it waits for the reshaped
+// frame's in-bracket present) rather than a per-crossing timer. There is no
+// per-pair decision left to make, so the pure fn + its `CrossingAction` enum are
+// gone; `has_ambient_motion` / `is_one_bit` survive for their other callers.
 
 /// Choose the viewport used to lay out the metaball field. During a live resize
 /// the last-settled dimensions are held while the live viewport and column mask
@@ -1512,87 +1471,9 @@ mod tests {
         assert!((bright.r as i32) < hi.r as i32, "the value dim pulls the pill back toward ground");
     }
 
-    // --- The theme-preview CROSSING decision (the vanishing-page fix) ----------
-
-    /// THE PREVIEW-CROSSING LAW — born from the user's "arrowing Mangrove→Magpie
-    /// makes the writing surface vanish" report (2026-07-17) and WIDENED after the
-    /// reopened "still missing from mangrove/magpie, switching from wagtail"
-    /// (2026-07-18). A no-wildcard sweep over EVERY ordered world pair in
-    /// [`crate::theme::THEMES`] (a new world joins the matrix automatically):
-    /// [`preview_crossing`] arms the present bracket EXACTLY when the pair straddles
-    /// a HEAVYWEIGHT-PIPELINE boundary — EITHER the lava boundary (one world ticks
-    /// the ~10 fps ambient lamp, the other is static) OR the one-bit boundary
-    /// (Wagtail ⇄ a hued world flips the dither/InverseFill pipeline state) — and
-    /// takes every same-side-of-BOTH hop as `Steady`. This is the ONLY input to the
-    /// live arming seam (`App::retint_theme_preview`), so pinning the pure decision
-    /// pins the whole choice of which preview steps get the compositor-race
-    /// protection. The one-bit arm is what the lava-only test structurally missed:
-    /// Wagtail→Magpie is non-lava→non-lava, a same-side LAVA hop that read `Steady`.
-    #[test]
-    fn preview_crossing_arms_exactly_on_the_ambient_or_one_bit_boundary() {
-        use crate::theme::THEMES;
-        for prev in THEMES.iter() {
-            for next in THEMES.iter() {
-                // The AMBIENT boundary (TWINKLING-STARS round: widened from
-                // `is_lava` to the one gate the tick reads — lava OR stars).
-                let ambient = prev.has_ambient_motion() != next.has_ambient_motion();
-                let one_bit = prev.is_one_bit() != next.is_one_bit();
-                let crosses = ambient || one_bit;
-                let want = if crosses {
-                    CrossingAction::SyncAcrossCrossing
-                } else {
-                    CrossingAction::Steady
-                };
-                assert_eq!(
-                    preview_crossing(prev, next),
-                    want,
-                    "{} -> {}: ambient boundary = {ambient}, one-bit boundary = {one_bit}",
-                    prev.name,
-                    next.name,
-                );
-            }
-        }
-
-        // The reported pairs, both directions, plus their neighbours — the concrete
-        // anchors the roster sweep above generalises (guards a future world roster
-        // reorder from silently emptying the matrix of a real crossing).
-        let w = |name: &str| THEMES.iter().find(|t| t.name == name).unwrap();
-        let (mangrove, magpie, firetail, tawny, wagtail) =
-            (w("Mangrove"), w("Magpie"), w("Firetail"), w("Tawny"), w("Wagtail"));
-        assert!(mangrove.background.is_lava() && firetail.background.is_lava(), "both lava worlds present");
-        assert!(!magpie.background.is_lava() && !tawny.background.is_lava(), "the non-lava neighbours");
-        assert!(wagtail.is_one_bit(), "Wagtail is the one-bit world");
-        assert!(!magpie.is_one_bit() && !mangrove.is_one_bit(), "the hued neighbours are not one-bit");
-        assert!(!wagtail.background.is_lava(), "Wagtail is a STATIC (non-lava) one-bit world");
-        // The ORIGINAL report, both ways: lava ⇄ non-lava crosses.
-        assert_eq!(preview_crossing(mangrove, magpie), CrossingAction::SyncAcrossCrossing);
-        assert_eq!(preview_crossing(magpie, mangrove), CrossingAction::SyncAcrossCrossing);
-        // THE REOPENED report — Wagtail (one-bit, NON-lava) ⇄ a hued NON-lava world
-        // crosses NO lava boundary yet MUST arm the bracket (the one-bit arm):
-        assert_eq!(preview_crossing(wagtail, magpie), CrossingAction::SyncAcrossCrossing);
-        assert_eq!(preview_crossing(magpie, wagtail), CrossingAction::SyncAcrossCrossing);
-        // Wagtail ⇄ a lava world crosses BOTH boundaries — still one arm.
-        assert_eq!(preview_crossing(wagtail, mangrove), CrossingAction::SyncAcrossCrossing);
-        assert_eq!(preview_crossing(mangrove, wagtail), CrossingAction::SyncAcrossCrossing);
-        // Same-side-of-both hops stay Steady: lava→lava and hued-static→hued-static.
-        assert_eq!(preview_crossing(mangrove, firetail), CrossingAction::Steady);
-        assert_eq!(preview_crossing(magpie, tawny), CrossingAction::Steady);
-        // A world to itself never crosses (Wagtail included).
-        assert_eq!(preview_crossing(mangrove, mangrove), CrossingAction::Steady);
-        assert_eq!(preview_crossing(magpie, magpie), CrossingAction::Steady);
-        assert_eq!(preview_crossing(wagtail, wagtail), CrossingAction::Steady);
-        // THE TWINKLING-STARS ANCHORS: Currawong ticks the ambient clock via its
-        // STARS capability (non-lava!), so a Currawong ⇄ static hop crosses the
-        // cadence boundary exactly like a lava hop — while Currawong ⇄ a lava
-        // world is a SAME-SIDE ambient hop (both tick) and stays Steady.
-        let currawong = w("Currawong");
-        assert!(
-            currawong.has_ambient_motion() && !currawong.background.is_lava(),
-            "Currawong is the stars-ambient (non-lava) world"
-        );
-        assert_eq!(preview_crossing(currawong, tawny), CrossingAction::SyncAcrossCrossing);
-        assert_eq!(preview_crossing(tawny, currawong), CrossingAction::SyncAcrossCrossing);
-        assert_eq!(preview_crossing(currawong, mangrove), CrossingAction::Steady);
-        assert_eq!(preview_crossing(currawong, currawong), CrossingAction::Steady);
-    }
+    // The theme-preview CROSSING classification (and its no-wildcard roster law)
+    // was RETIRED 2026-07-18 — the bracket now arms unconditionally on every
+    // preview step, so there is no per-pair decision left to pin. The behaviour it
+    // used to gate is now verified at the App state machine: see
+    // `crate::app::tests::every_preview_step_brackets_and_teardown_waits_for_the_reshape_present`.
 }

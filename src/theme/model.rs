@@ -1330,9 +1330,8 @@ impl Theme {
     /// True iff this world's GROUND carries AMBIENT MOTION — the lava lamp
     /// ([`Background::is_lava`]) or the twinkling stars
     /// ([`AmbientStyle::is_animated`]). THE ONE gate every ambient-scheduling
-    /// decision reads (the App's ~10 fps tick arm, `lava::preview_crossing`'s
-    /// cadence boundary, the move-stream present hold, the launch-time
-    /// auto-page-on) — never a per-world name comparison and never a
+    /// decision reads (the App's ~10 fps tick arm, the move-stream present hold,
+    /// the launch-time auto-page-on) — never a per-world name comparison and never a
     /// re-derived OR at a call site, so the lava and stars consumers can
     /// never disagree about "does this world tick".
     pub fn has_ambient_motion(&self) -> bool {

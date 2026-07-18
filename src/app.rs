@@ -900,15 +900,29 @@ pub struct App {
     /// redraws scheduled by a move).
     move_settle_at: Option<Instant>,
     /// A THEME-PREVIEW step just crossed the lava boundary (a ticking lava world
-    /// ⇄ a static non-lava one), so the ambient ~10 fps present cadence starts or
-    /// stops underfoot. Held for `CROSSING_SYNC_SETTLE` (re-stamped on each
-    /// further crossing) so the crossing frame + one settle follow-up present
-    /// join the compositor's transaction rather than racing it — the third source
-    /// feeding `present_sync_armed`, the vanishing-page fix (2026-07-17). Only
-    /// ever stamped when `lava::preview_crossing` returns `SyncAcrossCrossing`
-    /// (`App::retint_theme_preview`); `None` otherwise, and structurally
+    /// THE PREVIEW-SETTLE debounce: stamped by `App::retint_theme_preview` on
+    /// EVERY theme-picker preview step (arrow / hover / wheel), re-stamped on each
+    /// further step so it fires `CROSSING_SYNC_SETTLE` after the user STOPS
+    /// navigating. Its presence arms the present-transaction bracket
+    /// (`present_sync_armed`'s third source), so every preview frame — including
+    /// the LANDING frame — joins the compositor's transaction rather than racing
+    /// it (the vanishing-page fix, 2026-07-18: the old `preview_crossing`
+    /// conditional bracketed only the transient boundary crossed mid-nav and left
+    /// the actual landing frame unbracketed — three widenings never caught it, so
+    /// the classification was RETIRED for unconditional arming). Structurally
     /// unreachable in a headless capture (the shared replay never previews).
     crossing_settle_at: Option<Instant>,
+    /// EVENT-ORDERED bracket teardown: set by `finish_crossing_settle` once the
+    /// preview settle elapses (the deferred font reshape has just been APPLIED in
+    /// the same `about_to_wait` pass but not yet PRESENTED). It HOLDS the
+    /// present-transaction bracket ON (a second source in `sync_present_txn`'s OR)
+    /// until the next present — the one carrying the reshaped frame — completes
+    /// INSIDE the bracket; the post-present hook in `on_redraw_requested` then
+    /// clears it and disarms. This replaces the old timer-race (settle turned the
+    /// bracket off in the SAME pass the reshape redraw was requested, so the
+    /// heaviest frame coalesced into one UNBRACKETED present) with a mechanical
+    /// happens-after: reshape present ⇒ THEN teardown. Live-only.
+    crossing_teardown_pending: bool,
     /// Shadow of the CAMetalLayer's `presentsWithTransaction` flag — the ONE
     /// owner of its composition is `App::sync_present_txn`, which arms it while
     /// ANY live source (resize OR move stream, OR a theme-preview lava-boundary
@@ -1279,6 +1293,7 @@ impl App {
             resize_settle_at: None,
             move_settle_at: None,
             crossing_settle_at: None,
+            crossing_teardown_pending: false,
             present_sync_on: false,
             config,
             cli_notes_root,
@@ -1695,9 +1710,16 @@ impl ApplicationHandler<AwlEvent> for App {
             // (`crate::probe::PROBE_LOGICAL_*`). Overrides any restored session
             // frame — a probe run is isolated (temp HOME) and must land in a
             // known small corner, not wherever the last real window happened to
-            // sit. Anchored near the top-left, clear of the menu bar, so it stays
-            // fully on-screen and unoccluded (the occlusion tripwire) while never
-            // reading as the center-stage main window.
+            // sit. Anchored near the top-left, clear of the menu bar.
+            // ALWAYS-ON-TOP is the occlusion cure: a non-activating (Prohibited)
+            // window never comes to front, so it would otherwise sit OCCLUDED
+            // behind the user's windows and wgpu would skip every present (the
+            // occlusion tripwire) — leaving the harness blind to the very
+            // present-race it exists to catch. `WindowLevel::AlwaysOnTop` floats
+            // it above other windows so it stays unoccluded and presents fire,
+            // WITHOUT making it key (window LEVEL is z-order, not focus — verified
+            // FOCUS-GAINED stays 0). Small + cornered keeps the always-on-top
+            // window out of the way.
             if crate::probe::live_active() {
                 attrs
                     .with_inner_size(LogicalSize::new(
@@ -1833,6 +1855,7 @@ impl ApplicationHandler<AwlEvent> for App {
         self.resize_settle_at = None;
         self.move_settle_at = None;
         self.crossing_settle_at = None;
+        self.crossing_teardown_pending = false;
         self.present_sync_on = false;
     }
 
@@ -2689,60 +2712,58 @@ mod tests {
         crate::theme::set_active(prev);
     }
 
-    /// THE VANISHING-PAGE REGRESSION PIN (user report 2026-07-17, "arrowing
-    /// Mangrove→Magpie makes the writing surface vanish"): a theme-preview step
-    /// that CROSSES the lava boundary arms the present-transaction sync (so the
-    /// crossing frame joins the compositor's transaction rather than racing it as
-    /// the ambient cadence stops), holds it through the `CROSSING_SYNC_SETTLE`
-    /// window, and settles exactly once. A same-side hop takes it as a no-op.
-    /// Drives the REAL `App` state machine through the real `retint_theme_preview`
-    /// / `finish_crossing_settle` bodies (the `about_to_wait` arm is just
-    /// `debounce_due`, pinned separately above).
+    /// THE VANISHING-PAGE FIX — UNCONDITIONAL BRACKET + EVENT-ORDERED TEARDOWN
+    /// (user report 2026-07-17/18, "arrowing into Magpie makes the writing surface
+    /// vanish", which survived three `preview_crossing` widenings). Two laws on
+    /// the REAL `App` state machine:
+    ///  (1) EVERY preview step arms the present-transaction bracket — INCLUDING a
+    ///      step the retired classifier would have called `Steady`: a
+    ///      static→static hop (`Galah→Magpie`, the real Mangrove-gesture LANDING
+    ///      frame the old bracket left exposed) and a lava→lava hop.
+    ///  (2) TEARDOWN IS EVENT-ORDERED: the settle (`finish_crossing_settle`) does
+    ///      NOT disarm — it hands off to `crossing_teardown_pending`, HOLDING the
+    ///      bracket until the post-present hook (`finish_crossing_teardown`)
+    ///      observes the reshaped frame presented in-bracket. So the heavy reshape
+    ///      frame can never coalesce into an unbracketed present (the old race).
     #[test]
-    fn preview_crossing_the_lava_boundary_brackets_the_present_and_settles_once() {
+    fn every_preview_step_brackets_and_teardown_waits_for_the_reshape_present() {
         let _g = crate::testlock::serial();
         let prev = crate::theme::active_index();
-        let w = |name: &str| {
-            *crate::theme::THEMES.iter().find(|t| t.name == name).unwrap()
-        };
-        let (mangrove, magpie) = (w("Mangrove"), w("Magpie"));
+        let w = |name: &str| *crate::theme::THEMES.iter().find(|t| t.name == name).unwrap();
+        let (mangrove, galah) = (w("Mangrove"), w("Galah"));
 
-        // Open the picker on the dark LAVA world, exactly as the report starts.
         crate::theme::set_active_by_name("Mangrove").unwrap();
         let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
         assert!(!app.present_sync_on, "idle: presents run async");
 
-        // ARROW to the static non-lava world: apply_core would have switched the
-        // active world first, so mirror that, then run the real preview retint
-        // with the OUTGOING (lava) world it snapshotted.
-        crate::theme::set_active_by_name("Magpie").unwrap();
-        app.retint_theme_preview(mangrove);
-        assert!(app.crossing_settle_at.is_some(), "the crossing stamps the hold");
-        assert!(
-            app.present_sync_on,
-            "the crossing frame joins the compositor transaction"
-        );
+        // (1) The STEADY steps the retired classifier left unbracketed now arm:
+        // `Galah→Magpie` (static→static — the real reported LANDING) and
+        // `Mangrove→Firetail` (lava→lava). Each starts from a disarmed state.
+        for (from, to, label) in
+            [(galah, "Magpie", "static->static LANDING"), (mangrove, "Firetail", "lava->lava")]
+        {
+            app.crossing_settle_at = None;
+            app.crossing_teardown_pending = false;
+            app.sync_present_txn();
+            assert!(!app.present_sync_on, "{label}: starts disarmed");
+            crate::theme::set_active_by_name(to).unwrap();
+            app.retint_theme_preview(from);
+            assert!(app.crossing_settle_at.is_some(), "{label}: the preview stamps the settle");
+            assert!(app.present_sync_on, "{label}: the bracket arms unconditionally");
+        }
 
-        // ARROW BACK across the boundary (Magpie→Mangrove): re-stamps the hold.
-        crate::theme::set_active_by_name("Mangrove").unwrap();
-        app.retint_theme_preview(magpie);
-        assert!(app.crossing_settle_at.is_some(), "the return crossing re-stamps");
-        assert!(app.present_sync_on, "still armed across the return crossing");
-
-        // Settle once: hold cleared, sync disarmed (no other source is live).
+        // (2) EVENT-ORDERED TEARDOWN. Phase 1 (settle) clears the debounce but
+        // HOLDS the bracket via the pending teardown — it must NOT disarm here,
+        // because the deferred reshape's present has not happened yet.
         app.finish_crossing_settle();
-        assert!(app.crossing_settle_at.is_none(), "settle clears the hold once");
-        assert!(!app.present_sync_on, "presents return to async once settled");
-
-        // A SAME-SIDE hop (lava → lava, Mangrove → Firetail; neither one-bit) is a
-        // total no-op: no boundary changes, so nothing is armed.
-        crate::theme::set_active_by_name("Firetail").unwrap();
-        app.retint_theme_preview(mangrove);
-        assert!(
-            app.crossing_settle_at.is_none(),
-            "a lava→lava hop leaves both boundaries alone: no bracket"
-        );
-        assert!(!app.present_sync_on, "same-side hop arms nothing");
+        assert!(app.crossing_settle_at.is_none(), "phase 1 clears the settle debounce");
+        assert!(app.crossing_teardown_pending, "phase 1 hands off to the pending teardown");
+        assert!(app.present_sync_on, "the bracket is HELD through the reshape present, not torn down");
+        // Phase 2 (the post-present hook, after the in-bracket reshape present)
+        // is the ONLY thing that disarms.
+        app.finish_crossing_teardown();
+        assert!(!app.crossing_teardown_pending, "phase 2 clears the pending teardown");
+        assert!(!app.present_sync_on, "only after the bracketed reshape present does the bracket disarm");
         crate::theme::set_active(prev);
     }
 
@@ -2762,20 +2783,22 @@ mod tests {
         crate::theme::set_active_by_name("Mangrove").unwrap();
         let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
 
-        // A live resize stream, then a preview crossing to a non-lava world.
+        // A live resize stream, then a preview step (now unconditional).
         app.arm_live_resize_sync();
         assert!(app.present_sync_on, "resize stream arms the sync");
         crate::theme::set_active_by_name("Magpie").unwrap();
         app.retint_theme_preview(mangrove);
         assert!(app.present_sync_on, "still armed with both sources live");
 
-        // The crossing settles first: the resize stream still owns a claim.
+        // The preview settles + fully tears down (both phases): the resize stream
+        // still owns a claim through EACH phase — the disarm belongs to the one
+        // owner, never to a single source's settle.
         app.finish_crossing_settle();
         assert!(app.crossing_settle_at.is_none());
-        assert!(
-            app.present_sync_on,
-            "the resize stream still owns a claim on the sync"
-        );
+        assert!(app.present_sync_on, "resize still owns a claim after phase 1");
+        app.finish_crossing_teardown();
+        assert!(!app.crossing_teardown_pending);
+        assert!(app.present_sync_on, "resize still owns a claim after phase 2");
         app.finish_resize_settle();
         assert!(!app.present_sync_on, "both settled: async presents again");
         crate::theme::set_active(prev);
