@@ -726,88 +726,84 @@ impl TextPipeline {
     ) {
         let lh = self.overlay_lh();
         let list_style = crate::render::effective_list_style();
-        // THE ONE PANE-VS-NO-PANE OWNER ([`theme::ListStyle::backs_rows_with_pane`]):
-        // `Pane` worlds back a list surface with an opaque card; `Bars` worlds float
-        // the rows as bare plates on the ground with NO backing pane. BOTH arms below
-        // — the centered picker AND the contextual spell popup — read it, so a
-        // Firetail-family world can never box one surface while floating the other
-        // (that divergence WAS the spell-popup-on-Bars pane bug).
-        let bars = !list_style.backs_rows_with_pane();
         let spell = self.overlay_spell.is_some();
         let card_rect = [geom.card_x, geom.card_y, geom.card_w, geom.card_h];
-        if bars {
-            // PER-ITEM LIST SURFACES round — BARS DROP THE PANE (the user's refit:
-            // "with the bars, there shouldn't be a pane!"). No boxed card (no
-            // border, no shadow, no bright `base_300` fill) — the bars, title,
-            // query, strip and hint float in the Persona ROOM: bars sit ON the
-            // room, not IN a box. This ONE arm serves BOTH the full-takeover picker
-            // AND the contextual spell popup (the Firetail refit extended — "for the
-            // autocorrect, get rid of the pane too"): identical ground room, so a
-            // Bars world can never box the spell popup while floating the picker.
-            //
-            // DESIGNER PIXEL-PASS FIX (2026-07-16, the "gap comb seam"): the theme
-            // picker is CRISP (no blur, no scrim — the doc stays bright so the live
-            // theme preview reads honestly), so with the box gone the RAW document
-            // showed through every gap between bars — its page-margin band on the
-            // left meeting the writing column mid-gap made a hard vertical seam
-            // repeated down the whole list. The room was never actually a room. So
-            // Bars lays a UNIFORM value VEIL of the world's own ground
-            // (`overlay_bars_room` = `base_100` — a scrim, never a bordered box): it
-            // pulls the document a value back into one calm plane, killing the comb
-            // seam and the left-overhang stub in one stroke. The shadow/border stay
-            // empty (no elevation — it is a room, not a card). Drawn FIRST in
-            // `draw_overlay_card`, so the placard watermark, the bars, and the row
-            // text all composite over it.
-            self.panel_card.set_corner(0.0);
-            self.panel_card
-                .set_color(theme::overlay_bars_room().rgba_bytes());
-            // THE ROOM'S EXTENT is the ONLY thing that differs between the two Bars
-            // surfaces. The full-takeover PICKER bleeds the room past all four canvas
-            // edges — the panel quad pipeline feathers a ~1px antialiased edge
-            // (`selection.wgsl`'s `smoothstep(-1, 1, d)`), so a plane flush to
-            // `[0, 0, w, h]` left the first pixel row only ~84% covered (a 1px
-            // lighter seam along y = 0); growing it `ROOM_BLEED` px per side pushes
-            // the feather off-screen so every on-canvas pixel sits fully inside.
-            // The contextual SPELL popup instead clips the room to its own
-            // `card_rect`, so the live document stays lit AROUND the summoned float
-            // (it is a peek at the word, not a whole-canvas takeover) — the plates
-            // still float on the same calm ground the picker gives them.
-            const ROOM_BLEED: f32 = 2.0;
-            let room_rect = if spell {
-                card_rect
-            } else {
-                [
-                    -ROOM_BLEED,
-                    -ROOM_BLEED,
-                    width as f32 + 2.0 * ROOM_BLEED,
-                    height as f32 + 2.0 * ROOM_BLEED,
-                ]
-            };
-            self.panel_card
-                .prepare(device, queue, width, height, &[room_rect]);
-            self.panel_shadow.prepare(device, queue, width, height, &[]);
-            self.panel_border.prepare(device, queue, width, height, &[]);
-            if spell {
-                // The spell popup is the ONE overlay that ever summons the float
-                // primitive (its Pane-world raised card, below). On Bars it floats
-                // bare on the room, so PARK those float quads — the caret-preview
-                // pass already parked them this frame (it and the spell popup are
-                // mutually exclusive), but park explicitly so a future reorder can
-                // never leak the raised pane back under the plates.
-                self.prepare_float_panel(device, queue, width, height, None);
+        // THE ONE ROW-BACKING OWNER ([`theme::ListStyle::list_backing`]): a `Pane`
+        // world backs its rows with an opaque CARD; a `Bars` world floats them as
+        // bare plates over either a full-canvas ROOM (the centered picker) or, for
+        // the contextual spell popup, NOTHING but each plate's own ground SCRIM
+        // (option B — no room box at all, so the live document shows BETWEEN the
+        // plates even on a dark world, instead of a near-black box behind them).
+        // ONE classifier, read here AND by the surface-audit laws, so a
+        // Firetail-family world can never box one surface while floating the other
+        // (that divergence WAS the spell-popup-on-Bars pane bug).
+        let backing = list_style.list_backing(spell);
+        match backing {
+            theme::ListBacking::Room => {
+                // The centered Bars PICKER drops the pane and floats its rows on a
+                // UNIFORM value VEIL of the world's own ground (`overlay_bars_room` =
+                // `base_100` — a scrim, never a bordered box: no shadow, no border, no
+                // bright `base_300` fill). It pulls the crisp live-preview document a
+                // value back into one calm plane, killing the "gap comb seam" the raw
+                // doc showed through every inter-bar gap. The room BLEEDS past all four
+                // canvas edges so the panel quad pipeline's ~1px feather
+                // (`selection.wgsl`'s `smoothstep(-1, 1, d)`) lands off-screen — a
+                // plane flush to `[0, 0, w, h]` left row 0 only ~84% covered (a 1px
+                // lighter seam along y = 0). Drawn FIRST in `draw_overlay_card`, so the
+                // placard watermark, the bars, and the row text composite over it.
+                const ROOM_BLEED: f32 = 2.0;
+                self.panel_card.set_corner(0.0);
+                self.panel_card
+                    .set_color(theme::overlay_bars_room().rgba_bytes());
+                self.panel_card.prepare(
+                    device,
+                    queue,
+                    width,
+                    height,
+                    &[[
+                        -ROOM_BLEED,
+                        -ROOM_BLEED,
+                        width as f32 + 2.0 * ROOM_BLEED,
+                        height as f32 + 2.0 * ROOM_BLEED,
+                    ]],
+                );
+                self.panel_shadow.prepare(device, queue, width, height, &[]);
+                self.panel_border.prepare(device, queue, width, height, &[]);
             }
-        } else if spell {
-            // PANE world spell popup: elevate on the float primitive — a small raised
-            // card at the misspelled word (UNCHANGED / byte-identical to before the
-            // Bars refit). The flat/room `panel_*` quads stay empty here.
-            self.prepare_float_panel(device, queue, width, height, Some(card_rect));
-            self.panel_card.prepare(device, queue, width, height, &[]);
-            self.panel_shadow.prepare(device, queue, width, height, &[]);
-            self.panel_border.prepare(device, queue, width, height, &[]);
-        } else {
-            // Centered PANE picker: the flat opaque card, ELEVATED (bordered) only on
-            // a true 1-bit world — see `prepare_panel_card_elevation`'s doc.
-            self.prepare_panel_card_elevation(device, queue, width, height, Some(card_rect));
+            theme::ListBacking::BarePlates => {
+                // OPTION B (the user's "b is good") — the contextual spell popup on a
+                // Bars world floats its suggestion plates on the RAW PAGE with NO room
+                // box at all. The prior round clipped the `base_100` room to the card,
+                // which on a DARK world read as a prominent near-black BOX behind the
+                // plates; the user wanted that gone. Legibility over the live document
+                // is now carried NOT by a rectangle but by each plate's own minimal
+                // ground SCRIM — a thin feathered moat confined to the plate footprint
+                // (a value step, DESIGN §3/§5), prepared on `panel_card` in the plate
+                // block BELOW once the plate rects are known (they depend on the
+                // just-shaped label widths, so they can't be built up here). We only
+                // PARK the room + float quads here so nothing boxes the popup; the
+                // caret-preview pass already parked the float this frame (it and the
+                // spell popup are mutually exclusive), but park explicitly so a future
+                // reorder can never leak the raised pane back under the plates.
+                self.prepare_float_panel(device, queue, width, height, None);
+                self.panel_shadow.prepare(device, queue, width, height, &[]);
+                self.panel_border.prepare(device, queue, width, height, &[]);
+                // `panel_card` is DEFERRED to the plate block (the per-plate scrims).
+            }
+            theme::ListBacking::Card if spell => {
+                // PANE world spell popup: elevate on the float primitive — a small
+                // raised card at the misspelled word (UNCHANGED / byte-identical to
+                // before). The flat/room `panel_*` quads stay empty here.
+                self.prepare_float_panel(device, queue, width, height, Some(card_rect));
+                self.panel_card.prepare(device, queue, width, height, &[]);
+                self.panel_shadow.prepare(device, queue, width, height, &[]);
+                self.panel_border.prepare(device, queue, width, height, &[]);
+            }
+            theme::ListBacking::Card => {
+                // Centered PANE picker: the flat opaque card, ELEVATED (bordered) only
+                // on a true 1-bit world — see `prepare_panel_card_elevation`'s doc.
+                self.prepare_panel_card_elevation(device, queue, width, height, Some(card_rect));
+            }
         }
 
         // Selected-row highlight: a VALUE BAND, the next rung up the surface ladder
@@ -1078,6 +1074,45 @@ impl TextPipeline {
                 (sel, unsel)
             }
         };
+        // OPTION B — the contextual spell popup's PER-PLATE GROUND SCRIMS
+        // ([`theme::ListBacking::BarePlates`]). With no room box behind the
+        // plates (the top match parked `panel_card`), each plate would abut the
+        // live document text; a thin ground moat around each plate's footprint
+        // walls it off WITHOUT a rectangle — figure/ground by VALUE (`base_100`,
+        // the world's own ground; a value step, never a hue — DESIGN §3/§5). Built
+        // from the SAME plate rects the bars draw (`bar_rects` = unselected +
+        // footer, `sel_rects` = the grown selected plate), so the scrim can never
+        // disagree with a plate's shape, then inflated a hair (`SCRIM_PAD`) and
+        // fed through `panel_card` (drawn UNDER the plates in `draw_overlay_card`).
+        // `2 * SCRIM_PAD` (4px) stays well inside the row `gap` (10px), so the raw
+        // page still shows between the scrimmed plates — the popup reads as
+        // floating chips on the document, not a box. On a light world `base_100`
+        // is the page ground, so the scrim is invisible-but-harmless there (the
+        // plate's own value carries it, as it already did under the room).
+        if backing == theme::ListBacking::BarePlates {
+            const SCRIM_PAD: f32 = 2.0;
+            let radius = match list_style {
+                theme::ListStyle::Bars { radius, .. } => radius.max(0.0),
+                theme::ListStyle::Pane => 0.0,
+            };
+            let scrims: Vec<[f32; 4]> = bar_rects
+                .iter()
+                .chain(sel_rects.iter())
+                .map(|&[x, y, w, h]| {
+                    [
+                        x - SCRIM_PAD,
+                        y - SCRIM_PAD,
+                        w + 2.0 * SCRIM_PAD,
+                        h + 2.0 * SCRIM_PAD,
+                    ]
+                })
+                .collect();
+            self.panel_card.set_corner(radius + SCRIM_PAD);
+            self.panel_card
+                .set_color(theme::overlay_bars_room().rgba_bytes());
+            self.panel_card
+                .prepare(device, queue, width, height, &scrims);
+        }
         self.overlay_bars
             .prepare(device, queue, width, height, &bar_rects);
         self.overlay_rows
