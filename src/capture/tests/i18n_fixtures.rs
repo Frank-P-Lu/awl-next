@@ -35,7 +35,7 @@ fn japanese_fixture_resolves_bundled_cjk_face_deterministically() {
     assert!(jp_text.contains('日'), "fixture actually carries kanji");
 
     // --- Saltpan (NEUTRAL serif world -> plain mincho candidate list) ------
-    // (Undertow moved to the Shippori Mincho override in Phase 2's variety
+    // (Bombora moved to the Shippori Mincho override in Phase 2's variety
     // round; Saltpan is a serif world this round LEFT ALONE, so it still
     // resolves the neutral bundled Noto Serif JP — the point this test makes.)
     crate::theme::set_active_by_name("Saltpan").expect("Saltpan is a real world");
@@ -90,7 +90,7 @@ fn ja_variety_worlds_resolve_bundled_faces_deterministically() {
 
     // One world per new ladder → its distinct bundled face.
     for (world, family) in [
-        ("Undertow", "Shippori Mincho"), // book-serif override
+        ("Bombora", "Shippori Mincho"), // book-serif override
         ("Galah", "Zen Maru Gothic"),    // rounded-sans override
         ("Mopoke", "Klee One"),          // Klee-world brush override
     ] {
@@ -346,10 +346,10 @@ fn klee_worlds_zh_hans_resolves_wenkai_characterful_face() {
     }
 
     // A non-Klee sans world stays on the plain floor.
-    crate::theme::set_active_by_name("Kingfisher").expect("Kingfisher is a real world");
+    crate::theme::set_active_by_name("Bowerbird").expect("Bowerbird is a real world");
     let mut buf = Buffer::from_str(&zh_text);
-    buf.set_path(dir.join("kingfisher.md"));
-    let png = dir.join("kingfisher.png");
+    buf.set_path(dir.join("bowerbird.md"));
+    let png = dir.join("bowerbird.png");
     capture_with(&png, &buf, &CaptureOpts::default()).expect("floor capture renders");
     let j: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap();

@@ -56,7 +56,7 @@ fn theme_font_switch_reshapes_document() {
     // A switch that leaves the SHAPED face unchanged must NOT reshape: the
     // document is already shaped in that family. With the taste-review face
     // swaps every world now names a UNIQUE display face, so the former
-    // distinct-world-same-font pair (Quokka + Kingfisher, both IBM Plex Sans)
+    // distinct-world-same-font pair (Quokka + Bowerbird, both IBM Plex Sans)
     // no longer exists; the realizable instance is a redundant switch to the
     // same world — sync_theme keys the reshape on the shaped face, not the call.
     theme::set_active_by_name("Quokka").unwrap();
@@ -141,12 +141,12 @@ fn theme_preview_color_split_defers_reshape_and_revert_leaves_none() {
         "the deferred reshape must land the same settled geometry as a synchronous sync_theme"
     );
 
-    // ESC-REVERT with a pending deferral: previews colored ahead to Undertow,
+    // ESC-REVERT with a pending deferral: previews colored ahead to Bombora,
     // then the revert applies the ORIGINAL world fully + synchronously (the
     // `retint_theme_now` path). The doc is already shaped in that face, so the
     // revert itself reshapes nothing — and a STRAY deferred fire afterwards
     // (the case the App cancels; harmless even if it raced through) no-ops.
-    theme::set_active_by_name("Undertow").unwrap();
+    theme::set_active_by_name("Bombora").unwrap();
     p.sync_theme_colors();
     assert!(p.needs_theme_reshape(), "a deferral is pending toward EB Garamond");
     let m = p.reshape_count;
@@ -168,9 +168,9 @@ fn theme_preview_color_split_defers_reshape_and_revert_leaves_none() {
 /// PER-WORLD CODE MONO — `sync_theme` tracks the EFFECTIVE shaped face
 /// (`doc_family` — the world's mono on a CODE buffer, else its display font;
 /// render.rs), NOT the display font. On a code buffer a switch whose MONO
-/// changes (Quokka → Kingfisher: IBM Plex Mono vs JetBrains Mono) MUST retrack
+/// changes (Quokka → Bowerbird: IBM Plex Mono vs JetBrains Mono) MUST retrack
 /// `shaped_font` to the new mono. The stronger, converse isolation: two worlds
-/// with DIFFERENT display faces but the SAME mono (Kingfisher → Mangrove — IBM
+/// with DIFFERENT display faces but the SAME mono (Bowerbird → Mangrove — IBM
 /// Plex Sans vs JetBrains Mono display, both JetBrains Mono code) leave
 /// `shaped_font` UNCHANGED (the effective face didn't move) even though the
 /// display changed — proving the reshape/track gate keys on the MONO, not the
@@ -207,10 +207,10 @@ fn code_mono_switch_reshapes_effective_face() {
     );
     let n = p.reshape_count;
 
-    // Quokka → Kingfisher: the code MONO changes (IBM Plex Mono → JetBrains
+    // Quokka → Bowerbird: the code MONO changes (IBM Plex Mono → JetBrains
     // Mono). The effective-face compare must see the mono change and reshape
     // the code buffer, retracking `shaped_font` to the new mono.
-    theme::set_active_by_name("Kingfisher").unwrap();
+    theme::set_active_by_name("Bowerbird").unwrap();
     p.sync_theme();
     assert_eq!(theme::active().font, "IBM Plex Sans");
     assert_eq!(theme::active().mono, "JetBrains Mono");
@@ -223,23 +223,23 @@ fn code_mono_switch_reshapes_effective_face() {
         "shaped_font tracks the NEW mono after the switch"
     );
 
-    // Kingfisher → Mangrove: DIFFERENT display faces (IBM Plex Sans vs
+    // Bowerbird → Mangrove: DIFFERENT display faces (IBM Plex Sans vs
     // JetBrains Mono) but the SAME code mono (both JetBrains Mono) — the
     // converse case. The code buffer is already shaped in the shared mono, so
     // the effective FACE is unchanged and `shaped_font` must NOT move even
     // though the display font did — proving the gate keys on the mono, not the
     // display. The WORLD (palette) DID change, so the switch still reshapes
     // once to re-bake the per-span syntax colors (`shaped_theme` — the
-    // Magpie→Undertow stale-color fix), landing back on the same shared mono.
+    // Magpie→Bombora stale-color fix), landing back on the same shared mono.
     let m = p.reshape_count;
     theme::set_active_by_name("Mangrove").unwrap();
     p.sync_theme();
     assert_ne!(
         theme::active().font,
         "IBM Plex Sans",
-        "Mangrove's display face differs from Kingfisher's"
+        "Mangrove's display face differs from Bowerbird's"
     );
-    assert_eq!(theme::active().mono, "JetBrains Mono", "Mangrove shares Kingfisher's mono");
+    assert_eq!(theme::active().mono, "JetBrains Mono", "Mangrove shares Bowerbird's mono");
     assert!(
         p.reshape_count > m,
         "a world switch re-bakes span colors even when the code mono is shared"
@@ -256,7 +256,7 @@ fn code_mono_switch_reshapes_effective_face() {
 
 /// STALE SPAN-COLOR fix: per-span syntax/markdown/focus colors are BAKED into
 /// the buffer `AttrsList` at shape time, so a theme switch that keeps the SAME
-/// effective face (Magpie -> Undertow, both Monaspace Xenon, on a code buffer)
+/// effective face (Magpie -> Bombora, both Monaspace Xenon, on a code buffer)
 /// used to skip the re-bake and leave those spans colored for the OLD world's
 /// derivation on the NEW ground. `sync_theme_font` now compares `shaped_theme`
 /// alongside `shaped_font`, so a same-face palette change still restyles and the
@@ -275,7 +275,7 @@ fn theme_switch_rebakes_span_colors_across_shared_effective_face() {
         return;
     };
 
-    // Magpie (light) and Undertow (dark) BOTH shape code in Monaspace Xenon, so a
+    // Magpie (light) and Bombora (dark) BOTH shape code in Monaspace Xenon, so a
     // code buffer's EFFECTIVE face is identical across the switch — the font
     // tracker alone would skip the reshape. Their palettes differ sharply (light
     // vs dark ink ladder), so the baked syntax colors MUST change.
@@ -300,8 +300,8 @@ fn theme_switch_rebakes_span_colors_across_shared_effective_face() {
     assert!(magpie_color.is_some());
     let n = p.reshape_count;
 
-    // Switch to a SAME-effective-face world (Undertow, also Monaspace Xenon).
-    theme::set_active_by_name("Undertow").unwrap();
+    // Switch to a SAME-effective-face world (Bombora, also Monaspace Xenon).
+    theme::set_active_by_name("Bombora").unwrap();
     assert_eq!(
         theme::active().mono,
         "Monaspace Xenon",
@@ -316,10 +316,10 @@ fn theme_switch_rebakes_span_colors_across_shared_effective_face() {
         p.shaped_font, "Monaspace Xenon",
         "the effective face is unchanged across the color re-bake"
     );
-    let undertow_color = p.buffer.lines[0].attrs_list().get_span(colored_byte).color_opt;
-    assert!(undertow_color.is_some());
+    let bombora_color = p.buffer.lines[0].attrs_list().get_span(colored_byte).color_opt;
+    assert!(bombora_color.is_some());
     assert_ne!(
-        magpie_color, undertow_color,
+        magpie_color, bombora_color,
         "the baked syntax color must reflect the NEW world's role_style_for, not the old"
     );
 
@@ -330,7 +330,7 @@ fn theme_switch_rebakes_span_colors_across_shared_effective_face() {
     assert_eq!(p.reshape_count, m, "re-syncing the SAME world must not restyle");
     assert_eq!(
         p.buffer.lines[0].attrs_list().get_span(colored_byte).color_opt,
-        undertow_color,
+        bombora_color,
         "an idempotent re-sync leaves the baked color untouched"
     );
 
@@ -717,7 +717,7 @@ fn heading_bold_worlds_shape_bold_in_their_own_family() {
 /// script-span layer's weight+style PIN (see `spans::add_script_spans`) that
 /// request drops the 400/Normal-only bundled face (`weight_diff != 0` +
 /// style-mismatch) and tofu/system-falls mid-sentence. Checks a serif world
-/// (Undertow → Shippori Mincho, its Phase-2 ja override) and a sans world
+/// (Bombora → Shippori Mincho, its Phase-2 ja override) and a sans world
 /// (Currawong → Noto Sans JP) — `want_fam` is read dynamically from the
 /// resolver, so it tracks each world's assigned face rather than a literal;
 /// caret parked on the blank line 0, so the styled lines are OFF-cursor (their
@@ -730,7 +730,7 @@ fn markdown_emphasis_keeps_the_bundled_cjk_face_never_a_fallback() {
         eprintln!("skipping markdown_emphasis_keeps_the_bundled_cjk_face_never_a_fallback: no wgpu adapter");
         return;
     };
-    for world in ["Undertow", "Currawong"] {
+    for world in ["Bombora", "Currawong"] {
         theme::set_active_by_name(world).unwrap();
         p.sync_theme();
         let (want_fam, _) = p

@@ -104,7 +104,7 @@ pub fn selection() -> Srgb {
 /// `faint` toward `muted` — the personality-assignment round's DARK-GROUND
 /// CONTRAST correction (the probe gallery's light-world Ghost was
 /// gallery-validated, but the same formulas were near-invisible on the dark
-/// grounds — Undertow's Ghost vanished; the user's taste note demanded the
+/// grounds — Bombora's Ghost vanished; the user's taste note demanded the
 /// wordmark "clearly READ" there while staying a receding ghost). ONE global
 /// constant per rung, never a per-world hand value. Blending toward `muted`
 /// — the next rung UP the same ladder — rather than all the way toward
@@ -132,7 +132,7 @@ const PLACARD_DARK_LIFT_GHOST: f32 = 0.45;
 /// - **DARK grounds** step the OTHER way — from `faint` UP toward [`muted`]
 ///   — because on a dark world `faint` already sits close to the ground and
 ///   the light formulas rendered near-invisible (the user's dark-ground
-///   taste note; Undertow's Ghost was the exhibit). One formula off the
+///   taste note; Bombora's Ghost was the exhibit). One formula off the
 ///   ladder ([`PLACARD_DARK_LIFT_FAINT`]/[`_GHOST`]), never a per-world
 ///   constant; the result recedes behind the rows BY CONSTRUCTION (a
 ///   `faint`→`muted` blend cannot outshine `muted`, the rows' own ink).
@@ -359,7 +359,7 @@ fn contrast_ratio(a: Srgb, b: Srgb) -> f32 {
 /// EVERY world by `render::tests::distinguishability::
 /// selected_row_text_clears_contrast_floor_on_every_world`. 3:1 is the WCAG
 /// large-text / UI-component floor; below it the glyphs wash into the fill (the
-/// Undertow-under-Bars exhibit: light ink on a mid sage band = 2.53:1).
+/// Bombora-under-Bars exhibit: light ink on a mid sage band = 2.53:1).
 pub(super) const SELECTED_ROW_INK_CONTRAST_FLOOR: f32 = 3.0;
 
 /// THE ONE owner of the selected picker row's INK on a `ValueBand` world — the
@@ -371,7 +371,7 @@ pub(super) const SELECTED_ROW_INK_CONTRAST_FLOOR: f32 = 3.0;
 /// reads harder against the fill. Derived purely from the fill's own luminance,
 /// never a per-world hand value: on a DARK world the light `base_content` fails
 /// against a mid band and the dark ground wins; on a LIGHT world the reverse.
-/// Undertow under Bars was the exhibit — light ink (236,232,242) on a mid sage
+/// Bombora under Bars was the exhibit — light ink (236,232,242) on a mid sage
 /// band (132,152,144) = 2.53:1. Wagtail's 1-bit worlds resolve their pair
 /// through `InverseFill` instead and never reach here.
 pub fn selected_row_ink(band: Srgb) -> Srgb {

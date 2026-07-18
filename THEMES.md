@@ -63,7 +63,7 @@ thing is the **ground itself**: a slow oxblood/wine lava-lamp drifting in the pa
 margins (`Background::Lava`), a named exception to `DESIGN.md` §3's "the caret is
 the only thing that breathes." Its room is an original deep oxblood-charcoal
 den: warm blush ink, muted claret chrome, wine lava, and one ember-gold caret.
-It is measurably redder/warmer than Undertow and substantially less orange/rust
+It is measurably redder/warmer than Bombora and substantially less orange/rust
 than Potoroo; numeric whole-palette distance keeps it distinct from every world.
 **Mangrove** folds the COOL second lava ground (a dithered deep-sea lamp),
 deepening its existing tidal-teal identity. Both are law-tested by §3's "The
@@ -77,7 +77,7 @@ cool-light-blue pole — the roster then had no light world on the blue side
 (Gumtree, the one cool light world, is GREEN). Brolga fills that hole: a clear
 cool sky after rain — a pale periwinkle sky-blue ground under a deep cool
 slate-navy ink, drawn in the clean cool sans IBM Plex Sans (the light value-pole
-twin of dark Kingfisher's navy, and a SANS where Gumtree is a serif, so it never
+twin of dark Bowerbird's navy, and a SANS where Gumtree is a serif, so it never
 reads as Gumtree's sibling — the exact near-pair trap the dawn round fixed). Its
 one warm living thing (DESIGN §3) is the brolga crane's red crown, a warm
 coral-vermilion caret. Its ground sits ≥35.7 redmean from every surviving light
@@ -584,7 +584,7 @@ the exception is fenced by **measurable laws**, exactly like the monochrome and
   ten-token palette signature (`base_100/200/300`, the full ink ladder, caret,
   caret ink, error, selection tint) stays ≥70 RMS redmean from EVERY other
   world — so a different font or moving shader can never disguise a copied
-  palette. Tests: `theme::tests::firetail_is_oxblood_wine_and_ember_not_potoroo_rust_or_undertow_violet`
+  palette. Tests: `theme::tests::firetail_is_oxblood_wine_and_ember_not_potoroo_rust_or_bombora_violet`
   and `theme::tests::firetail_palette_is_numerically_distinct_from_every_other_world`.
 - **The 1-bit foil (why a lava world can NEVER be Wagtail).** A `Background::Lava`
   paints authored COLOR (wine, teal) at fractional metaball-blend coverage — the
@@ -796,7 +796,7 @@ names its enforcing test:
   originals (`Faint` = the faint rung verbatim; `Ghost` = a `faint`/`base_300`
   blend); dark grounds step the same two rungs UP the ladder instead (pure
   `faint`→`muted` blends, one global constant per rung) because the light
-  formulas were near-invisible there (Undertow's Ghost, the user's taste
+  formulas were near-invisible there (Bombora's Ghost, the user's taste
   note). Test: `theme::tests::placard_ink_derives_from_the_ink_ladder_never_a_
   free_color`.
 - **Dark-ground legibility floor + ghost ceiling.** On every dark world the
@@ -915,7 +915,7 @@ heading hierarchy? `true` ⇒ `##`/`###` shape at the family's real bundled Bold
 the TITLE (`#`) never bolds in any world (Ladder J carries it by size alone —
 1.6/1.3/1.15, `markdown/headings.rs::type_scale`). The assignment is taste
 derived from the FACE, one line of reasoning per world in `worlds.rs`: serif
-display faces (Gumtree, Bilby, Saltpan, Undertow, Outback, Magpie) carry
+display faces (Gumtree, Bilby, Saltpan, Bombora, Mulga, Magpie) carry
 hierarchy structurally → regular; monospace + sans faces (the other ten) need
 the weight → bold. Its laws: `heading_bold_worlds_shape_bold_in_their_own_family`
 (a bold world's heading resolves the SAME family at weight ≥ 600 — the guard
@@ -969,12 +969,12 @@ unchanged).
 |-------------|-------------|------------------------------|------------------|----------------------------------------|
 | Gumtree     | book serif  | `CJK_JA_SHIPPORI`            | **Shippori Mincho** | Literata ↔ warm literary mincho     |
 | Bilby       | book serif  | `CJK_JA_SHIPPORI`            | **Shippori Mincho** | Newsreader ↔ bookish mincho         |
-| Undertow    | book serif  | `CJK_JA_SHIPPORI`            | **Shippori Mincho** | EB Garamond ↔ classic book mincho   |
+| Bombora    | book serif  | `CJK_JA_SHIPPORI`            | **Shippori Mincho** | EB Garamond ↔ classic book mincho   |
 | Saltpan     | display serif | `CJK_MINCHO` (neutral)     | Noto Serif JP    | left alone — display Fraunces          |
-| Outback     | slab serif  | `CJK_MINCHO` (neutral)      | Noto Serif JP    | left alone — Zilla Slab                 |
+| Mulga     | slab serif  | `CJK_MINCHO` (neutral)      | Noto Serif JP    | left alone — Zilla Slab                 |
 | Magpie      | slab serif  | `CJK_MINCHO` (neutral)      | Noto Serif JP    | left alone — Bitter                     |
 | Galah       | sans        | `CJK_JA_ZENMARU`            | **Zen Maru Gothic** | Figtree ↔ rounded warm gothic       |
-| Kingfisher  | sans        | `CJK_JA_ZENMARU`            | **Zen Maru Gothic** | IBM Plex Sans ↔ warm rounded gothic |
+| Bowerbird  | sans        | `CJK_JA_ZENMARU`            | **Zen Maru Gothic** | IBM Plex Sans ↔ warm rounded gothic |
 | Potoroo     | mono        | `CJK_GOTHIC` (neutral)      | Noto Sans JP     | left alone — mono world (even gothic)   |
 | Tawny       | mono        | `CJK_GOTHIC` (neutral)      | Noto Sans JP     | left alone — mono world                  |
 | Currawong   | mono        | `CJK_GOTHIC` (neutral)      | Noto Sans JP     | left alone — mono world                  |
@@ -1001,12 +1001,12 @@ The user vetoes the actual pixel taste via `gallery/jp-worlds/`.
 | Gumtree     | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
 | Bilby       | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
 | Saltpan     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
-| Undertow    | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
-| Outback     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
+| Bombora    | serif      | Shippori     | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
+| Mulga     | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
 | Magpie      | serif      | mincho       | `CJK_ZH_HANS_SERIF` (Noto Serif SC)          | `CJK_KO_SERIF` (**Gowun Batang**) |
 | Potoroo     | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
 | Tawny       | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
-| Kingfisher  | sans/mono  | Zen Maru     | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
+| Bowerbird  | sans/mono  | Zen Maru     | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
 | Currawong   | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
 | Mangrove    | sans/mono  | gothic       | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
 | Galah       | sans/mono  | Zen Maru     | `CJK_ZH_HANS_SANS` (Noto Sans SC)            | `CJK_KO` (Noto Sans KR)    |
@@ -1023,7 +1023,7 @@ is no NEUTRAL bundled serif-Korean floor, so `CJK_KO_SERIF`'s guaranteed floor
 stays the (sans) Noto Sans KR — which is exactly what `gallery/ko-worlds/`'s
 "floor" side (`AWL_CJK_FORCE=floor`) drops to. **GenSenRounded (源泉圓體,
 ButTaiwan/gensen-font) — investigated, DECLINED**: it was proposed as the ONE
-rounded zh-Hans add for the rounded worlds (Galah/Kingfisher), and its license
+rounded zh-Hans add for the rounded worlds (Galah/Bowerbird), and its license
 IS clean OFL 1.1, but the repo ships ONLY Traditional variants (TW 月 + TC 丹 +
 JP) — there is **no Simplified (SC/CN) build**, so it cannot serve the zh-HANS
 ladder (a Traditional face renders Traditional glyph shapes for Simplified

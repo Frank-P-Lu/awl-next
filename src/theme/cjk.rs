@@ -40,14 +40,14 @@ pub const CJK_GOTHIC: &[&str] = &["Noto Sans JP", "Hiragino Kaku Gothic ProN", "
 // captures. See THEMES.md's assignment table for which world gets which + why.
 
 /// JAPANESE bookish-mincho ladder — the warm LITERARY serif for the book-serif
-/// worlds (Gumtree, Bilby, Undertow): bundled Shippori Mincho first, then the
+/// worlds (Gumtree, Bilby, Bombora): bundled Shippori Mincho first, then the
 /// Noto Serif JP floor + the same Hiragino/Noto-CJK system trailing candidates
 /// as [`CJK_MINCHO`].
 pub const CJK_JA_SHIPPORI: &[&str] =
     &["Shippori Mincho", "Noto Serif JP", "Hiragino Mincho ProN", "Noto Serif CJK JP"];
 
 /// JAPANESE rounded-gothic ladder — the warm rounded "maru" sans for the two
-/// dedicated sans worlds (Galah, Kingfisher): bundled Zen Maru Gothic first,
+/// dedicated sans worlds (Galah, Bowerbird): bundled Zen Maru Gothic first,
 /// then the Noto Sans JP floor + the same gothic system trailing candidates as
 /// [`CJK_GOTHIC`].
 pub const CJK_JA_ZENMARU: &[&str] =
@@ -176,7 +176,7 @@ pub const CJK_KO: &[&str] = &["Noto Sans KR", "Apple SD Gothic Neo", "Noto Sans 
 
 /// Korean SERIF ladder — the "CJK companions" round's Gowun Batang rider, for
 /// the SERIF worlds (`Theme::cjk` is a mincho-family ja ladder: Gumtree, Bilby,
-/// Undertow, Saltpan, Outback, Magpie). Bundled Gowun Batang (a Korean BATANG /
+/// Bombora, Saltpan, Mulga, Magpie). Bundled Gowun Batang (a Korean BATANG /
 /// serif, OFL, subset to the SAME KS X 1001 set as the Noto Sans KR floor — see
 /// `render::FONT_CJK_COMPANION_FACES`) FIRST, closing the Chinese round's logged
 /// gap ("no comparable bundled serif Korean companion yet"), then the SAME

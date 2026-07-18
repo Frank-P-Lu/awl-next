@@ -251,7 +251,7 @@ pub enum PlacardCorner {
 /// gallery-validated barely-there P3R "watermark" read; on a DARK ground both
 /// rungs instead step UP the ladder toward `base_content`, because the
 /// gallery's dark-world shots proved the light formulas near-invisible there
-/// — Undertow's Ghost vanished outright. One formula off the ladder per
+/// — Bombora's Ghost vanished outright. One formula off the ladder per
 /// mode, never a per-world hand constant; see `placard_ink`'s own doc).
 /// `Stipple` is the personality-assignment round's texture variant: the SAME
 /// wordmark rendered as a Bayer-matrix STIPPLE of individual full-ink pixels

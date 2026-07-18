@@ -288,7 +288,7 @@ fn nested_bullets_cycle_by_depth_and_reveal_on_cursor() {
 /// PER-WORLD BULLETS: the depth-derived glyph swaps to the ACTIVE world's own
 /// [`theme::Theme::bullets`] pair (drawn in its ornament face) — a technical
 /// world keeps `•`/`◦`, a literary serif draws its characterful pair, and
-/// Undertow the manicule. Reveal-on-cursor is unchanged (off-caret only). Proves
+/// Bombora the manicule. Reveal-on-cursor is unchanged (off-caret only). Proves
 /// the glyph is theme-DATA, not a fixed geometric triple.
 #[test]
 fn bullet_glyphs_swap_per_world() {
@@ -304,7 +304,7 @@ fn bullet_glyphs_swap_per_world() {
     let text = "- top\n  - sub\n";
     let cases = [
         ("Tawny", ('•', '◦')),       // geometric world: plain, byte-identical
-        ("Undertow", ('☞', '❧')),    // the manicule showpiece + hedera
+        ("Bombora", ('☞', '❧')),    // the manicule showpiece + hedera
         ("Gumtree", ('❧', '☙')),     // Junicode botanical hederas
         ("Bilby", ('❧', '❦')),       // Garamond Renaissance fleurons
         ("Mopoke", ('⁑', '❦')),      // the quiet utilitarian Junicode mark

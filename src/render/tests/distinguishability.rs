@@ -295,12 +295,12 @@ fn wcag_contrast(a: theme::Srgb, b: theme::Srgb) -> f32 {
     (hi + 0.05) / (lo + 0.05)
 }
 
-/// LAW (born from the Undertow-under-Bars taste-gate defect): the selected
+/// LAW (born from the Bombora-under-Bars taste-gate defect): the selected
 /// picker row's TEXT must clear a 3:1 contrast against its own selected-row
 /// value band on EVERY world. The band under [`theme::ListStyle::Bars`] is the
 /// world's `effective_overlay_selrow_band` (identical to the Pane band — Bars
 /// only drops the pane and widens the bar, not the fill VALUE), so a pass here
-/// covers both list styles. The exhibit: Undertow rendered light ink
+/// covers both list styles. The exhibit: Bombora rendered light ink
 /// (236,232,242) on a mid sage band (132,152,144) = 2.53:1, washing out; the fix
 /// is `theme::selected_row_ink`, the ONE derive owner that flips the row's ink
 /// to the reading pole when `base_content` fails. NO-WILDCARD over

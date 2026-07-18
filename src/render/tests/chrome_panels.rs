@@ -1247,7 +1247,7 @@ fn overlay_card_fits_its_content_no_fat_bottom_lip() {
     let _g = crate::testlock::serial();
     let pad = 12.0_f32;
 
-    for world in ["Kingfisher", "Saltpan", "Firetail", "Wagtail"] {
+    for world in ["Bowerbird", "Saltpan", "Firetail", "Wagtail"] {
         theme::set_active_by_name(world).unwrap();
         p.sync_theme();
 
@@ -1360,7 +1360,7 @@ fn overlay_hint_footer_is_compact_and_identical_across_kinds() {
         .count();
     assert_eq!(popups, 1, "exactly the Spell popup is a non-takeover footer");
 
-    for world in ["Kingfisher", "Saltpan", "Wagtail"] {
+    for world in ["Bowerbird", "Saltpan", "Wagtail"] {
         theme::set_active_by_name(world).unwrap();
         p.sync_theme();
         let lh = p.overlay_lh();
@@ -1596,7 +1596,7 @@ fn overlay_card_h_owner_reproduces_every_kinds_card_height() {
     let popups = ALL_KINDS.iter().filter(|k| card_pad_for(**k) == 10.0).count();
     assert_eq!(popups, 1, "exactly the Spell popup breathes at the small pad");
 
-    for world in ["Kingfisher", "Saltpan", "Wagtail"] {
+    for world in ["Bowerbird", "Saltpan", "Wagtail"] {
         theme::set_active_by_name(world).unwrap();
         p.sync_theme();
         let gap = p.overlay_header_gap();

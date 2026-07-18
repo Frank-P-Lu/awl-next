@@ -189,9 +189,9 @@ fn ja_variety_worlds_resolve_their_new_bundled_face() {
     let cases = [
         ("Gumtree", "Shippori Mincho"),
         ("Bilby", "Shippori Mincho"),
-        ("Undertow", "Shippori Mincho"),
+        ("Bombora", "Shippori Mincho"),
         ("Galah", "Zen Maru Gothic"),
-        ("Kingfisher", "Zen Maru Gothic"),
+        ("Bowerbird", "Zen Maru Gothic"),
         ("Mopoke", "Klee One"),
         ("Quokka", "Klee One"),
         // Two worlds this round left ALONE keep the neutral Noto face.
@@ -248,13 +248,13 @@ fn ko_serif_worlds_resolve_gowun_batang() {
     let cases = [
         ("Gumtree", "Gowun Batang"),
         ("Bilby", "Gowun Batang"),
-        ("Undertow", "Gowun Batang"),
+        ("Bombora", "Gowun Batang"),
         ("Saltpan", "Gowun Batang"),
-        ("Outback", "Gowun Batang"),
+        ("Mulga", "Gowun Batang"),
         ("Magpie", "Gowun Batang"),
         // Sans/mono controls — the neutral bundled floor, never Gowun Batang.
         ("Currawong", "Noto Sans KR"),
-        ("Kingfisher", "Noto Sans KR"),
+        ("Bowerbird", "Noto Sans KR"),
     ];
     for (world, want) in cases {
         theme::set_active_by_name(world).unwrap();

@@ -1,4 +1,4 @@
-//! src/theme/worlds.rs — the WORLDS DATA TABLE: the sixteen concrete
+//! src/theme/worlds.rs — the WORLDS DATA TABLE: the eighteen concrete
 //! [`Theme`] literals (exact hex from the theme spec) + the [`THEMES`] cycle
 //! order + [`DEFAULT_THEME`]. Pure data — no derivation logic lives here (see
 //! [`crate::theme::derive`] for the active-theme accessors).
@@ -37,7 +37,7 @@ const POSTER_BARS: ListStyle = ListStyle::Bars {
     coverage: super::model::BarCoverage::All,
 };
 
-// --- The sixteen worlds (exact hex from the theme spec) ----------------------
+// --- The eighteen worlds (exact hex from the theme spec) ---------------------
 
 /// Gumtree — light eucalyptus reading room (coral caret on a cool green page).
 pub const GUMTREE: Theme = Theme {
@@ -78,7 +78,7 @@ pub const GUMTREE: Theme = Theme {
     bullets: ('❧', '☙'),
     bullet_scale: BULLET_SCALE_ORNAMENT,
     // Pale cool-green ground → Day; Literata reading serif → Refined / Literary; green hue → Cool.
-    // Curated: shows under Day / Literary / Cool; opts OUT of Register (crowded → Bilby/Saltpan/Undertow keep Refined).
+    // Curated: shows under Day / Literary / Cool; opts OUT of Register (crowded → Bilby/Saltpan/Bombora keep Refined).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Cool") },
     role_overrides: RoleOverrides::NONE,
     // LIGHT-WORLD BORDER (composition round item 6, veto 3 adopted: "border on
@@ -319,9 +319,10 @@ pub const QUOKKA: Theme = Theme {
     render_caps: RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT },
 };
 
-/// Undertow — dark deep midnight current (hot indian-lake caret in violet dark).
-pub const UNDERTOW: Theme = Theme {
-    name: "Undertow",
+/// Bombora — the wave standing over a submerged reef: a violet-dark midnight
+/// swell (hot indian-lake caret cresting the deep water).
+pub const BOMBORA: Theme = Theme {
+    name: "Bombora",
     dark: true,
     base_100: Srgb::rgb(0x15, 0x0A, 0x2C),
     base_200: Srgb::rgb(0x24, 0x15, 0x40),
@@ -358,7 +359,7 @@ pub const UNDERTOW: Theme = Theme {
     // OVERRIDE (the serif nocturne's flourish): mirror the default fleuron into its
     // reversed twin ☙ for `---`, and swap `___`'s heart to the black-heart bullet ❥
     // (both NS2 ornament variants, also bundled). `***` keeps the ⁂ asterism.
-    // IN-FACE: Undertow's display IS EB Garamond, so its fleuron shapes in its own
+    // IN-FACE: Bombora's display IS EB Garamond, so its fleuron shapes in its own
     // face. The old {☙,⁂,❥} relied on the merged marks face (EBG has no ⁂/❥); the
     // set is now all-EBG fleurons (☙ dash keeps its distinct reversed look).
     ornaments: Ornaments { dash: '☙', star: '❧', underscore: '❦' },
@@ -377,9 +378,10 @@ pub const UNDERTOW: Theme = Theme {
     render_caps: RenderCaps::DEFAULT,
 };
 
-/// Outback — dark red-centre night (hays-russet caret in blackish-olive room).
-pub const OUTBACK: Theme = Theme {
-    name: "Outback",
+/// Mulga — the arid acacia scrub whose dark olive IS the room (hays-russet caret
+/// in a blackish-olive night).
+pub const MULGA: Theme = Theme {
+    name: "Mulga",
     dark: true,
     // GROUND NUDGE (distinctive-grounds pass): leaned the whole near-black ramp
     // toward a truer YELLOW-olive (hue ~107°→~94°, a touch more chroma). The old
@@ -526,12 +528,13 @@ pub const MOPOKE: Theme = Theme {
     render_caps: RenderCaps::DEFAULT,
 };
 
-/// Kingfisher — a deep midnight-navy dark world: a cool, still room of blue-black
-/// planes under a cool off-white ink, lit by ONE warm-amber caret — the thesis
-/// made literal, the single warm thing in a cool room (DESIGN §3). Drawn in IBM
-/// Plex Sans to set it apart from Tawny's mono family — a clean sans nocturne.
-pub const KINGFISHER: Theme = Theme {
-    name: "Kingfisher",
+/// Bowerbird — a deep midnight-navy dark world: the satin bowerbird's glossy
+/// blue-black planes under a cool off-white ink, lit by ONE warm-amber caret —
+/// the thesis made literal, the single warm thing in a cool room (DESIGN §3),
+/// like the one bright treasure hoarded in a blue-black bower. Drawn in IBM Plex
+/// Sans to set it apart from Tawny's mono family — a clean sans nocturne.
+pub const BOWERBIRD: Theme = Theme {
+    name: "Bowerbird",
     dark: true,
     base_100: Srgb::rgb(0x0C, 0x14, 0x26),
     base_200: Srgb::rgb(0x13, 0x1D, 0x33),
@@ -659,8 +662,8 @@ pub const MANGROVE: Theme = Theme {
     // GROUND NUDGE (distinctive-grounds pass): pushed the ramp toward a truer,
     // more-saturated TIDAL TEAL (~169° hue, ground chroma 0.33→0.39, a touch
     // lighter). The old ground was so dark it read near-neutral and collided with
-    // warm-grey Tawny (redmean 15.2) and blackish-olive Outback (16.6); the deeper
-    // teal separates cleanly (Tawny →32, Outback →40, Kingfisher →36) and makes
+    // warm-grey Tawny (redmean 15.2) and blackish-olive Mulga (16.6); the deeper
+    // teal separates cleanly (Tawny →32, Mulga →40, Bowerbird →36) and makes
     // "dark tidal-teal den — cool and rooted" read on the page. NOTE: a still-purer
     // teal (near-zero red) breached the comment-wash whisper ceiling — the warm
     // wash lifts a red-starved base too far (ΔL > 0.12) — so a little red is kept
@@ -929,7 +932,7 @@ pub const BROLGA: Theme = Theme {
     primary_content: Srgb::rgb(0xFC, 0xEE, 0xEA),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
     // A deep cornflower tint — the sky pooled in still water, cool, well clear
-    // of the coral caret. Alpha 0x60 (like Undertow/Mangrove) so the composited
+    // of the coral caret. Alpha 0x60 (like Bombora/Mangrove) so the composited
     // band clears the selection contrast floor over the pale blue ground.
     selection: Srgb::rgba(0x35, 0x57, 0xA0, 0x60),
     // A calm vertical gradient — the clear sky over still water — deepening
@@ -940,11 +943,11 @@ pub const BROLGA: Theme = Theme {
         dir: (0.0, 1.0),
     },
     // IBM Plex Sans — awl's cool humanist sans, now worn at BOTH value poles:
-    // dark Kingfisher's midnight navy and Brolga's pale sky. A clean cool sans
+    // dark Bowerbird's midnight navy and Brolga's pale sky. A clean cool sans
     // sets it apart from the only other cool LIGHT world (Gumtree, a green serif).
     font: "IBM Plex Sans",
     // Cool clean sans → its own type-family kin, the humanist IBM Plex Mono for
-    // the code grid (the Plex superfamily; distinct from Kingfisher's JetBrains).
+    // the code grid (the Plex superfamily; distinct from Bowerbird's JetBrains).
     mono: "IBM Plex Mono",
     // Plex Sans' even grotesque strokes give size little help — weight sections.
     heading_bold: true,
@@ -961,7 +964,7 @@ pub const BROLGA: Theme = Theme {
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
     // Clear cool daylight sky → Day (roomy — Gumtree/Magpie); pale blue → Cool
-    // (its defining trait — joins Gumtree/Kingfisher/Mangrove as the 4th, at the
+    // (its defining trait — joins Gumtree/Bowerbird/Mangrove as the 4th, at the
     // curated cap). Opts OUT of Register + Voice (both already at their 3-world
     // bands) — reachable via All + fuzzy search regardless.
     tags: ThemeTags { time: Some("Day"), register: None, voice: None, temperature: Some("Cool") },
@@ -1275,7 +1278,7 @@ pub const WAGTAIL: Theme = Theme {
 /// the GROUND ITSELF — a slow oxblood/wine metaball "lava lamp" bobbing in the
 /// page margins (see [`Background::Lava`] + `crate::lava`), the DESIGN.md §3
 /// ambient-motion amendment's first host (Mangrove is the cool second). The
-/// room is its own deep oxblood-charcoal den — redder beside Undertow's violet,
+/// room is its own deep oxblood-charcoal den — redder beside Bombora's violet,
 /// substantially less orange/rust than Potoroo. Warm blush ink, muted claret
 /// chrome, wine lava, and an ember-gold caret form one coherent original palette.
 /// The caret stays ≥40° of hue clear of the wine lava so amber remains the
@@ -1435,14 +1438,14 @@ pub const CASSOWARY: Theme = Theme {
     name: "Cassowary",
     dark: true,
     // BLACKGLASS ground (2026-07-18 variant, serving the user's "a bit similar to
-    // Outback no?" — both the old green-cast ground and Outback's blackish-olive
+    // Mulga no?" — both the old green-cast ground and Mulga's blackish-olive
     // read as dark GREEN rooms). Neutralised base_100/base_200 to a near-neutral
     // black GLASS (a powered CRT at rest: a hair cool, essentially achromatic —
     // sat drops 0.38 -> 0.09), so the page field is no longer a green room. The
     // green now lives ONLY where it means "terminal data": the phosphor INK, the
     // dim green PANEL/wash (base_300, below), the string wash, and the margin
-    // scan-line TINT (Pinstripe, below). Vs Outback redmean 48.8 -> 59.5, and the
-    // saturation collapse is the real separation (0.09 vs Outback's 0.35). NOTE:
+    // scan-line TINT (Pinstripe, below). Vs Mulga redmean 48.8 -> 59.5, and the
+    // saturation collapse is the real separation (0.09 vs Mulga's 0.35). NOTE:
     // this lands base_100 within ~3 redmean of Currawong's neutral OLED near-black
     // (#060607) — no law enforces pairwise-ground distinctness, and the two worlds
     // diverge hard elsewhere (green phosphor ink + green scan-line margins + crimson
@@ -1627,8 +1630,8 @@ pub const CASSOWARY_LIGHT: Theme = Theme {
 
 /// All eighteen worlds, in cycle order. `C-x t` advances through this list and
 /// wraps; `C-x T` steps backward. The two deep cool darks — Currawong (OLED
-/// black) beside the neutral Tawny/Mopoke pair, and Kingfisher (midnight navy)
-/// beside the violet Undertow — sit with their kin; Brolga (the COOL LIGHT POLE)
+/// black) beside the neutral Tawny/Mopoke pair, and Bowerbird (midnight navy)
+/// beside the violet Bombora — sit with their kin; Brolga (the COOL LIGHT POLE)
 /// sits with the light cluster, just before the statement worlds; the three
 /// STATEMENT worlds close the cycle — Wagtail (the bare 1-bit room, NO warm
 /// thing) beside Firetail (the warm den whose one warm thing is the living lava
@@ -1636,7 +1639,7 @@ pub const CASSOWARY_LIGHT: Theme = Theme {
 /// dark-technical statement.
 pub const THEMES: [Theme; 18] = [
     TAWNY, MOPOKE, CURRAWONG,
-    POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, KINGFISHER, OUTBACK, MANGROVE, GALAH, MAGPIE,
+    POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, BOMBORA, BOWERBIRD, MULGA, MANGROVE, GALAH, MAGPIE,
     // Brolga — the COOL LIGHT POLE — sits with the light cluster, just before the
     // statement worlds that close the cycle.
     BROLGA,

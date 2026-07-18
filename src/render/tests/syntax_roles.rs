@@ -66,7 +66,7 @@ fn hue_dist(a: f32, b: f32) -> f32 {
 ///     t=0.12/sat=0.32 measured 36.4–65.2 (Currawong screenshot-confirmed as
 ///     plain-looking ink, the bug this law exists to catch structurally);
 ///     every OTHER role/world combination already measured ≥ 76 (worst:
-///     dark Constant at 76.2, Undertow). 70 sits safely below that 76.2 floor
+///     dark Constant at 76.2, Bombora). 70 sits safely below that 76.2 floor
 ///     (room for future re-tuning) while sitting well above the old broken
 ///     Definition range, so a future regression of this exact shape — a role
 ///     tint that clears the pairwise ≥40 law but reads as invisible against
@@ -669,10 +669,10 @@ fn sweep_light_ladder() {
 ///     actually sees — NOT the opaque tint, which flattered a sub-glance
 ///     highlight) clears a CONTRAST FLOOR: composited-vs-ground redmean ≥ 35 AND
 ///     ΔL ≥ 0.10, so a selection can never read as "you can't tell it's
-///     highlighted" (the reported Undertow/Mangrove bug: those two composited to
+///     highlighted" (the reported Bombora/Mangrove bug: those two composited to
 ///     only ΔL 0.090 / 0.076, invisible enough to fail this law before their
 ///     tints were lifted in-hue). Still CALM: ΔL ≤ 0.35 (a quiet highlight, never
-///     a solid paint fill — worst 0.231, Outback). Floor calibrated to fail the
+///     a solid paint fill — worst 0.231, Mulga). Floor calibrated to fail the
 ///     two worst offenders; every world now clears ΔL 0.118 (Currawong).
 #[test]
 fn ink_ladder_and_selection_laws_hold_for_every_world() {

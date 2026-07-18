@@ -1212,6 +1212,30 @@ fn apply_sticky_globals_restores_theme_page_caret_and_honours_flags() {
     crate::caret::set_mode(caret0);
 }
 
+/// RETIRED-WORLD LENIENT FALLBACK at the config APPLY seam (2026-07-18 rename:
+/// Outback→Mulga, Kingfisher→Bowerbird, Undertow→Bombora). A user who upgrades
+/// with a stale `theme = "Outback"` (or Kingfisher / Undertow) persisted in
+/// `config.toml` must land on the BUILT-IN DEFAULT (Saltpan), never crash and
+/// never a by-position neighbour: `set_active_by_name` returns `None` and
+/// `apply_sticky_globals` discards it, so the default set at startup survives.
+#[test]
+fn apply_sticky_globals_falls_back_to_default_for_retired_world_names() {
+    let _g = crate::testlock::serial();
+    let theme0 = crate::theme::active_index();
+    for retired in ["Outback", "Kingfisher", "Undertow"] {
+        // Startup has already put the built-in default (Saltpan) on the global.
+        crate::theme::set_active(crate::theme::DEFAULT_THEME);
+        let cfg = Config { theme: Some(retired.to_string()), ..Config::empty() };
+        cfg.apply_sticky_globals(false, false, false, false, crate::page::PageClass::Prose);
+        assert_eq!(
+            crate::theme::active().name,
+            "Saltpan",
+            "retired world {retired:?} must fall back to the default (Saltpan), not change the active world"
+        );
+    }
+    crate::theme::set_active(theme0);
+}
+
 // ── STICKY PROJECT ROOT ─────────────────────────────────────────────────
 
 #[test]
