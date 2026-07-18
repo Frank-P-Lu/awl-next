@@ -202,14 +202,12 @@ pub const BILBY: Theme = Theme {
         // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries the
         // card edge off the pale ground. DATA, no code path.
         elevation: Elevation::Bordered,
-        // DAWN ROUND: the LIGHT POLE claims the page frame the roster decision
-        // reserved ("the dark-line-on-light variant is reserved for a future
-        // light-silent pole world" — THEMES.md roster decisions, 2026-07-15).
-        // A 1px hairline of Bilby's own night-violet ink around the writing
-        // column — Wagtail's 2px ladder-white frame mirrored at the other end
-        // of the spectrum. Ink stays the `page_frame_ink()` derivation
-        // (= base_content), weight-only data here.
-        page_frame: PageFrame::Line { weight_px: 1.0 },
+        // DAWN ROUND: rose-gold horizon ground + night-violet ink landed on the
+        // user's word ("rose gold is fine... i like it"). The 1px hairline
+        // page frame the round PROPOSED for the light pole was REJECTED by the
+        // user's eyes ("the frame is so weird") — Bilby stays frameless; the
+        // roster's reserved dark-line-on-light assignment goes back on the
+        // shelf for some future light-pole world.
         ..RenderCaps::DEFAULT
     },
 };

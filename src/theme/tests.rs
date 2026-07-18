@@ -2048,9 +2048,10 @@ fn personality_assignments_are_exactly_the_decided_table() {
             // night-violet ink around the writing column, Wagtail's 2px white
             // frame mirrored at the light end of the spectrum. Keeps the
             // light-world card border.
+            // Dawn round: the proposed 1px light-pole page frame was REJECTED by
+            // the user live ("the frame is so weird") — Bilby ships frameless.
             "Bilby" => RenderCaps {
                 elevation: Elevation::Bordered,
-                page_frame: PageFrame::Line { weight_px: 1.0 },
                 ..RenderCaps::DEFAULT
             },
             // LIGHT-WORLD BORDER (composition round item 6): the remaining
