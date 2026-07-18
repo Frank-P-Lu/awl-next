@@ -90,6 +90,87 @@ fn overlay_card_box_stays_on_canvas_across_the_width_sweep() {
     );
 }
 
+/// ZOOM-AWARE CARD-WIDTH OUTCOME LAW (the user's 200%-palette report: at 200% in
+/// a WIDE window every palette row came back brutally elided — "Comp…ion…",
+/// "Clean unu…d assets…" — because the 520/600 width caps were device-px
+/// constants blind to zoom while the glyphs doubled). Parameterized over zoom
+/// (1.0, 1.6, 2.0) the way the popover no-clip laws were parameterized over DPI.
+///
+/// The card width now scales through the ONE owner [`overlay_card_desired_w`], so
+/// on a window with ROOM the primary cells NEVER elide as the type grows;
+/// elision fires only when the WINDOW genuinely lacks room. Asserted as an
+/// OUTCOME over the shaper's real elision decision fed by the LIVE
+/// `overlay_geometry().text_w` ([`TextPipeline::overlay_elided_candidates`], which
+/// reruns `full_budget` + `fit_primary` off the true card width — a card-width
+/// regression re-elides and trips this). PURE geometry (no GPU frame), so it
+/// always runs.
+#[test]
+fn overlay_card_width_is_zoom_aware_no_elision_when_the_window_has_room() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping overlay_card_width_is_zoom_aware: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    // The real palette's longest labels — the ones the user watched collapse.
+    let items: Vec<String> = [
+        "Go to file…",
+        "Switch project…",
+        "Recent projects…",
+        "Compare with version…",
+        "Clean unused assets…",
+        "Toggle typewriter scroll",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    // A chord on the first two rows (a right column exists, like the live palette).
+    let binds: Vec<String> = vec![
+        "\u{2318}O".into(),
+        "\u{2318}\u{21e7}P".into(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    ];
+
+    // The Cmd-P palette is FACETED — a populated lens strip routes `overlay_geometry`
+    // to the faceted card (the exact path the user summoned). Builds the view fresh
+    // per (width, zoom) so `set_view` rebuilds the metrics from `v.zoom`.
+    let palette = |p: &mut TextPipeline, width: u32, zoom: f32| -> Vec<String> {
+        let mut v = view("hello\n", 0, 0);
+        v.zoom = zoom;
+        v.overlay_active = true;
+        v.overlay_title = "commands";
+        v.overlay_items = items.clone();
+        v.overlay_bindings = binds.clone();
+        v.overlay_lens = vec![("All".into(), true), ("File".into(), false)];
+        p.set_view(&v);
+        p.overlay_elided_candidates(width)
+    };
+
+    // ROOM: on the 1200-px canvas the card grows with the glyphs, so nothing elides
+    // at ANY of the three zooms — the whole point of the fix.
+    for &zoom in &[1.0f32, 1.6, 2.0] {
+        let elided = palette(&mut p, 1200, zoom);
+        assert!(
+            elided.is_empty(),
+            "zoom {zoom}: a WIDE (1200px) window has room — no palette primary may \
+             elide, but these did: {elided:?}"
+        );
+    }
+
+    // LEGITIMATE-ELISION CONTROL: a genuinely NARROW window at 200% truly lacks
+    // room, so the card fills the window and the shaper DOES elide (correct — the
+    // fix must not paper over a real space shortage).
+    let narrow = palette(&mut p, 360, 2.0);
+    assert!(
+        !narrow.is_empty(),
+        "zoom 2.0 in a 360px window genuinely lacks room — elision MUST still fire \
+         (else the fix is over-widening past the window)"
+    );
+}
+
 /// Y-AGREEMENT OUTCOME LAW (Wagtail-lesson: assert what the shaped buffers +
 /// upload owners actually place, not a mechanism count) — across FLAT and
 /// FACETED pickers, both DPIs, and SEVEN worlds (incl. the four Bars poster

@@ -372,6 +372,24 @@ pub fn reading_time_min(words: usize) -> usize {
     }
 }
 
+/// THE strikethrough ENGAGEMENT gate — awl's exactly-two-tilde rule, the ONE
+/// place BOTH the live renderer ([`spans`]) and every exporter
+/// ([`crate::export`]'s `model::parse`) decide whether a pulldown
+/// `Tag::Strikethrough` span actually strikes. pulldown's GFM option ALSO parses
+/// single-tilde `~x~`; awl deliberately keeps that INERT (the `==` exactly-two
+/// precedent — the format command and the writer's-diff serializer both emit
+/// `~~`), so prose like `2~3 weeks` or a stray `~word~` never silently strikes.
+/// `src` is the whole `~~…~~` span slice (from the offset iterator); ENGAGED iff
+/// its LEADING tilde run is EXACTLY two (GFM guarantees the closing run matches).
+/// A `~~~` run is a block-level FENCE and never reaches an inline strikethrough
+/// tag, so it can't reach this gate. Pure + total. Sharing this ONE owner is what
+/// keeps the RENDER (inert `~x~` → no strike span) and the EXPORT (inert `~x~` →
+/// no `<del>`/`<w:strike/>`) from disagreeing — the render/export strike
+/// divergence this fixed.
+pub fn strike_engaged(src: &str) -> bool {
+    src.bytes().take_while(|&b| b == b'~').count() == 2
+}
+
 /// Parse `text` into styling spans in DOCUMENT byte coordinates. Spans may
 /// overlap by DESIGN: a link or code-block first pushes a whole-range `Markup`
 /// span, then its inner text pushes a `LinkText`/`Code` span — applied in this
@@ -415,7 +433,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
     // tiny per-Start stack so a skipped single-tilde span's `TagEnd` never
     // decrements a counter it didn't increment.
     let mut strike = 0u32;
-    let mut strike_engaged: Vec<bool> = Vec::new();
+    let mut strike_engaged_stack: Vec<bool> = Vec::new();
     // IMAGE nesting depth. An image's `![alt](path)` source is emitted as ONE
     // `ConcealMarkup(Image)` span over its whole range (see the `Tag::Image`
     // arm); while inside one, the inner alt-text `Event::Text` is SUPPRESSED
@@ -483,10 +501,11 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 // `==` exactly-two rule. A `~~~` run is a FENCE at block level and
                 // never reaches this inline arm.
                 Tag::Strikethrough => {
-                    let s = &text[range.clone()];
-                    let tildes = s.bytes().take_while(|&b| b == b'~').count();
-                    let engaged = tildes == 2;
-                    strike_engaged.push(engaged);
+                    // THE shared exactly-two-tilde gate (`strike_engaged`) — the
+                    // export's `model::parse` reads the SAME owner, so a single
+                    // `~x~` stays inert in both the render and every export.
+                    let engaged = strike_engaged(&text[range.clone()]);
+                    strike_engaged_stack.push(engaged);
                     if engaged {
                         strike += 1;
                         push_delim(&mut body, &range, 2, ConcealKind::Strikethrough);
@@ -571,7 +590,7 @@ pub fn spans(text: &str) -> Vec<(Range<usize>, MdKind)> {
                 TagEnd::Strong => strong = strong.saturating_sub(1),
                 TagEnd::Emphasis => emph = emph.saturating_sub(1),
                 TagEnd::Strikethrough => {
-                    if strike_engaged.pop().unwrap_or(false) {
+                    if strike_engaged_stack.pop().unwrap_or(false) {
                         strike = strike.saturating_sub(1);
                     }
                 }

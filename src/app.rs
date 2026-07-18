@@ -278,6 +278,21 @@ impl ZoomReflow {
     }
 }
 
+/// A pending ZOOM ANCHOR: the document char + the screen y that char should hold, so
+/// the next `sync_view` (which reshapes to the just-changed zoom) keeps that point
+/// fixed on screen instead of anchoring at the viewport top. Captured at the OLD zoom
+/// BEFORE the deferred reshape (both zoom paths arm it — the wheel with the POINTER's
+/// char + y, the keyboard with the CARET's, or the viewport-centre char when the caret
+/// is off-screen), consumed once by `sync_view` via [`TextPipeline::zoom_anchor_scroll`]
+/// (the one owner of the anchored-scroll math). Live-only: the headless capture never
+/// builds an `App`, so its single-frame scroll stays cursor-follow (unchanged).
+#[derive(Clone, Copy, Debug)]
+struct ZoomAnchor {
+    line: usize,
+    col: usize,
+    screen_y: f32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GpuLifecycle { AwaitingWindow, Active { oom_skips: u8 }, Suspended, Rebuilding }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -360,6 +375,14 @@ struct Gpu {
     faults: gpu::GpuFaultInbox,
     #[cfg(not(target_arch = "wasm32"))]
     inject_surface_loss: bool,
+    /// LIVE PROBE frame mirror (`--live-script` only, else forever `None`): a
+    /// persistent texture every PRESENTED frame is blitted into just before
+    /// `present()`, so a probe `shot` can read back what the compositor was
+    /// LAST HANDED — without forcing a redraw that would repaint over exactly
+    /// the stale-frame / missed-redraw bug classes the probe hunts. See
+    /// `Gpu::mirror_presented_frame` + `crate::probe`'s module doc.
+    #[cfg(not(target_arch = "wasm32"))]
+    probe_mirror: Option<wgpu::Texture>,
 }
 
 /// GPU surface + frame loop (device/queue/surface, prepare/render).
@@ -378,6 +401,10 @@ mod apply;
 /// The single-instance DAEMON's App-side wiring (native only): react to a
 /// posted `DaemonEvent`, finish a buffer for C-x #, tear down on quit.
 mod daemon;
+/// The LIVE PROBE HARNESS's App-side wiring (native only): scripted chords
+/// through the real dispatch tail + compositor-side window shots. See
+/// `crate::probe`'s module doc.
+mod probe;
 /// The native macOS MENU BAR's App-side wiring (`cfg(target_os = "macos")`
 /// only): resolve a fired menu item's id and re-dispatch it through the SAME
 /// `App::apply` seam a keypress uses. `crate::menu` owns the pure roster +
@@ -425,6 +452,14 @@ pub struct App {
     soak_recovery_pending: Option<crate::soak_gpu::FaultKind>,
     #[cfg(not(target_arch = "wasm32"))]
     soak_passed: Option<bool>,
+    /// LIVE PROBE (`--live-script`): the one-shot "first frame is up" signal
+    /// the driver thread blocks on before feeding scripted input — sent (and
+    /// the sender dropped) from `on_gpu_ready`, alongside a `focus_window()`
+    /// so the probe window is frontmost/unoccluded (the wgpu macOS occlusion
+    /// tripwire: a non-visible window presents nothing). `None` outside a
+    /// probe run — zero cost on a normal launch.
+    #[cfg(not(target_arch = "wasm32"))]
+    probe_ready: Option<std::sync::mpsc::Sender<()>>,
     /// WASM-only handoff slot for the ASYNC GPU init. The browser main thread can't
     /// block, so `Gpu::new` runs on a `spawn_local` future that parks its result
     /// here; `window_event` moves it into `gpu` on the first frame. `Rc<RefCell>`
@@ -787,6 +822,11 @@ pub struct App {
     /// next present opportunity. Any intervening ordinary `sync_view` clears it
     /// because that sync necessarily applies the newest zoom already.
     zoom_reflow: ZoomReflow,
+    /// Pending ZOOM ANCHOR (see [`ZoomAnchor`]): the document point + screen y the
+    /// next reflow should hold fixed, so a keyboard ⌘± zooms around the CARET (not
+    /// the viewport top) and the wheel zooms around the POINTER. `None` = plain
+    /// top-anchored scroll. Consumed once by `sync_view`.
+    zoom_anchor: Option<ZoomAnchor>,
     /// When the theme-picker live PREVIEW last landed on a world whose display face
     /// differs from the shaped one, and the deferred FONT reshape is pending; the
     /// debounced `sync_theme_font` fires after `THEME_FONT_DEBOUNCE` of quiet in
@@ -842,15 +882,29 @@ pub struct App {
     /// redraws scheduled by a move).
     move_settle_at: Option<Instant>,
     /// A THEME-PREVIEW step just crossed the lava boundary (a ticking lava world
-    /// ⇄ a static non-lava one), so the ambient ~10 fps present cadence starts or
-    /// stops underfoot. Held for `CROSSING_SYNC_SETTLE` (re-stamped on each
-    /// further crossing) so the crossing frame + one settle follow-up present
-    /// join the compositor's transaction rather than racing it — the third source
-    /// feeding `present_sync_armed`, the vanishing-page fix (2026-07-17). Only
-    /// ever stamped when `lava::preview_crossing` returns `SyncAcrossCrossing`
-    /// (`App::retint_theme_preview`); `None` otherwise, and structurally
+    /// THE PREVIEW-SETTLE debounce: stamped by `App::retint_theme_preview` on
+    /// EVERY theme-picker preview step (arrow / hover / wheel), re-stamped on each
+    /// further step so it fires `CROSSING_SYNC_SETTLE` after the user STOPS
+    /// navigating. Its presence arms the present-transaction bracket
+    /// (`present_sync_armed`'s third source), so every preview frame — including
+    /// the LANDING frame — joins the compositor's transaction rather than racing
+    /// it (the vanishing-page fix, 2026-07-18: the old `preview_crossing`
+    /// conditional bracketed only the transient boundary crossed mid-nav and left
+    /// the actual landing frame unbracketed — three widenings never caught it, so
+    /// the classification was RETIRED for unconditional arming). Structurally
     /// unreachable in a headless capture (the shared replay never previews).
     crossing_settle_at: Option<Instant>,
+    /// EVENT-ORDERED bracket teardown: set by `finish_crossing_settle` once the
+    /// preview settle elapses (the deferred font reshape has just been APPLIED in
+    /// the same `about_to_wait` pass but not yet PRESENTED). It HOLDS the
+    /// present-transaction bracket ON (a second source in `sync_present_txn`'s OR)
+    /// until the next present — the one carrying the reshaped frame — completes
+    /// INSIDE the bracket; the post-present hook in `on_redraw_requested` then
+    /// clears it and disarms. This replaces the old timer-race (settle turned the
+    /// bracket off in the SAME pass the reshape redraw was requested, so the
+    /// heaviest frame coalesced into one UNBRACKETED present) with a mechanical
+    /// happens-after: reshape present ⇒ THEN teardown. Live-only.
+    crossing_teardown_pending: bool,
     /// Shadow of the CAMetalLayer's `presentsWithTransaction` flag — the ONE
     /// owner of its composition is `App::sync_present_txn`, which arms it while
     /// ANY live source (resize OR move stream, OR a theme-preview lava-boundary
@@ -1126,6 +1180,8 @@ impl App {
             soak_recovery_pending: None,
             #[cfg(not(target_arch = "wasm32"))]
             soak_passed: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            probe_ready: None,
             #[cfg(target_arch = "wasm32")]
             gpu_pending: std::rc::Rc::new(std::cell::RefCell::new(None)),
             last_frame: None,
@@ -1212,12 +1268,14 @@ impl App {
             history_scroll_before: None,
             zoom_persist_at: None,
             zoom_reflow: ZoomReflow::default(),
+            zoom_anchor: None,
             theme_font_at: None,
             lava_tick_at: None,
             focused: true,
             resize_settle_at: None,
             move_settle_at: None,
             crossing_settle_at: None,
+            crossing_teardown_pending: false,
             present_sync_on: false,
             config,
             cli_notes_root,
@@ -1430,6 +1488,25 @@ impl App {
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
+        // LIVE PROBE ready signal: the window + GPU exist, so the driver thread
+        // may start feeding scripted input. FIRST make the window unoccludable:
+        // the wgpu macOS occlusion gate returns `SurfaceError::Occluded` before
+        // `nextDrawable()` for a window without `NSWindowOcclusionStateVisible`
+        // — and a probe launched from a (fullscreen) terminal opens BEHIND it,
+        // so without this the run presents ZERO frames (observed: every shot
+        // "no frame has presented yet"). AlwaysOnTop guarantees visibility for
+        // the run's few seconds regardless of the launching terminal;
+        // `focus_window` additionally asks for key status so the run matches
+        // the reported live conditions (focused editing).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(tx) = self.probe_ready.take() {
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window
+                    .set_window_level(winit::window::WindowLevel::AlwaysOnTop);
+                gpu.window.focus_window();
+            }
+            let _ = tx.send(());
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1526,6 +1603,10 @@ pub(crate) enum AwlEvent {
     /// (`App::handle_menu_event`, `app/menu.rs`).
     #[cfg(target_os = "macos")]
     Menu(String),
+    /// A live-probe step posted by the `--live-script` driver thread (see
+    /// `crate::probe`'s module doc) — a scripted chord for the real dispatch
+    /// tail, a compositor-side window shot, or the terminating quit.
+    Probe(crate::probe::ProbeEvent),
 }
 #[cfg(target_arch = "wasm32")]
 type AwlEvent = ();
@@ -1543,6 +1624,7 @@ impl ApplicationHandler<AwlEvent> for App {
             AwlEvent::Daemon(e) => self.handle_daemon_event(e),
             #[cfg(target_os = "macos")]
             AwlEvent::Menu(id) => self.handle_menu_event(id, _event_loop),
+            AwlEvent::Probe(e) => self.handle_probe_event(_event_loop, e),
         }
     }
 
@@ -1606,6 +1688,35 @@ impl ApplicationHandler<AwlEvent> for App {
                 .with_min_inner_size(LogicalSize::new(min_w, min_h))
                 .with_title(if self.soak.is_some() { "Awl GPU probe — keep visible".to_string() } else { title })
                 .with_visible(true);
+            // LIVE PROBE: a small, corner-anchored, DETERMINISTIC window
+            // (`crate::probe::PROBE_LOGICAL_*`). Overrides any restored session
+            // frame — a probe run is isolated (temp HOME) and must land in a
+            // known small corner, not wherever the last real window happened to
+            // sit. Anchored near the top-left, clear of the menu bar.
+            // ALWAYS-ON-TOP is the occlusion cure: a non-activating (Prohibited)
+            // window never comes to front, so it would otherwise sit OCCLUDED
+            // behind the user's windows and wgpu would skip every present (the
+            // occlusion tripwire) — leaving the harness blind to the very
+            // present-race it exists to catch. `WindowLevel::AlwaysOnTop` floats
+            // it above other windows so it stays unoccluded and presents fire,
+            // WITHOUT making it key (window LEVEL is z-order, not focus — verified
+            // FOCUS-GAINED stays 0). Small + cornered keeps the always-on-top
+            // window out of the way.
+            if crate::probe::live_active() {
+                attrs
+                    .with_inner_size(LogicalSize::new(
+                        crate::probe::PROBE_LOGICAL_W,
+                        crate::probe::PROBE_LOGICAL_H,
+                    ))
+                    .with_position(winit::dpi::LogicalPosition::new(48.0, 64.0))
+                    // `with_active(false)` → winit shows the window via
+                    // `orderFront` instead of `makeKeyAndOrderFront`, so it never
+                    // becomes the KEY window (no keyboard-focus theft). Paired with
+                    // the Prohibited policy + `activate_ignoring_other_apps(false)`
+                    // in `crate::app::run`. Only the probe opts out of focus; a
+                    // normal launch keeps the default active window.
+                    .with_active(false)
+            } else {
             match self.restored_window {
                 Some(frame) => {
                     let screens: Vec<crate::session::ScreenRect> = event_loop
@@ -1630,6 +1741,7 @@ impl ApplicationHandler<AwlEvent> for App {
                         .with_position(winit::dpi::PhysicalPosition::new(clamped.x, clamped.y))
                 }
                 None => attrs.with_inner_size(LogicalSize::new(1200.0, 800.0)),
+            }
             }
         };
         #[cfg(target_arch = "wasm32")]
@@ -1725,6 +1837,7 @@ impl ApplicationHandler<AwlEvent> for App {
         self.resize_settle_at = None;
         self.move_settle_at = None;
         self.crossing_settle_at = None;
+        self.crossing_teardown_pending = false;
         self.present_sync_on = false;
     }
 
@@ -2156,18 +2269,30 @@ fn hud_mods_broken(summon: ModifiersState, now: ModifiersState) -> bool {
     !now.contains(summon)
 }
 
-/// Does a held Shift on this action signal SELECT-INTENT (Shift+motion extends
-/// the selection, GUI style)? `M-<` / `M->` need Shift just to TYPE the `<` /
-/// `>` glyph, so that Shift is INCIDENTAL — Emacs treats them as pure motion
-/// (you select via the mark, `C-Space`), so it must NOT extend the selection.
-/// Every other action keeps Shift's normal select-extend meaning. Pure, so it's
-/// unit-testable without a window/event loop. THE ONE OWNER of the rule: both
-/// the live key dispatch (`app/input/keys.rs`) and the headless `--keys` replay
-/// (`main/run.rs::ReplaySession::apply_chord`) derive their `apply_core` shift
-/// flag through this fn, so an `S-` chord in a spec signals select-intent
-/// exactly as a live held Shift does — never a parallel copy of the rule.
-pub(crate) fn motion_honors_shift_select(action: &Action) -> bool {
-    !matches!(action, Action::BufferStart | Action::BufferEnd)
+/// Does a held Shift on this CHORD signal SELECT-INTENT (Shift+motion extends
+/// the selection, GUI style)? The rule keys on the pressed CHORD, not just the
+/// `Action`, because BufferStart/BufferEnd are reached two very different ways:
+///   * `M-<` / `M->` (emacs) need Shift just to TYPE the `<` / `>` glyph — a
+///     `Key::Character` — so that Shift is INCIDENTAL (Emacs treats them as pure
+///     motion; you select via the mark, `C-Space`) and must NOT extend.
+///   * Shift+Cmd-Up/Down (macOS) and Shift+Ctrl-Home/End (Linux) reach the SAME
+///     actions through a `Key::Named` navigation key — a genuine GUI
+///     select-intent Shift the platform text fields all honor — and MUST extend.
+/// So the ONE discriminator is the key's shape: a named navigation key extends,
+/// a printable glyph whose Shift is needed just to type it does not. Every OTHER
+/// action keeps Shift's normal select-extend meaning regardless of key. Pure, so
+/// it's unit-testable without a window/event loop. THE ONE OWNER of the rule:
+/// both the live key dispatch (`app/input/keys.rs`, passing the resolved logical
+/// key) and the headless `--keys` replay
+/// (`main/run.rs::ReplaySession::apply_chord`, passing the chord's key) derive
+/// their `apply_core` shift flag through this fn, so an `S-` chord in a spec
+/// signals select-intent exactly as a live held Shift does — never a parallel
+/// copy of the rule.
+pub(crate) fn motion_honors_shift_select(action: &Action, key: &Key) -> bool {
+    match action {
+        Action::BufferStart | Action::BufferEnd => matches!(key, Key::Named(_)),
+        _ => true,
+    }
 }
 
 /// The UN-composed logical key for a key event — undoing macOS Option dead-key
@@ -2196,6 +2321,7 @@ pub fn run(
     config: Config,
     wait: bool,
     #[cfg(not(target_arch = "wasm32"))] soak: Option<crate::soak_gpu::SoakConfig>,
+    #[cfg(not(target_arch = "wasm32"))] live: Option<crate::probe::LiveScript>,
 ) -> anyhow::Result<()> {
     // CRASH VISIBILITY (native only — mirrors the daemon's own CAPTURE GATE
     // exactly): install the panic hook FIRST, before any window/GPU/daemon
@@ -2208,6 +2334,14 @@ pub fn run(
     #[cfg(not(target_arch = "wasm32"))]
     if soak.is_none() { crate::crashlog::install_hook(); }
 
+    // FLIGHT RECORDER (native live-App only, capture-gated exactly like the crash
+    // hook / daemon above — headless `--screenshot`/`--keys`/`--bench-*` never
+    // reach `run`): if `AWL_FLIGHT_RECORDER=<path>` is set, arm the append-only
+    // present/bracket/redraw trace so the user's next live theme-preview "page
+    // vanishes" repro leaves a black box. A no-op when the env is absent.
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::probe::init_flight();
+
     // SINGLE-INSTANCE DAEMON (native only, and compiled out entirely under
     // `mas` — see `crate::daemon`'s module doc for the full CAPTURE GATE
     // argument: this whole block lives ONLY on this live-App startup path,
@@ -2216,8 +2350,12 @@ pub fn run(
     // already-running instance exits in milliseconds with no window ever
     // created. Under `mas`, Launch Services already refuses a second launch
     // and there is no CLI to hand a path off with, so this is simply absent.
+    // The LIVE PROBE additionally skips the daemon outright (defense in depth
+    // beyond the wrapper script's env isolation): a probe launch must never
+    // hand its file off to — or bind over the socket of — the user's real
+    // running instance. See `crate::probe`'s module doc.
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
-    let instance_listener = if soak.is_some() { None } else { match crate::daemon::startup(file.as_deref(), wait) {
+    let instance_listener = if soak.is_some() || live.is_some() { None } else { match crate::daemon::startup(file.as_deref(), wait) {
         Ok(crate::daemon::StartupOutcome::HandedOff) => return Ok(()),
         Ok(crate::daemon::StartupOutcome::Instance(l)) => Some(l),
         Err(e) => {
@@ -2243,6 +2381,46 @@ pub fn run(
     #[cfg(all(feature = "mas", target_os = "macos"))]
     if soak.is_none() { crate::mas::restore_all_grants(); }
 
+    // LIVE PROBE (`--live-script`): launch WITHOUT STEALING FOCUS. Three winit
+    // defaults each steal it and must all be turned off (the Accessory policy
+    // alone does NOT — it only governs Dock/cmd-tab presence; the app still
+    // activates and auto-keys its window, verified the hard way):
+    //   1. ACTIVATION POLICY → Prohibited: the app can never be ACTIVATED, so
+    //      `activateIgnoringOtherApps` is a no-op and no window of ours can become
+    //      key (Accessory was insufficient — a `Focused(true)` still fired). No
+    //      Dock icon, no cmd-tab entry, no menu-bar takeover either.
+    //   2. `activate_ignoring_other_apps` defaults to TRUE → winit calls
+    //      `NSApp.activateIgnoringOtherApps(true)` at launch, yanking the whole
+    //      app (and the user's keyboard) to the foreground. Forced OFF here.
+    //   3. (paired with the window's `with_active(false)` below → `orderFront`
+    //      instead of `makeKeyAndOrderFront`, so the window shows but never
+    //      becomes KEY.)
+    // Net: the probe window appears on screen (visible + unoccluded — the wgpu
+    // occlusion gate is about display VISIBILITY, not key status, so presents
+    // still fire) while the user keeps typing into whatever they were using. The
+    // driver injects chords straight into the event loop, never OS key focus, so
+    // nothing the probe needs is lost. A normal launch stays Regular + active —
+    // byte-identical activation to before.
+    #[cfg(not(target_arch = "wasm32"))]
+    let event_loop = {
+        #[allow(unused_mut)]
+        let mut builder = EventLoop::<AwlEvent>::with_user_event();
+        #[cfg(target_os = "macos")]
+        if live.is_some() {
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            // PROHIBITED (not Accessory): Accessory still lets the app ACTIVATE on
+            // launch, and an active app auto-makes its front window key — which
+            // stole the user's keyboard (observed: a `Focused(true)` still fired).
+            // A Prohibited app can never be activated, so `activateIgnoringOtherApps`
+            // is a no-op and no window of ours can become key. The window is still
+            // shown (`orderFront`) and composited, so presents/occlusion are
+            // unaffected (verified nonzero in the smoke run).
+            builder.with_activation_policy(ActivationPolicy::Prohibited);
+            builder.with_activate_ignoring_other_apps(false);
+        }
+        builder.build()?
+    };
+    #[cfg(target_arch = "wasm32")]
     let event_loop = EventLoop::<AwlEvent>::with_user_event().build()?;
     #[cfg(not(target_arch = "wasm32"))]
     let proxy = event_loop.create_proxy();
@@ -2266,6 +2444,26 @@ pub fn run(
     #[cfg(target_os = "macos")]
     {
         if app.soak.is_none() { app.menu_proxy = Some(proxy.clone()); }
+    }
+    // LIVE PROBE (`--live-script`): arm the ready signal and spawn the driver
+    // thread (the daemon's own EventLoopProxy precedent — scripted steps are
+    // posted into the winit loop, never cross-thread `App` access). Shots land
+    // in the script's shots dir, created here so the very first `shot` step
+    // can't fail on a missing directory.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(script) = live {
+        // Arm the process-global FIRST — `Gpu::new` (called from `resumed`,
+        // strictly later) reads it to add COPY_SRC + the frame mirror.
+        crate::probe::set_live_active();
+        if let Err(e) = std::fs::create_dir_all(&script.shots_dir) {
+            eprintln!("LIVE-PROBE error: cannot create shots dir {}: {e}", script.shots_dir.display());
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.probe_ready = Some(tx);
+        let probe_proxy = proxy.clone();
+        crate::probe::spawn_driver(script, rx, move |e| {
+            probe_proxy.send_event(AwlEvent::Probe(e)).is_ok()
+        });
     }
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
     if let Some(listener) = instance_listener {
@@ -2516,60 +2714,58 @@ mod tests {
         crate::theme::set_active(prev);
     }
 
-    /// THE VANISHING-PAGE REGRESSION PIN (user report 2026-07-17, "arrowing
-    /// Mangrove→Magpie makes the writing surface vanish"): a theme-preview step
-    /// that CROSSES the lava boundary arms the present-transaction sync (so the
-    /// crossing frame joins the compositor's transaction rather than racing it as
-    /// the ambient cadence stops), holds it through the `CROSSING_SYNC_SETTLE`
-    /// window, and settles exactly once. A same-side hop takes it as a no-op.
-    /// Drives the REAL `App` state machine through the real `retint_theme_preview`
-    /// / `finish_crossing_settle` bodies (the `about_to_wait` arm is just
-    /// `debounce_due`, pinned separately above).
+    /// THE VANISHING-PAGE FIX — UNCONDITIONAL BRACKET + EVENT-ORDERED TEARDOWN
+    /// (user report 2026-07-17/18, "arrowing into Magpie makes the writing surface
+    /// vanish", which survived three `preview_crossing` widenings). Two laws on
+    /// the REAL `App` state machine:
+    ///  (1) EVERY preview step arms the present-transaction bracket — INCLUDING a
+    ///      step the retired classifier would have called `Steady`: a
+    ///      static→static hop (`Galah→Magpie`, the real Mangrove-gesture LANDING
+    ///      frame the old bracket left exposed) and a lava→lava hop.
+    ///  (2) TEARDOWN IS EVENT-ORDERED: the settle (`finish_crossing_settle`) does
+    ///      NOT disarm — it hands off to `crossing_teardown_pending`, HOLDING the
+    ///      bracket until the post-present hook (`finish_crossing_teardown`)
+    ///      observes the reshaped frame presented in-bracket. So the heavy reshape
+    ///      frame can never coalesce into an unbracketed present (the old race).
     #[test]
-    fn preview_crossing_the_lava_boundary_brackets_the_present_and_settles_once() {
+    fn every_preview_step_brackets_and_teardown_waits_for_the_reshape_present() {
         let _g = crate::testlock::serial();
         let prev = crate::theme::active_index();
-        let w = |name: &str| {
-            *crate::theme::THEMES.iter().find(|t| t.name == name).unwrap()
-        };
-        let (mangrove, magpie) = (w("Mangrove"), w("Magpie"));
+        let w = |name: &str| *crate::theme::THEMES.iter().find(|t| t.name == name).unwrap();
+        let (mangrove, galah) = (w("Mangrove"), w("Galah"));
 
-        // Open the picker on the dark LAVA world, exactly as the report starts.
         crate::theme::set_active_by_name("Mangrove").unwrap();
         let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
         assert!(!app.present_sync_on, "idle: presents run async");
 
-        // ARROW to the static non-lava world: apply_core would have switched the
-        // active world first, so mirror that, then run the real preview retint
-        // with the OUTGOING (lava) world it snapshotted.
-        crate::theme::set_active_by_name("Magpie").unwrap();
-        app.retint_theme_preview(mangrove);
-        assert!(app.crossing_settle_at.is_some(), "the crossing stamps the hold");
-        assert!(
-            app.present_sync_on,
-            "the crossing frame joins the compositor transaction"
-        );
+        // (1) The STEADY steps the retired classifier left unbracketed now arm:
+        // `Galah→Magpie` (static→static — the real reported LANDING) and
+        // `Mangrove→Firetail` (lava→lava). Each starts from a disarmed state.
+        for (from, to, label) in
+            [(galah, "Magpie", "static->static LANDING"), (mangrove, "Firetail", "lava->lava")]
+        {
+            app.crossing_settle_at = None;
+            app.crossing_teardown_pending = false;
+            app.sync_present_txn();
+            assert!(!app.present_sync_on, "{label}: starts disarmed");
+            crate::theme::set_active_by_name(to).unwrap();
+            app.retint_theme_preview(from);
+            assert!(app.crossing_settle_at.is_some(), "{label}: the preview stamps the settle");
+            assert!(app.present_sync_on, "{label}: the bracket arms unconditionally");
+        }
 
-        // ARROW BACK across the boundary (Magpie→Mangrove): re-stamps the hold.
-        crate::theme::set_active_by_name("Mangrove").unwrap();
-        app.retint_theme_preview(magpie);
-        assert!(app.crossing_settle_at.is_some(), "the return crossing re-stamps");
-        assert!(app.present_sync_on, "still armed across the return crossing");
-
-        // Settle once: hold cleared, sync disarmed (no other source is live).
+        // (2) EVENT-ORDERED TEARDOWN. Phase 1 (settle) clears the debounce but
+        // HOLDS the bracket via the pending teardown — it must NOT disarm here,
+        // because the deferred reshape's present has not happened yet.
         app.finish_crossing_settle();
-        assert!(app.crossing_settle_at.is_none(), "settle clears the hold once");
-        assert!(!app.present_sync_on, "presents return to async once settled");
-
-        // A SAME-SIDE hop (lava → lava, Mangrove → Firetail; neither one-bit) is a
-        // total no-op: no boundary changes, so nothing is armed.
-        crate::theme::set_active_by_name("Firetail").unwrap();
-        app.retint_theme_preview(mangrove);
-        assert!(
-            app.crossing_settle_at.is_none(),
-            "a lava→lava hop leaves both boundaries alone: no bracket"
-        );
-        assert!(!app.present_sync_on, "same-side hop arms nothing");
+        assert!(app.crossing_settle_at.is_none(), "phase 1 clears the settle debounce");
+        assert!(app.crossing_teardown_pending, "phase 1 hands off to the pending teardown");
+        assert!(app.present_sync_on, "the bracket is HELD through the reshape present, not torn down");
+        // Phase 2 (the post-present hook, after the in-bracket reshape present)
+        // is the ONLY thing that disarms.
+        app.finish_crossing_teardown();
+        assert!(!app.crossing_teardown_pending, "phase 2 clears the pending teardown");
+        assert!(!app.present_sync_on, "only after the bracketed reshape present does the bracket disarm");
         crate::theme::set_active(prev);
     }
 
@@ -2589,20 +2785,22 @@ mod tests {
         crate::theme::set_active_by_name("Mangrove").unwrap();
         let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
 
-        // A live resize stream, then a preview crossing to a non-lava world.
+        // A live resize stream, then a preview step (now unconditional).
         app.arm_live_resize_sync();
         assert!(app.present_sync_on, "resize stream arms the sync");
         crate::theme::set_active_by_name("Magpie").unwrap();
         app.retint_theme_preview(mangrove);
         assert!(app.present_sync_on, "still armed with both sources live");
 
-        // The crossing settles first: the resize stream still owns a claim.
+        // The preview settles + fully tears down (both phases): the resize stream
+        // still owns a claim through EACH phase — the disarm belongs to the one
+        // owner, never to a single source's settle.
         app.finish_crossing_settle();
         assert!(app.crossing_settle_at.is_none());
-        assert!(
-            app.present_sync_on,
-            "the resize stream still owns a claim on the sync"
-        );
+        assert!(app.present_sync_on, "resize still owns a claim after phase 1");
+        app.finish_crossing_teardown();
+        assert!(!app.crossing_teardown_pending);
+        assert!(app.present_sync_on, "resize still owns a claim after phase 2");
         app.finish_resize_settle();
         assert!(!app.present_sync_on, "both settled: async presents again");
         crate::theme::set_active(prev);
@@ -2671,20 +2869,102 @@ mod tests {
     }
 
     #[test]
-    fn buffer_endpoints_ignore_incidental_shift() {
-        // `M-<` / `M->` need Shift just to TYPE `<` / `>`, so that Shift is
-        // incidental and must NOT extend the selection — these are pure motion.
-        assert!(!motion_honors_shift_select(&Action::BufferStart));
-        assert!(!motion_honors_shift_select(&Action::BufferEnd));
-        // Every other motion keeps Shift's normal select-extend meaning (the user
-        // deliberately held Shift, e.g. Shift+Arrow / M-Shift-f).
-        assert!(motion_honors_shift_select(&Action::ForwardChar));
-        assert!(motion_honors_shift_select(&Action::ForwardWord));
-        assert!(motion_honors_shift_select(&Action::NextLine));
-        assert!(motion_honors_shift_select(&Action::LineEnd));
+    fn buffer_endpoints_shift_intent_keys_on_the_chord_not_the_action() {
+        use winit::keyboard::NamedKey;
+        // The chord-aware rule: BufferStart/BufferEnd carry INCIDENTAL Shift only
+        // for `M-<` / `M->`, whose Shift is needed just to TYPE the `<` / `>`
+        // glyph (a `Key::Character`) — those stay pure motion and must NOT extend.
+        assert!(!motion_honors_shift_select(&Action::BufferStart, &Key::Character("<".into())));
+        assert!(!motion_honors_shift_select(&Action::BufferEnd, &Key::Character(">".into())));
+        // But the SAME actions reached through a NAMED navigation key carry a
+        // genuine GUI select-intent Shift and MUST extend: Shift+Cmd-Up/Down
+        // (macOS) and Shift+Ctrl-Home/End (Linux) select to document start/end,
+        // exactly like every platform text field (the live bug this round fixed).
+        assert!(motion_honors_shift_select(&Action::BufferStart, &Key::Named(NamedKey::ArrowUp)));
+        assert!(motion_honors_shift_select(&Action::BufferEnd, &Key::Named(NamedKey::ArrowDown)));
+        assert!(motion_honors_shift_select(&Action::BufferStart, &Key::Named(NamedKey::Home)));
+        assert!(motion_honors_shift_select(&Action::BufferEnd, &Key::Named(NamedKey::End)));
+        // Every other motion keeps Shift's normal select-extend meaning regardless
+        // of key shape (the user deliberately held Shift, e.g. Shift+Arrow / M-Shift-f).
+        assert!(motion_honors_shift_select(&Action::ForwardChar, &Key::Named(NamedKey::ArrowRight)));
+        assert!(motion_honors_shift_select(&Action::ForwardChar, &Key::Character("f".into())));
+        assert!(motion_honors_shift_select(&Action::ForwardWord, &Key::Character("f".into())));
+        assert!(motion_honors_shift_select(&Action::NextLine, &Key::Named(NamedKey::ArrowDown)));
+        assert!(motion_honors_shift_select(&Action::LineEnd, &Key::Named(NamedKey::End)));
         // Non-motions are unaffected (Shift is ignored by the motion-select logic
         // for them anyway), so they report the default true.
-        assert!(motion_honors_shift_select(&Action::InsertChar('a')));
+        assert!(motion_honors_shift_select(&Action::InsertChar('a'), &Key::Character("A".into())));
+    }
+
+    #[test]
+    fn shift_cmd_up_down_extend_to_document_bounds_through_the_live_apply_seam() {
+        // LIVE-PATH pin (the resolve → derive-shift → apply_core chain the window
+        // runs, minus winit event plumbing): resolve the real chord through the
+        // persistent keymap exactly as `dispatch_pressed_key` does, derive the
+        // shift flag through the ONE owner keyed on the pressed KEY, then apply.
+        // Shift+Cmd-Up must select from mid-document up to (0,0); Shift+Cmd-Down
+        // must select from there down to the document end — while `M-<` / `M->`,
+        // whose Shift is incidental to typing the glyph, must NOT extend.
+        use winit::event::Modifiers;
+        use winit::keyboard::{ModifiersState, NamedKey};
+        let sup_shift = Modifiers::from(ModifiersState::SUPER | ModifiersState::SHIFT);
+        let meta_shift = Modifiers::from(ModifiersState::ALT | ModifiersState::SHIFT);
+
+        // Helper: resolve a (key, mods) chord and apply it with the live shift
+        // derivation, returning the post-apply selection.
+        fn drive_live(
+            key: Key,
+            mods: winit::event::Modifiers,
+            text: &str,
+            start: usize,
+        ) -> Option<((usize, usize), (usize, usize))> {
+            // Pin the MAC convention: this drives the macOS Cmd-Up/Down chord
+            // (Super+Arrow), so the result must not depend on the ambient
+            // `AWL_CONVENTION_FORCE` the suite may run under (Linux resolves
+            // Super+Arrow differently).
+            let mut km = crate::keymap::KeymapState::new_with_convention(
+                crate::convention::Convention::Mac,
+            );
+            let action = km.resolve(&key, &mods);
+            let shift = mods.state().contains(ModifiersState::SHIFT)
+                && motion_honors_shift_select(&action, &key);
+            let mut buffer = crate::buffer::Buffer::from_str(text);
+            buffer.set_cursor(start);
+            let mut shift_selecting = false;
+            let mut zoom = 1.0;
+            let mut search = None;
+            let mut overlay = None;
+            let mut make_overlay =
+                |_k: crate::overlay::OverlayKind| -> Option<crate::overlay::OverlayState> { None };
+            let mut browse_to = |_k: crate::overlay::OverlayKind,
+                                 _r: Option<String>|
+             -> Option<crate::overlay::OverlayState> { None };
+            let mut ctx = crate::actions::ActionCtx {
+                buffer: &mut buffer,
+                shift_selecting: &mut shift_selecting,
+                zoom: &mut zoom,
+                search: &mut search,
+                scroll_page_lines: 1,
+                overlay: &mut overlay,
+                make_overlay: &mut make_overlay,
+                browse_to: &mut browse_to,
+                oracle: None,
+            };
+            crate::actions::apply_core(&mut ctx, &action, shift);
+            buffer.selection_line_col()
+        }
+
+        const TXT: &str = "alpha beta\ngamma delta\nepsilon zeta\n";
+        // From mid-line (1,3), Shift+Cmd-Up extends up to (0,0).
+        let up = drive_live(Key::Named(NamedKey::ArrowUp), sup_shift, TXT, 14);
+        assert_eq!(up, Some(((0, 0), (1, 3))), "Shift+Cmd-Up selects to document start");
+        // From the same spot, Shift+Cmd-Down extends down to the doc end — the
+        // empty final line after the trailing newline, (3,0).
+        let down = drive_live(Key::Named(NamedKey::ArrowDown), sup_shift, TXT, 14);
+        assert_eq!(down, Some(((1, 3), (3, 0))), "Shift+Cmd-Down selects to document end");
+        // `M-<` (Character `<`, Shift incidental) moves but never extends.
+        let emacs = drive_live(Key::Character("<".into()), meta_shift, TXT, 14);
+        assert_eq!(emacs, None, "M-< incidental Shift stays pure motion (no selection)");
     }
 
     #[test]

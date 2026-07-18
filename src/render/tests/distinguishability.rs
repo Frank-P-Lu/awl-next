@@ -715,10 +715,12 @@ fn check_real_pixels(
 /// the standing law stays within the suite's time budget.)
 ///
 /// NOTE this test is GREEN: the color retint is provably correct from every
-/// source. The reopened Wagtail vanish is therefore NOT a stale-color bug but the
-/// live-only present/compositor race, fixed by widening `lava::preview_crossing`
-/// to arm the present bracket on the one-bit boundary too (its own no-wildcard
-/// roster law `preview_crossing_arms_exactly_on_the_lava_or_one_bit_boundary`).
+/// source. The reopened vanish is therefore NOT a stale-color bug but the
+/// live-only present/compositor race, addressed by arming the present bracket
+/// UNCONDITIONALLY on every preview step with an event-ordered teardown that
+/// holds the bracket through the deferred reshape's present (the retired
+/// `preview_crossing` classification left the actual landing frame unbracketed —
+/// see `app::tests::every_preview_step_brackets_and_teardown_waits_for_the_reshape_present`).
 #[test]
 fn theme_preview_retint_regrounds_the_page_surface_on_every_world() {
     let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {

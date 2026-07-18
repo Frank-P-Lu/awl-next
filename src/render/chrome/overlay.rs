@@ -261,6 +261,69 @@ impl TextPipeline {
         overlay_card_box_policy(crate::render::effective_card_anchor(), width as f32, desired_w)
     }
 
+    /// The pixel scale the overlay CHROME shapes at this frame — the same
+    /// `zoom * dpi` factor [`crate::render::Metrics::with_dpi`] folds into every
+    /// glyph metric, recovered from the live body `font_size`. `1.0` at zoom 1.0 /
+    /// dpi 1.0 (the capture default and the tuning canvas), so anything scaled by
+    /// it is byte-identical there.
+    pub(in crate::render) fn overlay_pixel_scale(&self) -> f32 {
+        self.metrics.font_size / crate::render::FONT_SIZE
+    }
+
+    /// THE ONE OWNER of the summoned card's WIDE desired width (device px) at the
+    /// CURRENT zoom/DPI: the base cap ([`CARD_MAX_W`] / [`CARD_MAX_W_FACETED`],
+    /// tuned for the 1:1 capture canvas) GROWN by [`Self::overlay_pixel_scale`] so
+    /// the card widens WITH the glyphs.
+    ///
+    /// Without this the cap stayed an unzoomed 520/600 while the overlay text
+    /// DOUBLED under zoom — the card read proportionally half as wide, and
+    /// [`rowlayout`]'s primary-cell elision + the footer's yield fired even though
+    /// the WINDOW had abundant room (the zoom-blind card bug: at 200% every
+    /// palette row came back "Go t…ile…", "Comp…ion…"). The window clamp in
+    /// [`overlay_card_box_policy`] still bounds the result, so a card never
+    /// overruns the window — it just stops eliding when there IS room, and enters
+    /// the fill regime only when the window GENUINELY lacks it. Both geometry
+    /// paths ([`Self::overlay_geometry`], [`TextPipeline::theme_overlay_geometry`])
+    /// and the fill-regime fold read this ONE scaled width, so the width and the
+    /// fold threshold can never drift.
+    ///
+    /// GROW-ONLY (`scale.max(1.0)`): the scale only ever WIDENS the base cap. The
+    /// bug is a high-zoom COLLAPSE, so the fix touches exactly the `zoom·dpi > 1.0`
+    /// regime. At the SHIPPED default (zoom 0.8, dpi 1.0 → scale 0.8) and every
+    /// scale ≤ 1.0 this is the identity — the card holds the base cap, BYTE-
+    /// IDENTICAL to the pre-fix `base`-passthrough (so the 0.8 default look and
+    /// every ≤1.0 capture/law are untouched; a slightly-roomier-than-proportional
+    /// card at low zoom never clips).
+    pub(in crate::render) fn overlay_card_desired_w(&self, base: f32) -> f32 {
+        base * self.overlay_pixel_scale().max(1.0)
+    }
+
+    /// TEST HOOK (zoom-aware card width) — the currently-set overlay's candidate
+    /// items that the card's REAL width would ELIDE at window `width`, at the
+    /// current zoom. Reconstructs the shaper's own decision from the live
+    /// [`Self::overlay_geometry`]`.text_w` (so a card-width regression IS caught)
+    /// through the ONE elision owner: `total_chars = floor(text_w / char_width)`,
+    /// `full_budget`, then [`rowlayout::fit_primary`] — the exact two lines both
+    /// `overlay_shape_text` and `overlay_shape_theme` run for the palette's
+    /// primary column. Reports the OUTCOME (which names lose text), never a
+    /// mechanism count. Empty = no primary elided (the whole list fits).
+    #[cfg(test)]
+    pub(in crate::render) fn overlay_elided_candidates(&self, width: u32) -> Vec<String> {
+        let geom = self.overlay_geometry(width);
+        let cw = self.metrics.char_width;
+        let total_chars = if cw > 0.0 {
+            (geom.text_w / cw).floor() as usize
+        } else {
+            usize::MAX
+        };
+        let budget = rowlayout::full_budget(total_chars);
+        self.overlay_items
+            .iter()
+            .filter(|item| rowlayout::fit_primary(item.as_str(), budget).as_str() != item.as_str())
+            .cloned()
+            .collect()
+    }
+
     /// THE QUERY-INPUT BEAT token (device px): the calm slab of negative space
     /// inserted after the header rows (query + optional lens strip) and before
     /// the candidate list, on the palette AND every faceted picker uniformly (the
@@ -833,15 +896,19 @@ impl TextPipeline {
         // query + rows/empty + hint + the keybindings tips footer (0 unless summoned).
         let total_rows = header_rows + visible + empty_rows + hint_rows + footer_rows;
         // RESPONSIVE CARD via the ONE horizontal-box owner: the tightened flat
-        // width cap ([`CARD_MAX_W`], item 3) placed with the edge-inset rhythm
-        // (item 2) + the narrow-window collapse/fill fallback (item 7). The box
-        // narrows the width only in the fill regime, so the text column can
-        // never starve.
-        let (card_x, card_w) = self.overlay_card_box(width, CARD_MAX_W);
+        // width cap ([`CARD_MAX_W`], item 3), scaled to the current zoom/DPI by
+        // the ONE owner [`Self::overlay_card_desired_w`] (so the card grows WITH
+        // the glyphs instead of pinning to an unzoomed 520 — the zoom-blind card
+        // bug), then placed with the edge-inset rhythm (item 2) + the
+        // narrow-window collapse/fill fallback (item 7). The box narrows the width
+        // only in the fill regime, so the text column can never starve.
+        let desired_w = self.overlay_card_desired_w(CARD_MAX_W);
+        let (card_x, card_w) = self.overlay_card_box(width, desired_w);
         // item 4 (NARROW FOLD): the placard folds to InlinePrefix once even the
-        // floor inset can't seat the flat card's desired width — the SAME owner
-        // the width fallback above reads (`overlay_card_box`'s policy).
-        let card_narrow = overlay_card_fill_regime(width as f32, CARD_MAX_W);
+        // floor inset can't seat the flat card's desired width — reads the SAME
+        // scaled `desired_w` the width fallback above does, so the fold threshold
+        // and the width can never drift.
+        let card_narrow = overlay_card_fill_regime(width as f32, desired_w);
         // Horizontal text inset is list-style aware (`Bars` pads the glyphs inside
         // each bar's edge — the ONE owner `overlay_text_hpad`); vertical padding
         // stays `pad` (12) so the card height math is untouched. `Pane` keeps
@@ -992,8 +1059,15 @@ impl TextPipeline {
                 .unwrap_or(0) as f32
                 * m.char_width
         };
+        // The MIN/MAX bounds are tuned for the 1:1 capture canvas; GROW them with the
+        // current zoom/DPI (the SAME grow-only `overlay_pixel_scale` the takeover
+        // card's width uses) so a long correction isn't clamped to an unzoomed 360
+        // while its shaped `content_w` doubled under zoom — the zoom-blind card bug,
+        // contextual sibling. Grow-only (`scale.max(1.0)`): byte-identical at every
+        // scale ≤ 1.0 (the shipped 0.8 default + all captures untouched).
+        let scale = self.overlay_pixel_scale().max(1.0);
         let card_w = (content_w + 2.0 * pad)
-            .clamp(140.0, 360.0)
+            .clamp(140.0 * scale, 360.0 * scale)
             .min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
         // At least one row tall so a (rare) flagged word with no suggestions still

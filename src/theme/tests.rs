@@ -135,19 +135,18 @@ fn bars_unselected_sits_a_quiet_rung_below_the_selected_band() {
 
 
 #[test]
-fn worlds_ten_dark_six_light() {
-    // 17 on THIS branch: Cassowary (the NERV-terminal statement world) lands as
-    // an ADDITIVE DARK entry (10→11 dark). A concurrent branch adds a light-blue
-    // 17th world (light +1); the merge train reconciles to [Theme; 18] = 11 dark
-    // / 7 light. (Test name kept for the merge train to update in one place.)
-    assert_eq!(THEMES.len(), 17);
+fn worlds_eleven_dark_seven_light() {
+    assert_eq!(THEMES.len(), 18);
     let dark = THEMES.iter().filter(|t| t.dark).count();
     let light = THEMES.iter().filter(|t| !t.dark).count();
     // 11 dark (Tawny/Mopoke/Currawong/Potoroo/Undertow/Kingfisher/Outback/
-    // Mangrove/Wagtail/Firetail/Cassowary) / 6 light (Gumtree/Bilby/Saltpan/
-    // Quokka/Galah/Magpie).
+    // Mangrove/Wagtail/Firetail/Cassowary) / 7 light (Gumtree/Bilby/Saltpan/
+    // Quokka/Galah/Magpie/Brolga). Brolga (the COOL LIGHT POLE) is a pale
+    // sky-blue light world filling the cool-light-blue hole the DAWN round
+    // vacated when Bilby turned warm rose-gold; Cassowary (the NERV-terminal
+    // statement world) is the eighteenth, an additive dark entry.
     assert_eq!(dark, 11);
-    assert_eq!(light, 6);
+    assert_eq!(light, 7);
 }
 
 /// `Theme::is_one_bit` — Wagtail's 2026-07 rework, from greyscale (any grey
@@ -1006,7 +1005,7 @@ fn cjk_fallback_matches_world_character() {
     let zenmaru = ["Galah", "Kingfisher"];
     let klee = ["Mopoke", "Quokka"];
     let mincho = ["Saltpan", "Outback", "Magpie"]; // neutral serif (Noto Serif JP)
-    let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong", "Wagtail", "Firetail", "Cassowary"]; // neutral sans/mono (Noto Sans JP)
+    let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong", "Wagtail", "Firetail", "Brolga", "Cassowary"]; // neutral sans/mono (Noto Sans JP)
     for t in THEMES.iter() {
         assert!(!t.cjk.is_empty(), "{} has no CJK fallback list", t.name);
         if shippori.contains(&t.name) {
@@ -1233,7 +1232,7 @@ fn latin_candidates_is_the_worlds_own_display_face() {
 fn zh_hans_ladder_matches_world_character_with_klee_override() {
     let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
     let klee = ["Mopoke", "Quokka"];
-    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong", "Wagtail", "Firetail", "Cassowary"];
+    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong", "Wagtail", "Firetail", "Brolga", "Cassowary"];
     for t in THEMES.iter() {
         assert!(!t.zh_hans.is_empty(), "{} has no zh-Hans candidate list", t.name);
         if klee.contains(&t.name) {
@@ -2062,7 +2061,10 @@ fn personality_assignments_are_exactly_the_decided_table() {
             },
             // LIGHT-WORLD BORDER (composition round item 6): the remaining
             // pale-ground worlds gain the summoned-card border, DATA-only.
-            "Gumtree" | "Saltpan" | "Quokka" => {
+            // Brolga (the SEVENTEENTH world, the cool light pole) joins them —
+            // a crisp rim off its pale sky-blue ground; deliberately NO page
+            // frame (the DAWN round's 1px light-pole frame was user-rejected).
+            "Gumtree" | "Saltpan" | "Quokka" | "Brolga" => {
                 RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT }
             }
             "Tawny" | "Mopoke" | "Potoroo" | "Undertow" | "Kingfisher" | "Outback" => {

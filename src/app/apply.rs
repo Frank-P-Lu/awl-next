@@ -39,21 +39,24 @@ impl App {
     /// deferral outright (nothing left to restyle). Live-only: the shared headless
     /// replay never routes through here.
     ///
-    /// PRESENT-RACE BRACKET (the vanishing-page fix, 2026-07-17; widened
-    /// 2026-07-18): a preview step that crosses a HEAVYWEIGHT-PIPELINE BOUNDARY
-    /// changes the present cadence or reconfigures costly GPU state under the
-    /// compositor, so the crossing frame can be left blank/stale unless it joins
-    /// the compositor's transaction. `lava::preview_crossing` decides purely over
-    /// the OUTGOING world (`prev`) and the now-active one — arming on EITHER the
-    /// lava boundary (the ~10 fps ambient cadence starts/stops) OR the one-bit
-    /// boundary (leaving/entering Wagtail flips the dither/InverseFill pipeline
-    /// state; Wagtail→Magpie is a non-lava hop that the lava test alone missed).
-    /// On a crossing we stamp `crossing_settle_at` and arm the present-transaction
-    /// sync (`sync_present_txn`, the one owner shared with resize/move) BEFORE the
-    /// caller's post-apply redraw runs — so the crossing frame joins the
-    /// compositor's transaction instead of racing it, and the `CROSSING_SYNC_SETTLE`
-    /// debounce fires one guaranteed follow-up present at rest. A same-side hop
-    /// (both boundaries) leaves it untouched.
+    /// PRESENT-RACE BRACKET (the vanishing-page fix — UNCONDITIONAL as of
+    /// 2026-07-18). EVERY preview step arms the present-transaction bracket, no
+    /// exceptions. The old `lava::preview_crossing` classification (arm only when
+    /// the pair straddled a lava/one-bit boundary) was RETIRED: a live trace of
+    /// the reported Mangrove→Magpie gesture showed the actual LANDING step
+    /// (`Galah→Magpie`) reads `Steady`, so the bracket armed on the transient
+    /// boundary crossed EARLIER in the nav and had already torn down before the
+    /// landing frame presented — which is why three successive widenings (is_lava
+    /// → ambient → one-bit) never fixed it. The simpler truth: a preview step is a
+    /// preview step; every one of them joins the compositor's transaction. We stamp
+    /// `crossing_settle_at` (re-stamped per step, the "user still navigating"
+    /// debounce) and arm the sync (`sync_present_txn`, the one owner shared with
+    /// resize/move) BEFORE the caller's post-apply redraw runs. The bracket's
+    /// TEARDOWN is event-ordered (`finish_crossing_settle` +
+    /// `crossing_teardown_pending`), not a timer race — see those two.
+    // `prev` (the outgoing world) is now only named by the native probe trace, so
+    // the wasm build — which never runs a probe — reads it as unused.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     pub(super) fn retint_theme_preview(&mut self, prev: crate::theme::Theme) {
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.pipeline.sync_theme_colors();
@@ -63,12 +66,24 @@ impl App {
                 None
             };
         }
-        if crate::lava::preview_crossing(&prev, &crate::theme::active())
-            == crate::lava::CrossingAction::SyncAcrossCrossing
-        {
-            self.crossing_settle_at = Some(Instant::now());
-            self.sync_present_txn();
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::recording() {
+            // Log the DESTINATION page ground (`base_100`) — what the writing
+            // surface SHOULD be this preview step. A vanish is "the page went
+            // blank/stale on screen": pairing this intended color with the
+            // present outcome (traced below) tells the black box whether awl's
+            // correct light-ground frame actually reached the compositor.
+            let g = crate::theme::base_100().rgb_bytes();
+            crate::probe::trace(format_args!(
+                "retint_preview {} -> {} (page_ground #{:02x}{:02x}{:02x}, bracket armed)",
+                prev.name,
+                crate::theme::active().name,
+                g[0], g[1], g[2],
+            ));
         }
+        // Unconditional: every preview frame joins the compositor's transaction.
+        self.crossing_settle_at = Some(Instant::now());
+        self.sync_present_txn();
         self.update_title();
     }
 
@@ -96,6 +111,15 @@ impl App {
             gpu.pipeline.sync_theme_font();
         }
         self.sync_view(false);
+        // The reshape is now APPLIED into the view but not yet PRESENTED. This
+        // redraw carries it to the screen; because the present-transaction bracket
+        // is still armed (the settle in this same `about_to_wait` pass only marks
+        // `crossing_teardown_pending`, it never disarms the bracket), that present
+        // lands INSIDE the transaction. See `finish_crossing_settle`.
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::recording() {
+            crate::probe::trace(format_args!("deferred_reshape applied (bracketed present to follow)"));
+        }
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
@@ -585,6 +609,10 @@ impl App {
         if zoom_changed
             && matches!(action, Action::ZoomIn | Action::ZoomOut | Action::ZoomReset)
         {
+            // Anchor the keyboard zoom on the CARET (captured against the still-OLD
+            // geometry, BEFORE the deferred reflow reshapes): the caret holds its
+            // screen position instead of drifting by its distance from the top.
+            self.arm_zoom_anchor_caret();
             self.mark_zoom_dirty();
         }
         self.search = search;

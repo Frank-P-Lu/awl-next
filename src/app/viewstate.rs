@@ -362,7 +362,17 @@ impl App {
         // cursor's visual row == its logical line, so the off path is identical to the
         // previous logical-line cursor-follow.
         let prev_scroll = self.scroll_lines;
-        if follow {
+        if let Some(anchor) = self.zoom_anchor.take() {
+            // ZOOM ANCHOR wins this sync: this `set_view` just reshaped to the newly
+            // changed zoom, so re-solve the scroll that keeps the anchored document
+            // point at its captured screen y (the ONE owner does the variable-row
+            // math + clamp). Overrides cursor-follow — the anchored caret is on
+            // screen by construction, and the off-screen fallback deliberately holds
+            // the viewport centre rather than yanking to the caret.
+            let pipeline = &self.gpu.as_ref().unwrap().pipeline;
+            self.scroll_lines =
+                pipeline.zoom_anchor_scroll(anchor.line, anchor.col, anchor.screen_y, height);
+        } else if follow {
             let pipeline = &self.gpu.as_ref().unwrap().pipeline;
             let cursor_row = pipeline.visual_row_of(cursor_line, cursor_col);
             self.scroll_lines = match follow_scroll_strategy(

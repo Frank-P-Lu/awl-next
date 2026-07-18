@@ -188,6 +188,40 @@ impl App {
         }
     }
 
+    /// ZOOM ANCHOR — POINTER (wheel ⌘-scroll). Record the document point under the
+    /// mouse + its screen y so the deferred reflow keeps it fixed under the cursor.
+    /// Reads the OLD (pre-reshape) geometry — call BEFORE the reshape lands, and only
+    /// when the zoom actually changed (a no-op `set_zoom` at a clamp must not leave a
+    /// stale anchor for an unrelated `sync_view` to apply). No-op headless (no gpu).
+    pub(in crate::app) fn arm_zoom_anchor_pointer(&mut self) {
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        let (px, py) = self.cursor_px;
+        let (line, col) = gpu.pipeline.hit_test(px, py, self.scroll_lines);
+        self.zoom_anchor = Some(ZoomAnchor { line, col, screen_y: py });
+    }
+
+    /// ZOOM ANCHOR — CARET (keyboard ⌘± / ⌘0). Hold the caret's current screen
+    /// position; when the caret is OFF-SCREEN, hold the document point at the viewport
+    /// centre instead (so the view stays put rather than jumping to the caret). Reads
+    /// the OLD (pre-reshape) geometry — call from the zoom-changed arm in `apply`
+    /// BEFORE the reflow. No-op headless (no gpu).
+    pub(in crate::app) fn arm_zoom_anchor_caret(&mut self) {
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        let height = gpu.config.height as f32;
+        let top = render::TEXT_TOP + gpu.pipeline.menubar_reserve();
+        let (cl, cc) = self.buffer.cursor_line_col();
+        let caret_y = gpu.pipeline.char_screen_top(cl, cc, self.scroll_lines);
+        self.zoom_anchor = Some(if caret_y >= top && caret_y < height {
+            ZoomAnchor { line: cl, col: cc, screen_y: caret_y }
+        } else {
+            // Caret off-screen: anchor whatever sits at the viewport centre.
+            let cx = (gpu.config.width as f32) * 0.5;
+            let cy = (top + height) * 0.5;
+            let (line, col) = gpu.pipeline.hit_test(cx, cy, self.scroll_lines);
+            ZoomAnchor { line, col, screen_y: cy }
+        });
+    }
+
     /// Arm the DEBOUNCED sticky-zoom write: stamp "now" so `about_to_wait` persists
     /// the settled zoom after `ZOOM_PERSIST_DEBOUNCE` of quiet (one write per rapid
     /// Cmd-=/Cmd-- run, not one-per-step). Kicks a redraw so the loop reaches
@@ -386,6 +420,40 @@ impl App {
                 return;
             }
         }
+        // macOS OPTION DEAD-KEY input: `event.logical_key` is the COMPOSED glyph
+        // under Option (Option-f -> 'ƒ'); `key_without_modifiers` recovers the
+        // BARE key. Both forms feed the shared dispatch tail, which decides per
+        // consumer which one applies (see `dispatch_pressed_key`'s doc). The
+        // un-compose is computed here because it needs the raw `KeyEvent`.
+        let bare = if self.mods.state().contains(ModifiersState::ALT) {
+            key_without_modifiers(&event)
+        } else {
+            event.logical_key.clone()
+        };
+        self.dispatch_pressed_key(event_loop, event.logical_key.clone(), bare, event.repeat);
+    }
+
+    /// THE SHARED PRESS-DISPATCH TAIL — everything a real (non-modifier,
+    /// non-IME) key press does past the raw-`KeyEvent` guards: popover/menubar
+    /// dismiss, peek cancel, latency stamp, pointer auto-hide, the search
+    /// guard, rebind capture, keymap resolve → `apply` → re-sync + redraw.
+    /// ONE owner with two callers: the real `WindowEvent::KeyboardInput` path
+    /// above, and the live-probe harness (`--live-script`, `app/probe.rs`),
+    /// which feeds parsed chords through this exact tail so a scripted press
+    /// and a physical press are the same code by construction (the probe's
+    /// `raw` and `bare` coincide — a parsed chord is already un-composed).
+    ///
+    /// `raw` is the platform's composed `logical_key` (what search/typing see);
+    /// `bare` is the Option-un-composed form (what chord recording and a
+    /// configured Meta rebind match against); `repeat` is the OS auto-repeat
+    /// flag (drives the held-caret trail).
+    pub(in crate::app) fn dispatch_pressed_key(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        raw: Key,
+        bare: Key,
+        repeat: bool,
+    ) {
         // FORMAT POPOVER: it is a MOUSE affordance (reveal-on-select) — any real
         // (non-modifier) key press dismisses it, so a keyboard selection / edit
         // never leaves it hanging and can never SUMMON it (the mouse-only rule).
@@ -437,7 +505,7 @@ impl App {
         // dropped) and AFTER the preedit guard, but BEFORE keymap.resolve.
         if self.search.is_some() {
             let mods = self.mods;
-            self.handle_search_key(&event.logical_key, &mods, event_loop);
+            self.handle_search_key(&raw, &mods, event_loop);
             self.sync_view(true);
             if let Some(gpu) = self.gpu.as_ref() {
                 gpu.window.request_redraw();
@@ -454,17 +522,12 @@ impl App {
         // through `apply_core` instead; both call `OverlayState::capture_record`.
         if self.capture_recording() {
             let is_ctrl_key = matches!(
-                &event.logical_key,
+                &raw,
                 Key::Named(winit::keyboard::NamedKey::Enter)
                     | Key::Named(winit::keyboard::NamedKey::Escape)
             );
             if !is_ctrl_key {
-                let logical = if self.mods.state().contains(ModifiersState::ALT) {
-                    key_without_modifiers(&event)
-                } else {
-                    event.logical_key.clone()
-                };
-                let combo = crate::keyspec::format_chord(&logical, self.mods.state());
+                let combo = crate::keyspec::format_chord(&bare, self.mods.state());
                 let finished = self
                     .overlay
                     .as_mut()
@@ -485,29 +548,26 @@ impl App {
             }
         }
         // Held arrow / motion keys arrive as OS AUTO-REPEAT events
-        // (`event.repeat`). Record it for the next `sync_view` so a held
+        // (`repeat`). Record it for the next `sync_view` so a held
         // navigation move builds a continuous lagging caret trail, while a
         // discrete tap (`repeat == false`) stays gap-suppressed.
-        self.caret_held = event.repeat;
+        self.caret_held = repeat;
         // macOS OPTION DEAD-KEY FIX (LIVE path only): Option composes a
-        // letter into a glyph (Option-f -> 'ƒ'), so `event.logical_key` is the
+        // letter into a glyph (Option-f -> 'ƒ'), so the raw `logical_key` is the
         // composed char. Since the identity round retired the built-in Option-letter
         // layer, `is_meta_chord` is true ONLY for a key a config `[keys]` Meta rebind
-        // reclaims — so when ALT is held we un-compose (`key_without_modifiers`) ONLY
-        // for such a configured chord; otherwise we keep the composed `logical_key` so
+        // reclaims — so when ALT is held we resolve the un-composed `bare` form ONLY
+        // for such a configured chord; otherwise we keep the composed `raw` key so
         // Option-accent INPUT (Option-e -> é, Option-n -> ñ) types as text. The
         // headless `--keys` replay already sends the un-composed key + ALT, so this
         // branch is exercised only live (its behaviour with a real composing keyboard
         // needs human confirmation).
-        let logical = if self.mods.state().contains(ModifiersState::ALT) {
-            let bare = key_without_modifiers(&event);
-            if self.keymap.is_meta_chord(&bare) {
-                bare
-            } else {
-                event.logical_key.clone()
-            }
+        let logical = if self.mods.state().contains(ModifiersState::ALT)
+            && self.keymap.is_meta_chord(&bare)
+        {
+            bare
         } else {
-            event.logical_key.clone()
+            raw
         };
         let action = self.keymap.resolve(&logical, &self.mods);
         // LIFETIME STATS: record this press into the odometer — a keystroke, a
@@ -533,12 +593,16 @@ impl App {
             self.hud_key = Some(logical.clone());
             self.hud_mods = self.mods.state();
         }
-        // `M-<` / `M->` need Shift just to TYPE `<` / `>`, so that Shift is
-        // INCIDENTAL — it must NOT extend the selection (Emacs treats these
-        // as pure motion; select via the mark, `C-Space`). Strip it for those
-        // two actions before it reaches the Shift+motion select logic.
+        // SHIFT = SELECT-INTENT, keyed on the pressed CHORD (the resolved logical
+        // key), not the Action alone. `M-<` / `M->` need Shift just to TYPE the
+        // `<` / `>` glyph (a `Key::Character`), so that Shift is INCIDENTAL and
+        // must NOT extend — but Shift+Cmd-Up/Down (macOS) and Shift+Ctrl-Home/End
+        // (Linux) reach the SAME BufferStart/BufferEnd actions through a named
+        // navigation key and DO extend, exactly like every platform text field.
+        // The ONE owner (`motion_honors_shift_select`) makes that call from key
+        // shape; the headless `--keys` replay derives its flag through the same fn.
         let shift = self.mods.state().contains(ModifiersState::SHIFT)
-            && motion_honors_shift_select(&action);
+            && motion_honors_shift_select(&action, &logical);
         // CHORD door: a keyboard chord is the FAST, learned path the usage ledger
         // graduates on (see `crate::stats::Door`).
         let defer_zoom_sync = matches!(action, Action::ZoomIn | Action::ZoomOut | Action::ZoomReset);

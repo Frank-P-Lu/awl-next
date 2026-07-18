@@ -159,8 +159,18 @@ impl Gpu {
             vec![]
         };
 
+        // LIVE PROBE (`--live-script`): the surface additionally allows COPY_SRC
+        // so every presented frame can be blitted into the probe's mirror
+        // texture (`mirror_presented_frame`). Metal supports it; every normal
+        // launch keeps the production usage bit-for-bit.
+        #[allow(unused_mut)]
+        let mut usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::live_active() {
+            usage |= wgpu::TextureUsages::COPY_SRC;
+        }
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage,
             format: config_format,
             width,
             height,
@@ -197,6 +207,8 @@ impl Gpu {
             faults,
             #[cfg(not(target_arch = "wasm32"))]
             inject_surface_loss: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            probe_mirror: None,
         })
     }
 
@@ -340,6 +352,61 @@ impl Gpu {
     /// wait is vsync PACING, not work, and folding it in would make every busy
     /// sequence read as exactly-at-budget (PresentMon's MsCPUBusy vs MsCPUWait
     /// distinction). Stamps use the wasm-safe `crate::clock::Instant`.
+    /// LIVE PROBE only: encode a copy of the just-rendered surface texture
+    /// into the persistent mirror (lazily (re)created on size/format change,
+    /// e.g. a resize mid-script). Runs inside `redraw`'s own encoder so the
+    /// mirror can never hold a HALF-newer frame than what presents.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mirror_presented_frame(&mut self, encoder: &mut wgpu::CommandEncoder, frame: &wgpu::Texture) {
+        let (w, h) = (frame.width(), frame.height());
+        let stale = self
+            .probe_mirror
+            .as_ref()
+            .is_none_or(|m| m.width() != w || m.height() != h || m.format() != frame.format());
+        if stale {
+            self.probe_mirror = Some(self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("awl live-probe frame mirror"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: frame.format(),
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            }));
+        }
+        let mirror = self.probe_mirror.as_ref().expect("mirror just ensured");
+        encoder.copy_texture_to_texture(
+            frame.as_image_copy(),
+            mirror.as_image_copy(),
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+    }
+
+    /// LIVE PROBE only: read the mirror — the LAST PRESENTED frame — back as a
+    /// tight RGBA image (sRGB bytes, PNG-ready; BGRA surfaces channel-swapped).
+    /// `Err` names the reason (no frame presented yet / readback failure) for
+    /// the probe's stdout protocol line.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn read_probe_mirror(&self) -> Result<image::RgbaImage, String> {
+        let mirror = self
+            .probe_mirror
+            .as_ref()
+            .ok_or_else(|| "no frame has presented yet".to_string())?;
+        let (w, h) = (mirror.width(), mirror.height());
+        let mut img = crate::capture::gpu::read_frame(&self.device, &self.queue, mirror, w, h)
+            .map_err(|e| format!("mirror readback failed: {e}"))?;
+        if matches!(
+            mirror.format(),
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for px in img.pixels_mut() {
+                px.0.swap(0, 2);
+            }
+        }
+        Ok(img)
+    }
+
     pub(super) fn redraw(&mut self) -> GpuFrameOutcome {
         let (w, h) = (self.config.width, self.config.height);
         let debug = crate::debug::debug_on();
@@ -392,6 +459,14 @@ impl Gpu {
         if let Err(e) = self.pipeline.render(&mut encoder, &view) {
             eprintln!("render error: {e}");
         }
+        // LIVE PROBE frame mirror: blit the finished frame into the persistent
+        // mirror texture INSIDE the same submission, so the mirror always holds
+        // exactly the last frame the compositor was handed. A no-op branch on
+        // every normal launch.
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::live_active() {
+            self.mirror_presented_frame(&mut encoder, &frame.texture);
+        }
         self.queue.submit(Some(encoder.finish()));
         // Notify winit we're about to present, per its own documented practice
         // ("call this after drawing, before you submit the buffer to the
@@ -401,6 +476,10 @@ impl Gpu {
         // `RedrawRequested`; harmless everywhere else, so unconditional.
         self.window.pre_present_notify();
         frame.present();
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::recording() {
+            crate::probe::trace(format_args!("present"));
+        }
         // The latency endpoint: present-SUBMISSION return (wgpu exposes no
         // presented-time), stamped before the off-frame atlas trim.
         let done = debug.then(Instant::now);

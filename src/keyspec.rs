@@ -39,7 +39,7 @@ use crate::keymap::{Action, KeymapState};
 /// sees it, the live guard's exact position. A pre-resolved `Action` stream
 /// could not express "the open panel ate this key" (`M-c` would drop as
 /// unbound, `C-x` would falsely arm the prefix).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Chord {
     /// The raw token as written in the spec (`"C-s"`, `"Cmd-S-f"`, `"h"`).
     pub spec: String,

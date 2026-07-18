@@ -43,7 +43,21 @@ const EXPECTED: &[(&str, usize)] = &[
     // usable window (spell dictionary / clipboard / render-state init, the
     // daemon socket) — none has a `self.notice` seam to route through this
     // early, and each is a one-time, non-recurring condition.
-    ("app.rs", 5),
+    ("app.rs", 6),
+    // LIVE PROBE harness protocol/diagnostic lines (fate (c), CLI harness
+    // output): the driver's ready-timeout warning + the ONE `PROBE-TRACE …`
+    // owner (`probe.rs::trace`, the single stderr print site every present /
+    // crossing / move trace routes through, so the scattered call sites in
+    // `app/apply.rs` / `app/gpu.rs` / `app/window.rs` carry no print macro of
+    // their own), the per-shot `LIVE-PROBE shot …` protocol lines the wrapping
+    // script asserts on (`app/probe.rs`), and `app.rs`'s shots-dir creation
+    // failure (counted in the row above). The third print site is the FLIGHT
+    // RECORDER's `AWL_FLIGHT_RECORDER` open-failure warning (`init_flight`) — a
+    // one-time startup-before-notice diagnostic (fate (c)), like the config/GPU
+    // init failures above; when the recorder can't open its file it says so and
+    // stays off rather than failing the launch.
+    ("probe.rs", 3),
+    ("app/probe.rs", 5),
     // "follow link: could not open …" — a rare OS-handoff failure
     // (C-c C-o). Flagged as a future notice-routing candidate, not fixed
     // this round (out of the reported bug's scope).

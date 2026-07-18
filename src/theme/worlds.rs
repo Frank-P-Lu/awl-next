@@ -885,6 +885,95 @@ pub const MAGPIE: Theme = Theme {
     },
 };
 
+/// Brolga — the SEVENTEENTH world, and the COOL LIGHT POLE: a clear cool sky
+/// after rain — pale periwinkle sky-blue, washed clean — with the brolga crane's
+/// one red-crown spark at the caret.
+///
+/// WHY IT EXISTS: the DAWN round (2026-07-18) retuned Bilby out of its old
+/// pale-BLUE day room into a warm rose-gold dawn, vacating the cool-light-blue
+/// pole — the roster then had NO light world on the blue side (Bilby/Saltpan/
+/// Galah warm, Magpie neutral, and the only cool light world, Gumtree, is
+/// GREEN). Brolga fills that hole deliberately and is built NOT to read as a
+/// resurrection of the old Bilby cyan (#E8FAFF, retired) nor as Gumtree's
+/// sibling (the exact near-pair trap the dawn round fixed): a clean cool SANS
+/// (IBM Plex Sans) on a pale periwinkle-blue ground, where Gumtree is a cool
+/// green SERIF. The brolga is a tall grey-blue wetland crane with a vivid red
+/// crown; its world is the pale blue of a clear sky reflected in still shallow
+/// water, and its one warm living thing (DESIGN §3) is the crane's red crown at
+/// the caret.
+///
+/// - **Ground**: pale periwinkle sky-blue (`base_100` #E9EFFB, WCAG relY ~0.86)
+///   — its own point in the crowded pale band: measured ≥35.7 redmean from every
+///   surviving light ground (min vs Galah; the warm/neutral pales sit far off in
+///   hue and the blue pole was empty), well past the dawn round's ~18.8 pale-band
+///   ceiling. A calm vertical `Gradient` margin (a clear sky), no pattern noise.
+/// - **Ink**: a deep cool slate-navy content receding through slate-blue-grey
+///   `muted` to a pale blue-grey `faint` — the clear cool sky carried into the
+///   ink ladder.
+/// - **Caret**: the brolga's red crown — a warm coral-vermilion (hue ~10°), the
+///   one warm spark in the cool room, ≥80° of hue clear of every syntax-role
+///   anchor (the amber guard holds).
+/// - **Selection**: pools the sky's blue in still water — a deep cornflower
+///   tint, cool and well clear of the coral caret.
+pub const BROLGA: Theme = Theme {
+    name: "Brolga",
+    dark: false,
+    base_100: Srgb::rgb(0xE9, 0xEF, 0xFB),
+    base_200: Srgb::rgb(0xDC, 0xE6, 0xF8),
+    base_300: Srgb::rgb(0xC7, 0xD7, 0xF2),
+    base_content: Srgb::rgb(0x1B, 0x24, 0x36),
+    muted: Srgb::rgb(0x58, 0x63, 0x7A),
+    faint: Srgb::rgb(0x99, 0xA3, 0xB6),
+    // The brolga's red crown — a warm coral-vermilion, the one warm thing.
+    primary: Srgb::rgb(0xD7, 0x5B, 0x41),
+    primary_content: Srgb::rgb(0xFC, 0xEE, 0xEA),
+    error: Srgb::rgb(0xC0, 0x39, 0x2B),
+    // A deep cornflower tint — the sky pooled in still water, cool, well clear
+    // of the coral caret. Alpha 0x60 (like Undertow/Mangrove) so the composited
+    // band clears the selection contrast floor over the pale blue ground.
+    selection: Srgb::rgba(0x35, 0x57, 0xA0, 0x60),
+    // A calm vertical gradient — the clear sky over still water — deepening
+    // downward from the pale plane to the recessed margin blue.
+    background: Background::Gradient {
+        from: Srgb::rgb(0xDC, 0xE6, 0xF8),
+        to: Srgb::rgb(0xC7, 0xD7, 0xF2),
+        dir: (0.0, 1.0),
+    },
+    // IBM Plex Sans — awl's cool humanist sans, now worn at BOTH value poles:
+    // dark Kingfisher's midnight navy and Brolga's pale sky. A clean cool sans
+    // sets it apart from the only other cool LIGHT world (Gumtree, a green serif).
+    font: "IBM Plex Sans",
+    // Cool clean sans → its own type-family kin, the humanist IBM Plex Mono for
+    // the code grid (the Plex superfamily; distinct from Kingfisher's JetBrains).
+    mono: "IBM Plex Mono",
+    // Plex Sans' even grotesque strokes give size little help — weight sections.
+    heading_bold: true,
+    cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS_SANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
+    // Cool clean sky → the merged marks' airy star/diamond trio (✧ open star +
+    // ✴ sparkle + ⬥ diamond) — a clear-sky sparkle over still water.
+    ornaments: Ornaments { dash: '✧', star: '✴', underscore: '⬥' },
+    ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // Clean cool sky → plain geometric bullets (unfussy restraint).
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
+    // Clear cool daylight sky → Day (roomy — Gumtree/Magpie); pale blue → Cool
+    // (its defining trait — joins Gumtree/Kingfisher/Mangrove as the 4th, at the
+    // curated cap). Opts OUT of Register + Voice (both already at their 3-world
+    // bands) — reachable via All + fuzzy search regardless.
+    tags: ThemeTags { time: Some("Day"), register: None, voice: None, temperature: Some("Cool") },
+    role_overrides: RoleOverrides::NONE,
+    // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries the
+    // summoned card's edge off the pale ground. DATA, no code path. The DAWN
+    // round's reserved dark-line-on-light PAGE FRAME is deliberately NOT taken:
+    // the user's live verdict on Bilby's 1px frame was "the frame is so weird"
+    // on a light world, so Brolga stays frameless too.
+    render_caps: RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT },
+};
+
 /// Wagtail — the FIFTEENTH world, and awl's first true MONOCHROME one — REWORKED
 /// 2026-07 from its original GREYSCALE form (any grey permitted, zero saturation
 /// only) into a TRUE 1-BIT world: **only `#000000` and `#FFFFFF` — nothing
@@ -1581,23 +1670,21 @@ pub const CASSOWARY_WATTLE: Theme = Theme {
     ..CASSOWARY
 };
 
-/// All seventeen worlds, in cycle order. `C-x t` advances through this list and
+/// All eighteen worlds, in cycle order. `C-x t` advances through this list and
 /// wraps; `C-x T` steps backward. The two deep cool darks — Currawong (OLED
 /// black) beside the neutral Tawny/Mopoke pair, and Kingfisher (midnight navy)
-/// beside the violet Undertow — sit with their kin; the two STATEMENT worlds
-/// close the cycle as mirror bookends — Wagtail (the bare 1-bit room, NO warm
+/// beside the violet Undertow — sit with their kin; Brolga (the COOL LIGHT POLE)
+/// sits with the light cluster, just before the statement worlds; the three
+/// STATEMENT worlds close the cycle — Wagtail (the bare 1-bit room, NO warm
 /// thing) beside Firetail (the warm den whose one warm thing is the living lava
-/// GROUND itself) — and Cassowary (the NERV terminal) sits after Firetail as the
+/// GROUND itself), and Cassowary (the NERV terminal) sits after Firetail as the
 /// dark-technical statement.
-///
-/// **COUNT NOTE (merge-train reconciliation):** a concurrent branch adds a
-/// light-blue 17th world touching this same array + the count/axis law tests.
-/// This branch adds Cassowary as an ADDITIVE DARK entry (dark +1). When both
-/// land the array is `[Theme; 18]` and `worlds_ten_dark_six_light` becomes 11
-/// dark / 7 light. On this branch alone it is 17 (11 dark / 6 light).
-pub const THEMES: [Theme; 17] = [
+pub const THEMES: [Theme; 18] = [
     TAWNY, MOPOKE, CURRAWONG,
     POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, KINGFISHER, OUTBACK, MANGROVE, GALAH, MAGPIE,
+    // Brolga — the COOL LIGHT POLE — sits with the light cluster, just before the
+    // statement worlds that close the cycle.
+    BROLGA,
     WAGTAIL, FIRETAIL, CASSOWARY,
 ];
 

@@ -740,10 +740,11 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // the next key (or the live App's mouse-press handler closes it on a
         // click — `app/input/mouse.rs`). Render-only (no buffer change).
         Action::About => {
-            // Re-take the lock the top intercept released (see the SCOPE note): the
-            // open-flag WRITE stays serialized against a concurrent reader, but only
-            // for this leaf arm — never across a page writer. Reentrant for a test
-            // holding it around its own drive.
+            // Reentrant no-op: `_test_guard` at the top of this function already
+            // holds this same process-wide lock for the WHOLE call, so this
+            // re-take costs nothing extra (outside `cfg(test)`, nothing at all) —
+            // kept as a local, self-documenting guard on the open-flag WRITE
+            // rather than leaning on the caller to already hold it.
             #[cfg(test)]
             let _g = crate::testlock::serial();
             crate::about::set_open(true);
@@ -753,8 +754,8 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // next key (or the live App's mouse-press handler closes it on a click —
         // `app/input/mouse.rs`). Render-only (no buffer change). See `lifetime.rs`.
         Action::LifetimeStats => {
-            // Re-take the lock the top intercept released (see the SCOPE note),
-            // scoped to this leaf arm — never held across a page writer. Reentrant.
+            // Reentrant no-op under the same whole-function `_test_guard` above —
+            // see the comment on the `Action::About` arm.
             #[cfg(test)]
             let _g = crate::testlock::serial();
             crate::lifetime::set_open(true);

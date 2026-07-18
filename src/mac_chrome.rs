@@ -69,6 +69,33 @@ pub fn pick_file_to_open() -> Option<PathBuf> {
 /// never happen — see the module doc) reads as `false`, never a panic; this is
 /// consulted exactly ONCE, at live startup, by [`crate::motion::apply_at_startup`]
 /// — never by any headless capture path.
+/// The window server's id (`CGWindowID` == `NSWindow.windowNumber`) of this
+/// app's first — in practice only — window, for the live probe's
+/// compositor-side self-capture (`crate::probe::capture_window_to_png`).
+/// `None` off-main-thread or before the window exists (the probe driver only
+/// runs after `on_gpu_ready`, so in practice it always resolves). Lives here
+/// because window access is AppKit surface (the module doc's one-place rule);
+/// the CoreGraphics capture itself is plain C API and stays in `probe.rs`.
+pub fn own_window_number() -> Option<u32> {
+    let mtm = MainThreadMarker::new()?;
+    let app = NSApplication::sharedApplication(mtm);
+    let windows = app.windows();
+    // The app owns ONE real window plus (empirically) a small invisible winit
+    // auxiliary; keep only VISIBLE windows and take the largest, so the probe
+    // can never screenshot the helper.
+    windows
+        .iter()
+        .filter(|w| w.isVisible())
+        .max_by(|a, b| {
+            let area = |w: &objc2_app_kit::NSWindow| {
+                let f = w.frame();
+                f.size.width * f.size.height
+            };
+            area(a).total_cmp(&area(b))
+        })
+        .and_then(|w| u32::try_from(w.windowNumber()).ok())
+}
+
 pub fn system_reduce_motion() -> bool {
     let Some(_mtm) = MainThreadMarker::new() else {
         return false;

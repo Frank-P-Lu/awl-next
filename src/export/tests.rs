@@ -731,3 +731,152 @@ fn check_attrs(mut attrs: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+// --- Render/export strikethrough agreement (the exactly-two-tilde gate) ------
+//
+// The BUG this closed: `markdown::spans` gates strikethrough to EXACTLY-two
+// tildes (`~x~` inert, `~~x~~` struck), but the export enabled pulldown's GFM
+// strikethrough WITHOUT that gate — so `~x~` exported STRUCK while rendering
+// inert. Both paths now read the ONE shared owner `markdown::strike_engaged`.
+// These laws assert the render's struck-set and the export's struck-set are the
+// SAME for the truth table, and drive the real HTML emitter to prove the gate
+// reaches actual exported bytes.
+
+/// The struck TEXT tokens as the RENDERER sees them: every `MdKind::Strikethrough`
+/// span's source substring, split into whitespace tokens, in document order.
+fn render_struck_tokens(md: &str) -> Vec<String> {
+    let mut spans = crate::markdown::spans(md);
+    spans.sort_by_key(|(r, _)| r.start);
+    let mut out = Vec::new();
+    for (r, k) in &spans {
+        if *k == crate::markdown::MdKind::Strikethrough {
+            out.extend(md[r.clone()].split_whitespace().map(str::to_string));
+        }
+    }
+    out
+}
+
+/// The struck TEXT tokens as the EXPORT tree sees them: every `Inline::Strikethrough`
+/// node's flattened text, split into whitespace tokens, in document order. A struck
+/// node's full `plain_text` covers all its (possibly nested) content once, so we do
+/// not recurse into it — mirroring the renderer, where every byte under an engaged
+/// strike is struck.
+fn export_struck_tokens(md: &str) -> Vec<String> {
+    fn walk_inlines(inlines: &[Inline], out: &mut Vec<String>) {
+        for i in inlines {
+            match i {
+                Inline::Strikethrough(c) => {
+                    out.extend(model::plain_text(c).split_whitespace().map(str::to_string));
+                }
+                Inline::Strong(c)
+                | Inline::Emphasis(c)
+                | Inline::Highlight(c)
+                | Inline::Link { children: c, .. } => walk_inlines(c, out),
+                _ => {}
+            }
+        }
+    }
+    fn walk_blocks(blocks: &[Block], out: &mut Vec<String>) {
+        for b in blocks {
+            match b {
+                Block::Heading { inlines, .. } | Block::Paragraph(inlines) => {
+                    walk_inlines(inlines, out)
+                }
+                Block::BlockQuote(bs) => walk_blocks(bs, out),
+                Block::List(l) => {
+                    for it in &l.items {
+                        walk_blocks(&it.blocks, out)
+                    }
+                }
+                Block::Table(t) => {
+                    for cell in &t.head {
+                        walk_inlines(cell, out)
+                    }
+                    for row in &t.rows {
+                        for cell in row {
+                            walk_inlines(cell, out)
+                        }
+                    }
+                }
+                Block::CodeBlock { .. } | Block::Rule => {}
+            }
+        }
+    }
+    let doc = model::parse(md);
+    let mut out = Vec::new();
+    walk_blocks(&doc.blocks, &mut out);
+    out
+}
+
+#[test]
+fn render_export_strikethrough_agree() {
+    // The truth table: single-tilde inert, two-tilde struck, tilde-fence, a
+    // nested single-inside-double, an engaged span across a soft break, a prose
+    // false-positive, and a plain mid-sentence pair.
+    let cases: &[(&str, &[&str])] = &[
+        ("~x~", &[]),                        // single tilde: inert, nothing struck
+        ("~~x~~", &["x"]),                   // two tildes: struck
+        ("~~~\nbody\n~~~\n", &[]),           // `~~~` is a FENCE, never a strike
+        ("~~a ~b~ c~~", &["a", "b", "c"]),   // engaged outer; inert inner `~` dropped
+        ("~~cut\nline~~", &["cut", "line"]), // engaged across a soft break
+        ("2~3 weeks and 4~5 days", &[]),     // bare single `~` in prose: never struck
+        ("keep ~~cut this~~ keep", &["cut", "this"]),
+    ];
+    for (md, expected) in cases {
+        let r = render_struck_tokens(md);
+        let e = export_struck_tokens(md);
+        assert_eq!(
+            r, e,
+            "render vs export struck-set diverge on {md:?}: render={r:?} export={e:?}"
+        );
+        assert_eq!(
+            r,
+            expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            "struck-set unexpected for {md:?}: got {r:?} want {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn export_html_strikethrough_gate() {
+    // Drive the REAL HTML emitter end-to-end: the engaged `~~x~~` yields a
+    // `<del>`; the inert single-tilde `~x~` never does — yet still exports its
+    // content (the bug was `~x~` exporting STRUCK).
+    let struck = to_html("~~x~~", &NoImages);
+    assert!(
+        struck.contains("<del>x</del>"),
+        "engaged ~~x~~ must render <del>: {struck}"
+    );
+
+    let inert = to_html("~x~", &NoImages);
+    assert!(!inert.contains("<del>"), "inert ~x~ must NOT render <del>: {inert}");
+    assert!(inert.contains("<p>x</p>"), "inert ~x~ content still exported: {inert}");
+
+    // The nested pathological case: ONE `<del>` wrapping the whole content, and
+    // the inert inner `~` delimiters dropped (never emitted as literal tildes).
+    let nested = to_html("~~a ~b~ c~~", &NoImages);
+    assert_eq!(
+        nested.matches("<del>").count(),
+        1,
+        "nested case is one strike wrapper: {nested}"
+    );
+    assert!(!nested.contains('~'), "inert inner ~ delimiters dropped: {nested}");
+}
+
+#[test]
+fn export_docx_strikethrough_gate() {
+    // The DOCX path shares the same model tree, so the gate reaches it too: the
+    // engaged pair emits `<w:strike/>`; the inert single tilde emits none.
+    let doc_xml = |md: &str| {
+        String::from_utf8(unzip_stored(&to_docx(md, &NoImages))["word/document.xml"].clone())
+            .unwrap()
+    };
+    assert!(
+        doc_xml("~~x~~").contains("<w:strike/>"),
+        "engaged ~~x~~ emits <w:strike/>"
+    );
+    assert!(
+        !doc_xml("~x~").contains("<w:strike/>"),
+        "inert ~x~ must emit no <w:strike/>"
+    );
+}
