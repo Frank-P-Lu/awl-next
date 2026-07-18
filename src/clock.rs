@@ -95,3 +95,142 @@ impl Clock for RealClock {
         Instant::now()
     }
 }
+
+/// A DETERMINISTIC virtual clock: the sibling [`Clock`] the [`RealClock`] doc
+/// foretold, slotting behind the same `Box<dyn Clock>` field with zero consumer
+/// changes. Time NEVER passes on its own — it advances ONLY by the fixed steps a
+/// driver injects ([`advance`](Self::advance)) — so the whole scheduling /
+/// animation path an `App` runs (`app::schedule`'s debounce/settle deadlines, the
+/// ambient tick, the App's sense-of-time stamps) can be STEPPED frame-by-frame
+/// under the headless harness, making the live-only bug classes (a redraw-
+/// scheduling gap, a debounce firing early/late, an animation phase not advancing)
+/// CAPTURABLE. That is the whole reason the [`Clock`] seam exists (see its doc).
+///
+/// DETERMINISM. The one real read is the arbitrary monotonic `base` captured once
+/// at construction — a scaffold, never observed directly. Every scheduling
+/// consumer compares clock-derived values to EACH OTHER (`now() >= stamp +
+/// window`, `now - last` for a spring dt), so the `base` term CANCELS: two runs
+/// with different bases take byte-identical decisions and render byte-identical
+/// frames, because only the injected DELTAS matter. `advance` never reads a wall
+/// clock and no path consults randomness. (Living in `clock.rs`, not the `app`
+/// module, this construction-time `Instant::now()` is outside `app::clock_law`'s
+/// scope by the same rule that lets [`RealClock`] read it here — and it is
+/// deterministic-by-delta, so it needs no allow-list bump.)
+///
+/// The inner elapsed count is an `Arc<AtomicU64>` of nanoseconds so a CLONE shares
+/// the SAME timeline: the frame loop keeps one handle to `advance`, and hands a
+/// clone into `App::clock`, so the App reads exactly the time the driver stepped.
+#[cfg(any(test, not(target_arch = "wasm32")))]
+#[derive(Clone)]
+pub struct VirtualClock {
+    /// The arbitrary monotonic origin, captured ONCE (the only real read); every
+    /// `now()` is `base + elapsed`, and every consumer uses deltas, so `base`
+    /// cancels and the value is deterministic-by-delta (see the type doc).
+    base: Instant,
+    /// Virtual nanoseconds elapsed since `base`, shared across clones so the
+    /// driver's `advance` is visible through the clone the App reads.
+    elapsed_nanos: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+#[cfg(any(test, not(target_arch = "wasm32")))]
+impl VirtualClock {
+    /// A fresh virtual clock at virtual time zero. The base is captured here (the
+    /// only real-clock read); it is never observed directly (see the type doc's
+    /// determinism note).
+    pub fn new() -> Self {
+        Self {
+            base: Instant::now(),
+            elapsed_nanos: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Advance virtual time by `dt`. Deterministic — never reads a wall clock.
+    /// Visible immediately through every clone (they share the inner count).
+    pub fn advance(&self, dt: std::time::Duration) {
+        self.elapsed_nanos
+            .fetch_add(dt.as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Convenience: advance virtual time by `ms` milliseconds (the frame loop's
+    /// per-frame step).
+    pub fn advance_ms(&self, ms: u64) {
+        self.advance(std::time::Duration::from_millis(ms));
+    }
+
+    /// Virtual time elapsed since construction — a pure delta (base-independent),
+    /// so it is the deterministic quantity to STAMP a frame-loop sidecar with.
+    pub fn elapsed(&self) -> std::time::Duration {
+        std::time::Duration::from_nanos(self.elapsed_nanos.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+#[cfg(any(test, not(target_arch = "wasm32")))]
+impl Default for VirtualClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(any(test, not(target_arch = "wasm32")))]
+impl Clock for VirtualClock {
+    #[inline]
+    fn now(&self) -> Instant {
+        self.base + self.elapsed()
+    }
+}
+
+#[cfg(test)]
+mod virtual_clock_tests {
+    use super::*;
+
+    #[test]
+    fn starts_at_zero_and_advances_only_when_stepped() {
+        let clock = VirtualClock::new();
+        let t0 = clock.now();
+        // No wall time passes on its own: a re-read without an advance is identical.
+        assert_eq!(clock.now(), t0, "virtual time must not pass on its own");
+        assert_eq!(clock.elapsed(), std::time::Duration::ZERO);
+
+        clock.advance_ms(150);
+        assert_eq!(clock.elapsed(), std::time::Duration::from_millis(150));
+        assert_eq!(clock.now(), t0 + std::time::Duration::from_millis(150));
+
+        clock.advance(std::time::Duration::from_millis(350));
+        assert_eq!(clock.elapsed(), std::time::Duration::from_millis(500));
+    }
+
+    #[test]
+    fn a_clone_shares_the_same_timeline() {
+        // The frame loop keeps one handle and hands a clone to `App::clock`; a step
+        // on either handle must be visible through the other (shared inner count).
+        let driver = VirtualClock::new();
+        let injected = driver.clone();
+        driver.advance_ms(500);
+        assert_eq!(injected.elapsed(), std::time::Duration::from_millis(500));
+        assert_eq!(injected.now(), driver.now());
+    }
+
+    #[test]
+    fn deltas_are_base_independent() {
+        // Two clocks with independent bases (the arbitrary real read) reach the same
+        // DECISION for the same injected steps — the determinism guarantee: a
+        // deadline of `stamp + window` vs `now` depends only on the deltas.
+        let window = std::time::Duration::from_millis(500);
+        let a = VirtualClock::new();
+        let b = VirtualClock::new();
+        let stamp_a = a.now();
+        let stamp_b = b.now();
+        for _ in 0..4 {
+            a.advance_ms(100);
+            b.advance_ms(100);
+        }
+        // Both at t=400 < 500: neither deadline has passed.
+        assert_eq!(a.now() >= stamp_a + window, b.now() >= stamp_b + window);
+        assert!(!(a.now() >= stamp_a + window));
+        a.advance_ms(100);
+        b.advance_ms(100);
+        // Both at t=500 == deadline: both fire, regardless of their differing bases.
+        assert_eq!(a.now() >= stamp_a + window, b.now() >= stamp_b + window);
+        assert!(a.now() >= stamp_a + window);
+    }
+}

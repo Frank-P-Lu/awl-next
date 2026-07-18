@@ -359,6 +359,11 @@ pub fn schema_held() -> String {
 
 mod animated;
 mod film;
+/// The virtual-clock FRAME-LOOP capture (`--screenshot-frames`): N settled frames
+/// driven by a real `App`'s scheduling body under a `VirtualClock`. Native-only (it
+/// builds a hermetic `App` via `InMemoryFs::new`, which is not on the wasm target).
+#[cfg(not(target_arch = "wasm32"))]
+mod frames;
 // `pub(crate)`: the render bench suite (`render::benchsuite`) drives frames
 // through the SAME headless device / offscreen target / pixel readback this
 // module owns — one owner of the wgpu plumbing, not an aligned copy.
@@ -370,6 +375,8 @@ mod sidecar;
 
 pub use animated::{capture_held, capture_timeline, HeldDir};
 pub use film::{FilmRenderer, FRAME_MS};
+#[cfg(not(target_arch = "wasm32"))]
+pub use frames::{capture_frames, DEFAULT_FRAME_STEP_MS};
 pub use modes::{
     capture_motion, capture_motion_diagonal, capture_motion_vertical, capture_with,
 };
