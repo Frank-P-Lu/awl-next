@@ -17,18 +17,25 @@
 //! the frost path ran. Three cells, sampled along the changed axis:
 //!
 //!   1. HEADED lava doc, Mangrove + Firetail, phase 0.7 (a blob intrudes the
-//!      fixed top rail there — an ordinary top-of-page outline shows frost only
-//!      at phases where a blob passes behind a pill). The frosted pills DIM real
-//!      pixels: hundreds change (measured 598 Mangrove / 706 Firetail). Asserted
-//!      as a SUBSTANTIAL changed-pixel count via `image`-decoded RGB arithmetic,
-//!      not merely "the bytes differ".
-//!   2. HEADING-LESS doc (no outline → `pill_count == 0`) — byte-IDENTICAL: the
-//!      inert path is a true no-op (frost only touches pixels a pill covers).
-//!   3. NON-LAVA world (Tawny, no lava ground) — byte-IDENTICAL: frost is gated
-//!      on the lava-ground CAPABILITY, so a flat-ground world is untouched.
+//!      fixed top rail there). The frosted pills — the OUTLINE entries' rail pills
+//!      PLUS the bottom-left GUTTER pill — DIM real pixels: thousands change
+//!      (measured 16750 Mangrove / 16981 Firetail). Asserted as a SUBSTANTIAL
+//!      changed-pixel count via `image`-decoded RGB arithmetic, not merely "the
+//!      bytes differ".
+//!   2. HEADING-LESS lava doc (no outline, but the page-mode GUTTER still draws)
+//!      — the GUTTER frost pill ALONE dims real pixels (measured 2734 Mangrove /
+//!      2791 Firetail). This is the direct GPU guard for the gutter de-uglify fix:
+//!      the bottom-left corner is frosted (a softened lamp) rather than the old
+//!      hard-carved dead-flat dark rectangle, even with no outline.
+//!   3. NON-LAVA world (Tawny, no lava ground) — byte-IDENTICAL: frost is gated on
+//!      the lava-ground CAPABILITY, so a flat-ground world is untouched (no
+//!      outline pill AND no gutter pill).
 //!
-//! Cells 2 & 3 are the negative controls that keep cell 1 honest: they prove the
-//! diff in cell 1 is the frost pills and nothing ambient.
+//! Cell 3 is the negative control that keeps cells 1 & 2 honest: it proves the
+//! diff is the lava-gated frost path and nothing ambient. (The "frost only touches
+//! pixels a pill covers" no-op is law-tested at the pure seam —
+//! `theme::tests::gutter_frost_pill_keeps_ink_contrast_on_every_lava_world`
+//! part (4): coverage is exactly 0 outside every pill.)
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -193,7 +200,7 @@ fn frost_pills_dim_real_gpu_pixels_on_a_headed_lava_doc() {
 }
 
 #[test]
-fn frost_is_byte_identical_where_no_pill_is_placed() {
+fn frost_dims_the_gutter_corner_and_is_gated_on_the_lava_capability() {
     let root = tmp_dir("controls");
     let headed = root.join("headed.md");
     let ordinary = root.join("ordinary.md");
@@ -204,21 +211,30 @@ fn frost_is_byte_identical_where_no_pill_is_placed() {
         return;
     }
 
-    // Control A: a HEADING-LESS lava doc has no outline → pill_count 0 → frost is
-    // a true no-op. ON and OFF captures are byte-identical.
-    let ord_on = root.join("ord_on.png");
-    let ord_off = root.join("ord_off.png");
-    assert!(capture(&ord_on, &ordinary, "Mangrove", Some("deepsea"), true));
-    assert!(capture(&ord_off, &ordinary, "Mangrove", Some("deepsea"), false));
-    assert_eq!(
-        std::fs::read(&ord_on).unwrap(),
-        std::fs::read(&ord_off).unwrap(),
-        "heading-less lava doc: frost with no pill must be byte-identical"
-    );
+    // Cell 2: a HEADING-LESS lava doc has no outline, but the page-mode GUTTER
+    // still draws (the filename/project stack) — so the GUTTER frost pill ALONE
+    // dims real pixels vs. frost-OFF's raw lamp. This is the direct GPU guard for
+    // the de-uglify fix: the bottom-left corner is a softened lamp, not the old
+    // hard-carved dead-flat dark rectangle. Sampled on both lava worlds.
+    for (theme, spec) in [("Mangrove", "deepsea"), ("Firetail", "warm")] {
+        let ord_on = root.join(format!("{theme}_ord_on.png"));
+        let ord_off = root.join(format!("{theme}_ord_off.png"));
+        assert!(capture(&ord_on, &ordinary, theme, Some(spec), true));
+        assert!(capture(&ord_off, &ordinary, theme, Some(spec), false));
+        let (w1, h1, on_px) = decode(&ord_on);
+        let (w2, h2, off_px) = decode(&ord_off);
+        assert_eq!((w1, h1), (w2, h2), "{theme}: same canvas");
+        let changed = changed_rgb_pixels(&on_px, &off_px);
+        assert!(
+            changed >= FROST_PIXEL_FLOOR,
+            "{theme}: the gutter frost pill changed only {changed} px (floor {FROST_PIXEL_FLOOR}); \
+             a heading-less lava doc's bottom-left corner must still be frosted"
+        );
+    }
 
-    // Control B: a NON-LAVA world (Tawny, flat ground → no AWL_LAVA) has no lava
-    // capability for frost to gate on. ON and OFF captures are byte-identical
-    // even with the outline drawn.
+    // Cell 3: a NON-LAVA world (Tawny, flat ground → no AWL_LAVA) has no lava
+    // capability for frost to gate on. ON and OFF captures are byte-identical even
+    // with the outline AND the gutter drawn (no outline pill, no gutter pill).
     let tw_on = root.join("tw_on.png");
     let tw_off = root.join("tw_off.png");
     assert!(capture(&tw_on, &headed, "Tawny", None, true));

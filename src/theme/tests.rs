@@ -593,41 +593,47 @@ fn outline_frost_pills_keep_ink_contrast_on_every_lava_world() {
     }
 }
 
-/// THE GUTTER LOCAL CORNER CARVE LAW (the "lava both sides" round — re-scoped
-/// from the old whole-margin gutter carve). The bottom-left page-mode GUTTER
-/// (`TextPipeline::prepare_gutter` — the filename/project stack) used to gate the
-/// WHOLE-margin `lava_rail_carved` carve, which flattened both margins on nearly
-/// every page-mode buffer (the gutter shows almost always), so the lamp was
-/// right-only. It now drives only a BOUNDED corner carve around its own block
-/// (`TextPipeline::lava_gutter_carve_rect` → the shader's `gutter_rect`), so its
-/// `muted`/`faint` stack sits on flat ground while the REST of both margins keep
-/// the lamp — an ordinary doc goes both-sides.
+/// THE GUTTER FROST PILL CONTRAST LAW (the de-uglify round — re-scoped from the
+/// old bounded-corner HARD carve this round replaced). The bottom-left page-mode
+/// GUTTER (`TextPipeline::prepare_gutter` — the filename/project stack) used to
+/// HARD-carve its corner out of the lava mask, dropping the band to the flat,
+/// DARKEST page ground (`base_100`) — an ugly geometric dark pocket beside the much
+/// lighter writing column and below the margin's own blob peaks (worst on
+/// Firetail, ground lum ~12 vs column ~60). It now rides the SAME per-entry FROST
+/// treatment the outline does (`TextPipeline::lava_gutter_frost_rect` →
+/// `prepare_lava_layer`'s `pills`): the lamp renders SOFTENED (a blurred
+/// SMOOTH-field sample, `crate::lava::frost_field`) and value-DIMMED toward the
+/// flat ground (`crate::lava::frost_pixel` / `FROST_DIM`), so the dim gutter ink
+/// keeps its contrast while the lamp reads THROUGH — a warm whisper, not a dead
+/// flat rectangle. Four halves:
 ///
-/// Three halves:
+/// (1) LEGIBILITY over the FROST pill at EVERY phase (64 phases × an in-pill grid):
+///     the ACTUAL frosted pixel (the pure-Rust shader mirror `frost_field` →
+///     `frost_pixel`) clears the ink-ladder floors against the gutter's own inks —
+///     the `faint` project line at redmean >= 100, the `muted` filename line at
+///     >= 150. Proven over COMPOSITED PIXELS, never sidecar state (the Wagtail
+///     invisible-picker-row lesson).
 ///
-/// (1) STRUCTURAL, PHASE-INDEPENDENT — FLAT INSIDE THE CORNER: with the gutter
-///     rect carved (`lava_mask_2d` with `Some(rect)`), the gutter's own corner
-///     band contains NO lava pixel at ANY animation phase — the composited pixel
-///     is bit-exactly the world's flat ground. Proven over COMPOSITED PIXELS via
-///     the pure-Rust shader mirror, with a non-vacuous WITNESS.
+/// (2) THE DARK REGION IS FIXED — the lamp reads THROUGH: WITNESSED non-vacuous —
+///     some sampled frost pixel genuinely differs from the flat ground, so the old
+///     dead-flat dark pocket is gone (a softened living lamp, not a carve).
 ///
-/// (2) BOTH MARGINS RECLAIMED — LOCAL, not whole-margin: OUTSIDE the corner rect
-///     (the left margin ABOVE the band, and the whole right margin) the 2-D mask
-///     is byte-for-byte the un-carved column mask — the lamp is untouched, so an
-///     ordinary doc keeps both sides. Witnessed: some sampled reclaimed pixel
-///     genuinely carries a blob. The corner BOUNDS (a bottom-left box) are pinned
-///     at the render seam by
-///     `render::tests::outline::lava_gutter_carve_follows_gutter_visibility`.
+/// (3) PHASE-FREE WORST BOUND: the brightest a pill can ever reach is
+///     `frost_pixel(1.0, ..)` = `mix(blob_hi, ground, FROST_DIM)`; the ink clears
+///     the floors against THAT, so every phase is covered by construction.
 ///
-/// (3) LEGIBILITY FLOOR: the gutter's two inks clear the repo's perceptible-
-///     difference floors against that LOCAL corner ground (== base_100) — the
-///     `faint` project line at the ink-ladder law (c) redmean >= 100, the
-///     `muted` filename line at >= 150 — so the gutter can never drown again.
+/// (4) THE FROST IS LOCAL — both margins keep their lamp: coverage
+///     (`frost_amount`) is solid INSIDE the corner and exactly 0 OUTSIDE it (the
+///     left margin above the band, the whole right margin), so nothing carves and
+///     the rest of both margins stay their live lamp. The pill BOUNDS (a
+///     bottom-left box) are pinned at the render seam by
+///     `render::tests::outline::lava_gutter_frost_pill_follows_gutter_visibility`.
 ///
-/// The `Background` match is NO-WILDCARD: a future ground variant must decide
-/// its rail story here or fail to compile.
+/// The `Background` match is NO-WILDCARD: a future ground variant must decide its
+/// frost story here or fail to compile. A static-ground world carries no lava, so
+/// it `continue`s — no frost, byte-identical (the unaffected-worlds guarantee).
 #[test]
-fn gutter_corner_carve_is_local_flat_ground_and_keeps_both_margins_on_every_lava_world() {
+fn gutter_frost_pill_keeps_ink_contrast_on_every_lava_world() {
     fn redmean(a: Srgb, b: Srgb) -> f32 {
         let rbar = (a.r as f32 + b.r as f32) * 0.5;
         let dr = a.r as f32 - b.r as f32;
@@ -636,138 +642,120 @@ fn gutter_corner_carve_is_local_flat_ground_and_keeps_both_margins_on_every_lava
         ((2.0 + rbar / 256.0) * dr * dr + 4.0 * dg * dg + (2.0 + (255.0 - rbar) / 256.0) * db * db)
             .sqrt()
     }
-    // Representative page geometry (the 1600x1000 gallery canvas at the default
-    // 70-char prose measure). The gutter's local corner rect [left, top, right,
-    // bottom]: left 0, right a small gap shy of the column, a BOTTOM band (the
-    // two stacked LABEL rows ~8px up from the canvas bottom — `prepare_gutter` /
-    // `gutter_carve_rect`).
+    // Representative page geometry (the 1600x1000 gallery canvas). The gutter's
+    // local frost pill [left, top, right, bottom]: left 0, right a small gap shy of
+    // the column, a BOTTOM band (the two stacked LABEL rows ~8px up from the canvas
+    // bottom — `prepare_gutter` / `gutter_carve_rect`).
     let vp = (1600.0f32, 1000.0f32);
-    let (col_left, col_right) = (296.0f32, 1304.0f32);
-    let gap = crate::lava::MARGIN_GAP_PX;
-    let gutter_rect = [0.0f32, 900.0, 260.0, 1000.0];
+    let blur = crate::lava::FROST_BLUR_PX;
+    let dim = crate::lava::FROST_DIM;
+    let feather = crate::lava::FROST_FEATHER_PX;
+    let pill = [0.0f32, 850.0, 260.0, 1000.0];
     for t in THEMES.iter() {
-        // NO-WILDCARD: the composite below uses blob_hi — the BRIGHTEST tone the
-        // shader can reach — so proving the worst case covers blob_lo too.
-        let (ground, blob_hi) = match t.background {
-            // The five static grounds carry no lava to carve.
+        // NO-WILDCARD: a future ground variant must decide its frost story here.
+        let (ground, blob_lo, blob_hi) = match t.background {
+            // The five static grounds carry no lava — no frost, byte-identical.
             Background::Gradient { .. }
             | Background::Dots { .. }
             | Background::Starfield { .. }
             | Background::Pinstripe { .. }
             | Background::Stripes { .. } => continue,
-            Background::Lava { ground, blob_hi, .. } => (ground, blob_hi),
+            Background::Lava { ground, blob_lo, blob_hi, .. } => (ground, blob_lo, blob_hi),
         };
-        // The corner ground IS the page's own ground — the ink-ladder laws govern it.
-        assert_eq!(ground, t.base_100, "{}: corner ground must be base_100", t.name);
+        // The pill's un-lit floor IS the page's own ground — the ink-ladder laws
+        // govern it; the frost only ever LIFTS from there toward the dimmed lamp.
+        assert_eq!(ground, t.base_100, "{}: frost ground must be base_100", t.name);
 
-        // (1) Phase sweep x corner-band grid: the 2-D carved mask is exactly zero
-        //     INSIDE the rect, so the straight-alpha composite over the flat
-        //     ground is bit-exactly the ground — even against the brightest tone.
-        // (2) The RECLAIMED margin (left margin ABOVE the band + the right
-        //     margin) stays byte-identical to the un-carved column mask.
-        let mut witnessed_carve = false;
-        let mut witnessed_reclaim = false;
+        // (1)+(2) Phase sweep × in-pill grid: the ACTUAL frost pixel clears the
+        //         gutter ink floors, AND the lamp genuinely reads through the frost
+        //         (the dark pocket is gone).
+        let mut witnessed_alive = false;
         for step in 0..64 {
             let phase = step as f32 * crate::lava::LAVA_LOOP_CYCLES / 64.0;
-            // CARVE samples: x strictly INSIDE the corner rect (past its 28px
-            // right-face feather: rect right 260 → interior ends ~232).
-            for &x in &[10.0f32, 60.0, 120.0, 180.0, 225.0] {
-                // Corner-band y samples (inside the rect), well past its feather.
-                for y in [930.0, 955.0, 985.0] {
-                    let a = crate::lava::lava_mask_2d(
-                        x,
-                        y,
-                        col_left,
-                        col_right,
-                        gap,
-                        false,
-                        Some(gutter_rect),
-                    );
-                    assert_eq!(
-                        a, 0.0,
-                        "{}: lava coverage in the gutter corner at x={x} y={y} phase={phase}",
+            for xi in 0..16 {
+                // x strictly INSIDE the pill, past its right-face feather.
+                let x = 12.0 + (235.0 - 12.0) * (xi as f32 + 0.5) / 16.0;
+                for y in [860.0, 900.0, 940.0, 980.0] {
+                    // The pill fully covers this pixel (coverage ~1 well inside).
+                    assert!(
+                        crate::lava::frost_pill_coverage(x, y, pill, feather) > 0.99,
+                        "{}: sample x={x} y={y} is not solidly inside the gutter pill",
                         t.name
                     );
-                    let over = |gc: u8, bc: u8| -> u8 {
-                        (bc as f32 * a + gc as f32 * (1.0 - a)).round() as u8
-                    };
-                    let px = Srgb {
-                        r: over(ground.r, blob_hi.r),
-                        g: over(ground.g, blob_hi.g),
-                        b: over(ground.b, blob_hi.b),
-                        a: 0xFF,
-                    };
-                    assert_eq!(
-                        (px.r, px.g, px.b),
-                        (ground.r, ground.g, ground.b),
-                        "{}: gutter-corner pixel is not the flat ground at x={x} y={y} phase={phase}",
+                    let field = crate::lava::frost_field(
+                        (x, y),
+                        vp,
+                        &crate::lava::BACKDROP_BLOBS,
+                        phase,
+                        blur,
+                    );
+                    let px = crate::lava::frost_pixel(field, ground, blob_lo, blob_hi, dim);
+                    let project = redmean(t.faint, px);
+                    assert!(
+                        project >= 100.0,
+                        "{}: the gutter's faint project line only {project:.1} redmean from \
+                         the frost pill at x={x} y={y} phase={phase} (under the ink-ladder floor)",
                         t.name
                     );
-                    // WITNESS the carve: the un-carved mask WOULD paint here.
-                    if crate::lava::column_mask(x, col_left, col_right, gap) >= 1.0
-                        && crate::lava::metaball_field(
-                            (x, y),
-                            vp,
-                            &crate::lava::BACKDROP_BLOBS,
-                            phase,
-                        ) >= 0.5
-                    {
-                        witnessed_carve = true;
+                    let name = redmean(t.muted, px);
+                    assert!(
+                        name >= 150.0,
+                        "{}: the gutter's muted filename only {name:.1} redmean from the frost \
+                         pill at x={x} y={y} phase={phase}",
+                        t.name
+                    );
+                    if (px.r, px.g, px.b) != (ground.r, ground.g, ground.b) {
+                        witnessed_alive = true;
                     }
-                }
-            }
-            // RECLAIMED: the left margin ABOVE the corner band (both sides back)
-            // AND the whole right margin are byte-identical to the plain column
-            // mask — the carve is LOCAL, the lamp elsewhere is untouched.
-            let reclaim: [(f32, f32); 6] = [
-                (60.0, 120.0),   // left margin, above the band
-                (180.0, 300.0),  // left margin, above the band
-                (120.0, 520.0),  // left margin, above the band
-                (1320.0, 930.0), // right margin, at the band's y (still lit)
-                (1400.0, 500.0), // right margin
-                (1560.0, 970.0), // right margin, deep
-            ];
-            for (x, y) in reclaim {
-                let carved =
-                    crate::lava::lava_mask_2d(x, y, col_left, col_right, gap, false, Some(gutter_rect));
-                let plain = crate::lava::column_mask(x, col_left, col_right, gap);
-                assert_eq!(
-                    carved, plain,
-                    "{}: a reclaimed margin pixel lost its lamp at x={x} y={y} (carve not local)",
-                    t.name
-                );
-                if plain >= 1.0
-                    && crate::lava::metaball_field((x, y), vp, &crate::lava::BACKDROP_BLOBS, phase)
-                        >= 0.5
-                {
-                    witnessed_reclaim = true;
                 }
             }
         }
         assert!(
-            witnessed_carve,
-            "{}: no sampled corner pixel would have carried lava without the carve (vacuous)",
+            witnessed_alive,
+            "{}: no sampled gutter frost pixel differs from the flat ground — the dark pocket \
+             would still be a dead-flat carve, not a softened LIVING lamp",
             t.name
+        );
+
+        // (3) PHASE-FREE WORST BOUND: frost_pixel(1.0, ..) = mix(blob_hi, ground,
+        //     dim) is the brightest a pill can reach; the ink clears the floors
+        //     against it, so every phase is covered by construction.
+        let worst = crate::lava::frost_pixel(1.0, ground, blob_lo, blob_hi, dim);
+        assert!(
+            redmean(t.faint, worst) >= 100.0,
+            "{}: faint project ink only {:.1} redmean from the WORST gutter frost pill (phase-free bound)",
+            t.name,
+            redmean(t.faint, worst)
         );
         assert!(
-            witnessed_reclaim,
-            "{}: no sampled reclaimed pixel carries a blob — the both-sides claim is vacuous",
-            t.name
+            redmean(t.muted, worst) >= 150.0,
+            "{}: muted filename ink only {:.1} redmean from the worst gutter frost pill",
+            t.name,
+            redmean(t.muted, worst)
         );
-        // (3) The gutter's inks clear the corner's LOCAL ground (== base_100).
-        let project = redmean(t.faint, ground);
+
+        // (4) THE FROST IS LOCAL — both margins keep their live lamp. Coverage is
+        //     solid inside the pill (non-vacuous) and exactly zero OUTSIDE it (the
+        //     left margin above the band, and the whole right margin), so nothing
+        //     is carved and the rest of both margins are untouched.
         assert!(
-            project >= 100.0,
-            "{}: the gutter's faint project line only {project:.1} redmean from \
-             the corner ground (under the ink-ladder perceptibility floor)",
+            crate::lava::frost_amount(120.0, 930.0, &[pill], feather) > 0.99,
+            "{}: the gutter pill does not frost its own corner (vacuous)",
             t.name
         );
-        let name = redmean(t.muted, ground);
-        assert!(
-            name >= 150.0,
-            "{}: the gutter's muted filename only {name:.1} redmean from the corner ground",
-            t.name
-        );
+        for (x, y) in [
+            (60.0, 500.0),   // left margin, above the band
+            (180.0, 300.0),  // left margin, above the band
+            (1320.0, 930.0), // right margin, at the band's y
+            (1560.0, 970.0), // right margin, deep bottom
+        ] {
+            assert_eq!(
+                crate::lava::frost_amount(x, y, &[pill], feather),
+                0.0,
+                "{}: frost leaked outside the gutter pill at x={x} y={y} (not local — a margin lost its lamp)",
+                t.name
+            );
+        }
     }
 }
 

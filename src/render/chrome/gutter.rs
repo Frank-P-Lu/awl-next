@@ -205,10 +205,11 @@ impl TextPipeline {
     /// Whether the page-mode GUTTER is actually DRAWN this frame — THE one
     /// visibility rule, read straight off [`Self::gutter_layout`]'s own full gate
     /// (page mode + a buffer name + a margin past the hard floor), never a
-    /// re-derivation. Exposed for the LAVA gutter corner carve
-    /// ([`TextPipeline::lava_gutter_carve_rect`], `render/layers.rs`). Reading the
-    /// SAME owner `prepare_gutter`/`gutter_report` share means the carve can never
-    /// disagree with what the frame draws.
+    /// re-derivation. Exposed for the LAVA gutter corner treatment — the shipped
+    /// FROST PILL ([`TextPipeline::lava_gutter_frost_rect`]) and its demoted
+    /// hard-carve revert ([`TextPipeline::lava_gutter_carve_rect`]), both in
+    /// `render/layers.rs`. Reading the SAME owner `prepare_gutter`/`gutter_report`
+    /// share means neither can disagree with what the frame draws.
     pub(in crate::render) fn gutter_visible(&self) -> bool {
         self.gutter_layout().is_some()
     }

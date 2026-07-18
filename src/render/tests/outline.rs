@@ -965,30 +965,35 @@ fn lava_frost_pills_follow_outline_visibility() {
     crate::page::set_measure(80);
 }
 
-/// THE GUTTER LOCAL CORNER CARVE wiring ([`TextPipeline::lava_gutter_carve_rect`]
-/// — the "lava both sides" round). The bottom-left gutter used to gate the
-/// WHOLE-margin `lava_rail_carved` carve (`outline_visible OR gutter_visible`),
-/// and since the gutter draws on nearly every page-mode buffer the lamp was
-/// right-only almost always. Now the gutter drives only a BOUNDED corner carve
-/// around its own block, leaving the rest of both margins their lamp — so a
-/// lava world + a drawn gutter (with the outline hidden) does NOT trigger the
-/// full carve, but DOES return a corner rect; an ordinary doc goes both-sides.
-/// The rect comes from the SAME `gutter_layout` owner `prepare_gutter`/
-/// `gutter_report` ride ([`TextPipeline::gutter_visible`] as the gate), so the
-/// carve can never disagree with the drawn block. An unnamed (scratch) buffer
-/// hides the gutter (no rect); a static-ground world never carves
-/// (capability-keyed). The composited-pixel + bounds + ink-floor law lives at
-/// the pure seam (`theme::tests::gutter_corner_carve_is_local_flat_ground_and_
-/// keeps_both_margins_on_every_lava_world`); THIS test pins the render-side
-/// decision that law assumes. The OUTLINE full carve is
+/// THE GUTTER LOCAL FROST PILL wiring ([`TextPipeline::lava_gutter_frost_rect`] —
+/// the de-uglify round). The bottom-left gutter used to drive a HARD corner carve
+/// (`lava_gutter_carve_rect` → the shader's `gutter`/`gutter_rect` globals) that
+/// dropped its band to the flat, darkest page ground — an ugly geometric dark
+/// pocket under the filename/project readout, worst on Firetail. That hard carve
+/// is now DEMOTED behind the FROST default (like `lava_rail_carved`): under the
+/// shipped default (`crate::lava::FROST_RAIL_DEFAULT` true) `lava_gutter_carve_rect`
+/// returns `None` and the gutter instead contributes a FROST PILL
+/// (`lava_gutter_frost_rect`) — the SAME bounded corner box, but rendered as a
+/// softened, value-dimmed lamp rather than carved to dead-flat ground. So a lava
+/// world + a drawn gutter (outline hidden) does NOT trigger the whole-margin carve
+/// and does NOT hard-carve its corner, but DOES return a frost-pill rect that
+/// `prepare_lava_layer` uploads into the shader's `pills` array. The rect comes
+/// from the SAME `gutter_layout` owner `prepare_gutter`/`gutter_report` ride
+/// ([`TextPipeline::gutter_visible`] as the gate), so the pill can never disagree
+/// with the drawn block. An unnamed (scratch) buffer hides the gutter (no pill); a
+/// static-ground world never frosts (capability-keyed). The composited-pixel +
+/// ink-floor law lives at the pure seam (`theme::tests::
+/// gutter_frost_pill_keeps_ink_contrast_on_every_lava_world`); THIS test pins the
+/// render-side decision that law assumes. The OUTLINE frost pills are
 /// [`lava_frost_pills_follow_outline_visibility`] above.
 #[test]
-fn lava_gutter_carve_follows_gutter_visibility() {
+fn lava_gutter_frost_pill_follows_gutter_visibility() {
     let Some(mut p) = headless_pipeline() else {
-        eprintln!("skipping lava_gutter_carve_follows_gutter_visibility: no wgpu adapter");
+        eprintln!("skipping lava_gutter_frost_pill_follows_gutter_visibility: no wgpu adapter");
         return;
     };
     let _g = crate::testlock::serial();
+    assert!(crate::lava::frost_on(), "control: frost is the shipped default");
     let lava_idx = crate::theme::THEMES
         .iter()
         .position(|t| t.background.is_lava())
@@ -1015,32 +1020,39 @@ fn lava_gutter_carve_follows_gutter_visibility() {
         "control: a non-markdown buffer has no outline"
     );
     assert!(p.gutter_visible(), "control: the gutter draws");
-    // The gutter no longer flattens the WHOLE margin (both sides reclaimed) ...
+    // The gutter never flattens the WHOLE margin (both sides stay alive) ...
     assert!(
         !p.lava_rail_carved(height),
-        "the gutter does NOT trigger the full-margin carve anymore (both sides return)"
+        "the gutter does NOT trigger the full-margin carve (both sides return)"
     );
-    // ... but it DOES carve a bounded local corner around its own block.
+    // ... and under the FROST default it no longer HARD-carves its corner either
+    // (the demoted revert path is inert) ...
+    assert!(
+        p.lava_gutter_carve_rect(height).is_none(),
+        "frost default: the hard gutter carve is demoted (a frost pill instead)"
+    );
+    // ... instead it returns a FROST-PILL rect over its own block.
     let rect = p
-        .lava_gutter_carve_rect(height)
-        .expect("lava world + drawn gutter => a local corner rect");
+        .lava_gutter_frost_rect(height)
+        .expect("lava world + drawn gutter => a frost-pill rect");
     // The rect is the gutter's own box: left 0, right shy of the column, a bottom
     // band (top below the canvas middle, bottom == canvas bottom).
-    assert_eq!(rect[0], 0.0, "corner left == 0 (canvas edge)");
-    assert!(rect[2] > 0.0 && rect[2] < 1900.0, "corner right hugs the column: {rect:?}");
+    assert_eq!(rect[0], 0.0, "pill left == 0 (canvas edge)");
+    assert!(rect[2] > 0.0 && rect[2] < 1900.0, "pill right hugs the column: {rect:?}");
     assert!(
         rect[1] > height as f32 * 0.5 && rect[3] >= height as f32,
-        "corner is a BOTTOM band: {rect:?}"
+        "pill is a BOTTOM band: {rect:?}"
     );
 
-    // An UNNAMED (scratch) buffer hides the gutter => no corner carve.
+    // An UNNAMED (scratch) buffer hides the gutter => no frost pill.
     let blank = view("plain text, not markdown\n", 0, 0);
     p.set_view(&blank);
     assert!(!p.gutter_visible(), "no name => no gutter");
     assert!(
-        p.lava_gutter_carve_rect(height).is_none(),
-        "no gutter ink => no corner carve, the lamp reclaims"
+        p.lava_gutter_frost_rect(height).is_none(),
+        "no gutter ink => no frost pill, the lamp is un-frosted"
     );
+    assert!(p.lava_gutter_carve_rect(height).is_none(), "no gutter => no hard carve either");
     assert!(!p.lava_rail_carved(height), "no outline either => no full carve");
 
     // EDGE-TO-EDGE (page off): the gutter hides with the margins themselves.
@@ -1048,15 +1060,19 @@ fn lava_gutter_carve_follows_gutter_visibility() {
     p.set_view(&named);
     assert!(!p.gutter_visible(), "edge-to-edge hides the gutter");
     assert!(
-        p.lava_gutter_carve_rect(height).is_none(),
-        "no margins, no corner carve"
+        p.lava_gutter_frost_rect(height).is_none(),
+        "no margins, no frost pill"
     );
     crate::page::set_page_on(true);
 
-    // A static-ground world NEVER carves, gutter drawn or not (capability-keyed).
+    // A static-ground world NEVER frosts, gutter drawn or not (capability-keyed).
     crate::theme::set_active(static_idx);
     p.set_view(&named);
     assert!(p.gutter_visible(), "control: the gutter still draws");
+    assert!(
+        p.lava_gutter_frost_rect(height).is_none(),
+        "a non-lava world has no lamp to frost"
+    );
     assert!(
         p.lava_gutter_carve_rect(height).is_none(),
         "a non-lava world has nothing to carve"

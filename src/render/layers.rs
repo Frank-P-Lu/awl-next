@@ -156,13 +156,27 @@ impl TextPipeline {
         let rail_carved = self.lava_rail_carved(height);
         let gutter_rect = self.lava_gutter_carve_rect(height);
         // FROST PILLS (the shipped headed-doc default): one pill per drawn outline
-        // entry, hugging its text extents. Empty in every non-frost frame (no lava
-        // ground, no outline, or `AWL_LAVA_FROST=off`), so the shader's frost path
-        // is inert (`pill_count == 0`) and a heading-less doc stays byte-identical.
+        // entry hugging its text extents, PLUS the bottom-left gutter's OWN pill.
+        // The gutter's old hard corner carve (a mask->0 rectangle that dropped its
+        // band to the flat, darkest page ground — an ugly geometric dark pocket
+        // under the filename/project readout, worst on Firetail) is now a FROST
+        // pill too (see `lava_gutter_frost_rect`), so its `muted`/`faint` stack
+        // sits on a softened, value-dimmed lamp — a warm whisper that breathes with
+        // the field — instead of a dead flat-dark patch. Empty in every non-frost
+        // frame (no lava ground, no outline AND no gutter, or `AWL_LAVA_FROST=off`),
+        // so the shader's frost path is inert (`pill_count == 0`) and a
+        // heading-less, gutter-less doc stays byte-identical. The gutter pill LEADS
+        // so it always survives the `MAX_FROST_PILLS` clamp.
         let frost_pills = if crate::lava::frost_on()
             && self.effective_background().lava_params().is_some()
         {
-            self.lava_frost_pill_rects(height)
+            let mut pills = Vec::new();
+            if let Some(g) = self.lava_gutter_frost_rect(height) {
+                pills.push(g);
+            }
+            pills.extend(self.lava_frost_pill_rects(height));
+            pills.truncate(crate::lava::MAX_FROST_PILLS);
+            pills
         } else {
             Vec::new()
         };
@@ -382,18 +396,48 @@ impl TextPipeline {
             && self.outline_visible(height)
     }
 
-    /// THE GUTTER'S LOCAL CORNER CARVE rect for this frame: `Some([left, top,
-    /// right, bottom])` (px) exactly when a lava ground is active AND the
-    /// bottom-left GUTTER is actually DRAWN ([`Self::gutter_visible`]), else
-    /// `None`. The bounded bottom-left region around the gutter block is carved
-    /// out of the field mask (so its `muted`/`faint` stack never swims in the
-    /// lamp) while the rest of both margins keep their lamp — the fix for the
-    /// gutter gating the WHOLE-margin carve on nearly every page-mode buffer.
-    /// Geometry comes from the SAME [`Self::gutter_carve_rect`] owner
-    /// `prepare_gutter`/`gutter_layout` ride, so the carve can never disagree
-    /// with the drawn gutter block.
+    /// THE GUTTER'S LOCAL CORNER CARVE rect — the HARD carve, now DEMOTED behind
+    /// the FROST default (like [`Self::lava_rail_carved`]). Under the shipped
+    /// default ([`crate::lava::FROST_RAIL_DEFAULT`] `true`) this is ALWAYS `None`:
+    /// the gutter is a FROST PILL instead ([`Self::lava_gutter_frost_rect`]), so
+    /// its `muted`/`faint` stack sits on a softened, value-dimmed lamp rather than
+    /// the old hard-carved dead-flat corner (which revealed the world's darkest
+    /// ground — an ugly geometric dark pocket). Flipping that ONE const to `false`
+    /// re-arms this hard carve — a lava ground active AND the bottom-left GUTTER
+    /// actually DRAWN ([`Self::gutter_visible`]) — feeding the shader's still-wired
+    /// `gutter`/`gutter_rect` globals, for a clean one-line data revert to the
+    /// pre-frost behaviour. Geometry comes from the SAME [`Self::gutter_carve_rect`]
+    /// owner `prepare_gutter`/`gutter_layout` ride, so the carve (and the frost
+    /// pill that replaced it) can never disagree with the drawn gutter block.
     pub(super) fn lava_gutter_carve_rect(&self, height: u32) -> Option<[f32; 4]> {
-        if self.effective_background().lava_params().is_none() || !self.gutter_visible() {
+        if crate::lava::FROST_RAIL_DEFAULT
+            || self.effective_background().lava_params().is_none()
+            || !self.gutter_visible()
+        {
+            return None;
+        }
+        self.gutter_carve_rect(height)
+    }
+
+    /// THE GUTTER'S LOCAL FROST PILL rect for this frame (the SHIPPED default):
+    /// `Some([left, top, right, bottom])` (px) exactly when the FROST treatment is
+    /// on ([`crate::lava::frost_on`] — env-aware, so `AWL_LAVA_FROST=off` shows the
+    /// raw lamp for the gallery A/B, matching the outline), a lava ground is
+    /// active, AND the bottom-left GUTTER is DRAWN ([`Self::gutter_visible`]).
+    /// [`Self::prepare_lava_layer`] pushes it onto the shader's `pills` array, so
+    /// the gutter's `muted`/`faint` stack sits on a SOFTENED, value-dimmed lamp (a
+    /// warm whisper that breathes with the field) instead of the old hard-carved
+    /// dead-flat corner — the de-uglify fix, keeping the ink's contrast floor (law
+    /// `theme::tests::gutter_frost_pill_keeps_ink_contrast_on_every_lava_world`).
+    /// Geometry comes from the SAME [`Self::gutter_carve_rect`] owner the demoted
+    /// hard carve ([`Self::lava_gutter_carve_rect`]) rode, so the pill covers
+    /// exactly the drawn gutter block. Mirrors the OUTLINE's frost-on
+    /// ([`Self::lava_frost_pill_rects`]) / revert ([`Self::lava_rail_carved`]) fork.
+    pub(super) fn lava_gutter_frost_rect(&self, height: u32) -> Option<[f32; 4]> {
+        if !crate::lava::frost_on()
+            || self.effective_background().lava_params().is_none()
+            || !self.gutter_visible()
+        {
             return None;
         }
         self.gutter_carve_rect(height)
