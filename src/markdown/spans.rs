@@ -890,7 +890,19 @@ fn push_task_marker(
 /// side or the other. This single rule is what makes a bare `=` meaningless
 /// (never a run of 2) and what makes an adjacent `====` inert (no candidate
 /// anywhere in it) — no special-casing either edge case separately. Pure, O(n).
-fn equals_runs(s: &str) -> Vec<Range<usize>> {
+///
+/// THE ONE OWNER of the `==highlight==` delimiter gate. `==` is NOT a CommonMark
+/// construct (pulldown emits it as literal text), so the RENDER
+/// ([`push_highlight_spans`] here) and the EXPORT
+/// ([`crate::export::model::split_highlight`]) each hand-roll the same
+/// after-the-fact scan — and they MUST agree on which `=` runs count, or an inert
+/// `===` / bare `=` would highlight in one path but not the other (the exact
+/// two-owner shape that produced the `~x~` strike divergence). Sharing this pub
+/// owner is what keeps them byte-for-byte identical — see the
+/// `render_export_highlight_agree` law test. Both callers pair the returned
+/// candidates greedily (open `k`, close `k+1`), so the pairing stays local to
+/// each while the candidate SET is shared.
+pub fn equals_runs(s: &str) -> Vec<Range<usize>> {
     let b = s.as_bytes();
     let mut out = Vec::new();
     let mut i = 0usize;
