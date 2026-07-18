@@ -1606,7 +1606,7 @@ impl TextPipeline {
         // gap maps to the nearest row (no dead zones).
         // `list_style` computed once at the top of this fn (drives the pane-drop).
         let mirror = crate::render::effective_card_anchor().mirrors_growth();
-        // ARM B LIVING-BAND PROBE (`AWL_OVERLAY_MOTION_FORCE`, env-gated → `None`
+        // ARM B LIVING-BAND PROBE (`AWL_LIVING_BAND`, env-gated → `None`
         // on every ordinary run, so the ordinary path below is byte-identical):
         // the selection band's morph / two-shape choreography. Pane-only; when
         // active it OWNS the band rects (the ordinary `overlay_band_drawn` slide

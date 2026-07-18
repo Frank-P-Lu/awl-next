@@ -8,10 +8,12 @@
 //! This module is the PURE PHASE MATH (no GPU, no clock, no `Theme` — unit
 //! testable directly) plus the dev-only env PIN that lets a headless capture
 //! dump a deterministic MID-FLIGHT frame (mirrors `AWL_LAVA`'s phase pin and the
-//! wild-menu slant probe). It ships NOTHING by default: with `AWL_OVERLAY_MOTION_
-//! FORCE` unset, [`overlay_motion_force`] is `None`, the renderer takes its
+//! wild-menu slant probe). It ships NOTHING by default: with `AWL_LIVING_BAND`
+//! unset, [`overlay_motion_force`] is `None`, the renderer takes its
 //! ordinary single-band path, and every capture is BYTE-IDENTICAL. The knob is a
-//! live-A/B + gallery instrument only, exactly like `AWL_MOTION_FORCE`.
+//! live-A/B + gallery instrument only, exactly like `AWL_MOTION_FORCE` — and a
+//! DISTINCT name from main's `AWL_OVERLAY_MOTION_FORCE` (the slant/grow probe),
+//! so the two instruments never contend over one env var.
 //!
 //! Two choreographies, one shared elastic core (leading edge fast, trailing edge
 //! slow — the P5 elastic):
@@ -214,7 +216,7 @@ pub fn covered_rows(bands: &[BandRect], first_top: f32, lh: f32, n: usize) -> Ve
     out
 }
 
-/// The parsed `AWL_OVERLAY_MOTION_FORCE` value: which [`Choreo`] to draw and,
+/// The parsed `AWL_LIVING_BAND` value: which [`Choreo`] to draw and,
 /// optionally, a PINNED phase for a deterministic mid-flight capture frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MotionForce {
@@ -225,7 +227,7 @@ pub struct MotionForce {
     pub phase: Option<f32>,
 }
 
-/// Parse an `AWL_OVERLAY_MOTION_FORCE` string. Grammar: `<kind>[:<phase>]` where
+/// Parse an `AWL_LIVING_BAND` string. Grammar: `<kind>[:<phase>]` where
 /// `kind` ∈ `morph | twoshape | slam | soft` and `phase` ∈ `[0, 1]`. `off`/empty
 /// → `None` (probe inert). A malformed kind or phase → `None` (fall back to the
 /// ordinary single band; a bad knob never crashes or alters a default run).
@@ -254,12 +256,15 @@ pub fn parse_motion_force(s: &str) -> Option<MotionForce> {
     Some(MotionForce { choreo, phase })
 }
 
-/// The `AWL_OVERLAY_MOTION_FORCE` dev knob, read ONCE and memoised. `None` on
+/// The `AWL_LIVING_BAND` dev knob, read ONCE and memoised. `None` on
 /// every ordinary run (env unset), so the renderer's living-band branch is
-/// unreachable and every default capture stays byte-identical.
-fn awl_overlay_motion_force() -> &'static Option<MotionForce> {
+/// unreachable and every default capture stays byte-identical. A DISTINCT env
+/// var from main's `AWL_OVERLAY_MOTION_FORCE` (the slant/grow frame-dump probe,
+/// `crate::render::overlay_motion_probe`) so the two dev instruments never fight
+/// over one name — each ignores the other's grammar.
+fn awl_living_band() -> &'static Option<MotionForce> {
     static ONCE: std::sync::OnceLock<Option<MotionForce>> = std::sync::OnceLock::new();
-    ONCE.get_or_init(|| std::env::var("AWL_OVERLAY_MOTION_FORCE").ok().and_then(|s| parse_motion_force(&s)))
+    ONCE.get_or_init(|| std::env::var("AWL_LIVING_BAND").ok().and_then(|s| parse_motion_force(&s)))
 }
 
 /// TEST-ONLY escape hatch for the living-band probe (mirrors
@@ -286,7 +291,7 @@ pub fn overlay_motion_force() -> Option<MotionForce> {
             return Some(m);
         }
     }
-    *awl_overlay_motion_force()
+    *awl_living_band()
 }
 
 #[cfg(test)]

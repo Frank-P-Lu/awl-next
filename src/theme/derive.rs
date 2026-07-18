@@ -330,7 +330,7 @@ fn surface_step_band(extra_steps: i32) -> Srgb {
 /// crossing reads exactly one calm step brighter than the lead (echo `+0`, lead
 /// `+1`, crossing `+2` past `surface_selected`: a clean monotone value climb),
 /// colour where they cross by VALUE only, never a hue / never amber (DESIGN §3).
-/// Consumed only when `AWL_OVERLAY_MOTION_FORCE=twoshape…` is set; inert on
+/// Consumed only when `AWL_LIVING_BAND=twoshape…` is set; inert on
 /// every ordinary run.
 pub fn overlay_band_overlap() -> Srgb {
     surface_step_band(OVERLAY_SELROW_EXTRA_STEPS + 1)

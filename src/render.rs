@@ -116,7 +116,7 @@ mod rects;
 
 /// ARM B "LIVING SELECTION BAND" choreography PROBES (the P5-cursor motion spec).
 /// Pure phase math (morph stretch + two-shape crossing) plus the dev-only
-/// `AWL_OVERLAY_MOTION_FORCE` phase pin; ships nothing by default (env unset →
+/// `AWL_LIVING_BAND` phase pin; ships nothing by default (env unset →
 /// the renderer's ordinary single-band path, every capture byte-identical).
 pub(crate) mod livingband;
 
@@ -3362,7 +3362,7 @@ pub struct TextPipeline {
     /// under-the-text z-slot; parked empty for `Text`/`Band` and every non-theme
     /// card, so those render byte-identically.
     pub overlay_facet_ghost: SelectionPipeline,
-    /// ARM B LIVING-BAND PROBE only (`AWL_OVERLAY_MOTION_FORCE=twoshape…`): the
+    /// ARM B LIVING-BAND PROBE only (`AWL_LIVING_BAND=twoshape…`): the
     /// CROSSING quad the two-shape choreography fills at the world's brightest
     /// value step where the leading band and its chasing echo overlap — colour
     /// where they cross, by VALUE (never a hue). Parked EMPTY (zero instances →
