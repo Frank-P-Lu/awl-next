@@ -244,8 +244,27 @@ impl TextPipeline {
                 .prepare_multicolor(device, queue, width, height, &[]);
             return;
         };
-        // Proto cache: rebuild the scattered layout only when the size or the
-        // authored params change (a theme switch onto different star data).
+        // DPI/ZOOM INVARIANCE: the authored `cell_px`/`size_px` (`theme/worlds.rs`)
+        // are PHYSICAL px at scale 1.0. The layout scatters one candidate per
+        // `cell_px` cell over the PHYSICAL viewport (`width`/`height`), and each dot
+        // draws `size_px` physical px wide — so on a 2x-retina surface (the SAME
+        // logical window rasterized 2x) an unscaled cell packs ~4x the grid cells
+        // (the ~5.6x-denser field the user saw) and every dot renders at half its
+        // intended LOGICAL size. Scale BOTH by the TOTAL logical->physical factor
+        // `scale` = user-zoom × device-DPI (exactly `Metrics::with_dpi`'s own `s`):
+        // `metrics.zoom` is the user zoom ALONE (the frost path right above scales by
+        // it), so it must also be multiplied by `self.dpi` to cover retina. With a
+        // 2x cell over a 2x viewport the grid is the SAME logical structure (constant
+        // density) and a 2x dot keeps a constant logical size. Shadowing carries the
+        // scaled values through the proto key, the margin cull, and the quads below.
+        // `STAR_MARGIN_GAP_PX` + the 1px AA fringe stay in physical px (the placement
+        // law owner `stars::in_margin` is untouched).
+        let scale = self.metrics.zoom * self.dpi;
+        let cell_px = cell_px * scale;
+        let size_px = size_px * scale;
+        // Proto cache: rebuild the scattered layout only when the size, the DPI/zoom
+        // scale, or the authored params change (a theme switch onto different star
+        // data). The scale rides in through the now-scaled `cell_px`/`size_px`.
         let key = (width, height, cell_px.to_bits(), density.to_bits());
         if self.stars_proto_key != Some(key) {
             self.stars_protos =

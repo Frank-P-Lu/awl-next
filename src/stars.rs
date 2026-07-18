@@ -251,6 +251,50 @@ mod tests {
         );
     }
 
+    /// THE SCALE-INVARIANCE GUARANTEE the DPI fix rides on (the twinkling-stars
+    /// density/size bug): [`layout`] is VIEWPORT-space and unit-agnostic, so
+    /// scattering over an `s×` viewport with an `s×` cell reproduces the SAME grid
+    /// — identical population, every star at exactly `s×` its position, same seeds.
+    /// The renderer (`prepare_stars_layer`) leans on exactly this: it multiplies the
+    /// authored physical `cell_px` by the total logical->physical factor `s`
+    /// (user-zoom × device-DPI) before laying out over the `s×` physical viewport, so
+    /// the LOGICAL density is constant at any DPI. (`s = 2.0` is a power of two, so
+    /// the `ceil(w/cell)` grid dims are BIT-identical and the counts are EXACTLY
+    /// equal; the render-side `currawong_star_field_is_dpi_invariant_in_logical_space`
+    /// proves the fix is actually WIRED at real pixels — this proves the layout math
+    /// underneath it.)
+    #[test]
+    fn layout_is_scale_invariant_in_logical_space() {
+        let (cell, density, _, _) = currawong_stars();
+        let (lw, lh) = (1000.0_f32, 700.0_f32);
+        let base = layout(lw, lh, cell, density);
+        assert!(base.len() > 10, "the base sky must have a real population");
+        let s = 2.0_f32;
+        let scaled = layout(lw * s, lh * s, cell * s, density);
+        assert_eq!(
+            scaled.len(),
+            base.len(),
+            "an s× viewport with an s× cell must scatter the SAME population as 1× — \
+             constant logical density is what makes the field DPI-invariant \
+             (got {} at s={s} vs {} at 1×)",
+            scaled.len(),
+            base.len(),
+        );
+        for (b, sc) in base.iter().zip(scaled.iter()) {
+            assert!(
+                (sc.x - b.x * s).abs() < 1e-2 && (sc.y - b.y * s).abs() < 1e-2,
+                "each star must land at exactly s× its logical position \
+                 (({}, {}) × {s} vs ({}, {}))",
+                b.x, b.y, sc.x, sc.y,
+            );
+            assert!(
+                (sc.seed - b.seed).abs() < 1e-6,
+                "the same grid cell must keep its seed across scales ({} vs {})",
+                b.seed, sc.seed,
+            );
+        }
+    }
+
     #[test]
     fn twinkle_stays_inside_its_band_and_actually_breathes() {
         let (_, _, peak, floor) = currawong_stars();
