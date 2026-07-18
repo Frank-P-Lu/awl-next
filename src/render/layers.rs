@@ -486,22 +486,22 @@ impl TextPipeline {
                 return;
             }
         }
-        let caret_invert_on =
-            theme::active().render_caps.caret_block_style == theme::CaretBlockStyle::InverseVideo;
-        // MORPH-IN-ONE-BIT FALLS BACK TO THE INVERTED BLOCK (documented
-        // call — see CLAUDE.md's "1-bit Wagtail caret" round /
-        // `caret_invert`'s field doc): the glyph-silhouette look recolors
-        // the cursor's own letter to `primary`, which on a one-bit world is
-        // the SAME pure white as the letter's own ink — an invisible no-op
-        // recolor (no seam to see at all), not merely a dim one. Building a
-        // glyph-shaped invert mask would be real new per-glyph pipeline work
-        // for a mode whose whole selling point (a colored accent letter)
-        // doesn't exist in a two-value world; the block invert already makes
-        // the letter legible (`prepare_caret_block`), so Morph simply
-        // degrades to Block here. Ibeam is UNCHANGED — its thin bar sits
-        // BETWEEN glyph cells, never over one, so it never collides with a
-        // glyph's own ink in the first place.
-        let mode = if caret_invert_on && crate::caret::mode() == CaretMode::Morph {
+        // MORPH FOLDS TO BLOCK ON AN INK-CARET WORLD (both special block styles;
+        // documented call — see CLAUDE.md's "1-bit Wagtail caret" round /
+        // `caret_invert`'s field doc + `CaretBlockStyle::folds_morph_to_block`):
+        // the glyph-silhouette look recolors the cursor's own letter to `primary`,
+        // which on an ink-caret world is the SAME value as the letter's own ink —
+        // an invisible no-op recolor (Wagtail's white-on-white), or, for a Filled
+        // world, a green silhouette that vanishes into the green block beneath it.
+        // Building a distinct glyph-morph for that would be per-glyph pipeline work
+        // for a mode whose selling point (a colored accent letter) doesn't exist
+        // when the caret IS the ink; the block path already makes the letter
+        // legible (InverseVideo flips it, Filled knocks it out), so Morph degrades
+        // to Block here. Ibeam is UNCHANGED — its thin bar sits BETWEEN glyph
+        // cells, never over one, so it never collides with a glyph's own ink.
+        let mode = if theme::active().render_caps.caret_block_style.folds_morph_to_block()
+            && crate::caret::mode() == CaretMode::Morph
+        {
             CaretMode::Block
         } else {
             crate::caret::mode()
@@ -618,9 +618,55 @@ impl TextPipeline {
         let ch = ch + extend;
         let cy = cy + extend * 0.5;
         let (cw, ch, ccorner) = self.pop_scaled(cw, ch, ccorner);
-        self.caret_glyph_pipeline.clear();
 
-        if theme::active().render_caps.caret_block_style == theme::CaretBlockStyle::InverseVideo {
+        match theme::active().render_caps.caret_block_style {
+        theme::CaretBlockStyle::Filled => {
+            // THE AUTHENTIC CRT PHOSPHOR BLOCK (an ink-caret world, `primary ==
+            // base_content`; Cassowary): an opaque `primary` cell drawn UNDER the
+            // text exactly like an ORDINARY world's block (below), PLUS the covered
+            // glyph knocked back through in the GROUND colour. A plain block here
+            // would paint green-on-green and ERASE the letter (unlike an amber-vs-ink
+            // block, whose value contrast keeps the letter legible); the knockout
+            // fixes that WITHOUT the `InverseVideo` photo-negative (which on a
+            // chromatic ink would flip green → magenta, not a lit cell).
+            self.caret_pipeline
+                .prepare_directed(queue, width, height, cx, cy, cw, ch, ccorner, ax, ay);
+            // KNOCKOUT: reuse the MORPH silhouette pipeline (drawn OVER the text)
+            // to repaint the covered glyph — the SAME anchor glyph the block sits on
+            // (both key off `caret.pos`, so they align by construction) — in
+            // `primary_content` (the ground; set at the draw site below). Only when
+            // SETTLED on a real inhabited glyph: mid-glide the block is a thin streak
+            // with no full cell to punch, and a glyphless anchor (space / line start /
+            // empty line) is simply a solid phosphor cell with nothing to knock out.
+            let settled = self.caret.settle_factor() >= CARET_MORPH_SETTLE_SHOW;
+            if settled && self.prepare_caret_masks(device, queue) {
+                // THE KNOCKOUT COLOUR — the GROUND (`primary_content`), set at the
+                // draw site so it is authoritative even in the headless capture
+                // (which never runs `sync_theme_colors`); on a Filled world the
+                // silhouette pipeline is ONLY ever the knockout (morph folds to
+                // block), so this override is total, never fighting a morph accent.
+                self.caret_glyph_pipeline
+                    .set_color(theme::primary_content().rgb_bytes());
+                let (from_box, to_box, morph_t) = self.caret_glyph_geometry();
+                self.caret_glyph_pipeline.prepare(
+                    device,
+                    queue,
+                    width,
+                    height,
+                    self.caret_mask_from.as_ref(),
+                    from_box,
+                    self.caret_mask_to.as_ref(),
+                    to_box,
+                    morph_t,
+                    1.0,
+                    CARET_MORPH_DILATE_PX * self.metrics.zoom,
+                );
+            } else {
+                self.caret_glyph_pipeline.clear();
+            }
+        }
+        theme::CaretBlockStyle::InverseVideo => {
+            self.caret_glyph_pipeline.clear();
             // TRUE 1-BIT WORLDS: an opaque pre-text quad here — even one
             // tinted `primary` (pure white on a one-bit world, the SAME
             // value as the text ink) — would white-out a glyph the caret
@@ -652,9 +698,12 @@ impl TextPipeline {
             let rect = [cx - cw * 0.5, cy - ch * 0.5, cw, ch];
             self.caret_invert.prepare(device, queue, width, height, &[rect]);
             self.caret_pipeline.prepare_empty();
-        } else {
+        }
+        theme::CaretBlockStyle::Normal => {
+            self.caret_glyph_pipeline.clear();
             self.caret_pipeline
                 .prepare_directed(queue, width, height, cx, cy, cw, ch, ccorner, ax, ay);
+        }
         }
     }
 

@@ -2075,6 +2075,10 @@ fn personality_assignments_are_exactly_the_decided_table() {
             // TopLeft card), BORDERED elevation, the poster Bars list, and BRACKET
             // facet chips (terminal corner-ticks). The writing page stays calm.
             "Cassowary" => RenderCaps {
+                // The authentic CRT phosphor cursor — an ink caret (primary ==
+                // base_content) needs the Filled block so a lit green cell knocks
+                // the glyph out in the ground rather than erasing it green-on-green.
+                caret_block_style: model::CaretBlockStyle::Filled,
                 title_style: TitleStyle::Placard {
                     corner: PlacardCorner::Auto,
                     scale: 3.0,
@@ -2131,10 +2135,12 @@ fn page_frame_ink_is_the_ladder_and_assigned_weights_are_real() {
             "{}: page_frame_ink must be exactly the world's own base_content",
             t.name
         );
-        // A MONOCHROME world's caret IS its ink (value + motion carry it —
-        // Wagtail's pure white), so "never literally primary" is structurally
-        // inapplicable there; every chromatic world must keep them distinct.
-        if !t.is_monochrome() {
+        // An INK-CARET world's caret IS its ink (`primary == base_content`;
+        // presence carried by the inverting/filled block, not a hue — Wagtail's
+        // pure white, Cassowary's phosphor green), so "never literally primary" is
+        // structurally inapplicable there (the frame ink == base_content == primary
+        // BY DESIGN); every other world must keep frame-ink and accent distinct.
+        if !t.ink_caret() {
             assert_ne!(
                 derive::page_frame_ink(),
                 t.primary,
@@ -2364,7 +2370,13 @@ fn streaks_heatmap_levels_are_distinguishable_every_world() {
                 "{}: heatmap level {i} (sat {:.2}) manufactures chroma beyond the ink ladder (max {:.2})",
                 t.name, s, s_ink.max(s_empty)
             );
-            assert_ne!(*c, primary(), "{}: heatmap level {i} must never be literally the accent", t.name);
+            // On an INK-CARET world the brightest rung IS the ink IS the accent
+            // (`primary == base_content`; Wagtail's white, Cassowary's phosphor),
+            // so "never literally primary" is structurally inapplicable — the
+            // heatmap climbing to the full ink is the intended top level.
+            if !t.ink_caret() {
+                assert_ne!(*c, primary(), "{}: heatmap level {i} must never be literally the accent", t.name);
+            }
         }
     }
     set_active(DEFAULT_THEME);

@@ -261,7 +261,12 @@ fn check_color_math(th: &theme::Theme, s: Surface, floor: f32) {
         },
         Surface::CaretVsGround => match th.render_caps.caret_block_style {
             theme::CaretBlockStyle::InverseVideo => {}
-            theme::CaretBlockStyle::Normal => {
+            // Both paint an OPAQUE `primary` cell over the ground, so visibility is
+            // the same primary-vs-ground redmean check. Filled additionally re-inks
+            // the covered GLYPH in `primary_content` — but that only affects the
+            // letter inside the cell, never the cell's own contrast with the page,
+            // so the block's findability is still exactly this measurement.
+            theme::CaretBlockStyle::Normal | theme::CaretBlockStyle::Filled => {
                 let d = redmean(th.primary, th.base_100);
                 assert!(
                     d >= floor,

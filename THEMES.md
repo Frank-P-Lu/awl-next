@@ -13,7 +13,7 @@ world the design got wrong.
 ## 1. What a world is
 
 A **world** (`theme::Theme`, `src/theme.rs`) is a complete, curated mood — not a
-swatch. Seventeen ship today (ten dark, seven light; `theme::THEMES`), each with:
+swatch. Eighteen ship today (eleven dark, seven light; `theme::THEMES`), each with:
 
 - **An identity**: a name (Tawny, Saltpan, Potoroo, …), a one-line character
   description in its doc comment, and — critically — its own **display font**
@@ -87,6 +87,26 @@ own point in the crowded pale band. It carries only the light-world card border
 user's live verdict on Bilby's 1px frame was "the frame is so weird" on a light
 world). No new law: Brolga rides the shared ink/role/selection derivations and
 is enrolled in every sweep the moment it joins `THEMES`.
+
+The eighteenth world, **Cassowary**, is the dark-technical statement — a NERV
+operations terminal (an Evangelion wink): green phosphor data on near-black
+GLASS, red held back for the alert channel alone. Its one accent (DESIGN §3) is
+NOT amber — it is the terminal's own phosphor GREEN, and it introduces the
+**ink-caret** pattern (`Theme::ink_caret`, `primary == base_content`): the caret
+is the ink's own colour, so it carries no separate accent HUE. It draws as the
+authentic CRT block cursor via `CaretBlockStyle::Filled` — a lit `primary`-green
+cell with the covered glyph knocked out in the GROUND (`primary_content`), never
+the `InverseVideo` photo-negative (which on a chromatic ink would flip green →
+magenta). Because an ink caret has no accent hue for a syntax role to steal, it
+is EXEMPT from the amber guard's ≥30° role-hue gap (§4's role-tint law (e)) — an
+exemption generalized from Wagtail (whose white caret is likewise its own ink,
+presence carried by INVERSION not hue) and LAW-PINNED to the required
+inverting/filled block (`ink_caret ⇒ folds_morph_to_block`), so the green
+ink-ladder tints still hold their pairwise / perceptibility / luminance /
+ground-contrast laws ON the green ink. No other new law: Cassowary rides the
+shared derivations. Iosevka is its terminal-readout face; the summoned command
+overlay goes loud (Archivo Black wordmark placard, bordered console card, poster
+Bars) while the writing page stays a calm green terminal.
 
 ---
 
@@ -243,7 +263,7 @@ new law here, not a bypass of this one.
 ### Structural / identity laws
 
 Enforced by the `theme::tests` module (see file for exact assertions):
-`worlds_ten_dark_seven_light`, `every_world_has_a_valid_background`,
+`worlds_eleven_dark_seven_light`, `every_world_has_a_valid_background`,
 `every_world_has_a_bundled_mono`, `cjk_fallback_matches_world_character`,
 `zh_hans_ladder_matches_world_character_with_klee_override`,
 `zh_hant_uniform_ko_splits_serif_from_sans`,
@@ -278,7 +298,7 @@ Enforced by `render::tests::syntax_roles::every_monochrome_world_renders_zero_sa
   from-comment-wash laws apply UNCHANGED — a monochrome highlight must still
   read as a highlight, by value instead of hue.
 - This is a property test layered ON TOP of, not a replacement for, the
-  ordinary structural laws above (`worlds_ten_dark_seven_light`,
+  ordinary structural laws above (`worlds_eleven_dark_seven_light`,
   `role_style_laws_hold_for_every_world`, …) — those still separately pin
   Wagtail's exact hex literals; this law is what stops a future hand-edit from
   quietly nudging one of those greys toward a hue and surviving unnoticed.
@@ -1238,7 +1258,7 @@ Checklist:
    wash and let `role_style_laws_hold_for_every_world` prove the pins still
    clear every law on their own.
 6. Add the const to `THEMES`; run `cargo test` — the structural laws
-   (`worlds_ten_dark_seven_light` will need its counts updated), the role-style
+   (`worlds_eleven_dark_seven_light` will need its counts updated), the role-style
    laws, and the ink-ladder/selection laws all sweep `THEMES` automatically, so a
    new world is enrolled in every law the moment it's in the array. A new WORLD
    CLASS (Wagtail's monochrome one) may also need its own new law, per §2/§3's
