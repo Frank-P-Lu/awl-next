@@ -133,13 +133,17 @@ impl TextPipeline {
         // Wider than the flat pickers so the whole lens strip (Time … All) fits on
         // one line even on a WIDE mono world face without the far-right All clipping
         // — via the SAME horizontal-box owner (edge inset + narrow-window fallback),
-        // just a slightly wider cap ([`CARD_MAX_W_FACETED`]).
-        let (card_x, card_w) = self.overlay_card_box(width, super::overlay::CARD_MAX_W_FACETED);
+        // just a slightly wider cap ([`CARD_MAX_W_FACETED`]). Scaled to the current
+        // zoom/DPI by the ONE owner [`TextPipeline::overlay_card_desired_w`], so the
+        // faceted card (the Cmd-P palette) grows WITH the glyphs like the flat one —
+        // otherwise the 600 cap stayed unzoomed while the text doubled and every row
+        // elided (the zoom-blind card bug).
+        let desired_w = self.overlay_card_desired_w(super::overlay::CARD_MAX_W_FACETED);
+        let (card_x, card_w) = self.overlay_card_box(width, desired_w);
         // item 4 (NARROW FOLD): the placard folds to InlinePrefix once even the
-        // floor inset can't seat the faceted card's desired width — the SAME
-        // owner the width fallback above reads.
-        let card_narrow =
-            super::overlay::overlay_card_fill_regime(width as f32, super::overlay::CARD_MAX_W_FACETED);
+        // floor inset can't seat the faceted card's desired width — reads the SAME
+        // scaled `desired_w` the width fallback above does (no drift).
+        let card_narrow = super::overlay::overlay_card_fill_regime(width as f32, desired_w);
         // List-style-aware horizontal text inset (the ONE owner shared with the
         // flat picker); vertical padding stays `pad`. `Pane` keeps `hpad == pad`.
         let hpad = self.overlay_text_hpad();
