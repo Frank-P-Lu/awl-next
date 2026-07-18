@@ -602,6 +602,83 @@ exemption (flat is correct here, like the 1-bit exemption), and
 `ground == base_100` keeps the flat page column and the margin floor one seamless
 den.
 
+### The ambient-stars law (`RenderCaps::ambient` — the TWINKLING-STARS round, 2026-07-18)
+
+Currawong's differentiator, and the QUIET pole of the user's decided principle
+(*"Aliveness ≠ loudness. Most worlds should feel ALIVE, including quiet ones —
+twinkling-stars: maximally quiet, unmistakably alive."*): tiny points in the
+page-mode MARGINS, each breathing its brightness on its own slow,
+individually-phased seconds-scale cycle. A CAPABILITY, not a code path —
+`theme::AmbientStyle { None | Stars { tint, cell_px, density, size_px, peak,
+floor } }` on `RenderCaps.ambient`, `None` on every world but Currawong; a
+second world adopts stars by data alone (`theme_caps_law` bans a world-name
+branch in the renderer). The machinery deliberately RIDES the lava lamp's,
+one register quieter:
+
+- **One ambient clock, two consumers.** The twinkle phase IS the lava phase
+  (`TextPipeline::lava_phase`), advanced by the App's single ~10 fps
+  `WaitUntil` ambient tick behind the SAME cadence gate
+  (`lava::lava_should_tick` fed by `Theme::has_ambient_motion()` — THE one
+  lava-OR-stars owner every scheduling/crossing/page-force decision reads),
+  paused on blur/move/resize, killed by the `ambient_motion` config, FROZEN
+  under Reduce Motion (static stars — present, not twinkling) and to `t=0` in
+  every headless capture (`lava::lava_phase_for`, the one resolver; the dev
+  `AWL_STARS_PHASE` knob pins a gallery phase). A stars world forces page
+  mode ON at the same launch seam a lava world does (no margins = no sky),
+  and crossing INTO or OUT OF an ambient world in the theme-picker preview
+  arms the same present-transaction bracket
+  (`lava::preview_crossing`, `preview_crossing_arms_exactly_on_the_ambient_or_one_bit_boundary`).
+- **Layout is a position hash, never entropy.** `stars::layout` scatters one
+  candidate per fixed pixel grid cell via a pure INTEGER hash (bit-exact —
+  deliberately not a float `sin`-fract hash, whose libm results vary across
+  platforms); two captures are byte-identical and a resize keeps every star
+  anchored to its cell. Per-star rates are INTEGER cycles per ambient loop,
+  so the breath meets its own endpoint at the phase wrap. Laws:
+  `stars::tests::layout_is_deterministic_and_stays_in_viewport`,
+  `twinkle_is_seamless_across_the_ambient_loop_wrap`,
+  `stars_are_individually_phased_never_in_unison`,
+  `twinkle_stays_inside_its_band_and_actually_breathes`.
+- **Margins only, by a hard gate.** `stars::in_margin` (one owner, shared by
+  the renderer's cull and the laws) rejects any star whose quad + AA fringe
+  could touch the writing column band + a breathing gap, against the LIVE
+  column geometry (`page_geometry()` — the adaptive column composes for
+  free); the outline's pill rects + the gutter's corner rect (the same
+  owners the lava frost/carve reads) are additional no-star zones, so a
+  point never crowds the rail's dim ink. Laws:
+  `stars::tests::margin_gate_rejects_the_whole_column_band_and_gap` (pure) +
+  `render::tests::stars::currawong_stars_twinkle_in_the_margins_only_at_real_pixels`
+  (REAL GPU pixels: the two-phase twinkle-diff is non-empty, lives in both
+  margins, and NEVER inside the column — appearance proven over bytes, the
+  Wagtail lesson).
+- **The quiet band (value-ladder-derived ceiling + visibility floor).** A
+  star's PEAK composited pixel (linear-light alpha blend over each margin
+  gradient endpoint — the GPU's own math) deviates from its local ground by
+  NO MORE than the world's own `muted` rung deviates from `base_100`, and by
+  at least ΔY 0.02 (visible — never the invisible-band trap); the AMBER
+  GUARD holds (a chromatic tint ≥30° off `primary`, never literally the
+  accent) and a true 1-bit world can never carry stars (a fractional-alpha
+  breath composites a forbidden third value). Law:
+  `theme::tests::ambient_stars_laws_hold_for_every_world` (the real-pixel
+  test above re-asserts the luminance ceiling over the rendered bytes).
+- **Byte-identity for the starless roster.** An `AmbientStyle::None` world
+  uploads ZERO star instances through the same prepare path, and page-off
+  culls everything even on the stars world. Law: `render::tests::stars::
+  starless_worlds_and_page_off_upload_zero_star_instances`; verified as
+  byte-identical PNGs across all fifteen non-Currawong worlds against the
+  pre-round base at landing time.
+- The dots render through the EXISTING quad owner
+  (`SelectionPipeline::prepare_multicolor`, fully-rounded corners — the
+  writing-streaks per-instance-color path): no new pipeline, no new shader,
+  nothing new for the WebGL2 fallback to validate. Sidecar: the `page`
+  block's `ambient` field (schema `/173`) reports style/tint/drawn-count/
+  effective-phase — a STATE oracle; placement + brightness are asserted over
+  the PNG.
+
+All star numbers (tint, cell, density, size, peak/floor) are TASTE TUNABLE
+data on `worlds.rs::CURRAWONG` — the round shipped BUILD + GALLERY + HOLD,
+landing only on the user's gallery pick; the twinkle's FEEL over real seconds
+is live-only and flagged for human confirmation, never claimed verified.
+
 ### Render capabilities as data (`Theme::render_caps` — the 2026-07 refactor)
 
 Everything above (selection, elevation, decorative washes, backdrop, the

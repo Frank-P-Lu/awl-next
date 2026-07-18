@@ -486,7 +486,7 @@ fn page_json(pipeline: &TextPipeline) -> String {
         crate::page::PageClass::Code => "code",
     };
     format!(
-        "{{ \"on\": {}, \"measure\": {}, \"class\": \"{}\", \"column\": {{ \"left\": {}, \"width\": {} }}, \"background\": {} }}",
+        "{{ \"on\": {}, \"measure\": {}, \"class\": \"{}\", \"column\": {{ \"left\": {}, \"width\": {} }}, \"background\": {}, \"ambient\": {} }}",
         page_on,
         page_measure,
         class,
@@ -498,7 +498,30 @@ fn page_json(pipeline: &TextPipeline) -> String {
         // of the fifteen non-lava worlds reports exactly as before (byte-identical
         // content; `phase` appears only on the lava arm).
         background_json(pipeline.effective_background(), pipeline.lava_render_phase()),
+        // TWINKLING STARS (`/173`): the ambient capability — style + the star
+        // instances actually drawn + the effective twinkle phase (fixed 0.0
+        // headlessly; the `AWL_STARS_PHASE` knob pins another).
+        ambient_json(pipeline),
     )
+}
+
+/// Serialize the active world's `AmbientStyle` capability for the page sidecar
+/// (`/173`). `{ "style": "none" }` for a starless world; a stars world adds the
+/// authored tint, the DRAWN instance count (post margin/ink-zone cull — the
+/// pipeline's own uploaded count, so the oracle reports what actually rendered),
+/// and the effective twinkle phase.
+fn ambient_json(pipeline: &TextPipeline) -> String {
+    let ambient = crate::theme::active().render_caps.ambient;
+    match ambient.stars_params() {
+        None => format!("{{ \"style\": {} }}", json_string(ambient.as_str())),
+        Some((tint, _cell, _density, _size, _peak, _floor)) => format!(
+            "{{ \"style\": {}, \"tint\": {}, \"count\": {}, \"phase\": {} }}",
+            json_string(ambient.as_str()),
+            json_string(&tint.hex()),
+            pipeline.stars_pipeline.instance_count(),
+            pipeline.stars_render_phase(),
+        ),
+    }
 }
 
 /// WYSIWYG block: `on` mirrors `crate::markdown::wysiwyg_on()`, and `concealed`

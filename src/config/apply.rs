@@ -47,18 +47,17 @@ impl Config {
                 crate::page::set_page_on(on);
             }
         }
-        // AUTO-PAGE-ON for a LAVA world: the lava-lamp ground lives ENTIRELY in the
-        // MARGINS (masked out of the writing column), so page mode MUST be on for
-        // the ground to exist at all — page-off means no margins means no lava (the
-        // probe's own finding #2). A lava world therefore forces the centered
-        // column on, OVERRIDING the remembered `page_mode` / `--page` (the margins
-        // ARE the feature). Read AFTER the theme is set above, so it reflects the
-        // world that will actually open. NO world ships a lava background yet, so
-        // this is inert today (every world's `is_lava()` is false). A LIVE theme
-        // switch to a lava world would want the same nudge — a follow-up for the
-        // lava-world authoring round (this launch seam is where sticky page mode is
-        // applied, per the task).
-        if crate::theme::background().is_lava() {
+        // AUTO-PAGE-ON for an AMBIENT-GROUND world (lava OR twinkling stars —
+        // `Theme::has_ambient_motion`, the one gate): both grounds live ENTIRELY
+        // in the MARGINS (masked/culled out of the writing column), so page mode
+        // MUST be on for the ground to exist at all — page-off means no margins
+        // means no lamp and no stars (the lava probe's own finding #2). Such a
+        // world therefore forces the centered column on, OVERRIDING the
+        // remembered `page_mode` / `--page` (the margins ARE the feature). Read
+        // AFTER the theme is set above, so it reflects the world that will
+        // actually open. Firetail/Mangrove (lava) + Currawong (stars) hit this
+        // arm today.
+        if crate::theme::active().has_ambient_motion() {
             crate::page::set_page_on(true);
         }
         if !measure_flag {

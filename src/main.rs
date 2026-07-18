@@ -116,6 +116,10 @@ mod settings;
 mod spell;
 mod storyboard;
 mod spellunderline;
+// TWINKLING STARS — the ambient star-field ground (margins-only, individually
+// phased twinkle riding the lava's own ~10 fps ambient clock). Currawong's
+// differentiator; every other world's `AmbientStyle::None` is a total no-op.
+mod stars;
 mod stats;
 mod streaks;
 mod syntax;

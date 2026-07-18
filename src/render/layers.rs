@@ -206,6 +206,100 @@ impl TextPipeline {
             );
     }
 
+    /// TWINKLING STARS (`theme::AmbientStyle::Stars`, the TWINKLING-STARS round):
+    /// tiny individually-phased breathing points in the page-mode MARGINS,
+    /// drawn right after the lava layer and before the page frame / washes /
+    /// text. A TOTAL no-op (zero instances) for every `AmbientStyle::None`
+    /// world — fifteen of the sixteen stay byte-identical — and for page-off
+    /// (the column spans the canvas → the margin gate culls everything, the
+    /// background pass's own collapse).
+    ///
+    /// THE SHAPE: the star LAYOUT is a proto cache — [`crate::stars::layout`]'s
+    /// deterministic position-hash scatter, rebuilt only when the (viewport,
+    /// star params) key misses ([`TextPipeline::stars_proto_key`]) — and the
+    /// per-frame work is pure arithmetic over the visible set: cull each proto
+    /// against the LIVE column band ([`crate::stars::in_margin`], the one
+    /// placement-law owner, reading the SAME `page_geometry()` every ground
+    /// layer reads — an adaptive-column shift or live resize re-culls the same
+    /// anchored field) plus the margin-INK zones (the outline's pill rects +
+    /// the gutter's corner rect, the same owners the lava frost/carve reads —
+    /// so a star never sits under the dim rail text), then breathe its alpha
+    /// by [`crate::stars::brightness`] at the resolved twinkle phase
+    /// ([`TextPipeline::stars_render_phase`]: env knob > Reduce-Motion freeze >
+    /// the shared ambient clock — frozen at t=0 in every headless capture).
+    pub(super) fn prepare_stars_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
+        let Some((tint, cell_px, density, size_px, peak, floor)) =
+            crate::theme::active().render_caps.ambient.stars_params()
+        else {
+            // A starless world uploads ZERO instances (and clears the proto
+            // cache so a later switch back rebuilds against fresh params).
+            self.stars_proto_key = None;
+            self.stars_pipeline
+                .prepare_multicolor(device, queue, width, height, &[]);
+            return;
+        };
+        // Proto cache: rebuild the scattered layout only when the size or the
+        // authored params change (a theme switch onto different star data).
+        let key = (width, height, cell_px.to_bits(), density.to_bits());
+        if self.stars_proto_key != Some(key) {
+            self.stars_protos =
+                crate::stars::layout(width as f32, height as f32, cell_px, density);
+            self.stars_proto_key = Some(key);
+        }
+        let (page_on, _measure, col_left, col_w) = self.page_geometry();
+        let (band_left, band_w) = if page_on {
+            (col_left, col_w)
+        } else {
+            (0.0, width as f32)
+        };
+        let band_right = band_left + band_w;
+        // MARGIN-INK no-star zones: the outline's per-entry pill rects + the
+        // gutter's corner rect — the SAME geometry owners the lava frost pills
+        // and gutter carve read, so a star can never crowd the rail's dim ink.
+        let mut ink_zones: Vec<[f32; 4]> = if self.outline_visible(height) {
+            self.lava_frost_pill_rects(height)
+        } else {
+            Vec::new()
+        };
+        if self.gutter_visible() {
+            if let Some(r) = self.gutter_carve_rect(height) {
+                ink_zones.push(r);
+            }
+        }
+        let half = size_px * 0.5;
+        let phase = self.stars_render_phase();
+        let gap = crate::stars::STAR_MARGIN_GAP_PX;
+        let mut quads: Vec<([f32; 4], [u8; 4])> = Vec::with_capacity(self.stars_protos.len());
+        for s in &self.stars_protos {
+            if !crate::stars::in_margin(s.x, half, band_left, band_right, gap) {
+                continue;
+            }
+            let e = half + 1.0;
+            if ink_zones.iter().any(|r| {
+                s.x + e > r[0] && s.x - e < r[2] && s.y + e > r[1] && s.y - e < r[3]
+            }) {
+                continue;
+            }
+            let a = crate::stars::brightness(s.seed, phase, floor, peak);
+            let alpha = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+            quads.push((
+                [s.x - half, s.y - half, size_px, size_px],
+                [tint.r, tint.g, tint.b, alpha],
+            ));
+        }
+        // Fully-rounded corners turn each tiny quad into a soft dot (the SDF
+        // becomes a circle when the radius reaches the half-size).
+        self.stars_pipeline.set_corner(half);
+        self.stars_pipeline
+            .prepare_multicolor(device, queue, width, height, &quads);
+    }
+
     /// THE PAGE FRAME (`theme::PageFrame`, the personality-assignment round's
     /// graduated capability — the `AWL_PAGE_BORDER` gallery probe's geometry,
     /// now driven by per-world DATA instead of an env var): four thin quads
