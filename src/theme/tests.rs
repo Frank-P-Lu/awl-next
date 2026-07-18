@@ -2042,9 +2042,20 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 // (and a fractional-alpha breath is 1-bit-illegal besides).
                 ambient: model::AmbientStyle::None,
             },
-            // LIGHT-WORLD BORDER (composition round item 6): the four remaining
+            // DAWN ROUND (2026-07-18): Bilby is the LIGHT POLE — the roster
+            // decision ("the dark-line-on-light page frame is reserved for a
+            // future light-silent pole world") lands here: 1px of its own
+            // night-violet ink around the writing column, Wagtail's 2px white
+            // frame mirrored at the light end of the spectrum. Keeps the
+            // light-world card border.
+            "Bilby" => RenderCaps {
+                elevation: Elevation::Bordered,
+                page_frame: PageFrame::Line { weight_px: 1.0 },
+                ..RenderCaps::DEFAULT
+            },
+            // LIGHT-WORLD BORDER (composition round item 6): the remaining
             // pale-ground worlds gain the summoned-card border, DATA-only.
-            "Gumtree" | "Bilby" | "Saltpan" | "Quokka" => {
+            "Gumtree" | "Saltpan" | "Quokka" => {
                 RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT }
             }
             "Tawny" | "Mopoke" | "Potoroo" | "Undertow" | "Kingfisher" | "Outback" => {
