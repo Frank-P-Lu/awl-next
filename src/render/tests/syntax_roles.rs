@@ -51,7 +51,13 @@ fn hue_dist(a: f32, b: f32) -> f32 {
 ///     Definition / Constant / CommentCode are NEVER washed;
 /// (e) AMBER GUARD: every derived fg tint with sat > 0.15 sits ≥ 30° of hue
 ///     from the world's `primary` AND at sat ≤ 0.50 (the comment tiers are
-///     the existing inks — exempt by identity, never equal to primary);
+///     the existing inks — exempt by identity, never equal to primary).
+///     EXEMPTION — an INK-CARET world (`Theme::ink_caret`, primary ==
+///     base_content: Wagtail, Cassowary) skips the ≥30° hue gap: its caret
+///     carries no accent HUE (presence is the inverting/filled block), so no
+///     role can steal it. The exemption is paired, law-enforced, with a
+///     non-Normal `caret_block_style` — an opaque ink-coloured block would
+///     erase the letter; the sat cap + all the distinctness laps still apply;
 /// (f) presence ordering is monotone per mode: Definition sits closest to
 ///     the full ink, then Constant, then Str;
 /// (g) PERCEPTIBILITY FLOOR: every tinted role's fg (Definition, Constant,
@@ -228,16 +234,46 @@ fn role_style_laws_hold_for_every_world() {
             "{}: only prose comments (+ dark strings) are washed", th.name);
 
         // (e) AMBER GUARD over every enrolled role's effective fg.
+        //
+        // INK-CARET EXEMPTION (the generalized Wagtail precedent — see
+        // `Theme::ink_caret`): a world whose caret is the INK's OWN colour
+        // (`primary == base_content`) carries NO chromatic accent for a role to
+        // steal — its caret's presence is the inverting/filled BLOCK, not a hue —
+        // so the ≥30° role-hue gap is moot and SKIPPED for its tinted roles. Two
+        // precedents: Wagtail (pure-white ink caret; also caught by the is_one_bit
+        // flat exemption above) and Cassowary (phosphor-green caret, so Str at
+        // ~140° may sit ~1° from the green ink). Everything ELSE still holds — the
+        // ink-caret roles keep their sat ≤ 0.50 cap here AND the full pairwise
+        // (a)/perceptibility (g)/luminance (h)/ground-contrast (i) laps below, so
+        // Cassowary's tints stay mutually distinguishable ON the green ink.
+        //
+        // The exemption is SAFE only because such a world MUST invert or fill its
+        // block caret — a plain opaque block in the ink's own colour would erase
+        // the letter and leave no findable caret. That pairing is LAW-ENFORCED
+        // here so it can never drift (ink-caret ⇒ non-Normal block style):
+        let ink_caret = th.ink_caret();
+        if ink_caret {
+            assert!(
+                th.render_caps.caret_block_style.folds_morph_to_block(),
+                "{}: an ink-caret world (primary == base_content) MUST invert or fill \
+                 its block caret (a non-Normal CaretBlockStyle) — a plain opaque block \
+                 in the ink's own colour would erase the letter with no findable caret",
+                th.name
+            );
+        }
         let (ph, _, _) = th.primary.to_hsl();
         for k in ROLES {
             let fg = style(k).fg;
-            assert_ne!(fg, th.primary, "{}: {k:?} must never BE the accent", th.name);
             if fg == th.base_content || fg == th.muted {
                 continue; // the comment tiers ride the existing inks (exempt by identity)
             }
+            // A TINTED role must never coincidentally BE the accent. (On an
+            // ink-caret world `primary == base_content`, but a tinted role is held
+            // ≥70 redmean off `base_content` by law (g), so it can never equal it.)
+            assert_ne!(fg, th.primary, "{}: {k:?} must never BE the accent", th.name);
             let (h, s, _) = fg.to_hsl();
             assert!(s <= 0.5, "{}: {k:?} fg sat {s:.2} > 0.50 (too loud)", th.name);
-            if s > 0.15 {
+            if s > 0.15 && !ink_caret {
                 let d = hue_dist(h, ph);
                 assert!(
                     d >= 30.0,

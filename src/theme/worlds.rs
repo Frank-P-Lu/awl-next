@@ -1383,20 +1383,264 @@ pub const FIRETAIL: Theme = Theme {
     },
 };
 
-/// All sixteen worlds, in cycle order. `C-x t` advances through this list and
+/// Cassowary — a NERV operations terminal: phosphor-green data on near-black
+/// glass, a lit CRT block cursor in that same phosphor, and a warning-red alert
+/// channel.
+///
+/// **The register (WORLDS.md's flavour sentence):** *"The MAGI bridge after dark
+/// — green terminal data on black glass, a lit phosphor block where you sit, red
+/// only when something is wrong."* The cassowary is the roster's armoured,
+/// prehistoric, casque-helmeted dangerous bird ("the world's most dangerous
+/// bird", a living dinosaur) — glossy BLACK plumage, a red wattle, an electric
+/// blue-green neck: the black-ground / green-data / red-warning palette is the
+/// creature's own colouring, and its armoured-menace character is the mecha wink
+/// without cosplay.
+///
+/// **The accent resolution (the board's named core problem — the user picked
+/// PHOSPHOR).** awl's ONE accent is the caret (`primary`; DESIGN §3). Most worlds
+/// spend it on amber; Cassowary spends it on the terminal's OWN phosphor GREEN —
+/// the caret IS the ink's colour (`primary == base_content`, an INK CARET —
+/// `Theme::ink_caret`), drawn as the authentic CRT block cursor: a lit
+/// `primary`-green cell with the covered glyph knocked out in the GROUND colour
+/// (`CaretBlockStyle::Filled`; `primary_content` is set to the black glass). This
+/// is the generalized WAGTAIL precedent — Wagtail's caret is its own white ink,
+/// presence carried by INVERSION not a hue accent — so an ink caret carries no
+/// separate accent hue, and is exempt from the amber-guard's ≥30° role gap (that
+/// guard exists so no syntax tint steals the caret's accent; it is moot when the
+/// caret HAS no accent hue). The exemption is law-pinned to the required
+/// inverting/filled block (`role_style_laws_hold_for_every_world` (e)), so the
+/// green ink-ladder tints (Str ~140° among them) stay mutually distinguishable ON
+/// the green ink by VALUE. RED stays the ERROR/ALERT channel alone (`error`, and
+/// the warning-crimson `selection`). A clean split — green = the terminal (the
+/// data AND the cursor you type at), red = alert. Ibeam mode is the clean thin
+/// green bar; morph folds to the filled block.
+///
+/// **Face + heading.** Iosevka, the narrowest, most mechanical bundled mono — the
+/// literal terminal-readout face — as both display and code (already mono, so
+/// code reuses it). Uniform mono strokes need weight to lift a section head →
+/// `heading_bold: true` (Iosevka ships a real Bold). The summoned overlay speaks
+/// the LOUD NERV monolith voice: `chrome_face = Archivo Black` (the heavy
+/// grotesque, registers at usWeightClass 400 so the plain chrome request matches
+/// it) on the placard wordmark / title prefix / lens-strip — while the writing
+/// column and list rows stay Iosevka (the closed chrome-surface set; legibility
+/// surfaces never change face). The WRITING page stays calm green-on-black; the
+/// drama is transient, only when you summon a command (the NERV console appears)
+/// — exactly DESIGN §5's "transient summoned overlays, never persistent chrome".
+///
+/// **Ground.** `Pinstripe` — fine parallel dim-green lines in the page-mode
+/// margins: CRT scan-lines, the terminal register, marginal and calm (the page
+/// column stays the flat figure). Every taste number is HOLD-flagged for the
+/// user's gallery pick.
+pub const CASSOWARY: Theme = Theme {
+    name: "Cassowary",
+    dark: true,
+    // BLACKGLASS ground (2026-07-18 variant, serving the user's "a bit similar to
+    // Outback no?" — both the old green-cast ground and Outback's blackish-olive
+    // read as dark GREEN rooms). Neutralised base_100/base_200 to a near-neutral
+    // black GLASS (a powered CRT at rest: a hair cool, essentially achromatic —
+    // sat drops 0.38 -> 0.09), so the page field is no longer a green room. The
+    // green now lives ONLY where it means "terminal data": the phosphor INK, the
+    // dim green PANEL/wash (base_300, below), the string wash, and the margin
+    // scan-line TINT (Pinstripe, below). Vs Outback redmean 48.8 -> 59.5, and the
+    // saturation collapse is the real separation (0.09 vs Outback's 0.35). NOTE:
+    // this lands base_100 within ~3 redmean of Currawong's neutral OLED near-black
+    // (#060607) — no law enforces pairwise-ground distinctness, and the two worlds
+    // diverge hard elsewhere (green phosphor ink + green scan-line margins + crimson
+    // selection here vs Currawong's neutral ink + twinkling-star margins).
+    // ORIGINAL green-cast hexes (easy revert): base_100 #050B07, base_200 #0A160F.
+    base_100: Srgb::rgb(0x05, 0x05, 0x06),
+    base_200: Srgb::rgb(0x0B, 0x0C, 0x0D),
+    // The focused plane STAYS a dim terminal-green panel — deliberately KEPT green
+    // through the blackglass neutralisation: base_300 is the summoned NERV console
+    // CARD fill + the surface-ramp step, i.e. the "wash step" where terminal
+    // content sits. Keeping it green means the writing page reads as black glass
+    // while the transient summoned overlay reads as a green console panel (DESIGN
+    // §5's "the drama is transient" — you get the green terminal exactly when you
+    // summon a command). Sat 0.38, well clear of the neutral page field above.
+    base_300: Srgb::rgb(0x14, 0x2C, 0x1E),
+    // Phosphor green data — bright enough to read as CRT phosphor, pale/soft
+    // enough for long prose (a saturated mid-green body fatigues; this pale
+    // phosphor gives the role tints their derivation room besides).
+    base_content: Srgb::rgb(0xA8, 0xEC, 0xBE),
+    muted: Srgb::rgb(0x5C, 0x9E, 0x70),
+    faint: Srgb::rgb(0x37, 0x63, 0x4A),
+    // THE PHOSPHOR CARET (the user's pick, 2026-07-18): the caret is the ink's OWN
+    // phosphor green — `primary == base_content` (#A8ECBE), an INK CARET. It draws
+    // as an authentic CRT block cursor via `CaretBlockStyle::Filled` (render_caps
+    // below): a lit green cell with the covered glyph knocked out in the ground
+    // colour. No separate accent HUE, so it is amber-guard-exempt (see the doc
+    // above + `role_style_laws_hold_for_every_world` (e)); its findability is the
+    // block fill (redmean ~605 vs the black glass), not a colour step off the ink.
+    primary: Srgb::rgb(0xA8, 0xEC, 0xBE),
+    // Ink-on-accent = the GROUND (the black glass, == base_100): the Filled block
+    // knocks the covered glyph out in THIS colour, so a lit green cell reads with
+    // the letter punched through in black glass — the terminal cursor.
+    primary_content: Srgb::rgb(0x05, 0x05, 0x06),
+    // The NERV warning red — the alert channel (spell-squiggle / failure signal),
+    // a hot "PATTERN" red that only ever means something is wrong.
+    error: Srgb::rgb(0xFF, 0x44, 0x36),
+    // A dim warning-CRIMSON selection wash (~348°, the "target-lock" band) — the
+    // world's "red on black" identity lives HERE + in `error`, never on the caret.
+    // Higher alpha than the calm worlds so the crimson clears the selection
+    // contrast floor over the near-black ground (redmean ≥150).
+    selection: Srgb::rgba(0xD2, 0x45, 0x5F, 0x70),
+    // CRT SCAN-LINES: fine parallel dim-green lines in the page-mode margins (the
+    // terminal register), gradient base_100 → base_200 (now the BLACKGLASS ground,
+    // so the from/to track it), marginal and calm. The scan-line TINT stays green
+    // (#1E4A32) — the phosphor register is the green identity in the margin, drawn
+    // OVER the neutral black glass. ORIGINAL from/to (easy revert): #050B07 / #0A160F.
+    background: Background::Pinstripe {
+        from: Srgb::rgb(0x05, 0x05, 0x06),
+        to: Srgb::rgb(0x0B, 0x0C, 0x0D),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0x1E, 0x4A, 0x32),
+    },
+    // Iosevka — the narrow mechanical terminal-readout face, display AND code.
+    font: "Iosevka",
+    mono: "Iosevka",
+    // Iosevka's uniform mechanical strokes need weight to mark a section head.
+    heading_bold: true,
+    cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS_SANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
+    // Technical terminal → the merged marks' hazard/alert trio (◆ hazard diamond +
+    // ✴ eight-spoke alert star + ◈ diamond-with-centre), three distinct geometrics.
+    ornaments: Ornaments { dash: '◆', star: '✴', underscore: '◈' },
+    ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // Stark terminal → plain geometric bullets (restraint is its character).
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
+    // NERV bunker terminal → Night; Iosevka mechanical mono → Technical. Opts OUT
+    // of Register + Temperature (both crowded near their cap, and to leave room for
+    // the concurrent roster growth) — headlines Night + Technical, its clearest reads.
+    tags: ThemeTags { time: Some("Night"), register: None, voice: Some("Technical"), temperature: None },
+    role_overrides: RoleOverrides::NONE,
+    // THE NERV CONSOLE (a statement/poster world — the summoned overlay goes loud
+    // while the writing page stays a calm green terminal): a bold Archivo-Black
+    // NERV wordmark placard (Auto corner → complementary to the TopLeft card),
+    // BORDERED elevation (a hard-edged console card over the black), the poster
+    // Bars list (per-row console plates), and BRACKET facet chips (terminal
+    // corner-ticks — "the terminal register", its own doc's words). Card anchored
+    // TopLeft (a deliberate object, opening the opposite corner for the wordmark).
+    render_caps: RenderCaps {
+        // THE AUTHENTIC CRT PHOSPHOR CURSOR: `primary == base_content` (an ink
+        // caret), so a plain opaque block would erase the letter green-on-green.
+        // `Filled` draws the lit green cell + knocks the glyph out in the ground
+        // (`primary_content`) — never the `InverseVideo` photo-negative (which on a
+        // chromatic ink flips green → magenta). Morph folds to this block; Ibeam
+        // stays the clean thin green bar.
+        caret_block_style: CaretBlockStyle::Filled,
+        title_style: TitleStyle::Placard {
+            corner: PlacardCorner::Auto,
+            scale: 3.0,
+            ink: PlacardInk::Bold,
+        },
+        card_anchor: CardAnchor::TopLeft,
+        chrome_face: ChromeFace::Named("Archivo Black"),
+        elevation: Elevation::Bordered,
+        list_style: POSTER_BARS,
+        facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+        ..RenderCaps::DEFAULT
+    },
+};
+
+/// Cassowary Light — the EXPLORATORY LIGHT variant (the user's still-OPEN "idk if
+/// eva should be light?" question), the **entry-plug interior / EVA-00 (Rei)
+/// register**: a pale, clinical, backlit white with a faint cool-green cast (the
+/// LCL-lit plug glass), dark slate-green data ink, an amber caret, and the NERV
+/// red on white. Deliberately NOT in [`THEMES`] (a gallery exploration, not a
+/// shipped world) — the dark `CASSOWARY` is the anchor and now ships the PHOSPHOR
+/// ink caret (the user's dark-world pick); this LIGHT const is KEPT (dead code)
+/// only because the light-vs-dark question was never closed, so the user can still
+/// see the light option. To ship it: add to `THEMES` (+ the count / personality /
+/// axis / CJK tests) and reconsider its caret (a light ink caret would want a
+/// `Filled` block off the dark slate ink, not the amber here). Its ink-ladder
+/// lightnesses mirror Gumtree's (a proven light-world ladder), so it clears the
+/// strict light role-tint floors the same way.
+#[allow(dead_code)] // gallery-only exploration; not in THEMES (see doc above).
+pub const CASSOWARY_LIGHT: Theme = Theme {
+    name: "Cassowary Light",
+    dark: false,
+    // Pale cool-green white — the backlit entry-plug glass.
+    base_100: Srgb::rgb(0xEE, 0xF4, 0xF0),
+    base_200: Srgb::rgb(0xE2, 0xEC, 0xE6),
+    base_300: Srgb::rgb(0xD2, 0xE1, 0xD8),
+    // Dark slate-green data ink (mirrors Gumtree's ink lightness).
+    base_content: Srgb::rgb(0x16, 0x24, 0x1B),
+    // Muted rung lightened just enough to widen the base_content->muted band so the
+    // derived light Def/Const role tints clear their pairwise floor (the classic
+    // light-world tightness); mirrors Gumtree's muted lightness.
+    muted: Srgb::rgb(0x5A, 0x6E, 0x62),
+    faint: Srgb::rgb(0x92, 0xA3, 0x98),
+    // The amber LCL caret, a shade deeper for contrast on the pale ground.
+    primary: Srgb::rgb(0xD9, 0x79, 0x22),
+    primary_content: Srgb::rgb(0xFB, 0xEF, 0xE2),
+    // NERV red, deepened so it holds contrast on white.
+    error: Srgb::rgb(0xC2, 0x34, 0x29),
+    // Pale warning-crimson selection (the "target-lock" band, light register).
+    selection: Srgb::rgba(0xC8, 0x36, 0x5E, 0x5E),
+    // The clinical lab: fine dim scan-lines in the margins, one register up.
+    background: Background::Pinstripe {
+        from: Srgb::rgb(0xE2, 0xEC, 0xE6),
+        to: Srgb::rgb(0xD2, 0xE1, 0xD8),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0xAF, 0xC6, 0xB8),
+    },
+    font: "Iosevka",
+    mono: "Iosevka",
+    heading_bold: true,
+    cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS_SANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
+    ornaments: Ornaments { dash: '◆', star: '✴', underscore: '◈' },
+    ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
+    tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Technical"), temperature: None },
+    role_overrides: RoleOverrides::NONE,
+    // The same NERV console overlay as the dark anchor, so the user compares the
+    // two on equal footing.
+    render_caps: RenderCaps {
+        title_style: TitleStyle::Placard {
+            corner: PlacardCorner::Auto,
+            scale: 3.0,
+            ink: PlacardInk::Bold,
+        },
+        card_anchor: CardAnchor::TopLeft,
+        chrome_face: ChromeFace::Named("Archivo Black"),
+        elevation: Elevation::Bordered,
+        list_style: POSTER_BARS,
+        facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+        ..RenderCaps::DEFAULT
+    },
+};
+
+// The two caret EXPLORATIONS (CASSOWARY_PHOSPHOR / CASSOWARY_WATTLE) that served
+// the user's "maybe the cursor could be a different colour, not amber" gallery
+// round are RETIRED — the user picked PHOSPHOR, now shipped as the anchor
+// `CASSOWARY` above (an ink caret drawn with the authentic `CaretBlockStyle::Filled`
+// CRT block, not the exploration's photo-negative `InverseVideo`).
+
+/// All eighteen worlds, in cycle order. `C-x t` advances through this list and
 /// wraps; `C-x T` steps backward. The two deep cool darks — Currawong (OLED
 /// black) beside the neutral Tawny/Mopoke pair, and Kingfisher (midnight navy)
-/// beside the violet Undertow — sit with their kin; the two STATEMENT worlds
-/// close the cycle as mirror bookends — Wagtail (the bare 1-bit room, NO warm
+/// beside the violet Undertow — sit with their kin; Brolga (the COOL LIGHT POLE)
+/// sits with the light cluster, just before the statement worlds; the three
+/// STATEMENT worlds close the cycle — Wagtail (the bare 1-bit room, NO warm
 /// thing) beside Firetail (the warm den whose one warm thing is the living lava
-/// GROUND itself).
-pub const THEMES: [Theme; 17] = [
+/// GROUND itself), and Cassowary (the NERV terminal) sits after Firetail as the
+/// dark-technical statement.
+pub const THEMES: [Theme; 18] = [
     TAWNY, MOPOKE, CURRAWONG,
     POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, KINGFISHER, OUTBACK, MANGROVE, GALAH, MAGPIE,
-    // Brolga — the seventeenth world, the COOL LIGHT POLE — sits with the light
-    // cluster, just before the two statement worlds that still close the cycle.
+    // Brolga — the COOL LIGHT POLE — sits with the light cluster, just before the
+    // statement worlds that close the cycle.
     BROLGA,
-    WAGTAIL, FIRETAIL,
+    WAGTAIL, FIRETAIL, CASSOWARY,
 ];
 
 /// Const `str` equality (`==` is not available in a `const fn` on stable).

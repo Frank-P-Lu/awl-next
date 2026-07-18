@@ -36,8 +36,9 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 | **Currawong**  | near-pure-black OLED       | Iosevka             | Iosevka         | Awl Marks · ✷ ✴ ⬥                             | Night | Humble   | Technical | Neutral |
 | **Wagtail**    | near-black, zero-saturation | JetBrains Mono     | JetBrains Mono  | Awl Marks · ✧ ⭑ ❡                             | Dusk  | —        | —         | —       |
 | **Firetail**   | deep oxblood-charcoal       | Monaspace Xenon    | Monaspace Xenon | Awl Marks · ✷ ✶ ✦                             | —     | —        | —         | Warm    |
+| **Cassowary**  | near-black glass            | Iosevka            | Iosevka         | Awl Marks · ◆ ✴ ◈                             | Night | —        | Technical | —       |
 
-*(17 worlds. The names are Australian fauna, flora, and landscape — flavour, not taxonomy. Wagtail and Firetail close the roster as statement-world mirrors; Brolga is the newest, the cool light pole — see below.)*
+*(18 worlds. The names are Australian fauna, flora, and landscape — flavour, not taxonomy. Wagtail and Firetail close the roster as statement-world mirrors; Brolga is the cool light pole; Cassowary is the dark-technical statement, a NERV terminal — see below.)*
 
 ---
 
@@ -159,6 +160,11 @@ grey-blue wetland crane with a vivid red crown; its world is the pale blue of a
 clear sky reflected in still shallow water, and its one warm living thing is the
 crane's red crown — a coral-vermilion caret.
 Day · Cool.
+
+### Cassowary
+**A NERV operations terminal after dark — green phosphor data on black glass, a lit block cursor in that same phosphor, red only when something is wrong.**
+Iosevka as both page and code face, the narrow mechanical terminal-readout font; Noto Sans JP for Japanese; the summoned command overlay goes loud in Archivo Black. Cassowary is the dark-technical statement world (an Evangelion wink). Where every other chromatic world spends its one accent on an amber caret, Cassowary spends it on the terminal's own phosphor GREEN: the caret is the ink's own colour, drawn as an authentic CRT block cursor — a lit green cell with the letter under it knocked out in the black-glass ground. Red is held back for the alert channel alone (the spell-squiggle, a warning-crimson selection). The writing page stays a calm green terminal; the drama is transient, appearing only when you summon a command. The cassowary is a glossy-black, red-wattled, blue-green-necked living dinosaur — the black-ground / green-data / red-warning palette is the bird's own colouring.
+Night · Technical.
 
 ---
 

@@ -4516,6 +4516,11 @@ impl TextPipeline {
         self.caret_pipeline.set_color(theme::primary().rgb_bytes());
         self.caret_trail_pipeline
             .set_color(theme::primary().rgb_bytes());
+        // The glyph-silhouette pipeline rides `primary` (the MORPH accent letter).
+        // A FILLED block caret repurposes it as the CRT KNOCKOUT and OVERRIDES this
+        // colour to `primary_content` at the draw site each frame (the ONE owner is
+        // `prepare_caret_block`'s `Filled` arm — authoritative in the headless
+        // capture too, which never calls this `sync_theme_colors`).
         self.caret_glyph_pipeline
             .set_color(theme::primary().rgb_bytes());
         self.selection_pipeline

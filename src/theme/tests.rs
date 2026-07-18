@@ -135,16 +135,17 @@ fn bars_unselected_sits_a_quiet_rung_below_the_selected_band() {
 
 
 #[test]
-fn worlds_ten_dark_seven_light() {
-    assert_eq!(THEMES.len(), 17);
+fn worlds_eleven_dark_seven_light() {
+    assert_eq!(THEMES.len(), 18);
     let dark = THEMES.iter().filter(|t| t.dark).count();
     let light = THEMES.iter().filter(|t| !t.dark).count();
-    // 10 dark (Tawny/Mopoke/Currawong/Potoroo/Undertow/Kingfisher/Outback/
-    // Mangrove/Wagtail/Firetail) / 7 light (Gumtree/Bilby/Saltpan/Quokka/Galah/
-    // Magpie/Brolga). Brolga (the seventeenth) is the COOL LIGHT POLE — a pale
+    // 11 dark (Tawny/Mopoke/Currawong/Potoroo/Undertow/Kingfisher/Outback/
+    // Mangrove/Wagtail/Firetail/Cassowary) / 7 light (Gumtree/Bilby/Saltpan/
+    // Quokka/Galah/Magpie/Brolga). Brolga (the COOL LIGHT POLE) is a pale
     // sky-blue light world filling the cool-light-blue hole the DAWN round
-    // vacated when Bilby turned warm rose-gold.
-    assert_eq!(dark, 10);
+    // vacated when Bilby turned warm rose-gold; Cassowary (the NERV-terminal
+    // statement world) is the eighteenth, an additive dark entry.
+    assert_eq!(dark, 11);
     assert_eq!(light, 7);
 }
 
@@ -955,8 +956,10 @@ fn every_world_has_a_bundled_mono() {
     // SIXTH — it derives from Potoroo's warm den and shares its Monaspace Xenon
     // slab-mono display (a logged, honest consequence of adding worlds faster than
     // bundled display faces; see `worlds.rs::FIRETAIL`'s own doc comment).
-    const MONO_DISPLAY: [&str; 6] =
-        ["Tawny", "Currawong", "Potoroo", "Mangrove", "Wagtail", "Firetail"];
+    // Cassowary (the NERV terminal) is the SEVENTH — it shares Currawong's
+    // Iosevka as the terminal-readout face for both display and code.
+    const MONO_DISPLAY: [&str; 7] =
+        ["Tawny", "Currawong", "Potoroo", "Mangrove", "Wagtail", "Firetail", "Cassowary"];
     for t in THEMES.iter() {
         assert!(
             BUNDLED_MONOS.contains(&t.mono),
@@ -1002,7 +1005,7 @@ fn cjk_fallback_matches_world_character() {
     let zenmaru = ["Galah", "Kingfisher"];
     let klee = ["Mopoke", "Quokka"];
     let mincho = ["Saltpan", "Outback", "Magpie"]; // neutral serif (Noto Serif JP)
-    let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong", "Wagtail", "Firetail", "Brolga"]; // neutral sans/mono (Noto Sans JP)
+    let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong", "Wagtail", "Firetail", "Brolga", "Cassowary"]; // neutral sans/mono (Noto Sans JP)
     for t in THEMES.iter() {
         assert!(!t.cjk.is_empty(), "{} has no CJK fallback list", t.name);
         if shippori.contains(&t.name) {
@@ -1229,7 +1232,7 @@ fn latin_candidates_is_the_worlds_own_display_face() {
 fn zh_hans_ladder_matches_world_character_with_klee_override() {
     let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
     let klee = ["Mopoke", "Quokka"];
-    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong", "Wagtail", "Firetail", "Brolga"];
+    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong", "Wagtail", "Firetail", "Brolga", "Cassowary"];
     for t in THEMES.iter() {
         assert!(!t.zh_hans.is_empty(), "{} has no zh-Hans candidate list", t.name);
         if klee.contains(&t.name) {
@@ -2120,6 +2123,27 @@ fn personality_assignments_are_exactly_the_decided_table() {
             "Tawny" | "Mopoke" | "Potoroo" | "Undertow" | "Kingfisher" | "Outback" => {
                 RenderCaps::DEFAULT
             }
+            // CASSOWARY (the NERV-terminal statement world): the loud NERV console
+            // overlay — a bold Archivo-Black wordmark placard (Auto corner from the
+            // TopLeft card), BORDERED elevation, the poster Bars list, and BRACKET
+            // facet chips (terminal corner-ticks). The writing page stays calm.
+            "Cassowary" => RenderCaps {
+                // The authentic CRT phosphor cursor — an ink caret (primary ==
+                // base_content) needs the Filled block so a lit green cell knocks
+                // the glyph out in the ground rather than erasing it green-on-green.
+                caret_block_style: model::CaretBlockStyle::Filled,
+                title_style: TitleStyle::Placard {
+                    corner: PlacardCorner::Auto,
+                    scale: 3.0,
+                    ink: PlacardInk::Bold,
+                },
+                card_anchor: model::CardAnchor::TopLeft,
+                chrome_face: model::ChromeFace::Named("Archivo Black"),
+                elevation: Elevation::Bordered,
+                list_style: poster_bars,
+                facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+                ..RenderCaps::DEFAULT
+            },
             other => panic!(
                 "{other}: a NEW world must decide its personality here (placard? border? \
                  frame? or deliberately DEFAULT) — the assignment table is conscious data, \
@@ -2164,10 +2188,12 @@ fn page_frame_ink_is_the_ladder_and_assigned_weights_are_real() {
             "{}: page_frame_ink must be exactly the world's own base_content",
             t.name
         );
-        // A MONOCHROME world's caret IS its ink (value + motion carry it —
-        // Wagtail's pure white), so "never literally primary" is structurally
-        // inapplicable there; every chromatic world must keep them distinct.
-        if !t.is_monochrome() {
+        // An INK-CARET world's caret IS its ink (`primary == base_content`;
+        // presence carried by the inverting/filled block, not a hue — Wagtail's
+        // pure white, Cassowary's phosphor green), so "never literally primary" is
+        // structurally inapplicable there (the frame ink == base_content == primary
+        // BY DESIGN); every other world must keep frame-ink and accent distinct.
+        if !t.ink_caret() {
             assert_ne!(
                 derive::page_frame_ink(),
                 t.primary,
@@ -2397,7 +2423,13 @@ fn streaks_heatmap_levels_are_distinguishable_every_world() {
                 "{}: heatmap level {i} (sat {:.2}) manufactures chroma beyond the ink ladder (max {:.2})",
                 t.name, s, s_ink.max(s_empty)
             );
-            assert_ne!(*c, primary(), "{}: heatmap level {i} must never be literally the accent", t.name);
+            // On an INK-CARET world the brightest rung IS the ink IS the accent
+            // (`primary == base_content`; Wagtail's white, Cassowary's phosphor),
+            // so "never literally primary" is structurally inapplicable — the
+            // heatmap climbing to the full ink is the intended top level.
+            if !t.ink_caret() {
+                assert_ne!(*c, primary(), "{}: heatmap level {i} must never be literally the accent", t.name);
+            }
         }
     }
     set_active(DEFAULT_THEME);

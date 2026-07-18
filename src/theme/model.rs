@@ -114,19 +114,50 @@ pub enum SelectionStyle {
     InverseVideo,
 }
 
-/// Whether the BLOCK caret draws as an ordinary opaque quad UNDER the glyph
-/// (the default — the glyph composites over it normally), or must instead
-/// route through the same true-inverse-video mechanism as `SelectionStyle`'s
-/// `InverseVideo` case, because an opaque quad tinted this world's caret
-/// color would be the exact same value as the glyph's own ink and erase it
-/// (a caret landing on a heading's `#` on an all-white-ink world). MORPH mode
-/// degrades to BLOCK under `InverseVideo` (see `prepare_caret_layer`) — a
-/// glyph-shaped invert mask has no accent color to carry in a two-value
-/// world. See `TextPipeline::caret_invert`'s field doc.
+/// How the BLOCK caret draws when its `primary` collides with the glyph's own
+/// ink — the three cases an "ink caret" world ([`Theme::ink_caret`]) needs.
+///
+/// * `Normal` (the default): an ordinary opaque `primary` quad UNDER the glyph;
+///   the glyph composites over it normally. Right for every world whose caret
+///   accent DIFFERS in value from the ink it lands on.
+/// * `InverseVideo`: route through the true-inverse-video mechanism
+///   (`SelectionStyle::InverseVideo`'s `OneMinusDst` pass, drawn AFTER text),
+///   because an opaque quad tinted this world's caret colour would be the exact
+///   same value as the glyph's own ink and erase it (a caret landing on a
+///   heading's `#` on Wagtail's all-white-ink room). The flip inverts whatever
+///   composited beneath — black ground → white cell, white glyph → black — so
+///   the letter reads. Correct for a TRUE 1-BIT world (only two legal values, so
+///   the flip lands on legal values). On a CHROMATIC ink-caret world it would
+///   instead flip the ink to its hue-COMPLEMENT (green ink → magenta letter) — a
+///   photo-negative, not a lit cursor — which is why Cassowary uses `Filled`.
+/// * `Filled` (the authentic CRT phosphor cursor): an opaque `primary` cell
+///   drawn UNDER the text exactly like `Normal`, PLUS the covered glyph re-inked
+///   in `primary_content` and redrawn OVER the text (the glyph-mask silhouette
+///   pipeline, recoloured to the ground in `sync_theme_colors`; the KNOCKOUT).
+///   On an ink-caret world (`primary == base_content`) a plain `Normal` block
+///   would paint green-on-green and erase the letter; the knockout punches it
+///   back through in the GROUND colour, so the cell reads as a lit phosphor cell
+///   with the glyph knocked out of it — never the `InverseVideo` photo-negative.
+///
+/// MORPH mode folds to BLOCK under BOTH special styles ([`Self::folds_morph_to_block`],
+/// see `prepare_caret_layer`): neither carries a chromatic accent silhouette for
+/// the glyph-morph cross-fade to ride (InverseVideo has no colour; Filled's
+/// "accent" IS the ink, invisible over the block). See `TextPipeline::caret_invert`'s
+/// field doc + `prepare_caret_block`'s `Filled` arm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaretBlockStyle {
     Normal,
     InverseVideo,
+    Filled,
+}
+
+impl CaretBlockStyle {
+    /// The two SPECIAL block styles both fold MORPH mode down to their block form
+    /// (a glyph-morph silhouette has no accent hue to carry when the caret IS the
+    /// ink). `Normal` keeps every caret mode intact.
+    pub fn folds_morph_to_block(self) -> bool {
+        !matches!(self, CaretBlockStyle::Normal)
+    }
 }
 
 /// Whether a full-takeover overlay / the held HUD / the lifetime card /
@@ -1342,6 +1373,28 @@ impl Theme {
             && pure_bw(self.base_100)
             && pure_bw(self.base_content)
             && pure_bw(self.primary)
+    }
+
+    /// True iff this world's caret is the INK's OWN colour (`primary ==
+    /// base_content`) — an "INK CARET". Two precedent worlds: Wagtail's
+    /// pure-white-on-black room and Cassowary's phosphor-green on black glass.
+    ///
+    /// An ink caret carries NO separate accent HUE for a syntax role to compete
+    /// with: its presence comes entirely from an INVERTING or FILLED block that
+    /// flips / fills the cell, never from a colour the ink-ladder tints sit near.
+    /// So an ink-caret world is EXEMPT from the amber guard's ≥30° role-hue gap
+    /// (DESIGN §3; `render::tests::syntax_roles::role_style_laws_hold_for_every_world`
+    /// law (e)) — the reason that guard exists (no tint may steal the caret's
+    /// accent) is moot when the caret HAS no accent hue. The exemption is safe
+    /// ONLY paired with a non-`Normal` `caret_block_style`: a plain opaque block
+    /// in the ink's own colour would erase the letter and leave no findable
+    /// caret. The law enforces that pairing (`ink_caret ⇒ folds_morph_to_block`).
+    ///
+    /// EXACT equality is the honest predicate — both precedent worlds satisfy it
+    /// exactly (`is_one_bit`'s pure white; Cassowary's `#A8ECBE`). A future world
+    /// wanting a near-ink caret could widen this to a tight ΔE; today, none does.
+    pub fn ink_caret(&self) -> bool {
+        self.primary == self.base_content
     }
 
     /// True iff this world's GROUND carries AMBIENT MOTION — the lava lamp
