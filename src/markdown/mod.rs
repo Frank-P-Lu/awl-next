@@ -108,7 +108,10 @@ pub use headings::{
     heading_scale, heading_weight_bold, headings, headings_from_spans, type_scale, Heading,
 };
 #[allow(unused_imports)] // ImageRef: public API surface, no in-crate caller outside tests
-pub use refs::{image_refs, image_width_hint_edit, link_at, link_at_full, parse_image_source, ImageRef, LinkAt};
+pub use refs::{
+    image_refs, image_width_hint_edit, link_at, link_at_full, parse_image_source, split_alt_hint,
+    ImageRef, LinkAt,
+};
 #[allow(unused_imports)] // ListItem/READING_WPM: public API surface, no in-crate caller today
 pub use spans::{
     break_kind, equals_runs, frontmatter_end, is_thematic_break, list_item, reading_time_min,
