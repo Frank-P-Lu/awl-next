@@ -880,3 +880,156 @@ fn export_docx_strikethrough_gate() {
         "inert ~x~ must emit no <w:strike/>"
     );
 }
+
+// --- Render/export highlight agreement (the isolated-exactly-two-`=` gate) ----
+//
+// The DEBT this closed: the `==highlight==` delimiter gate (`equals_runs`, the
+// isolated-exactly-two-`=` rule) was duplicated VERBATIM in `markdown::spans` and
+// `export::model`. They agreed byte-for-byte, but it was the exact two-owner
+// shape that produced the `~x~` strike divergence — one edit away from
+// disagreeing. Both paths now read the ONE shared owner `markdown::equals_runs`.
+// These laws assert render's highlighted-set == export's highlighted-set for the
+// truth table, and drive the real HTML/DOCX emitters to prove the gate reaches
+// actual exported bytes (`<mark>` / `<w:highlight/>`).
+
+/// The highlighted TEXT tokens as the RENDERER sees them: every `MdKind::Highlight`
+/// span's source substring, split into whitespace tokens, in document order.
+fn render_highlighted_tokens(md: &str) -> Vec<String> {
+    let mut spans = crate::markdown::spans(md);
+    spans.sort_by_key(|(r, _)| r.start);
+    let mut out = Vec::new();
+    for (r, k) in &spans {
+        if *k == crate::markdown::MdKind::Highlight {
+            out.extend(md[r.clone()].split_whitespace().map(str::to_string));
+        }
+    }
+    out
+}
+
+/// The highlighted TEXT tokens as the EXPORT tree sees them: every
+/// `Inline::Highlight` node's flattened text, split into whitespace tokens, in
+/// document order. A highlighted node's full `plain_text` covers all its content
+/// once, so we do not recurse into it — mirroring the renderer, where every byte
+/// under an engaged `==…==` pair is highlighted.
+fn export_highlighted_tokens(md: &str) -> Vec<String> {
+    fn walk_inlines(inlines: &[Inline], out: &mut Vec<String>) {
+        for i in inlines {
+            match i {
+                Inline::Highlight(c) => {
+                    out.extend(model::plain_text(c).split_whitespace().map(str::to_string));
+                }
+                Inline::Strong(c)
+                | Inline::Emphasis(c)
+                | Inline::Strikethrough(c)
+                | Inline::Link { children: c, .. } => walk_inlines(c, out),
+                _ => {}
+            }
+        }
+    }
+    fn walk_blocks(blocks: &[Block], out: &mut Vec<String>) {
+        for b in blocks {
+            match b {
+                Block::Heading { inlines, .. } | Block::Paragraph(inlines) => {
+                    walk_inlines(inlines, out)
+                }
+                Block::BlockQuote(bs) => walk_blocks(bs, out),
+                Block::List(l) => {
+                    for it in &l.items {
+                        walk_blocks(&it.blocks, out)
+                    }
+                }
+                Block::Table(t) => {
+                    for cell in &t.head {
+                        walk_inlines(cell, out)
+                    }
+                    for row in &t.rows {
+                        for cell in row {
+                            walk_inlines(cell, out)
+                        }
+                    }
+                }
+                Block::CodeBlock { .. } | Block::Rule => {}
+            }
+        }
+    }
+    let doc = model::parse(md);
+    let mut out = Vec::new();
+    walk_blocks(&doc.blocks, &mut out);
+    out
+}
+
+#[test]
+fn render_export_highlight_agree() {
+    // The truth table: single `=` inert, two-`=` engaged, a bare three-`=` run and
+    // a four-`=` run (never a candidate), an outer engaged pair with an inert
+    // single-`=` run literal inside it, a `==` pair split by a soft break (no
+    // cross-line span in either path), a prose false-positive (`2=3 and 4=5`), and
+    // a plain mid-sentence pair.
+    let cases: &[(&str, &[&str])] = &[
+        ("=x=", &[]),                             // single `=`: inert, nothing marked
+        ("==x==", &["x"]),                        // two `=`: highlighted
+        ("===", &[]),                             // three `=`: no candidate anywhere
+        ("a ==== b", &[]),                        // four `=`: inert run, no candidate
+        ("==a =b= c==", &["a", "=b=", "c"]),      // engaged outer; inert `=b=` literal inside
+        ("==cut\nline==", &[]),                   // soft break splits: neither run pairs
+        ("2=3 and 4=5", &[]),                     // bare single `=` in prose: never marked
+        ("keep ==mark this== keep", &["mark", "this"]),
+    ];
+    for (md, expected) in cases {
+        let r = render_highlighted_tokens(md);
+        let e = export_highlighted_tokens(md);
+        assert_eq!(
+            r, e,
+            "render vs export highlight-set diverge on {md:?}: render={r:?} export={e:?}"
+        );
+        assert_eq!(
+            r,
+            expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            "highlight-set unexpected for {md:?}: got {r:?} want {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn export_html_highlight_gate() {
+    // Drive the REAL HTML emitter end-to-end: the engaged `==x==` yields a
+    // `<mark>`; the inert single-`=` `=x=` never does — yet still exports its
+    // content (the legitimate wrapper still emits; the inert case stays plain).
+    let marked = to_html("==x==", &NoImages);
+    assert!(
+        marked.contains("<mark>x</mark>"),
+        "engaged ==x== must render <mark>: {marked}"
+    );
+
+    let inert = to_html("=x=", &NoImages);
+    assert!(!inert.contains("<mark>"), "inert =x= must NOT render <mark>: {inert}");
+    assert!(inert.contains("=x="), "inert =x= content still exported literally: {inert}");
+
+    // The pathological case: ONE `<mark>` wrapping the whole content, the inner
+    // single-`=` run kept as literal `=` text (never a second highlight).
+    let nested = to_html("==a =b= c==", &NoImages);
+    assert_eq!(
+        nested.matches("<mark>").count(),
+        1,
+        "one highlight wrapper for the outer pair: {nested}"
+    );
+    assert!(nested.contains("=b="), "inert inner =b= kept literal: {nested}");
+}
+
+#[test]
+fn export_docx_highlight_gate() {
+    // The DOCX path shares the same model tree, so the gate reaches it too: the
+    // engaged pair emits `<w:highlight/>`; the inert single `=` emits none.
+    let doc_xml = |md: &str| {
+        String::from_utf8(unzip_stored(&to_docx(md, &NoImages))["word/document.xml"].clone())
+            .unwrap()
+    };
+    assert!(
+        doc_xml("==x==").contains("<w:highlight"),
+        "engaged ==x== emits <w:highlight/>"
+    );
+    assert!(
+        !doc_xml("=x=").contains("<w:highlight"),
+        "inert =x= must emit no <w:highlight/>"
+    );
+}

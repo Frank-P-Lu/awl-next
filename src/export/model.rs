@@ -19,10 +19,12 @@
 //! for byte (see the `render_export_strikethrough_agree` law test).
 //!
 //! `==highlight==` is NOT a CommonMark construct (pulldown emits it as literal
-//! text), so — exactly as `markdown::spans` does with its own hand-rolled scan —
-//! we split each text run on isolated `==…==` pairs into [`Inline::Highlight`]
-//! runs after the fact. FRONTMATTER is excluded up front (`frontmatter::detect`),
-//! matching its exclusion from word-count / spell / render.
+//! text), so — reading the SAME delimiter gate `markdown::spans` renders through
+//! ([`crate::markdown::equals_runs`], the shared owner) — we split each text run
+//! on isolated `==…==` pairs into [`Inline::Highlight`] runs after the fact, and
+//! the two paths can't disagree on which `==` runs count (see the
+//! `render_export_highlight_agree` law test). FRONTMATTER is excluded up front
+//! (`frontmatter::detect`), matching its exclusion from word-count / spell / render.
 //!
 //! PURE + DETERMINISTIC: `parse` is a function of the text alone; images are
 //! resolved through a caller-supplied [`ImageSource`] (the live App reads disk;
@@ -602,9 +604,12 @@ fn push_text(stack: &mut Vec<Frame>, text: &str) {
 /// isolated `==…==` pairs — the same de-facto Obsidian/Typora convention
 /// `markdown::spans` renders (exactly-two `=`, greedy pairing, an unpaired
 /// trailing marker left literal). pulldown never embeds a `\n` in one text run
-/// (soft breaks are their own events), so single-line pairing is exact.
+/// (soft breaks are their own events), so single-line pairing is exact. The
+/// delimiter gate is the SHARED owner [`crate::markdown::equals_runs`] — the same
+/// candidate set the renderer scans, so render and export can't disagree on which
+/// `==` runs count (see the `render_export_highlight_agree` law test).
 fn split_highlight(text: &str) -> Vec<Inline> {
-    let markers = equals_runs(text);
+    let markers = crate::markdown::equals_runs(text);
     if markers.len() < 2 {
         return vec![Inline::Text(text.to_string())];
     }
@@ -624,27 +629,6 @@ fn split_highlight(text: &str) -> Vec<Inline> {
     }
     if cursor < text.len() {
         out.push(Inline::Text(text[cursor..].to_string()));
-    }
-    out
-}
-
-/// Byte ranges of ISOLATED two-`=` runs in `s` (a `=` neither preceded nor
-/// followed by another `=`), mirroring `markdown::spans::equals_runs`.
-fn equals_runs(s: &str) -> Vec<std::ops::Range<usize>> {
-    let b = s.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    while i + 1 < b.len() {
-        if b[i] == b'='
-            && b[i + 1] == b'='
-            && (i == 0 || b[i - 1] != b'=')
-            && (i + 2 >= b.len() || b[i + 2] != b'=')
-        {
-            out.push(i..i + 2);
-            i += 2;
-        } else {
-            i += 1;
-        }
     }
     out
 }
