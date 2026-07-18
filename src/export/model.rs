@@ -8,6 +8,16 @@
 //! since `~~strike~~` is in the export's coverage) so the two never disagree on
 //! what the markdown MEANS.
 //!
+//! STRIKETHROUGH shares the RENDERER's exactly-two-tilde gate: pulldown's GFM
+//! option ALSO parses single-tilde `~x~`, but awl keeps that INERT (only `~~x~~`
+//! strikes). This fold reads the SAME owner the renderer does
+//! ([`crate::markdown::strike_engaged`]) off the offset iterator's span slice, so
+//! `~x~` exports UNSTRUCK exactly as it renders — the render/export strike
+//! divergence this closed. An inert single-tilde span contributes its inner
+//! content to the parent (inheriting the surrounding strike context) and drops
+//! its `~` delimiters, so the set of struck text matches `markdown::spans` byte
+//! for byte (see the `render_export_strikethrough_agree` law test).
+//!
 //! `==highlight==` is NOT a CommonMark construct (pulldown emits it as literal
 //! text), so — exactly as `markdown::spans` does with its own hand-rolled scan —
 //! we split each text run on isolated `==…==` pairs into [`Inline::Highlight`]
@@ -211,8 +221,23 @@ pub fn parse(markdown: &str) -> Document {
     // item's paragraph, so we stash it and stamp the enclosing Item on close.
     let mut pending_task: Option<bool> = None;
 
-    for ev in Parser::new_ext(src, opts) {
+    // The OFFSET iterator: each event carries its byte range into `src`, which the
+    // strikethrough gate needs (the exactly-two-tilde decision reads the span's
+    // source slice — see `crate::markdown::strike_engaged`).
+    for (ev, range) in Parser::new_ext(src, opts).into_offset_iter() {
         match ev {
+            // STRIKETHROUGH is gated at its Start on the SHARED exactly-two-tilde
+            // owner: an ENGAGED `~~x~~` opens a real `Strikethrough` frame; an
+            // INERT single-tilde `~x~` opens a passthrough frame whose children
+            // flush UNWRAPPED to the parent on close (so `~x~` is never struck,
+            // matching the renderer). Every other Start routes through `open_frame`.
+            Event::Start(Tag::Strikethrough) => {
+                if crate::markdown::strike_engaged(&src[range.clone()]) {
+                    stack.push(Frame::Strikethrough(Vec::new()));
+                } else {
+                    stack.push(Frame::StrikethroughInert(Vec::new()));
+                }
+            }
             Event::Start(tag) => open_frame(&mut stack, tag),
             Event::End(tag) => close_frame(&mut stack, tag, &mut pending_task),
             Event::Text(t) => push_text(&mut stack, &t),
@@ -266,6 +291,14 @@ enum Frame {
     Strong(Vec<Inline>),
     Emphasis(Vec<Inline>),
     Strikethrough(Vec<Inline>),
+    /// An INERT single-tilde `~x~` span — pulldown parsed it as strikethrough, but
+    /// awl's exactly-two-tilde gate ([`crate::markdown::strike_engaged`]) keeps it
+    /// UNSTRUCK. It collects its inner inlines exactly like any inline container,
+    /// but on close it flushes them UNWRAPPED into the parent (dropping the `~`
+    /// delimiters), so the content inherits the surrounding strike context and no
+    /// `Inline::Strikethrough` node is ever produced — the render's inert behavior
+    /// (the `~x~` bytes render as plain, unstruck text) projected into the tree.
+    StrikethroughInert(Vec<Inline>),
     Link {
         url: String,
         children: Vec<Inline>,
@@ -329,7 +362,9 @@ fn open_frame(stack: &mut Vec<Frame>, tag: Tag) {
         }),
         Tag::Emphasis => stack.push(Frame::Emphasis(Vec::new())),
         Tag::Strong => stack.push(Frame::Strong(Vec::new())),
-        Tag::Strikethrough => stack.push(Frame::Strikethrough(Vec::new())),
+        // `Tag::Strikethrough` is intercepted in `parse`'s loop BEFORE `open_frame`
+        // (it needs the span's byte range for the exactly-two-tilde gate), so it
+        // never arrives here.
         Tag::Link { dest_url, .. } => stack.push(Frame::Link {
             url: dest_url.into_string(),
             children: Vec::new(),
@@ -444,6 +479,15 @@ fn close_frame(stack: &mut Vec<Frame>, tag: TagEnd, pending_task: &mut Option<bo
         Frame::Emphasis(children) => push_inline(stack, Inline::Emphasis(children)),
         Frame::Strong(children) => push_inline(stack, Inline::Strong(children)),
         Frame::Strikethrough(children) => push_inline(stack, Inline::Strikethrough(children)),
+        // An inert single-tilde span: flush its inner inlines UNWRAPPED into the
+        // parent (in source order), dropping the `~` delimiters. Nested inside an
+        // engaged `~~…~~` the content lands in that Strikethrough frame (struck);
+        // at top level it lands in the paragraph (unstruck) — matching the render.
+        Frame::StrikethroughInert(children) => {
+            for c in children {
+                push_inline(stack, c);
+            }
+        }
         Frame::Link { url, children } => push_inline(stack, Inline::Link { url, children }),
         Frame::Image {
             src,
@@ -502,6 +546,7 @@ fn push_inline(stack: &mut [Frame], inline: Inline) {
             | Frame::Emphasis(v)
             | Frame::Strong(v)
             | Frame::Strikethrough(v)
+            | Frame::StrikethroughInert(v)
             | Frame::Link { children: v, .. } => {
                 v.push(inline);
                 return;
