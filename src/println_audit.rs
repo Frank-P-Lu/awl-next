@@ -105,13 +105,14 @@ const EXPECTED: &[(&str, usize)] = &[
     // `--help` + other CLI-only output.
     ("main.rs", 2),
     ("main/args.rs", 1),
-    // `--screenshot`/`--screenshot-motion*`/`--capture-*`'s "wrote …"
-    // deliverable output — this IS the CLI's product, read by scripts/agents —
-    // plus the permissive `--keys` replay's ONE stderr warning seam (the
-    // strict-replay round: `replay::warn_line` fires when a replay crosses an
-    // Unsupported/Intercepted effect; CLI diagnostic output by design, and the
-    // same string is recorded in the replay result so tests pin it).
-    ("main/run.rs", 7),
+    // `--screenshot`/`--screenshot-motion*`/`--screenshot-frames`/`--capture-*`'s
+    // "wrote …" deliverable output — this IS the CLI's product, read by
+    // scripts/agents — plus the permissive `--keys` replay's ONE stderr warning
+    // seam (the strict-replay round: `replay::warn_line` fires when a replay crosses
+    // an Unsupported/Intercepted effect; CLI diagnostic output by design, and the
+    // same string is recorded in the replay result so tests pin it). (The 8th is the
+    // virtual-clock frame-loop capture's own "wrote N frame(s)…" deliverable line.)
+    ("main/run.rs", 8),
     // `--storyboard`'s deliverable output (the run summary + "wrote film…"),
     // plus the BEST-EFFORT film-encode notes ("no ffmpeg on PATH", a nonzero
     // ffmpeg exit, a non-UTF-8 output path) — CLI product + diagnostics by

@@ -1214,6 +1214,22 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             println!("wrote {} (mid-glide diagonal, + sidecar .json)", out.display());
             Ok(())
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        Mode::ScreenshotFrames { out, file, frames, step_ms } => {
+            // The document is a stationary backdrop; the real App (built inside the
+            // harness) drives the scheduling. No `--keys` replay — the which-key
+            // prefix is armed directly at virtual t=0 (see `capture::frames`).
+            let buffer = load_buffer(&file);
+            capture::capture_frames(&out, &buffer, frames, step_ms, &CaptureOpts::default())?;
+            let stem = out
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "capture".to_string());
+            println!(
+                "wrote {frames} frame(s) to {stem}.fNNN.png (step {step_ms}ms, + per-frame sidecars, + {stem}.frames.json)"
+            );
+            Ok(())
+        }
         Mode::CaptureTimeline {
             out,
             file,

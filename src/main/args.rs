@@ -105,6 +105,20 @@ pub(crate) enum Mode {
         keys: Vec<keyspec::Chord>,
         km: KeymapState,
     },
+    /// The virtual-clock FRAME-LOOP capture (`--screenshot-frames N OUT.png`): N
+    /// successive SETTLED frames driven by a REAL `App`'s `about_to_wait_impl`
+    /// scheduling body stepped `step_ms` per frame under a `VirtualClock`, so a
+    /// LIVE-ONLY cross-frame behaviour (the which-key debounce summoning EXACTLY at
+    /// its 500 ms pause deadline) is inspectable — the class the single settled
+    /// `--screenshot` frame is blind to. `file` is the stationary document backdrop.
+    /// Native-only (builds a hermetic App via `InMemoryFs`). See `capture::frames`.
+    #[cfg(not(target_arch = "wasm32"))]
+    ScreenshotFrames {
+        out: PathBuf,
+        file: Option<PathBuf>,
+        frames: u32,
+        step_ms: u64,
+    },
     /// DETERMINISTIC TIMELINE capture: after the `--keys` replay sets up a
     /// NAVIGATION caret move (a glide, not an edit-snap), advance a VIRTUAL clock
     /// by the given cumulative-ms `steps` with an INJECTED dt, writing a frame
@@ -436,6 +450,14 @@ pub(crate) fn parse_args() -> Result<Mode> {
     let mut motion = false;
     let mut motion_v = false;
     let mut motion_d = false;
+    // `--screenshot-frames N OUT.png`: the virtual-clock FRAME-LOOP capture — N
+    // successive settled frames of the real App scheduling body stepped `--frame-step-ms`
+    // per frame (None = not a frame-loop capture). Native-only (builds a hermetic App),
+    // so the flag + its Mode do not exist on the CLI-less wasm target.
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut frames: Option<u32> = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut frame_step_ms: Option<u64> = None;
     // Every capture-mode flag seen, in order. More than one is a conflict (each
     // sets `out` + selects a Mode by precedence, so a second would silently win
     // or lose); checked after the loop via `ensure_single_capture_mode`.
@@ -583,6 +605,33 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 out = Some(PathBuf::from(p));
                 motion_d = true;
                 capture_modes.push("--screenshot-motion-d");
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            "--screenshot-frames" => {
+                // `--screenshot-frames N OUT.png`: the frame COUNT then the output path
+                // (the count is the flag's headline, mirroring the task's shape; OUT
+                // stays explicit like every other screenshot flag).
+                let n = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--screenshot-frames requires <N> <out.png>")
+                })?;
+                let n: u32 = n.parse().map_err(|e| {
+                    anyhow::anyhow!("--screenshot-frames <N> must be an integer: {e}")
+                })?;
+                let p = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--screenshot-frames requires an output path after <N>")
+                })?;
+                out = Some(PathBuf::from(p));
+                frames = Some(n);
+                capture_modes.push("--screenshot-frames");
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            "--frame-step-ms" => {
+                let v = args.next().ok_or_else(|| {
+                    anyhow::anyhow!("--frame-step-ms requires a millisecond step")
+                })?;
+                frame_step_ms = Some(v.parse().map_err(|e| {
+                    anyhow::anyhow!("--frame-step-ms must be a positive integer: {e}")
+                })?);
             }
             "--capture-timeline" => {
                 // `--capture-timeline "<ms,ms,...>" OUT.png`: a cumulative-ms step
@@ -1162,6 +1211,13 @@ pub(crate) fn parse_args() -> Result<Mode> {
             root,
             canvas: capture_size,
             dpi: capture_dpi,
+        },
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(out) if frames.is_some() => Mode::ScreenshotFrames {
+            out,
+            file,
+            frames: frames.unwrap(),
+            step_ms: frame_step_ms.unwrap_or(capture::DEFAULT_FRAME_STEP_MS),
         },
         Some(out) if motion_d => Mode::ScreenshotMotionDiagonal { out, file, keys, km },
         Some(out) if motion_v => Mode::ScreenshotMotionVertical { out, file, keys, km },

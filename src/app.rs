@@ -401,6 +401,12 @@ mod window;
 /// drive — one `WaitUntil` each, lifted out of the trait method (a thin
 /// delegate now) so the file's #1 collision seam has its own home.
 mod schedule;
+/// The virtual-clock frame loop's headless control-flow sink, re-exported so the
+/// capture harness (`crate::capture::frames`) + the scheduling law can step the
+/// real `about_to_wait_impl` body off-window. `Scheduler` stays crate-internal too
+/// (the trait the body is generic over; `ActiveEventLoop` is the live impl).
+#[cfg(any(test, not(target_arch = "wasm32")))]
+pub(crate) use schedule::RecordingScheduler;
 /// The apply bridge: resolve an `Action` + live-only side effects.
 mod apply;
 /// The single-instance DAEMON's App-side wiring (native only): react to a
@@ -1470,6 +1476,37 @@ impl App {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl App {
+    /// Build a HERMETIC, `gpu`-less App for the FRAME-LOOP capture
+    /// (`--screenshot-frames`) — a native, non-test sibling of the `#[cfg(test)]`
+    /// `new_hermetic`, deterministic by construction: an `InMemoryFs` (empty — no
+    /// config/session/stash to read, no user disk touched, the same door
+    /// `crate::scenario` uses for a strict replay) and reduce-motion/session-restore
+    /// pinned off, exactly like `new_hermetic`. The capture harness swaps a
+    /// [`crate::clock::VirtualClock`] in ([`set_clock`](Self::set_clock)) and steps
+    /// the real scheduling body; this App renders nothing itself (`gpu: None`), so
+    /// its buffer is just the scheduling driver — the harness draws the document +
+    /// the panel its state reports through its OWN offscreen pipeline. Constructs via
+    /// `Self::new` (not the raw open-paren needle the accounting guard scans for), so
+    /// that guard is unaffected.
+    ///
+    /// Installs the `InMemoryFs` via the production `fs::set_active` (the SAME door
+    /// `crate::scenario::install_hermetic_fs` uses for a strict replay), restoring the
+    /// prior backend when construction returns — no test-only `with_fs`/serial lock
+    /// (this is a single-threaded one-shot CLI, never a concurrent test). Routes
+    /// through `Self::new`, not the raw constructor's open-paren needle, so the
+    /// real-FS-constructor accounting guard is unaffected.
+    pub(crate) fn new_headless_scheduler(root: PathBuf, config: Config) -> Self {
+        let config = Config { session_restore: Some(false), reduce_motion: Some(false), ..config };
+        let prev = crate::fs::active();
+        crate::fs::set_active(Arc::new(crate::fs::InMemoryFs::new()));
+        let app = Self::new(None, root, None, None, config);
+        crate::fs::set_active(prev);
+        app
+    }
+}
+
 impl App {
     /// Shared post-GPU-init: fold the monitor's DPI scale into the metrics BEFORE
     /// the first sync (so the opening frame is proportioned like the capture on a
@@ -1943,8 +1980,17 @@ impl ApplicationHandler<AwlEvent> for App {
         // The full scheduling body (every debounce / settle deadline + the
         // ambient tick + GPU retries) lives in `app/schedule.rs`; a trait impl
         // can't span files, so this method is a thin delegate to the inherent
-        // `App::about_to_wait_impl` moved there.
+        // `App::about_to_wait_impl` moved there. `ActiveEventLoop` is the live
+        // `Scheduler` sink (a headless `RecordingScheduler` is the other, driven by
+        // `step_scheduling`), so the SAME body runs under the virtual-clock harness.
         self.about_to_wait_impl(event_loop);
+        // The GPU SOAK drive runs LAST (its historical position at the end of the
+        // scheduling body) but OUTSIDE it: it needs the real `&ActiveEventLoop`
+        // (resizes the recovery window, sets its own control flow) and always runs on
+        // real time, so it never belongs on the clock-steppable path. No-ops unless a
+        // `--soak-gpu` run is active.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.drive_gpu_soak(event_loop);
     }
 }
 
