@@ -2334,6 +2334,14 @@ pub fn run(
     #[cfg(not(target_arch = "wasm32"))]
     if soak.is_none() { crate::crashlog::install_hook(); }
 
+    // FLIGHT RECORDER (native live-App only, capture-gated exactly like the crash
+    // hook / daemon above — headless `--screenshot`/`--keys`/`--bench-*` never
+    // reach `run`): if `AWL_FLIGHT_RECORDER=<path>` is set, arm the append-only
+    // present/bracket/redraw trace so the user's next live theme-preview "page
+    // vanishes" repro leaves a black box. A no-op when the env is absent.
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::probe::init_flight();
+
     // SINGLE-INSTANCE DAEMON (native only, and compiled out entirely under
     // `mas` — see `crate::daemon`'s module doc for the full CAPTURE GATE
     // argument: this whole block lives ONLY on this live-App startup path,

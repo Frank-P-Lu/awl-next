@@ -477,7 +477,7 @@ impl Gpu {
         self.window.pre_present_notify();
         frame.present();
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::probe::live_active() {
+        if crate::probe::recording() {
             crate::probe::trace(format_args!("present"));
         }
         // The latency endpoint: present-SUBMISSION return (wgpu exposes no

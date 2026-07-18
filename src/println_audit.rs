@@ -51,8 +51,12 @@ const EXPECTED: &[(&str, usize)] = &[
     // `app/apply.rs` / `app/gpu.rs` / `app/window.rs` carry no print macro of
     // their own), the per-shot `LIVE-PROBE shot …` protocol lines the wrapping
     // script asserts on (`app/probe.rs`), and `app.rs`'s shots-dir creation
-    // failure (counted in the row above).
-    ("probe.rs", 2),
+    // failure (counted in the row above). The third print site is the FLIGHT
+    // RECORDER's `AWL_FLIGHT_RECORDER` open-failure warning (`init_flight`) — a
+    // one-time startup-before-notice diagnostic (fate (c)), like the config/GPU
+    // init failures above; when the recorder can't open its file it says so and
+    // stays off rather than failing the launch.
+    ("probe.rs", 3),
     ("app/probe.rs", 5),
     // "follow link: could not open …" — a rare OS-handoff failure
     // (C-c C-o). Flagged as a future notice-routing candidate, not fixed

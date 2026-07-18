@@ -44,6 +44,20 @@ impl App {
             gpu::GpuFrameOutcome::Skipped(skip) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(soak) = self.soak.as_mut() { soak.observe_frame(crate::soak_gpu::FrameOutcome::Skipped(soak_skip_kind(skip)), false); }
+                // FLIGHT-RECORDER / PROBE: a frame that DIDN'T present is the vanish
+                // signature — the writing surface can only go stale/blank on screen
+                // when a scheduled frame is skipped (occluded / timeout / surface
+                // lost) while the bracket state is what it is. Log the reason + the
+                // live bracket so the black box shows exactly which present was lost.
+                #[cfg(not(target_arch = "wasm32"))]
+                if crate::probe::recording() {
+                    crate::probe::trace(format_args!(
+                        "present SKIPPED {skip:?} (txn_on={} crossing={} teardown_pending={})",
+                        self.present_sync_on,
+                        self.crossing_settle_at.is_some(),
+                        self.crossing_teardown_pending,
+                    ));
+                }
                 let action = gpu_skip_action(skip, self.gpu_timeout_streak);
                 self.gpu_timeout_streak = if skip == gpu::GpuFrameSkip::Timeout {
                     self.gpu_timeout_streak.saturating_add(1)
@@ -93,6 +107,11 @@ impl App {
         // focus — a hard regression the smoke run asserts on (grep the stderr).
         #[cfg(not(target_arch = "wasm32"))]
         if crate::probe::live_active() { crate::probe::trace(format_args!("FOCUS-GAINED (window became key — focus theft!)")); }
+        // FLIGHT RECORDER (not the probe — its window is never key): a normal focus
+        // regain resumes the ambient tick. Logged so the black box can tell a stale
+        // frame during a blurred gap apart from a genuine preview-time race.
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::flight_active() { crate::probe::trace(format_args!("focus gained (ambient tick resumes)")); }
         self.focused = true;
         self.lava_tick_at = None;
         if let Some(gpu) = self.gpu.as_ref() { gpu.window.request_redraw(); }
@@ -106,12 +125,22 @@ impl App {
     /// (the next acquire returns `Occluded` and re-parks the loop). The decision
     /// is the pure `occluded_change_wants_redraw` so it is unit-testable.
     pub(super) fn on_occluded(&mut self, occluded: bool) {
+        // FLIGHT RECORDER / PROBE: occlusion is the direct cause of a skipped
+        // present (wgpu returns `Occluded` before `nextDrawable`), so a vanish that
+        // coincides with an occlusion transition is the OS hiding the window, not a
+        // preview race — the black box must distinguish them.
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::recording() {
+            crate::probe::trace(format_args!("occluded={occluded}"));
+        }
         if occluded_change_wants_redraw(occluded) {
             if let Some(gpu) = self.gpu.as_ref() { gpu.window.request_redraw(); }
         }
     }
 
     pub(super) fn on_focus_lost(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::flight_active() { crate::probe::trace(format_args!("focus lost (ambient tick pauses)")); }
         // AMBIENT LAVA TICK: the window lost focus — PAUSE the lava drift (hold the
         // current phase, stop scheduling frames) so a backgrounded window costs 0%
         // CPU. `about_to_wait`'s gate reads `self.focused`; clearing the stamp means
@@ -246,7 +275,7 @@ impl App {
         // it takes this arm as a TOTAL no-op, byte-identical as ever.
         if crate::theme::active().has_ambient_motion() {
             #[cfg(not(target_arch = "wasm32"))]
-            if crate::probe::live_active() { crate::probe::trace(format_args!("on_moved (ambient world)")); }
+            if crate::probe::recording() { crate::probe::trace(format_args!("on_moved (ambient world)")); }
             self.move_settle_at = Some(Instant::now());
             self.lava_tick_at = None;
             self.sync_present_txn();
@@ -275,7 +304,7 @@ impl App {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::probe::live_active() {
+        if crate::probe::recording() {
             crate::probe::trace(format_args!(
                 "present_txn {} (resize={} move={} crossing={} teardown_pending={})",
                 if want { "ON" } else { "OFF" },
@@ -326,7 +355,7 @@ impl App {
     /// flash. Clearing `move_settle_at` first makes it fire exactly once.
     pub(super) fn finish_move_settle(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::probe::live_active() { crate::probe::trace(format_args!("finish_move_settle")); }
+        if crate::probe::recording() { crate::probe::trace(format_args!("finish_move_settle")); }
         self.move_settle_at = None;
         self.lava_tick_at = None;
         self.sync_present_txn();
@@ -353,7 +382,7 @@ impl App {
     /// owner composes all three). Live-only: a headless capture never previews.
     pub(super) fn finish_crossing_settle(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::probe::live_active() { crate::probe::trace(format_args!("finish_crossing_settle -> teardown armed (bracket HELD through reshape present)")); }
+        if crate::probe::recording() { crate::probe::trace(format_args!("finish_crossing_settle -> teardown armed (bracket HELD through reshape present)")); }
         self.crossing_settle_at = None;
         // Hand off to the event-ordered teardown: hold the bracket ON until the
         // post-reshape present completes (see `finish_crossing_teardown`).
@@ -374,7 +403,7 @@ impl App {
     /// STRICTLY follows the bracketed reshape present, never coalesces with it.
     pub(super) fn finish_crossing_teardown(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if crate::probe::live_active() { crate::probe::trace(format_args!("finish_crossing_teardown (reshape presented in-bracket) -> disarm")); }
+        if crate::probe::recording() { crate::probe::trace(format_args!("finish_crossing_teardown (reshape presented in-bracket) -> disarm")); }
         self.crossing_teardown_pending = false;
         self.sync_present_txn();
         if let Some(gpu) = self.gpu.as_ref() {
