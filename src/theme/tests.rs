@@ -136,13 +136,17 @@ fn bars_unselected_sits_a_quiet_rung_below_the_selected_band() {
 
 #[test]
 fn worlds_ten_dark_six_light() {
-    assert_eq!(THEMES.len(), 16);
+    // 17 on THIS branch: Cassowary (the NERV-terminal statement world) lands as
+    // an ADDITIVE DARK entry (10→11 dark). A concurrent branch adds a light-blue
+    // 17th world (light +1); the merge train reconciles to [Theme; 18] = 11 dark
+    // / 7 light. (Test name kept for the merge train to update in one place.)
+    assert_eq!(THEMES.len(), 17);
     let dark = THEMES.iter().filter(|t| t.dark).count();
     let light = THEMES.iter().filter(|t| !t.dark).count();
-    // 10 dark (Tawny/Mopoke/Currawong/Potoroo/Undertow/Kingfisher/Outback/
-    // Mangrove/Wagtail/Firetail) / 6 light (Gumtree/Bilby/Saltpan/Quokka/Galah/
-    // Magpie). Firetail (the sixteenth) is the warm lava statement world.
-    assert_eq!(dark, 10);
+    // 11 dark (Tawny/Mopoke/Currawong/Potoroo/Undertow/Kingfisher/Outback/
+    // Mangrove/Wagtail/Firetail/Cassowary) / 6 light (Gumtree/Bilby/Saltpan/
+    // Quokka/Galah/Magpie).
+    assert_eq!(dark, 11);
     assert_eq!(light, 6);
 }
 
@@ -953,8 +957,10 @@ fn every_world_has_a_bundled_mono() {
     // SIXTH — it derives from Potoroo's warm den and shares its Monaspace Xenon
     // slab-mono display (a logged, honest consequence of adding worlds faster than
     // bundled display faces; see `worlds.rs::FIRETAIL`'s own doc comment).
-    const MONO_DISPLAY: [&str; 6] =
-        ["Tawny", "Currawong", "Potoroo", "Mangrove", "Wagtail", "Firetail"];
+    // Cassowary (the NERV terminal) is the SEVENTH — it shares Currawong's
+    // Iosevka as the terminal-readout face for both display and code.
+    const MONO_DISPLAY: [&str; 7] =
+        ["Tawny", "Currawong", "Potoroo", "Mangrove", "Wagtail", "Firetail", "Cassowary"];
     for t in THEMES.iter() {
         assert!(
             BUNDLED_MONOS.contains(&t.mono),
@@ -1000,7 +1006,7 @@ fn cjk_fallback_matches_world_character() {
     let zenmaru = ["Galah", "Kingfisher"];
     let klee = ["Mopoke", "Quokka"];
     let mincho = ["Saltpan", "Outback", "Magpie"]; // neutral serif (Noto Serif JP)
-    let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong", "Wagtail", "Firetail"]; // neutral sans/mono (Noto Sans JP)
+    let gothic = ["Tawny", "Potoroo", "Mangrove", "Currawong", "Wagtail", "Firetail", "Cassowary"]; // neutral sans/mono (Noto Sans JP)
     for t in THEMES.iter() {
         assert!(!t.cjk.is_empty(), "{} has no CJK fallback list", t.name);
         if shippori.contains(&t.name) {
@@ -1227,7 +1233,7 @@ fn latin_candidates_is_the_worlds_own_display_face() {
 fn zh_hans_ladder_matches_world_character_with_klee_override() {
     let mincho = ["Gumtree", "Saltpan", "Bilby", "Undertow", "Outback", "Magpie"];
     let klee = ["Mopoke", "Quokka"];
-    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong", "Wagtail", "Firetail"];
+    let gothic = ["Tawny", "Potoroo", "Mangrove", "Galah", "Kingfisher", "Currawong", "Wagtail", "Firetail", "Cassowary"];
     for t in THEMES.iter() {
         assert!(!t.zh_hans.is_empty(), "{} has no zh-Hans candidate list", t.name);
         if klee.contains(&t.name) {
@@ -2062,6 +2068,23 @@ fn personality_assignments_are_exactly_the_decided_table() {
             "Tawny" | "Mopoke" | "Potoroo" | "Undertow" | "Kingfisher" | "Outback" => {
                 RenderCaps::DEFAULT
             }
+            // CASSOWARY (the NERV-terminal statement world): the loud NERV console
+            // overlay — a bold Archivo-Black wordmark placard (Auto corner from the
+            // TopLeft card), BORDERED elevation, the poster Bars list, and BRACKET
+            // facet chips (terminal corner-ticks). The writing page stays calm.
+            "Cassowary" => RenderCaps {
+                title_style: TitleStyle::Placard {
+                    corner: PlacardCorner::Auto,
+                    scale: 3.0,
+                    ink: PlacardInk::Bold,
+                },
+                card_anchor: model::CardAnchor::TopLeft,
+                chrome_face: model::ChromeFace::Named("Archivo Black"),
+                elevation: Elevation::Bordered,
+                list_style: poster_bars,
+                facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+                ..RenderCaps::DEFAULT
+            },
             other => panic!(
                 "{other}: a NEW world must decide its personality here (placard? border? \
                  frame? or deliberately DEFAULT) — the assignment table is conscious data, \

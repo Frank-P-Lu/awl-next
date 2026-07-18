@@ -1294,17 +1294,218 @@ pub const FIRETAIL: Theme = Theme {
     },
 };
 
-/// All sixteen worlds, in cycle order. `C-x t` advances through this list and
+/// Cassowary — a NERV operations terminal: phosphor-green data on near-black
+/// glass, an amber LCL caret, and a warning-red alert channel.
+///
+/// **The register (WORLDS.md's flavour sentence):** *"The MAGI bridge after dark
+/// — green terminal data on black glass, one amber LCL spark where you sit, red
+/// only when something is wrong."* The cassowary is the roster's armoured,
+/// prehistoric, casque-helmeted dangerous bird ("the world's most dangerous
+/// bird", a living dinosaur) — glossy BLACK plumage, a red wattle, an electric
+/// blue-green neck: the black-ground / green-data / red-warning palette is the
+/// creature's own colouring, and its armoured-menace character is the mecha wink
+/// without cosplay.
+///
+/// **The amber-tension resolution (the board's named core problem).** awl's ONE
+/// accent is the caret's amber (`primary`; DESIGN §3). Evangelion's identity red
+/// (Unit-02 / the NERV logo / warning chrome) sits dangerously close to amber, so
+/// this world does NOT spend its identity on red. Instead it carries the MAGI
+/// terminal-phosphor GREEN as its ink-ladder identity — data green IS deeply
+/// Evangelion (the whole NERV bridge is green readouts on black) — and reserves
+/// RED for the ERROR/ALERT channel alone (`error`, and the warning-crimson
+/// `selection` wash). The caret stays amber — thematically the entry-plug LCL
+/// spark (LCL is the amber fluid the pilot floats in): the one warm living point
+/// of presence inside the cool green terminal, exactly DESIGN §3's "you get the
+/// warm colour, the world stays quiet." A clean three-way semantic split — green
+/// = data, red = alert/interaction, amber = you — that is both law-safe (green
+/// ~140° ink, crimson ~348° warnings, amber ~39° caret: role tints, washes and
+/// selection are all ≥30° off the caret) and peak-NERV.
+///
+/// **Face + heading.** Iosevka, the narrowest, most mechanical bundled mono — the
+/// literal terminal-readout face — as both display and code (already mono, so
+/// code reuses it). Uniform mono strokes need weight to lift a section head →
+/// `heading_bold: true` (Iosevka ships a real Bold). The summoned overlay speaks
+/// the LOUD NERV monolith voice: `chrome_face = Archivo Black` (the heavy
+/// grotesque, registers at usWeightClass 400 so the plain chrome request matches
+/// it) on the placard wordmark / title prefix / lens-strip — while the writing
+/// column and list rows stay Iosevka (the closed chrome-surface set; legibility
+/// surfaces never change face). The WRITING page stays calm green-on-black; the
+/// drama is transient, only when you summon a command (the NERV console appears)
+/// — exactly DESIGN §5's "transient summoned overlays, never persistent chrome".
+///
+/// **Ground.** `Pinstripe` — fine parallel dim-green lines in the page-mode
+/// margins: CRT scan-lines, the terminal register, marginal and calm (the page
+/// column stays the flat figure). Every taste number is HOLD-flagged for the
+/// user's gallery pick.
+pub const CASSOWARY: Theme = Theme {
+    name: "Cassowary",
+    dark: true,
+    // Near-black terminal GLASS with a faint green undertone (reads "terminal",
+    // not neutral) — the low-saturation dark keeps the warm comment wash in band
+    // (a red-starved deep TEAL breaches it; this near-neutral green does not).
+    base_100: Srgb::rgb(0x05, 0x0B, 0x07),
+    base_200: Srgb::rgb(0x0A, 0x16, 0x0F),
+    // The focused plane is a dim terminal-green panel (the console's own surface).
+    base_300: Srgb::rgb(0x14, 0x2C, 0x1E),
+    // Phosphor green data — bright enough to read as CRT phosphor, pale/soft
+    // enough for long prose (a saturated mid-green body fatigues; this pale
+    // phosphor gives the role tints their derivation room besides).
+    base_content: Srgb::rgb(0xA8, 0xEC, 0xBE),
+    muted: Srgb::rgb(0x5C, 0x9E, 0x70),
+    faint: Srgb::rgb(0x37, 0x63, 0x4A),
+    // Amber-gold LCL caret (hue ~39°), held well clear of the green ink (~140°),
+    // the crimson warnings (~348°) and the alert red (~4°): gold stays the ONE
+    // accent (DESIGN §3, the amber-guard).
+    primary: Srgb::rgb(0xF4, 0xB2, 0x3A),
+    primary_content: Srgb::rgb(0x22, 0x16, 0x04),
+    // The NERV warning red — the alert channel (spell-squiggle / failure signal),
+    // a hot "PATTERN" red that only ever means something is wrong.
+    error: Srgb::rgb(0xFF, 0x44, 0x36),
+    // A dim warning-CRIMSON selection wash (~348°, the "target-lock" band) — the
+    // world's "red on black" identity lives HERE + in `error`, never on the caret.
+    // Higher alpha than the calm worlds so the crimson clears the selection
+    // contrast floor over the near-black ground (redmean ≥150).
+    selection: Srgb::rgba(0xD2, 0x45, 0x5F, 0x70),
+    // CRT SCAN-LINES: fine parallel dim-green lines in the page-mode margins (the
+    // terminal register), gradient base_100 → base_200, marginal and calm.
+    background: Background::Pinstripe {
+        from: Srgb::rgb(0x05, 0x0B, 0x07),
+        to: Srgb::rgb(0x0A, 0x16, 0x0F),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0x1E, 0x4A, 0x32),
+    },
+    // Iosevka — the narrow mechanical terminal-readout face, display AND code.
+    font: "Iosevka",
+    mono: "Iosevka",
+    // Iosevka's uniform mechanical strokes need weight to mark a section head.
+    heading_bold: true,
+    cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS_SANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
+    // Technical terminal → the merged marks' hazard/alert trio (◆ hazard diamond +
+    // ✴ eight-spoke alert star + ◈ diamond-with-centre), three distinct geometrics.
+    ornaments: Ornaments { dash: '◆', star: '✴', underscore: '◈' },
+    ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    // Stark terminal → plain geometric bullets (restraint is its character).
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
+    // NERV bunker terminal → Night; Iosevka mechanical mono → Technical. Opts OUT
+    // of Register + Temperature (both crowded near their cap, and to leave room for
+    // the concurrent roster growth) — headlines Night + Technical, its clearest reads.
+    tags: ThemeTags { time: Some("Night"), register: None, voice: Some("Technical"), temperature: None },
+    role_overrides: RoleOverrides::NONE,
+    // THE NERV CONSOLE (a statement/poster world — the summoned overlay goes loud
+    // while the writing page stays a calm green terminal): a bold Archivo-Black
+    // NERV wordmark placard (Auto corner → complementary to the TopLeft card),
+    // BORDERED elevation (a hard-edged console card over the black), the poster
+    // Bars list (per-row console plates), and BRACKET facet chips (terminal
+    // corner-ticks — "the terminal register", its own doc's words). Card anchored
+    // TopLeft (a deliberate object, opening the opposite corner for the wordmark).
+    render_caps: RenderCaps {
+        title_style: TitleStyle::Placard {
+            corner: PlacardCorner::Auto,
+            scale: 3.0,
+            ink: PlacardInk::Bold,
+        },
+        card_anchor: CardAnchor::TopLeft,
+        chrome_face: ChromeFace::Named("Archivo Black"),
+        elevation: Elevation::Bordered,
+        list_style: POSTER_BARS,
+        facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+        ..RenderCaps::DEFAULT
+    },
+};
+
+/// Cassowary Light — the EXPLORATORY LIGHT variant (the user's "idk if eva should
+/// be light?" question), the **entry-plug interior / EVA-00 (Rei) register**: a
+/// pale, clinical, backlit white with a faint cool-green cast (the LCL-lit plug
+/// glass), dark slate-green data ink, the same amber LCL caret, and the NERV red
+/// on white. Deliberately NOT in [`THEMES`] (a gallery exploration, not a shipped
+/// world) — the dark `CASSOWARY` is the anchor; this is here so the user can see
+/// the light option side-by-side and pick. Add it to `THEMES` (and to the count +
+/// personality-table + axis tests) to ship it. Its ink-ladder lightnesses mirror
+/// Gumtree's (a proven light-world ladder), so it clears the strict light role-
+/// tint floors the same way.
+#[allow(dead_code)] // gallery-only exploration; not in THEMES (see doc above).
+pub const CASSOWARY_LIGHT: Theme = Theme {
+    name: "Cassowary Light",
+    dark: false,
+    // Pale cool-green white — the backlit entry-plug glass.
+    base_100: Srgb::rgb(0xEE, 0xF4, 0xF0),
+    base_200: Srgb::rgb(0xE2, 0xEC, 0xE6),
+    base_300: Srgb::rgb(0xD2, 0xE1, 0xD8),
+    // Dark slate-green data ink (mirrors Gumtree's ink lightness).
+    base_content: Srgb::rgb(0x16, 0x24, 0x1B),
+    // Muted rung lightened just enough to widen the base_content->muted band so the
+    // derived light Def/Const role tints clear their pairwise floor (the classic
+    // light-world tightness); mirrors Gumtree's muted lightness.
+    muted: Srgb::rgb(0x5A, 0x6E, 0x62),
+    faint: Srgb::rgb(0x92, 0xA3, 0x98),
+    // The amber LCL caret, a shade deeper for contrast on the pale ground.
+    primary: Srgb::rgb(0xD9, 0x79, 0x22),
+    primary_content: Srgb::rgb(0xFB, 0xEF, 0xE2),
+    // NERV red, deepened so it holds contrast on white.
+    error: Srgb::rgb(0xC2, 0x34, 0x29),
+    // Pale warning-crimson selection (the "target-lock" band, light register).
+    selection: Srgb::rgba(0xC8, 0x36, 0x5E, 0x5E),
+    // The clinical lab: fine dim scan-lines in the margins, one register up.
+    background: Background::Pinstripe {
+        from: Srgb::rgb(0xE2, 0xEC, 0xE6),
+        to: Srgb::rgb(0xD2, 0xE1, 0xD8),
+        dir: (0.0, 1.0),
+        tint: Srgb::rgb(0xAF, 0xC6, 0xB8),
+    },
+    font: "Iosevka",
+    mono: "Iosevka",
+    heading_bold: true,
+    cjk: CJK_GOTHIC,
+    zh_hans: CJK_ZH_HANS_SANS,
+    zh_hant: CJK_ZH_HANT,
+    ko: CJK_KO,
+    ornaments: Ornaments { dash: '◆', star: '✴', underscore: '◈' },
+    ornament_face: ORNAMENT_MARKS,
+    ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
+    bullets: BULLETS_PLAIN,
+    bullet_scale: BULLET_SCALE_PLAIN,
+    tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Technical"), temperature: None },
+    role_overrides: RoleOverrides::NONE,
+    // The same NERV console overlay as the dark anchor, so the user compares the
+    // two on equal footing.
+    render_caps: RenderCaps {
+        title_style: TitleStyle::Placard {
+            corner: PlacardCorner::Auto,
+            scale: 3.0,
+            ink: PlacardInk::Bold,
+        },
+        card_anchor: CardAnchor::TopLeft,
+        chrome_face: ChromeFace::Named("Archivo Black"),
+        elevation: Elevation::Bordered,
+        list_style: POSTER_BARS,
+        facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+        ..RenderCaps::DEFAULT
+    },
+};
+
+/// All seventeen worlds, in cycle order. `C-x t` advances through this list and
 /// wraps; `C-x T` steps backward. The two deep cool darks — Currawong (OLED
 /// black) beside the neutral Tawny/Mopoke pair, and Kingfisher (midnight navy)
 /// beside the violet Undertow — sit with their kin; the two STATEMENT worlds
 /// close the cycle as mirror bookends — Wagtail (the bare 1-bit room, NO warm
 /// thing) beside Firetail (the warm den whose one warm thing is the living lava
-/// GROUND itself).
-pub const THEMES: [Theme; 16] = [
+/// GROUND itself) — and Cassowary (the NERV terminal) sits after Firetail as the
+/// dark-technical statement.
+///
+/// **COUNT NOTE (merge-train reconciliation):** a concurrent branch adds a
+/// light-blue 17th world touching this same array + the count/axis law tests.
+/// This branch adds Cassowary as an ADDITIVE DARK entry (dark +1). When both
+/// land the array is `[Theme; 18]` and `worlds_ten_dark_six_light` becomes 11
+/// dark / 7 light. On this branch alone it is 17 (11 dark / 6 light).
+pub const THEMES: [Theme; 17] = [
     TAWNY, MOPOKE, CURRAWONG,
     POTOROO, GUMTREE, BILBY, SALTPAN, QUOKKA, UNDERTOW, KINGFISHER, OUTBACK, MANGROVE, GALAH, MAGPIE,
-    WAGTAIL, FIRETAIL,
+    WAGTAIL, FIRETAIL, CASSOWARY,
 ];
 
 /// Index into [`THEMES`] of the default/startup world: **Saltpan** (index 6 —
