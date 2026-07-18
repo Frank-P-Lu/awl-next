@@ -1340,12 +1340,29 @@ pub const FIRETAIL: Theme = Theme {
 pub const CASSOWARY: Theme = Theme {
     name: "Cassowary",
     dark: true,
-    // Near-black terminal GLASS with a faint green undertone (reads "terminal",
-    // not neutral) — the low-saturation dark keeps the warm comment wash in band
-    // (a red-starved deep TEAL breaches it; this near-neutral green does not).
-    base_100: Srgb::rgb(0x05, 0x0B, 0x07),
-    base_200: Srgb::rgb(0x0A, 0x16, 0x0F),
-    // The focused plane is a dim terminal-green panel (the console's own surface).
+    // BLACKGLASS ground (2026-07-18 variant, serving the user's "a bit similar to
+    // Outback no?" — both the old green-cast ground and Outback's blackish-olive
+    // read as dark GREEN rooms). Neutralised base_100/base_200 to a near-neutral
+    // black GLASS (a powered CRT at rest: a hair cool, essentially achromatic —
+    // sat drops 0.38 -> 0.09), so the page field is no longer a green room. The
+    // green now lives ONLY where it means "terminal data": the phosphor INK, the
+    // dim green PANEL/wash (base_300, below), the string wash, and the margin
+    // scan-line TINT (Pinstripe, below). Vs Outback redmean 48.8 -> 59.5, and the
+    // saturation collapse is the real separation (0.09 vs Outback's 0.35). NOTE:
+    // this lands base_100 within ~3 redmean of Currawong's neutral OLED near-black
+    // (#060607) — no law enforces pairwise-ground distinctness, and the two worlds
+    // diverge hard elsewhere (green phosphor ink + green scan-line margins + crimson
+    // selection here vs Currawong's neutral ink + twinkling-star margins).
+    // ORIGINAL green-cast hexes (easy revert): base_100 #050B07, base_200 #0A160F.
+    base_100: Srgb::rgb(0x05, 0x05, 0x06),
+    base_200: Srgb::rgb(0x0B, 0x0C, 0x0D),
+    // The focused plane STAYS a dim terminal-green panel — deliberately KEPT green
+    // through the blackglass neutralisation: base_300 is the summoned NERV console
+    // CARD fill + the surface-ramp step, i.e. the "wash step" where terminal
+    // content sits. Keeping it green means the writing page reads as black glass
+    // while the transient summoned overlay reads as a green console panel (DESIGN
+    // §5's "the drama is transient" — you get the green terminal exactly when you
+    // summon a command). Sat 0.38, well clear of the neutral page field above.
     base_300: Srgb::rgb(0x14, 0x2C, 0x1E),
     // Phosphor green data — bright enough to read as CRT phosphor, pale/soft
     // enough for long prose (a saturated mid-green body fatigues; this pale
@@ -1353,9 +1370,14 @@ pub const CASSOWARY: Theme = Theme {
     base_content: Srgb::rgb(0xA8, 0xEC, 0xBE),
     muted: Srgb::rgb(0x5C, 0x9E, 0x70),
     faint: Srgb::rgb(0x37, 0x63, 0x4A),
-    // Amber-gold LCL caret (hue ~39°), held well clear of the green ink (~140°),
-    // the crimson warnings (~348°) and the alert red (~4°): gold stays the ONE
-    // accent (DESIGN §3, the amber-guard).
+    // CARET VARIANT B3 (AMBER control): the amber-gold LCL caret (hue ~39°), held
+    // well clear of the green ink (~140°), the crimson warnings (~348°) and the
+    // alert red (~4°): gold stays the ONE accent (DESIGN §3, the amber-guard;
+    // min hue gap to any syntax role 101°). This is the SHIPPED anchor; the two
+    // alternate carets serving the user's "maybe the cursor could be a different
+    // colour, not amber" live as gallery explorations below (CASSOWARY_PHOSPHOR,
+    // CASSOWARY_WATTLE) — both on this same blackglass ground so the user compares
+    // caret-on-identical-room.
     primary: Srgb::rgb(0xF4, 0xB2, 0x3A),
     primary_content: Srgb::rgb(0x22, 0x16, 0x04),
     // The NERV warning red — the alert channel (spell-squiggle / failure signal),
@@ -1367,10 +1389,13 @@ pub const CASSOWARY: Theme = Theme {
     // contrast floor over the near-black ground (redmean ≥150).
     selection: Srgb::rgba(0xD2, 0x45, 0x5F, 0x70),
     // CRT SCAN-LINES: fine parallel dim-green lines in the page-mode margins (the
-    // terminal register), gradient base_100 → base_200, marginal and calm.
+    // terminal register), gradient base_100 → base_200 (now the BLACKGLASS ground,
+    // so the from/to track it), marginal and calm. The scan-line TINT stays green
+    // (#1E4A32) — the phosphor register is the green identity in the margin, drawn
+    // OVER the neutral black glass. ORIGINAL from/to (easy revert): #050B07 / #0A160F.
     background: Background::Pinstripe {
-        from: Srgb::rgb(0x05, 0x0B, 0x07),
-        to: Srgb::rgb(0x0A, 0x16, 0x0F),
+        from: Srgb::rgb(0x05, 0x05, 0x06),
+        to: Srgb::rgb(0x0B, 0x0C, 0x0D),
         dir: (0.0, 1.0),
         tint: Srgb::rgb(0x1E, 0x4A, 0x32),
     },
@@ -1486,6 +1511,74 @@ pub const CASSOWARY_LIGHT: Theme = Theme {
         facet_style: FacetStyle::Chips(ChipVariant::Bracket),
         ..RenderCaps::DEFAULT
     },
+};
+
+/// Cassowary PHOSPHOR — a CARET EXPLORATION (2026-07-18, serving the user's "maybe
+/// the cursor could be a different colour, not amber") on the BLACKGLASS ground.
+/// The caret is the INK's OWN phosphor green (`primary == base_content`, the
+/// authentic CRT block cursor): a solid green cell that INVERTS the glyph beneath
+/// it, exactly the way a real terminal block cursor reads. This is the Wagtail
+/// same-colour precedent generalised off the one-bit pole — the caret carries NO
+/// separate accent hue; block-INVERSION (`CaretBlockStyle::InverseVideo`) supplies
+/// all the distinguishability, so the caret-vs-ground contrast law is met by the
+/// invert, not by a colour step.
+///
+/// **HONEST LAW STATUS (why this is an exploration, not a shipped world).** A green
+/// caret at ~139° sits only ~1° from the `Str` syntax-role anchor (140°), so as a
+/// *shipped* world this VIOLATES the amber-guard `role_style_laws` sub-check (every
+/// tinted role ≥30° off `primary`). That guard exists so no syntax tint competes
+/// with the caret's ACCENT — but here the block caret HAS no chromatic accent (it's
+/// an inversion), so the guard's intent is arguably moot in block/morph mode, the
+/// same reasoning that exempts the one-bit pole. The cost lands in IBEAM mode: the
+/// thin insertion bar IS drawn in `primary` green (redmean ~605 vs the black glass
+/// → plainly visible), but it shares the text's hue, so it reads by SHAPE + ground
+/// contrast, never by colour. MORPH degrades to the inverted block under
+/// `InverseVideo` (see `prepare_caret_layer`). Promoting this world would need a
+/// declared amber-guard exemption (a "CRT-inversion caret" clause) + a
+/// `personality_assignments` table row; until the user picks it, it stays here,
+/// off `THEMES`, capturable via `--theme "Cassowary Phosphor"`.
+#[allow(dead_code)] // caret-exploration gallery variant; not in THEMES (see doc).
+pub const CASSOWARY_PHOSPHOR: Theme = Theme {
+    name: "Cassowary Phosphor",
+    // The caret IS the ink green — the one line that differs from the amber anchor
+    // besides `caret_block_style` below.
+    primary: Srgb::rgb(0xA8, 0xEC, 0xBE),
+    // Ink-on-accent: a dark glass value (only ever consulted in Normal block mode,
+    // which this world never uses — InverseVideo ignores it — kept sane anyway).
+    primary_content: Srgb::rgb(0x04, 0x10, 0x07),
+    render_caps: RenderCaps {
+        // The CRT block cursor: invert the glyph beneath rather than paint a green
+        // cell over green ink (which would erase the letter). Morph folds to this.
+        caret_block_style: CaretBlockStyle::InverseVideo,
+        title_style: TitleStyle::Placard { corner: PlacardCorner::Auto, scale: 3.0, ink: PlacardInk::Bold },
+        card_anchor: CardAnchor::TopLeft,
+        chrome_face: ChromeFace::Named("Archivo Black"),
+        elevation: Elevation::Bordered,
+        list_style: POSTER_BARS,
+        facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+        ..RenderCaps::DEFAULT
+    },
+    ..CASSOWARY
+};
+
+/// Cassowary WATTLE — a CARET EXPLORATION (2026-07-18, the user's "not amber")
+/// on the BLACKGLASS ground: the caret is the cassowary's own WATTLE red-orange
+/// (~22° hue), a warm living spark that is NOT amber yet stays fully law-legal.
+/// It clears the amber-guard with room (min hue gap to any syntax role 92°, to
+/// `Const` 290°) and it is deliberately distinct from the NERV alert `error`
+/// (#FF4436, ~4°): redmean 108.6 apart, a ~18° hue gap — the caret reads as an
+/// ORANGE spark, the error as a hot RED squiggle, so an alert still reads as
+/// "wrong". A clean, shippable alternate: unlike Phosphor it needs no law
+/// exemption. Off `THEMES` only because it is one of three carets the user is
+/// choosing between; capturable via `--theme "Cassowary Wattle"`.
+#[allow(dead_code)] // caret-exploration gallery variant; not in THEMES (see doc).
+pub const CASSOWARY_WATTLE: Theme = Theme {
+    name: "Cassowary Wattle",
+    // Wattle red-orange (~22°): between the alert red (~4°) and the amber anchor
+    // (~39°), a distinct third warm point, ≥30° off every syntax role.
+    primary: Srgb::rgb(0xFF, 0x7A, 0x2E),
+    primary_content: Srgb::rgb(0x2A, 0x12, 0x04),
+    ..CASSOWARY
 };
 
 /// All seventeen worlds, in cycle order. `C-x t` advances through this list and
