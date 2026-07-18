@@ -584,10 +584,12 @@ fn every_catalog_command_dispatches_without_panicking() {
         // The About card's "open" global OWNS the very next key (apply_core's
         // top-of-fn dismiss intercept), so reset it before EACH dispatch — else
         // a prior `Action::About` iteration would make the next command a no-op
-        // dismiss instead of running it. The Lifetime stats card has the SAME
-        // any-key-dismiss intercept, so reset it too.
+        // dismiss instead of running it. The Lifetime stats and Writing streaks
+        // cards have the SAME any-key-dismiss intercept (`card::dismiss_summoned_card`),
+        // so reset both.
         crate::about::set_open(false);
         crate::lifetime::set_open(false);
+        crate::streaks::set_open(false);
 
         let mut buffer = rich_markdown_buffer();
         let mut shift = false;
