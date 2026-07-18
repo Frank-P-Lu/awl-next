@@ -36,6 +36,12 @@
 //!     between steps to dwell.
 //!   - `sleep <ms>` — the driver thread pauses; the app runs its normal live
 //!     loop (debounces fire, frames present) for that long.
+//!   - `move <x> <y>` — move the pointer to PHYSICAL (x, y) through the real
+//!     `on_cursor_moved`; while a picker is open this HOVER-previews the row
+//!     under the cursor (a hover SWEEP is many `move`s with `sleep`s between —
+//!     the dense `CursorMoved` stream no keyboard burst reproduces).
+//!   - `wheel <n>` — mouse wheel by n notches (wheel-up positive) through the
+//!     real `on_mouse_wheel`; an open picker advances + previews, coordinate-free.
 //!   - `shot <name>` — screenshot the real window into `<shots-dir>/<name>.png`
 //!     (`--live-shots DIR`, default the system temp dir). Every shot prints one
 //!     `LIVE-PROBE shot …` line to stdout for the wrapping script to assert on.
@@ -75,11 +81,26 @@ pub enum Step {
     Sleep(u64),
     /// Screenshot the real window to `<shots-dir>/<name>.png`.
     Shot(String),
+    /// Move the pointer to PHYSICAL (x, y) — the real `on_cursor_moved` seam, so
+    /// an open picker HOVER-previews the row under the cursor exactly like a live
+    /// mouse move (`overlay_hover` → `retint_theme_preview`). A hover SWEEP is
+    /// many `move` steps with small `sleep`s between (the dense `CursorMoved`
+    /// stream a real sweep produces, which no keyboard burst reproduces).
+    MouseMove(f64, f64),
+    /// Mouse WHEEL by N notches (sign = direction, wheel-up positive) — the real
+    /// `on_mouse_wheel` seam; an open picker advances its selection + previews
+    /// (`overlay_wheel` → `retint_theme_preview`), coordinate-free.
+    Wheel(f32),
     /// Clean exit via `Action::Quit`.
     Quit,
 }
 
-/// The whole armed probe: parsed steps + where shots land.
+/// The whole armed probe: parsed steps + where shots land. The type is PORTABLE
+/// (so `Mode::Windowed` can carry the `Option<LiveScript>` field on every target,
+/// the "field exists, value never does" shape shared with `wait`); the fields are
+/// only READ by the native driver (`spawn_driver`), so on wasm — where no
+/// `LiveScript` is ever constructed — they are legitimately dead.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct LiveScript {
     pub steps: Vec<Step>,
@@ -88,13 +109,20 @@ pub struct LiveScript {
 
 /// What the driver thread posts into the winit loop (via `EventLoopProxy`,
 /// the daemon's own precedent — never cross-thread `App` access). `Sleep`
-/// never crosses the channel: the driver sleeps on its own thread.
+/// never crosses the channel: the driver sleeps on its own thread. Native-only:
+/// the driver + the winit-side handler are both native, so the wasm build (which
+/// never arms a probe) never names this type.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
 pub enum ProbeEvent {
     /// One chord: dispatched through the same tail a real key press takes.
     Chord(crate::keyspec::Chord),
     /// Screenshot the real window to this exact path (main-thread capture).
     Shot(PathBuf),
+    /// Move the pointer to PHYSICAL (x, y) through the real `on_cursor_moved`.
+    MouseMove(f64, f64),
+    /// Mouse wheel by N notches through the real `on_mouse_wheel`.
+    Wheel(f32),
     /// Clean exit through `Action::Quit`.
     Quit,
 }
@@ -184,8 +212,22 @@ pub fn parse_script(spec: &str) -> Result<Vec<Step>> {
                 }
                 steps.push(Step::Shot(rest.to_string()));
             }
+            "move" => {
+                let mut it = rest.split_whitespace();
+                let (x, y) = (it.next(), it.next());
+                match (x.and_then(|s| s.parse::<f64>().ok()), y.and_then(|s| s.parse::<f64>().ok())) {
+                    (Some(x), Some(y)) if it.next().is_none() => steps.push(Step::MouseMove(x, y)),
+                    _ => bail!("--live-script: `move` needs PHYSICAL x y (e.g. \"move 900 640\"), got {rest:?}"),
+                }
+            }
+            "wheel" => {
+                let n: f32 = rest
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("--live-script: `wheel` needs a notch count (e.g. \"wheel -2\"), got {rest:?}"))?;
+                steps.push(Step::Wheel(n));
+            }
             "quit" => steps.push(Step::Quit),
-            other => bail!("--live-script: unknown step {other:?} (keys|sleep|shot|quit)"),
+            other => bail!("--live-script: unknown step {other:?} (keys|sleep|shot|move|wheel|quit)"),
         }
     }
     if steps.is_empty() {
@@ -230,6 +272,8 @@ pub fn spawn_driver(
                     Step::Keys(chords) => chords
                         .into_iter()
                         .all(|c| post(ProbeEvent::Chord(c))),
+                    Step::MouseMove(x, y) => post(ProbeEvent::MouseMove(x, y)),
+                    Step::Wheel(n) => post(ProbeEvent::Wheel(n)),
                     Step::Shot(name) => {
                         post(ProbeEvent::Shot(script.shots_dir.join(format!("{name}.png"))))
                     }
@@ -393,6 +437,18 @@ mod tests {
         let steps = parse_script("keys Down; quit").expect("parses");
         assert_eq!(steps.len(), 2);
         assert_eq!(steps.last(), Some(&Step::Quit));
+    }
+
+    #[test]
+    fn parse_covers_mouse_move_and_wheel() {
+        let steps = parse_script("move 900 640; wheel -2; wheel 1").expect("parses");
+        assert_eq!(steps[0], Step::MouseMove(900.0, 640.0));
+        assert_eq!(steps[1], Step::Wheel(-2.0));
+        assert_eq!(steps[2], Step::Wheel(1.0));
+        assert_eq!(steps.last(), Some(&Step::Quit), "still terminates");
+        for bad in ["move 900", "move a b", "move 1 2 3", "wheel nudge"] {
+            assert!(parse_script(bad).is_err(), "{bad:?} should be rejected");
+        }
     }
 
     #[test]

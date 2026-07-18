@@ -26,6 +26,17 @@ impl App {
                 self.dispatch_pressed_key(event_loop, chord.key.clone(), chord.key, false);
                 self.mods = winit::event::Modifiers::default();
             }
+            crate::probe::ProbeEvent::MouseMove(x, y) => {
+                // The real pointer-move seam: sets `cursor_px` and, while a picker
+                // is open, HOVER-previews the row under the cursor exactly like a
+                // live mouse move (`on_cursor_moved` → `overlay_hover`).
+                self.on_cursor_moved(winit::dpi::PhysicalPosition::new(x, y));
+            }
+            crate::probe::ProbeEvent::Wheel(n) => {
+                // The real wheel seam: an open picker advances its selection +
+                // previews (`on_mouse_wheel` → `overlay_wheel`), coordinate-free.
+                self.on_mouse_wheel(winit::event::MouseScrollDelta::LineDelta(0.0, n));
+            }
             crate::probe::ProbeEvent::Shot(path) => self.probe_shot(&path),
             crate::probe::ProbeEvent::Quit => {
                 let exited = self.apply(
