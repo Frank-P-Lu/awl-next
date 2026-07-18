@@ -49,3 +49,49 @@ pub fn system_now() -> SystemTime {
         .unwrap_or(0);
     SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(ms)
 }
+
+/// The live editor's ONE owner of "what monotonic time is it" for SCHEDULING
+/// and ANIMATION. Every consumer that used to call the free `Instant::now()` on
+/// the scheduling/animation path — each debounce/settle deadline in
+/// `app::schedule`, the caret-spring frame `dt`, the ambient (lava/stars) tick,
+/// toast expiry, GPU-retry timing, and the App's own sense-of-time stamps
+/// (session origin, save marks, the key→px input receipt) — now reads
+/// `App::clock.now()` through this seam instead.
+///
+/// WHY a seam and not the free function: the headless capture harness has NO
+/// clock and renders a single SETTLED frame, so live-only bug classes
+/// (redraw-scheduling gaps, cache invalidation that only misbehaves ACROSS
+/// frames) are invisible to it. Routing the whole scheduling/animation path
+/// through one injectable [`Clock`] is the structural precondition for a future
+/// deterministic clock the harness can STEP frame-by-frame, making those
+/// classes capturable — without any world/theme code branching on time. The
+/// `app::clock_law` grep-test fences the `app` module against a raw
+/// `Instant::now` re-appearing outside two documented perf-measurement
+/// exceptions.
+///
+/// What this is deliberately NOT: the wall-clock STAMP path (file mtimes,
+/// history/`SystemTime` epoch reads) keeps [`system_now`]; and genuine
+/// real-WORK MEASUREMENT — the `--bench-*` harnesses, `--soak-gpu` (which
+/// injects its own start instant), the GPU-stage perf timing, the
+/// crash-log/probe diagnostics — reads the raw monotonic clock by necessity,
+/// because a virtual clock would report a fictional duration for real elapsed
+/// work. Those live outside the `app` module and outside this law's scope.
+pub trait Clock {
+    /// Monotonic "now". [`RealClock`] forwards to the platform `Instant::now()`.
+    fn now(&self) -> Instant;
+}
+
+/// The shipped clock: a zero-sized PURE pass-through to the platform monotonic
+/// clock, so the live app's timing is byte-for-byte what it was before the seam
+/// existed (the whole point of the MINIMUM landing — a `RealClock`-backed App
+/// captures identically). A deterministic sibling clock can slot in behind the
+/// same `Box<dyn Clock>` field without any consumer changing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RealClock;
+
+impl Clock for RealClock {
+    #[inline]
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}

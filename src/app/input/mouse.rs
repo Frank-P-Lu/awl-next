@@ -50,7 +50,7 @@ impl App {
     /// double-click reads the same wherever the pointer lands — one owner, so the
     /// two can't drift apart on what counts as "a double-click".
     pub(in crate::app) fn bump_click_count(&mut self) -> u32 {
-        let now = Instant::now();
+        let now = self.clock.now();
         let near = {
             let (lx, ly) = self.last_click_px;
             (self.cursor_px.0 - lx).abs() < 4.0 && (self.cursor_px.1 - ly).abs() < 4.0

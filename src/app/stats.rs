@@ -36,7 +36,10 @@ impl App {
         if !self.config.stats_on() {
             return;
         }
-        let now_ms = self.stats_origin.elapsed().as_millis() as u64;
+        // Session clock through the ONE time owner (origin was stamped by the
+        // same `self.clock`), so a deterministic clock would govern the active-
+        // writing odometer too. `RealClock` makes this `stats_origin.elapsed()`.
+        let now_ms = self.clock.now().duration_since(self.stats_origin).as_millis() as u64;
         let world = crate::theme::active().name;
         self.stats
             .record_keystroke(printable, world, self.stats_last_input_ms, now_ms);

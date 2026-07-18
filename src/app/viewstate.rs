@@ -31,7 +31,7 @@ impl App {
         // keep showing the previous squiggles; the re-scan runs in about_to_wait
         // after ~150ms of quiet so a word isn't flagged while you're still typing.
         if self.spell.is_some() && self.spell_checked_version != Some(self.buffer.version()) {
-            self.spell_dirty_at = Some(Instant::now());
+            self.spell_dirty_at = Some(self.clock.now());
         }
         // SAVE-FEEDBACK round: the window-title EDITED marker + the native
         // macOS titlebar dot, kept live WITHOUT re-titling every keystroke —
@@ -49,7 +49,7 @@ impl App {
         // — the determinism + no-fixture-mutation guarantee. The write fires in
         // `about_to_wait` after a quiet period.
         if self.buffer.is_note() && self.autosave_saved_version != Some(self.buffer.version()) {
-            self.autosave_dirty_at = Some(Instant::now());
+            self.autosave_dirty_at = Some(self.clock.now());
         }
         // Arm the DOCUMENT AUTOSAVE idle timer (config-gated, default ON) when a
         // non-note buffer's text changed since its last write — a pathed document
@@ -63,7 +63,7 @@ impl App {
                 self.scratch_saved_version != Some(self.buffer.version())
             };
             if unsaved {
-                self.doc_autosave_at = Some(Instant::now());
+                self.doc_autosave_at = Some(self.clock.now());
             }
         }
         // DIFF-AS-PREVIEW: while the History picker is open, the page below the

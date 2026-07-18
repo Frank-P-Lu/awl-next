@@ -67,7 +67,7 @@ impl App {
             // Idle → Pending: the convention's bare arming modifier went down alone —
             // start the hold timer (consumed by the single `WaitUntil` in
             // `about_to_wait`; no card yet).
-            Pending => self.peek_armed_at = Some(Instant::now()),
+            Pending => self.peek_armed_at = Some(self.clock.now()),
             // Pending → Open: the hold completed — summon the card + redraw.
             Open => {
                 self.peek_armed_at = None;
@@ -111,7 +111,7 @@ impl App {
             // Freshly mid-prefix: (re-)arm the pause. The panel is not shown yet — it
             // appears only once the pause elapses in `about_to_wait`.
             crate::whichkey::PrefixTransition::Arm => {
-                self.prefix_pending_at = Some(Instant::now());
+                self.prefix_pending_at = Some(self.clock.now());
             }
             // The prefix just resolved or aborted: put the panel down at once (summoned
             // + transient — it never lingers past the chord).
@@ -227,7 +227,7 @@ impl App {
     /// Cmd-=/Cmd-- run, not one-per-step). Kicks a redraw so the loop reaches
     /// `about_to_wait` to schedule the flush even if nothing else is animating.
     pub(in crate::app) fn mark_zoom_dirty(&mut self) {
-        self.zoom_persist_at = Some(Instant::now());
+        self.zoom_persist_at = Some(self.clock.now());
         self.zoom_reflow.queue();
         // ZOOM READOUT: a quiet muted percentage near the pointer while the gesture is
         // in flight (mirrors the page-drag readout). Armed on EVERY zoom step (this is
