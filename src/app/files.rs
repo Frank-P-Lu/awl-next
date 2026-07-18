@@ -706,7 +706,20 @@ impl App {
             crate::resolve_notes_root(&self.cli_notes_root.clone().or_else(|| cfg.notes_root.clone()));
         let workspace_opt = self.cli_workspace.clone().or_else(|| cfg.workspace.clone());
         self.workspace = Some(crate::resolve_workspace(&workspace_opt, &self.root));
-        crate::spell::set_spellcheck_on(cfg.spellcheck.unwrap_or(true));
+        // CACHE-KEY DISCIPLINE with `Config::apply_sticky_globals`: an ABSENT
+        // key must leave the global AS-IS (the built-in default already
+        // carries it), never force it back to ON. The old `unwrap_or(true)`
+        // broke that — reachable if a prior `persist_spellcheck`/
+        // `setting_toggle` write ever failed to land on disk (I/O error, no
+        // resolvable config path) while the runtime toggle sat OFF: the very
+        // next config-buffer save or Keybindings rebind (both route through
+        // this fn) would silently flip a still-intended-OFF toggle back ON.
+        // Mirrors `apply_sticky_globals_restores_spellcheck`'s law ("absent
+        // pref leaves the global as-is") — see
+        // `reload_config_absent_spellcheck_key_leaves_global_untouched`.
+        if let Some(on) = cfg.spellcheck {
+            crate::spell::set_spellcheck_on(on);
+        }
         self.config = cfg;
         // STICKY PAGE WIDTH: an edited `page_width_prose`/`page_width_code` takes
         // effect immediately too, re-resolved against the buffer that is CURRENTLY
@@ -2342,6 +2355,89 @@ mod tests {
 
             crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
         });
+    }
+
+    // ── SPELL-CHECK TOGGLE x CONFIG RELOAD (the spell-toggle-x-theme report):
+    // `App::reload_config` re-applies `spellcheck` LIVE (unlike theme/caret/
+    // dictionary, which only apply once at launch) so a hand-edited
+    // `spellcheck = false` in the Settings buffer takes effect on save. That
+    // special-casing must still obey `Config::apply_sticky_globals`'s law: an
+    // ABSENT key leaves the global AS-IS, never forces a default. ──────────
+
+    /// THE FIX this round makes: an absent `spellcheck` key on disk must NOT
+    /// force the global to the built-in ON default — it must leave whatever is
+    /// currently running untouched, exactly like `apply_sticky_globals`
+    /// (`apply_sticky_globals_restores_spellcheck` in `config/tests.rs` pins
+    /// the same law at the launch seam). Reachable if an earlier
+    /// `persist_spellcheck`/`setting_toggle` write never reached disk (I/O
+    /// error, unresolvable config path) while the runtime toggle sat OFF: the
+    /// very next config-buffer save or Keybindings rebind — both call
+    /// `reload_config` — used to silently flip a still-intended-OFF toggle
+    /// back ON.
+    #[test]
+    fn reload_config_absent_spellcheck_key_leaves_global_untouched() {
+        let _sp = crate::testlock::serial();
+        let saved = crate::spell::spellcheck_on();
+        let fake = Arc::new(crate::fs::InMemoryFs::new().with_dir("/w/proj"));
+        crate::fs::with_fs(fake, || {
+            let cfg_path = PathBuf::from("/cfg/config.toml");
+            // A config file that has never recorded a spellcheck preference —
+            // the common case for anyone who has never touched the toggle.
+            let mut config = Config::empty();
+            config.path = cfg_path.clone();
+            assert_eq!(config.spellcheck, None);
+            let mut app = App::new(None, PathBuf::from("/w/proj"), None, None, config);
+
+            // The runtime global sits OFF (e.g. a toggle whose persist never
+            // landed), but the disk file still has no `spellcheck` key.
+            crate::spell::set_spellcheck_on(false);
+            assert_eq!(Config::load(cfg_path.clone()).spellcheck, None, "disk still absent");
+
+            app.reload_config();
+
+            assert!(
+                !crate::spell::spellcheck_on(),
+                "an absent disk key must leave the global AS-IS, not force it back ON"
+            );
+
+            // The other direction too: ON stays ON across the same reload.
+            crate::spell::set_spellcheck_on(true);
+            app.reload_config();
+            assert!(crate::spell::spellcheck_on(), "and leaves an ON global alone too");
+        });
+        crate::spell::set_spellcheck_on(saved);
+    }
+
+    /// The POSITIVE half of the same seam: a hand-edited `spellcheck = false`
+    /// saved into the config file DOES take effect immediately on
+    /// `reload_config` — the documented "takes effect immediately, exactly
+    /// like the Toggle Spellcheck command" contract (`reload_config`'s own
+    /// doc comment). Round-trips through the real `persist_pref`/`Config::load`
+    /// pair, not a hand-built `Config`.
+    #[test]
+    fn reload_config_reapplies_a_persisted_spellcheck_value_immediately() {
+        let _sp = crate::testlock::serial();
+        let saved = crate::spell::spellcheck_on();
+        let fake = Arc::new(crate::fs::InMemoryFs::new().with_dir("/w/proj"));
+        crate::fs::with_fs(fake, || {
+            let cfg_path = PathBuf::from("/cfg/config.toml");
+            let mut config = Config::empty();
+            config.path = cfg_path.clone();
+            let mut app = App::new(None, PathBuf::from("/w/proj"), None, None, config);
+            crate::spell::set_spellcheck_on(true);
+
+            // Toggle OFF through the real seam (mirrors `Action::ToggleSpellcheck`
+            // + `App::persist_spellcheck`), then reload — mirrors saving the
+            // Settings buffer right after a hand-edit.
+            crate::spell::toggle();
+            app.persist_spellcheck();
+            assert_eq!(app.config.spellcheck, Some(false), "persist mirrors self.config");
+
+            crate::spell::set_spellcheck_on(true); // simulate reload starting from a stale global
+            app.reload_config();
+            assert!(!crate::spell::spellcheck_on(), "the persisted OFF value re-applies on reload");
+        });
+        crate::spell::set_spellcheck_on(saved);
     }
 
     #[test]
