@@ -199,16 +199,27 @@ Named tiers, not scattered magic numbers, so the ratios tune in one place:
 
 | rung      | scale | role |
 |-----------|-------|------|
-| `TITLE`   | 1.8×  | h1 — the document / top title |
-| `SECTION` | 1.5×  | h2 — a section head |
-| `SUBHEAD` | 1.25× | h3+ — a subhead (nudged from 1.3 to ease the steps down the ladder) |
+| `TITLE`   | 1.6×  | h1 — the document / top title (Ladder J; was 1.8) |
+| `SECTION` | 1.3×  | h2 — a section head (Ladder J; was 1.5) |
+| `SUBHEAD` | 1.15× | h3+ — a subhead (Ladder J; was 1.25) |
 | `BODY`    | 1.0×  | body prose / code — the baseline rung |
 | `LABEL`   | 0.8×  | UI metadata smaller than body (the future gutter / stats) |
+
+**Amendment (settled 2026-07-18, the heading-weight round — Ladder J + one bit
+of per-world weight):** the heading rungs eased to 1.6/1.3/1.15, and WEIGHT
+joined size as a *per-world* hierarchy leg: each world carries one bit
+(`Theme::heading_bold`) — set, its `##`/`###` heads shape in the face's own
+bundled Bold; clear, everything stays Regular. The TITLE (`#`) never bolds on
+any world — it spends pure size. The lean: serif worlds Regular (a serif's
+stroke contrast carries hierarchy structurally), mono-display worlds Bold
+(uniform strokes need weight), sans worlds judged by eye. Still no accent —
+amber stays the caret's alone (§3).
 
 ### Worked examples (one ink × one size)
 
 - **A heading title** = `TITLE` (or `SECTION`/`SUBHEAD`) × `base_content`. Size
-  carries the hierarchy; the ink stays full content — no bold, no accent (§3).
+  carries the hierarchy (plus, on the worlds whose bit says so, real bold on
+  `##`/`###` — the amendment above); the ink stays full content — no accent (§3).
 - **Markdown markup** (the `#`, `*`, backticks) = `BODY` × `muted`. Same size as
   the prose around it, one value rung quieter, so it recedes but stays editable.
 - **A future gutter label** (line numbers, the stats readout) = `LABEL` × `faint`.

@@ -311,17 +311,22 @@ pub(super) fn md_attrs(
                 natural = Some(dim);
             }
         }
-        MdKind::Heading(_) => {
-            // No-op transform: a heading reads as a heading by SIZE alone (applied
-            // per-LINE upstream via [`scaled_base_attrs`], already in `base`), riding
-            // the buffer's full default ink. We deliberately do NOT set:
-            //  - COLOR: DESIGN.md §3 — `primary` (amber) is the caret and ONLY the
-            //    caret; figure/ground is by VALUE + size, not by spending the accent.
-            //  - BOLD weight: a DESIGN call, not a font limitation — headings read
-            //    as headings by SIZE alone. (Inline `**bold**` DOES now shape in a
-            //    real bold face: every display face — proportional AND mono — bundles
-            //    a 700 weight, see `FONT_THEME_BOLD_FACES`. A heading could take it too,
-            //    but the 1.8x size is plenty of hierarchy on its own, so it stays Regular.)
+        MdKind::Heading(level) => {
+            // SIZE comes per-LINE upstream ([`scaled_base_attrs`], already in `base`,
+            // the Ladder-J rungs); WEIGHT is the per-world ONE BIT
+            // ([`crate::theme::Theme::heading_bold`]) composed through THE one owner
+            // [`crate::markdown::heading_weight_bold`] — SECTION (`##`) and SUBHEAD
+            // (`###`+) shape at real `Weight::BOLD` where the world's bit grants it
+            // (the same bundled same-family 700 request the `MdKind::Bold` arm below
+            // makes — a real weight change, never synthetic), while the TITLE (`#`)
+            // NEVER bolds, on any world (it spends pure size, 1.6x). We still
+            // deliberately do NOT set COLOR: DESIGN.md §3 — `primary` (amber) is the
+            // caret and ONLY the caret; figure/ground stays VALUE + size + (per-world)
+            // weight, never the accent. Data through the one renderer — no world is
+            // named here (`theme_caps_law`).
+            if crate::markdown::heading_weight_bold(th.heading_bold, level) {
+                a = a.weight(glyphon::Weight::BOLD);
+            }
         }
         MdKind::Bold => {
             // Resolves to the world's real bundled BOLD (700) face — for EVERY world,

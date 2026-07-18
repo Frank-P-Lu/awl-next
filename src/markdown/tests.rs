@@ -963,16 +963,16 @@ fn tag_maps_deep_heading_levels() {
 
 #[test]
 fn heading_scale_has_three_sizes_then_flattens() {
-    // The size ladder's named rungs: body 1.0 / subhead 1.25 / section 1.5 /
-    // title 1.8. h3 was nudged 1.3 -> 1.25 to ease the steps down the ladder.
+    // The size ladder's SHAPE, asserted off the named rungs themselves (never
+    // re-pinned literals — the rung VALUES are the consts' job, retuned by
+    // taste rounds like Ladder J's 1.8/1.5/1.25 -> 1.6/1.3/1.15): each level
+    // maps to its rung, the ladder descends strictly, and past ### the ramp
+    // flattens to the subhead rung.
     assert_eq!(heading_scale(0), type_scale::BODY, "no hash => body size");
-    assert_eq!(heading_scale(0), 1.0, "body rung is 1.0");
+    assert_eq!(heading_scale(0), 1.0, "body rung is the 1.0 baseline");
     assert_eq!(heading_scale(1), type_scale::TITLE, "h1 => title");
-    assert_eq!(heading_scale(1), 1.8, "title rung is 1.8");
     assert_eq!(heading_scale(2), type_scale::SECTION, "h2 => section");
-    assert_eq!(heading_scale(2), 1.5, "section rung is 1.5");
     assert_eq!(heading_scale(3), type_scale::SUBHEAD, "h3 => subhead");
-    assert_eq!(heading_scale(3), 1.25, "h3 nudged to the 1.25 subhead rung");
     // Strict ladder ordering, and 4+ hashes share the h3 (subhead) size.
     assert!(heading_scale(1) > heading_scale(2), "h1 > h2");
     assert!(heading_scale(2) > heading_scale(3), "h2 > h3");
@@ -990,6 +990,35 @@ fn heading_scale_has_three_sizes_then_flattens() {
     assert!(
         crate::theme::ORNAMENT_SCALE_ORNATE > heading_scale(1),
         "the ornate ornament reads bigger than h1"
+    );
+}
+
+#[test]
+fn heading_weight_gate_title_never_bolds_and_force_overrides_only_the_bit() {
+    use super::headings::heading_weight_bold_with_for_tests as gate;
+    // No force (the shipping default): the world's bit decides, but ONLY for
+    // level >= 2 — the TITLE (`#`) and a non-heading line (0) never bold.
+    for level in 0u8..=9 {
+        assert!(!gate(None, false, level), "bit off => never bold (level {level})");
+    }
+    assert!(!gate(None, true, 0), "level 0 (no heading) never bolds");
+    assert!(!gate(None, true, 1), "TITLE never bolds, even with the bit set");
+    for level in 2u8..=9 {
+        assert!(gate(None, true, level), "bit on => level {level} bolds");
+    }
+    // The A/B gallery force replaces the BIT, never the level gate: `on` bolds
+    // sections even on a bit-off world but STILL never the title; `off` kills
+    // the bit everywhere.
+    assert!(gate(Some(true), false, 2), "force on overrides a bit-off world at ##");
+    assert!(!gate(Some(true), false, 1), "force on still never bolds the TITLE");
+    assert!(!gate(Some(true), true, 1), "force on + bit on still never bolds the TITLE");
+    assert!(!gate(Some(false), true, 2), "force off overrides a bit-on world");
+    // And the public composition (env unset in the test process => no force)
+    // agrees with the pure core's no-force arm.
+    assert_eq!(
+        crate::markdown::heading_weight_bold(true, 2),
+        gate(None, true, 2),
+        "public fn rides the same core (no env force set in tests)"
     );
 }
 

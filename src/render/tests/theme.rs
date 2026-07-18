@@ -606,6 +606,108 @@ fn markdown_bold_on_mono_worlds_keeps_the_grid_never_a_foreign_face() {
     p.sync_theme();
 }
 
+/// PER-WORLD HEADING WEIGHT — the law over the ONE-BIT data
+/// (`Theme::heading_bold`), resolved through the REAL font system. A
+/// REGRESSION GUARD for future faces, not a blocker today: every display
+/// family currently bundles a genuine same-family 700, but a future world
+/// whose face ships Regular-only would trip the same `weight_diff == 0`
+/// fallback the `**bold**` rounds fixed — so for every world WITH the bit
+/// set, a `##` SECTION heading's content must resolve to the world's OWN
+/// display family at weight >= 600 (the real bold FILE, never a foreign
+/// fallback); for every world WITHOUT it, the same content stays below 600.
+/// And on EVERY world, bit or no bit, the `#` TITLE stays Regular — Ladder
+/// J's title-never-bolds rule, asserted at the shaped-glyph outcome (this
+/// also witnesses the IBM Plex Mono Light-300 trap's bold arm: Tawny's body
+/// shapes at 300 and its section head must land on the genuine 700 file in
+/// the SAME family, the 300→700 jump the round's data relies on).
+#[test]
+fn heading_bold_worlds_shape_bold_in_their_own_family() {
+    let _t = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping heading_bold_worlds_shape_bold_in_their_own_family: no wgpu adapter");
+        return;
+    };
+    // Sweep helper: the shaped faces of line 1's content glyphs (line-relative
+    // byte range `content`), as (family, weight) pairs.
+    let mut faces_of = |p: &mut TextPipeline, text: &str, content: std::ops::Range<usize>| {
+        p.set_view(&view_md(text, 0, 0));
+        let mut out: Vec<(String, u16)> = Vec::new();
+        for run in p.buffer.layout_runs() {
+            if run.line_i != 1 {
+                continue;
+            }
+            for g in run.glyphs.iter() {
+                if g.start < content.start || g.start >= content.end {
+                    continue;
+                }
+                let face = p
+                    .font_system
+                    .db()
+                    .face(g.font_id)
+                    .expect("shaped glyph maps to a registered face");
+                out.push((face.families[0].0.clone(), face.weight.0));
+            }
+        }
+        out
+    };
+    let mut bold_worlds = 0usize;
+    for t in theme::THEMES.iter() {
+        theme::set_active_by_name(t.name).unwrap();
+        p.sync_theme();
+        // "## Head" on line 1 (caret parked on line 0): content "Head" is
+        // line-relative bytes 3..7.
+        let section = faces_of(&mut p, "\n## Head", 3..7);
+        assert!(!section.is_empty(), "{}: no section-heading content glyphs shaped", t.name);
+        for (fam, wt) in &section {
+            if t.heading_bold {
+                assert_eq!(
+                    fam, t.font,
+                    "{}: a bold section heading resolved to {:?}, not the world's own \
+                     display family {:?} — the Regular-only-face fallback trap",
+                    t.name, fam, t.font
+                );
+                assert!(
+                    *wt >= 600,
+                    "{}: heading_bold is set but the section head shaped at weight {wt} \
+                     (< 600) — no real bold face answered the request",
+                    t.name
+                );
+            } else {
+                assert!(
+                    *wt < 600,
+                    "{}: heading_bold is OFF but the section head shaped at weight {wt}",
+                    t.name
+                );
+            }
+        }
+        // "# Head" on line 1: content bytes 2..6. The TITLE NEVER bolds — on
+        // any world, whatever the bit says.
+        let title = faces_of(&mut p, "\n# Head", 2..6);
+        assert!(!title.is_empty(), "{}: no title content glyphs shaped", t.name);
+        for (fam, wt) in &title {
+            assert_eq!(
+                fam, t.font,
+                "{}: the title resolved to {:?}, not the world's display family {:?}",
+                t.name, fam, t.font
+            );
+            assert!(
+                *wt < 600,
+                "{}: the TITLE must never bold (Ladder J), shaped at weight {wt}",
+                t.name
+            );
+        }
+        if t.heading_bold {
+            bold_worlds += 1;
+        }
+    }
+    assert!(
+        bold_worlds >= 1,
+        "the sweep's bold arm never ran — no world proposes the heading_bold bit"
+    );
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}
+
 /// THE bold/italic-breaks-Japanese REGRESSION, resolved through the REAL font
 /// system: shaping `**bold**` / `*italic*` / `***bold-italic***` Japanese must
 /// resolve every CJK content glyph to the world's BUNDLED JP face at its

@@ -285,7 +285,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // the STATE of the read-only prose-diff view (`crate::prosediff`) the capture
 // harness rendered (`AWL_DIFF_OLD`/`AWL_DIFF_NEW`). A state oracle only — the
 // struck/washed APPEARANCE is asserted over the PNG's pixels.
-pub const SCHEMA_VERSION: u32 = 172;
+// `/173` — PER-WORLD HEADING WEIGHT (+ Ladder J): the `theme` block gains
+// `heading_bold` — the EFFECTIVE section-heading weight bit this capture rendered
+// with (the active world's `Theme::heading_bold` folded through the ONE owner
+// `markdown::heading_weight_bold`, so the `AWL_HEADING_BOLD_FORCE` gallery knob is
+// reflected honestly). `true` ⇒ `##`/`###`+ shaped at the world's real bundled
+// Bold; the TITLE (`#`) never bolds regardless. The size ladder also retuned
+// (Ladder J: TITLE 1.6 / SECTION 1.3 / SUBHEAD 1.15), so markdown captures'
+// heading geometry changes everywhere — expected, not a schema matter.
+pub const SCHEMA_VERSION: u32 = 173;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

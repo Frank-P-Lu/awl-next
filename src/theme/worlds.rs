@@ -64,6 +64,8 @@ pub const GUMTREE: Theme = Theme {
     // Literary serif world → the slab-serif Monaspace Xenon: a mono that keeps a
     // whisper of the serif so the code page still reads as this world's kin.
     mono: "Monaspace Xenon",
+    // Literata's serif contrast carries hierarchy structurally — size alone reads.
+    heading_bold: false,
     cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -114,6 +116,8 @@ pub const POTOROO: Theme = Theme {
     font: "Monaspace Xenon",
     // Display face is ALREADY a monospace → reuse it for code (no second grid).
     mono: "Monaspace Xenon",
+    // Monaspace Xenon's uniform mono strokes need weight to mark a section head.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -156,6 +160,8 @@ pub const BILBY: Theme = Theme {
     font: "Newsreader 16pt 16pt",
     // Refined display serif → the slab-serif Monaspace Xenon for a literary code page.
     mono: "Monaspace Xenon",
+    // Newsreader's display-serif contrast IS its hierarchy — bold would coarsen it.
+    heading_bold: false,
     cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -209,6 +215,8 @@ pub const SALTPAN: Theme = Theme {
     // Old-style literary serif → Monaspace Xenon: the slab-serif mono echoes
     // Fraunces' serifed warmth on the code grid.
     mono: "Monaspace Xenon",
+    // The origin of the serif instinct: Fraunces' wonk + contrast carry it Regular.
+    heading_bold: false,
     cjk: CJK_MINCHO,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -253,6 +261,8 @@ pub const QUOKKA: Theme = Theme {
     font: "Fira Sans",
     // Warm friendly humanist sans → the warm humanist IBM Plex Mono for code.
     mono: "IBM Plex Mono",
+    // Fira Sans' low-contrast humanist strokes blur into body at 1.3x — weight marks the head.
+    heading_bold: true,
     cjk: CJK_JA_KLEE,
     zh_hans: CJK_ZH_HANS_KLEE,
     zh_hant: CJK_ZH_HANT,
@@ -303,6 +313,8 @@ pub const UNDERTOW: Theme = Theme {
     // Classic Garamond serif nocturne → Monaspace Xenon: a refined slab-serif mono
     // for a literary code page.
     mono: "Monaspace Xenon",
+    // EB Garamond's old-style modelling carries hierarchy; its bold reads foreign to the page.
+    heading_bold: false,
     cjk: CJK_JA_SHIPPORI,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -361,6 +373,8 @@ pub const OUTBACK: Theme = Theme {
     font: "Zilla Slab",
     // Slab-serif display → Monaspace Xenon: the only slab-serif mono, matching Zilla.
     mono: "Monaspace Xenon",
+    // Zilla Slab's chunky slab serifs already assert structure — Regular keeps it calm.
+    heading_bold: false,
     cjk: CJK_MINCHO,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -407,6 +421,8 @@ pub const TAWNY: Theme = Theme {
     font: "IBM Plex Mono",
     // The home mono IS the display face → reuse it for code.
     mono: "IBM Plex Mono",
+    // Plex Mono's Light-300 body makes the 700 head a real jump — mono needs the weight.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -453,6 +469,8 @@ pub const MOPOKE: Theme = Theme {
     font: "iA Writer Quattro S",
     // Warm cosy charcoal → the warm humanist IBM Plex Mono (kin to Tawny's home look).
     mono: "IBM Plex Mono",
+    // Quattro is a mono at heart (Plex Mono-derived, near-uniform strokes) — weight marks it.
+    heading_bold: true,
     cjk: CJK_JA_KLEE,
     zh_hans: CJK_ZH_HANS_KLEE,
     zh_hant: CJK_ZH_HANT,
@@ -499,6 +517,8 @@ pub const KINGFISHER: Theme = Theme {
     font: "IBM Plex Sans",
     // Cool technical navy → the crisp JetBrains Mono (a coding face for a coding den).
     mono: "JetBrains Mono",
+    // Plex Sans' even grotesque strokes give size little help — weight does the sectioning.
+    heading_bold: true,
     cjk: CJK_JA_ZENMARU,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -543,6 +563,8 @@ pub const CURRAWONG: Theme = Theme {
     font: "Iosevka",
     // Display face is ALREADY the narrow, mechanical Iosevka mono → reuse it for code.
     mono: "Iosevka",
+    // Iosevka's narrow mechanical grid is all uniform strokes — weight marks the head.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -624,6 +646,8 @@ pub const MANGROVE: Theme = Theme {
     font: "JetBrains Mono",
     // Display face is ALREADY JetBrains Mono → reuse it for code.
     mono: "JetBrains Mono",
+    // JetBrains Mono's uniform coding strokes need weight to lift a section head.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -693,6 +717,8 @@ pub const GALAH: Theme = Theme {
     font: "Figtree",
     // Warm friendly humanist sans → the warm humanist IBM Plex Mono.
     mono: "IBM Plex Mono",
+    // Figtree's geometric sans is stroke-uniform by design — weight does the sectioning.
+    heading_bold: true,
     cjk: CJK_JA_ZENMARU,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -760,6 +786,8 @@ pub const MAGPIE: Theme = Theme {
     font: "Bitter",
     // Sharp high-contrast slab display → Monaspace Xenon: the slab-serif mono matches Bitter's stance.
     mono: "Monaspace Xenon",
+    // Bitter's sharp slab contrast carries hierarchy on its own — Regular stays sharp.
+    heading_bold: false,
     cjk: CJK_MINCHO,
     zh_hans: CJK_ZH_HANS_SERIF,
     zh_hant: CJK_ZH_HANT,
@@ -1009,6 +1037,8 @@ pub const WAGTAIL: Theme = Theme {
     // greyscale round's logged font-sharing consequence).
     font: "JetBrains Mono",
     mono: "JetBrains Mono",
+    // A 1-bit world has NO ink rungs to spend — weight is the only second axis it owns.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
@@ -1144,6 +1174,8 @@ pub const FIRETAIL: Theme = Theme {
     // remains Firetail's own. The display face IS mono, so code reuses it.
     font: "Monaspace Xenon",
     mono: "Monaspace Xenon",
+    // The poster world's mono display: uniform slab-mono strokes take the bold head.
+    heading_bold: true,
     cjk: CJK_GOTHIC,
     zh_hans: CJK_ZH_HANS_SANS,
     zh_hant: CJK_ZH_HANT,
