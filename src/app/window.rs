@@ -238,6 +238,8 @@ impl App {
         // move transaction. A static world presents nothing around a move, so
         // it takes this arm as a TOTAL no-op, byte-identical as ever.
         if crate::theme::active().has_ambient_motion() {
+            #[cfg(not(target_arch = "wasm32"))]
+            if crate::probe::live_active() { eprintln!("PROBE-TRACE on_moved (ambient world) t={:?}", std::time::Instant::now()); }
             self.move_settle_at = Some(Instant::now());
             self.lava_tick_at = None;
             self.sync_present_txn();
@@ -259,6 +261,17 @@ impl App {
         );
         if want == self.present_sync_on {
             return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::live_active() {
+            eprintln!(
+                "PROBE-TRACE present_txn {} (resize={} move={} crossing={}) t={:?}",
+                if want { "ON" } else { "OFF" },
+                self.resize_settle_at.is_some(),
+                self.move_settle_at.is_some(),
+                self.crossing_settle_at.is_some(),
+                std::time::Instant::now(),
+            );
         }
         self.present_sync_on = want;
         #[cfg(target_os = "macos")]
@@ -300,6 +313,8 @@ impl App {
     /// this redraw presents the SAME lava the move started with — no snap, no
     /// flash. Clearing `move_settle_at` first makes it fire exactly once.
     pub(super) fn finish_move_settle(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::live_active() { eprintln!("PROBE-TRACE finish_move_settle t={:?}", std::time::Instant::now()); }
         self.move_settle_at = None;
         self.lava_tick_at = None;
         self.sync_present_txn();
@@ -320,6 +335,8 @@ impl App {
     /// `crossing_settle_at` first is what makes the `about_to_wait` arm (gated on
     /// the stamp) fire exactly once. Live-only: a headless capture never previews.
     pub(super) fn finish_crossing_settle(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::live_active() { eprintln!("PROBE-TRACE finish_crossing_settle t={:?}", std::time::Instant::now()); }
         self.crossing_settle_at = None;
         self.sync_present_txn();
         if let Some(gpu) = self.gpu.as_ref() {

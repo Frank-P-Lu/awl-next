@@ -95,6 +95,13 @@ impl App {
                         Ok(()) => println!("LIVE-PROBE shot {} ok backend=window-server", path.display()),
                         Err(e) => println!("LIVE-PROBE shot {} FAILED: png write: {e}", path.display()),
                     }
+                    // ALSO write the frame mirror beside it (`<name>.mirror.png`):
+                    // the pair is the disambiguator for the exact bug class this
+                    // harness hunts — mirror == window-server means the app never
+                    // presented anything newer; mirror newer than window-server
+                    // means the compositor was handed frames it never showed.
+                    let mirror_path = path.with_extension("mirror.png");
+                    self.probe_shot_mirror(&mirror_path, "companion mirror");
                     return;
                 }
                 Err(reason) => {

@@ -123,10 +123,14 @@ ref_for() { # ref_for SRC "KEYS with spaces or -" -> echoes png path
   local png="$WORK/ref/$slug.png"
   if [[ ! -f "$png" ]]; then
     mkdir -p "$WORK/ref"
-    local kargs=()
-    [[ "$keys" != "-" ]] && kargs=(--keys "$keys")
-    HOME="$WORK/refhome" XDG_CONFIG_HOME="$WORK/refhome/cfg" XDG_DATA_HOME="$WORK/refhome/data" \
-      "$BIN" --screenshot "$png" --theme "$src" "${kargs[@]}" "$FIXTURE" >/dev/null 2>&1
+    # (bash 3.2: an empty-array "${a[@]}" trips `set -u`, hence the split call)
+    if [[ "$keys" != "-" ]]; then
+      HOME="$WORK/refhome" XDG_CONFIG_HOME="$WORK/refhome/cfg" XDG_DATA_HOME="$WORK/refhome/data" \
+        "$BIN" --screenshot "$png" --theme "$src" --keys "$keys" "$FIXTURE" >/dev/null 2>&1
+    else
+      HOME="$WORK/refhome" XDG_CONFIG_HOME="$WORK/refhome/cfg" XDG_DATA_HOME="$WORK/refhome/data" \
+        "$BIN" --screenshot "$png" --theme "$src" "$FIXTURE" >/dev/null 2>&1
+    fi
     [[ -f "$png" ]] || { echo "error: reference capture failed for $src / $keys" >&2; return 1; }
   fi
   echo "$png"

@@ -476,6 +476,10 @@ impl Gpu {
         // `RedrawRequested`; harmless everywhere else, so unconditional.
         self.window.pre_present_notify();
         frame.present();
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::live_active() {
+            eprintln!("PROBE-TRACE present t={:?}", std::time::Instant::now());
+        }
         // The latency endpoint: present-SUBMISSION return (wgpu exposes no
         // presented-time), stamped before the off-frame atlas trim.
         let done = debug.then(Instant::now);
