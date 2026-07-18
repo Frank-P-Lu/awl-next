@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -114,3 +115,46 @@ jobs:
 
       - name: cargo test
         run: cargo test
+
+  # ── The "free mac-VM tier" experiment (INFORMATIONAL, NEVER GATING) ─────────
+  # GitHub's macos-latest runners are real macOS VMs with a WindowServer. Open
+  # question: does a headful awl window actually PRESENT frames there, or does
+  # the wgpu occlusion gate (an NSWindow lacking NSWindowOcclusionStateVisible
+  # returns Occluded BEFORE nextDrawable() → presents=0 — see CLAUDE.md's
+  # --soak-gpu tripwire) zero it? If frames flow, awl's "live-only" bug tier
+  # (present/compositor races, redraw-scheduling gaps) is reproducible in
+  # ordinary CI for free. Either answer is worth one CI run.
+  #
+  # NON-BLOCKING BY CONSTRUCTION — this can NEVER turn main red:
+  #   1. It is a SEPARATE job from the gating `mac` job (no shared step; a hang
+  #      or a nonzero exit here cannot touch mac's `cargo test`).
+  #   2. `continue-on-error: true` at the JOB level makes the workflow ignore
+  #      this job's conclusion entirely — so even a job-level timeout (a hang)
+  #      is swallowed, not just a step failure.
+  #   3. The step ALSO carries `continue-on-error: true` (belt and suspenders),
+  #      and `scripts/ci-live-probe.sh` itself always `exit 0`s: a build error,
+  #      a presents=0 contract FAIL (which makes `awl` exit nonzero), a missing
+  #      report line, or a runner with no console session are all reported and
+  #      swallowed. The presents count is echoed + written to the job summary
+  #      regardless of outcome.
+  # Not run on pull_request (informational only — keep PR checks lean); fires on
+  # push to main and on manual workflow_dispatch.
+  mac-live-probe:
+    name: mac live-probe (free mac-VM tier — non-gating)
+    runs-on: macos-latest
+    if: github.event_name != 'pull_request'
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Launches a SHORT headful --soak-gpu, greps `presents=N` from the report
+      # line, and echoes a loud verdict. The wrapper always exits 0; the
+      # step-level continue-on-error is a redundant guard.
+      - name: live-probe (does the mac VM present frames?)
+        continue-on-error: true
+        run: scripts/ci-live-probe.sh 25
