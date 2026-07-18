@@ -726,19 +726,24 @@ impl TextPipeline {
     ) {
         let lh = self.overlay_lh();
         let list_style = crate::render::effective_list_style();
+        // THE ONE PANE-VS-NO-PANE OWNER ([`theme::ListStyle::backs_rows_with_pane`]):
+        // `Pane` worlds back a list surface with an opaque card; `Bars` worlds float
+        // the rows as bare plates on the ground with NO backing pane. BOTH arms below
+        // — the centered picker AND the contextual spell popup — read it, so a
+        // Firetail-family world can never box one surface while floating the other
+        // (that divergence WAS the spell-popup-on-Bars pane bug).
+        let bars = !list_style.backs_rows_with_pane();
+        let spell = self.overlay_spell.is_some();
         let card_rect = [geom.card_x, geom.card_y, geom.card_w, geom.card_h];
-        if self.overlay_spell.is_some() {
-            // Contextual spell panel: elevate on the float primitive, no flat card.
-            self.prepare_float_panel(device, queue, width, height, Some(card_rect));
-            self.panel_card.prepare(device, queue, width, height, &[]);
-            self.panel_shadow.prepare(device, queue, width, height, &[]);
-            self.panel_border.prepare(device, queue, width, height, &[]);
-        } else if matches!(list_style, theme::ListStyle::Bars { .. }) {
+        if bars {
             // PER-ITEM LIST SURFACES round — BARS DROP THE PANE (the user's refit:
             // "with the bars, there shouldn't be a pane!"). No boxed card (no
             // border, no shadow, no bright `base_300` fill) — the bars, title,
             // query, strip and hint float in the Persona ROOM: bars sit ON the
-            // room, not IN a box.
+            // room, not IN a box. This ONE arm serves BOTH the full-takeover picker
+            // AND the contextual spell popup (the Firetail refit extended — "for the
+            // autocorrect, get rid of the pane too"): identical ground room, so a
+            // Bars world can never box the spell popup while floating the picker.
             //
             // DESIGNER PIXEL-PASS FIX (2026-07-16, the "gap comb seam"): the theme
             // picker is CRISP (no blur, no scrim — the doc stays bright so the live
@@ -746,43 +751,62 @@ impl TextPipeline {
             // showed through every gap between bars — its page-margin band on the
             // left meeting the writing column mid-gap made a hard vertical seam
             // repeated down the whole list. The room was never actually a room. So
-            // Bars lays a UNIFORM full-canvas value VEIL of the world's own ground
-            // (`base_100` at part alpha — a scrim, never a bordered box): it pulls
-            // the document a value back into one calm plane, killing the comb seam
-            // and the left-overhang stub in one stroke, while a hint of the
-            // re-tinted ground still ghosts through so the theme preview survives.
-            // The shadow/border stay empty (no elevation — it is a room, not a
-            // card). Drawn FIRST in `draw_overlay_card`, so the placard watermark,
-            // the bars, and the row text all composite over it.
+            // Bars lays a UNIFORM value VEIL of the world's own ground
+            // (`overlay_bars_room` = `base_100` — a scrim, never a bordered box): it
+            // pulls the document a value back into one calm plane, killing the comb
+            // seam and the left-overhang stub in one stroke. The shadow/border stay
+            // empty (no elevation — it is a room, not a card). Drawn FIRST in
+            // `draw_overlay_card`, so the placard watermark, the bars, and the row
+            // text all composite over it.
             self.panel_card.set_corner(0.0);
             self.panel_card
                 .set_color(theme::overlay_bars_room().rgba_bytes());
-            // BLEED the room plane past ALL FOUR canvas edges. The panel quad
-            // pipeline feathers a ~1px antialiased edge (`selection.wgsl`'s
-            // `smoothstep(-1, 1, d)`), so a plane sized flush to `[0, 0, w, h]`
-            // left the FIRST pixel row (centre 0.5px inside the top edge) only
-            // ~84% covered — the calm ground showed a 1px LIGHTER seam along
-            // y = 0 (the designer's first-scanline nit). Growing the rect
-            // `ROOM_BLEED` px on every side pushes the whole feather off-screen,
-            // so every on-canvas pixel sits fully inside the plane (`d < -1`).
+            // THE ROOM'S EXTENT is the ONLY thing that differs between the two Bars
+            // surfaces. The full-takeover PICKER bleeds the room past all four canvas
+            // edges — the panel quad pipeline feathers a ~1px antialiased edge
+            // (`selection.wgsl`'s `smoothstep(-1, 1, d)`), so a plane flush to
+            // `[0, 0, w, h]` left the first pixel row only ~84% covered (a 1px
+            // lighter seam along y = 0); growing it `ROOM_BLEED` px per side pushes
+            // the feather off-screen so every on-canvas pixel sits fully inside.
+            // The contextual SPELL popup instead clips the room to its own
+            // `card_rect`, so the live document stays lit AROUND the summoned float
+            // (it is a peek at the word, not a whole-canvas takeover) — the plates
+            // still float on the same calm ground the picker gives them.
             const ROOM_BLEED: f32 = 2.0;
-            self.panel_card.prepare(
-                device,
-                queue,
-                width,
-                height,
-                &[[
+            let room_rect = if spell {
+                card_rect
+            } else {
+                [
                     -ROOM_BLEED,
                     -ROOM_BLEED,
                     width as f32 + 2.0 * ROOM_BLEED,
                     height as f32 + 2.0 * ROOM_BLEED,
-                ]],
-            );
+                ]
+            };
+            self.panel_card
+                .prepare(device, queue, width, height, &[room_rect]);
+            self.panel_shadow.prepare(device, queue, width, height, &[]);
+            self.panel_border.prepare(device, queue, width, height, &[]);
+            if spell {
+                // The spell popup is the ONE overlay that ever summons the float
+                // primitive (its Pane-world raised card, below). On Bars it floats
+                // bare on the room, so PARK those float quads — the caret-preview
+                // pass already parked them this frame (it and the spell popup are
+                // mutually exclusive), but park explicitly so a future reorder can
+                // never leak the raised pane back under the plates.
+                self.prepare_float_panel(device, queue, width, height, None);
+            }
+        } else if spell {
+            // PANE world spell popup: elevate on the float primitive — a small raised
+            // card at the misspelled word (UNCHANGED / byte-identical to before the
+            // Bars refit). The flat/room `panel_*` quads stay empty here.
+            self.prepare_float_panel(device, queue, width, height, Some(card_rect));
+            self.panel_card.prepare(device, queue, width, height, &[]);
             self.panel_shadow.prepare(device, queue, width, height, &[]);
             self.panel_border.prepare(device, queue, width, height, &[]);
         } else {
-            // Centered overlay: the flat opaque card, ELEVATED (bordered) only on a
-            // true 1-bit world — see `prepare_panel_card_elevation`'s doc.
+            // Centered PANE picker: the flat opaque card, ELEVATED (bordered) only on
+            // a true 1-bit world — see `prepare_panel_card_elevation`'s doc.
             self.prepare_panel_card_elevation(device, queue, width, height, Some(card_rect));
         }
 
