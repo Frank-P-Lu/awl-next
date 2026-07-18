@@ -1033,3 +1033,110 @@ fn export_docx_highlight_gate() {
         "inert =x= must emit no <w:highlight/>"
     );
 }
+
+// --- Image size hint (Obsidian `|WIDTH`) render/export agreement -------------
+
+/// The width hint the EXPORT tree applies to `![<raw_alt>](p.png)` — the first
+/// `Inline::Image`'s `width_hint`. Mirrors [`render_image_width_hint`], reading
+/// the same document byte the editor's `parse_image_source` does, so the two are
+/// compared cell-for-cell.
+fn export_image_width_hint(raw_alt: &str) -> Option<u32> {
+    fn find(inlines: &[Inline]) -> Option<Option<u32>> {
+        for i in inlines {
+            match i {
+                Inline::Image { width_hint, .. } => return Some(*width_hint),
+                Inline::Strong(c)
+                | Inline::Emphasis(c)
+                | Inline::Strikethrough(c)
+                | Inline::Highlight(c)
+                | Inline::Link { children: c, .. } => {
+                    if let Some(h) = find(c) {
+                        return Some(h);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    fn walk(blocks: &[Block]) -> Option<Option<u32>> {
+        for b in blocks {
+            let hit = match b {
+                Block::Heading { inlines, .. } | Block::Paragraph(inlines) => find(inlines),
+                Block::BlockQuote(bs) => walk(bs),
+                Block::List(l) => l.items.iter().find_map(|it| walk(&it.blocks)),
+                _ => None,
+            };
+            if hit.is_some() {
+                return hit;
+            }
+        }
+        None
+    }
+    let md = format!("![{raw_alt}](p.png)\n");
+    walk(&model::parse(&md).blocks).flatten()
+}
+
+/// The width hint the RENDERER applies to the same source — the editor's real
+/// `parse_image_source` (the STRICT owner `markdown::split_alt_hint`).
+fn render_image_width_hint(raw_alt: &str) -> Option<u32> {
+    let src = format!("![{raw_alt}](p.png)");
+    crate::markdown::parse_image_source(&src)
+        .expect("well-formed image source")
+        .width_hint
+}
+
+/// LAW: the editor's applied image width hint and the export's are the SAME set,
+/// because both split the Obsidian `|WIDTH` / `|WxH` hint off the alt through the
+/// ONE owner `crate::markdown::split_alt_hint` (the STRICT parser). A lax second
+/// copy in `export::model` once took the first `x`-segment, so a malformed
+/// `|300xfoo` sized the EXPORT while the editor rendered it natural-width — the
+/// render/export divergence this closes. Truth table covers the sized forms, both
+/// malformed forms, a bare pipe, a non-numeric suffix, an empty alt, and a plain
+/// pipe-less alt.
+#[test]
+fn render_export_alt_hint_agree() {
+    let cases: &[(&str, Option<u32>)] = &[
+        ("pic|300", Some(300)),     // NNN: sized
+        ("pic|300x200", Some(300)), // WxH: width wins, height derived from aspect
+        ("pic|300xfoo", None),      // malformed H (non-digit): NO hint, alt kept verbatim
+        ("pic|300x", None),         // empty H after the `x`: NO hint
+        ("|", None),                // bare pipe, empty head + tail
+        ("a|b", None),              // non-numeric suffix: the `|` is literal alt content
+        ("", None),                 // empty alt
+        ("plain", None),            // no pipe at all
+    ];
+    for (raw, expected) in cases {
+        let r = render_image_width_hint(raw);
+        let e = export_image_width_hint(raw);
+        assert_eq!(
+            r, e,
+            "render vs export width-hint diverge on alt {raw:?}: render={r:?} export={e:?}"
+        );
+        assert_eq!(r, *expected, "width-hint unexpected for alt {raw:?}: got {r:?} want {expected:?}");
+    }
+}
+
+/// LAW (end-to-end through the REAL HTML emitter): a VALID `|300` hint sizes the
+/// exported `<img>` to 300; a MALFORMED `|300xfoo` is rejected everywhere, so the
+/// export falls back to the image's NATURAL (intrinsic) width — never 300. The
+/// fixture PNG is 6×4, so natural width is `6`; a stray `width="300"` would mean
+/// the lax parser resurfaced.
+#[test]
+fn export_html_alt_hint_gate() {
+    let sized = to_html("![cat|300](assets/pic.png)\n", &fixture_images());
+    assert!(
+        sized.contains("width=\"300\""),
+        "a valid |300 hint sizes the exported image: {sized}"
+    );
+
+    let malformed = to_html("![cat|300xfoo](assets/pic.png)\n", &fixture_images());
+    assert!(
+        !malformed.contains("width=\"300\""),
+        "a malformed |300xfoo must NOT size the export to 300: {malformed}"
+    );
+    assert!(
+        malformed.contains("width=\"6\""),
+        "a malformed hint exports at natural width (intrinsic 6): {malformed}"
+    );
+}

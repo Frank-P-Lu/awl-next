@@ -26,6 +26,13 @@
 //! `render_export_highlight_agree` law test). FRONTMATTER is excluded up front
 //! (`frontmatter::detect`), matching its exclusion from word-count / spell / render.
 //!
+//! An IMAGE's Obsidian `|WIDTH` / `|WxH` size hint is split off the alt through the
+//! SAME owner the editor's [`parse_image_source`][crate::markdown::parse_image_source]
+//! uses ([`crate::markdown::split_alt_hint`], the STRICT parser): a malformed
+//! `|300xfoo` / `|300x` yields NO hint in BOTH, so an export can never SIZE an image
+//! the editor renders at natural width (see the `render_export_alt_hint_agree` law
+//! test — the render/export size divergence this closed).
+//!
 //! PURE + DETERMINISTIC: `parse` is a function of the text alone; images are
 //! resolved through a caller-supplied [`ImageSource`] (the live App reads disk;
 //! tests hand in a fixed map), so the tree — and therefore every exported byte —
@@ -581,8 +588,12 @@ fn push_text(stack: &mut Vec<Frame>, text: &str) {
         alt, width_hint, ..
     }) = stack.last_mut()
     {
-        // Alt text may carry the `|300` / `|300x200` size hint.
-        let (a, hint) = split_alt_hint(text);
+        // Alt text may carry the `|300` / `|300x200` size hint. The split is the
+        // SHARED owner `crate::markdown::split_alt_hint` (the STRICT parser the
+        // editor's `parse_image_source` uses), so a malformed `|300xfoo` / `|300x`
+        // yields NO hint in BOTH — the export can never size an image the editor
+        // renders natural-width (see the `render_export_alt_hint_agree` law test).
+        let (a, hint) = crate::markdown::split_alt_hint(text);
         alt.push_str(&a);
         if hint.is_some() {
             *width_hint = hint;
@@ -631,21 +642,6 @@ fn split_highlight(text: &str) -> Vec<Inline> {
         out.push(Inline::Text(text[cursor..].to_string()));
     }
     out
-}
-
-/// Split an image's alt on the Obsidian size hint: `alt|300` → `("alt", 300)`,
-/// `alt|300x200` → `("alt", 300)` (width only, height derived from aspect).
-fn split_alt_hint(alt: &str) -> (String, Option<u32>) {
-    if let Some((a, hint)) = alt.rsplit_once('|') {
-        let width = hint
-            .split(['x', 'X'])
-            .next()
-            .and_then(|w| w.trim().parse::<u32>().ok());
-        if let Some(w) = width {
-            return (a.to_string(), Some(w));
-        }
-    }
-    (alt.to_string(), None)
 }
 
 // --- Small mappers ----------------------------------------------------------

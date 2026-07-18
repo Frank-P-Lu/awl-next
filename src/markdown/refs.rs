@@ -89,7 +89,16 @@ pub fn image_refs(text: &str) -> Vec<ImageRef> {
 /// aspect in v1). No `|`, or a non-numeric suffix (so an alt that legitimately
 /// contains `|`, like `"a | b"`, is preserved verbatim), yields the alt
 /// unchanged + `None`.
-fn split_alt_hint(alt: &str) -> (String, Option<u32>) {
+///
+/// STRICT + the SHARED owner: a `WxH` hint's `H` must be all digits too, so a
+/// malformed `alt|300xfoo` / `alt|300x` yields NO hint (the whole run kept as
+/// alt, verbatim). The [export model][crate::export::model] routes its image-alt
+/// split through this exact fn (re-exported as `crate::markdown::split_alt_hint`),
+/// so the editor's applied width hint and the export's can never disagree on a
+/// malformed suffix — the divergence a lax second copy once caused (a bad hint
+/// rendered natural-width in the editor but sized in the export). Law test:
+/// `render_export_alt_hint_agree`.
+pub fn split_alt_hint(alt: &str) -> (String, Option<u32>) {
     let Some((head, tail)) = alt.rsplit_once('|') else {
         return (alt.to_string(), None);
     };
