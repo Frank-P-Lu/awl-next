@@ -278,6 +278,21 @@ impl ZoomReflow {
     }
 }
 
+/// A pending ZOOM ANCHOR: the document char + the screen y that char should hold, so
+/// the next `sync_view` (which reshapes to the just-changed zoom) keeps that point
+/// fixed on screen instead of anchoring at the viewport top. Captured at the OLD zoom
+/// BEFORE the deferred reshape (both zoom paths arm it — the wheel with the POINTER's
+/// char + y, the keyboard with the CARET's, or the viewport-centre char when the caret
+/// is off-screen), consumed once by `sync_view` via [`TextPipeline::zoom_anchor_scroll`]
+/// (the one owner of the anchored-scroll math). Live-only: the headless capture never
+/// builds an `App`, so its single-frame scroll stays cursor-follow (unchanged).
+#[derive(Clone, Copy, Debug)]
+struct ZoomAnchor {
+    line: usize,
+    col: usize,
+    screen_y: f32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GpuLifecycle { AwaitingWindow, Active { oom_skips: u8 }, Suspended, Rebuilding }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -807,6 +822,11 @@ pub struct App {
     /// next present opportunity. Any intervening ordinary `sync_view` clears it
     /// because that sync necessarily applies the newest zoom already.
     zoom_reflow: ZoomReflow,
+    /// Pending ZOOM ANCHOR (see [`ZoomAnchor`]): the document point + screen y the
+    /// next reflow should hold fixed, so a keyboard ⌘± zooms around the CARET (not
+    /// the viewport top) and the wheel zooms around the POINTER. `None` = plain
+    /// top-anchored scroll. Consumed once by `sync_view`.
+    zoom_anchor: Option<ZoomAnchor>,
     /// When the theme-picker live PREVIEW last landed on a world whose display face
     /// differs from the shaped one, and the deferred FONT reshape is pending; the
     /// debounced `sync_theme_font` fires after `THEME_FONT_DEBOUNCE` of quiet in
@@ -1248,6 +1268,7 @@ impl App {
             history_scroll_before: None,
             zoom_persist_at: None,
             zoom_reflow: ZoomReflow::default(),
+            zoom_anchor: None,
             theme_font_at: None,
             lava_tick_at: None,
             focused: true,

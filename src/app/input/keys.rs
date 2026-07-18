@@ -188,6 +188,40 @@ impl App {
         }
     }
 
+    /// ZOOM ANCHOR — POINTER (wheel ⌘-scroll). Record the document point under the
+    /// mouse + its screen y so the deferred reflow keeps it fixed under the cursor.
+    /// Reads the OLD (pre-reshape) geometry — call BEFORE the reshape lands, and only
+    /// when the zoom actually changed (a no-op `set_zoom` at a clamp must not leave a
+    /// stale anchor for an unrelated `sync_view` to apply). No-op headless (no gpu).
+    pub(in crate::app) fn arm_zoom_anchor_pointer(&mut self) {
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        let (px, py) = self.cursor_px;
+        let (line, col) = gpu.pipeline.hit_test(px, py, self.scroll_lines);
+        self.zoom_anchor = Some(ZoomAnchor { line, col, screen_y: py });
+    }
+
+    /// ZOOM ANCHOR — CARET (keyboard ⌘± / ⌘0). Hold the caret's current screen
+    /// position; when the caret is OFF-SCREEN, hold the document point at the viewport
+    /// centre instead (so the view stays put rather than jumping to the caret). Reads
+    /// the OLD (pre-reshape) geometry — call from the zoom-changed arm in `apply`
+    /// BEFORE the reflow. No-op headless (no gpu).
+    pub(in crate::app) fn arm_zoom_anchor_caret(&mut self) {
+        let Some(gpu) = self.gpu.as_ref() else { return };
+        let height = gpu.config.height as f32;
+        let top = render::TEXT_TOP + gpu.pipeline.menubar_reserve();
+        let (cl, cc) = self.buffer.cursor_line_col();
+        let caret_y = gpu.pipeline.char_screen_top(cl, cc, self.scroll_lines);
+        self.zoom_anchor = Some(if caret_y >= top && caret_y < height {
+            ZoomAnchor { line: cl, col: cc, screen_y: caret_y }
+        } else {
+            // Caret off-screen: anchor whatever sits at the viewport centre.
+            let cx = (gpu.config.width as f32) * 0.5;
+            let cy = (top + height) * 0.5;
+            let (line, col) = gpu.pipeline.hit_test(cx, cy, self.scroll_lines);
+            ZoomAnchor { line, col, screen_y: cy }
+        });
+    }
+
     /// Arm the DEBOUNCED sticky-zoom write: stamp "now" so `about_to_wait` persists
     /// the settled zoom after `ZOOM_PERSIST_DEBOUNCE` of quiet (one write per rapid
     /// Cmd-=/Cmd-- run, not one-per-step). Kicks a redraw so the loop reaches
