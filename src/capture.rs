@@ -31,6 +31,18 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// (`--capture-held`, caret block WITH the `trail`) — PLAIN = N, TIMELINE = N+1,
 /// HELD = N+2 — so the three shape strings can never drift from each other.
 ///
+/// **CLAIM CONVENTION (the merge-collision cure, 2026-07-18 debt audit).** A
+/// schema bump is TWO coupled edits: set [`SCHEMA_VERSION`] to the next free
+/// number AND append exactly one `/N` row here with that same number. Because
+/// two branches in flight will both grab the same next number, the const line
+/// CONFLICTS on merge (git flags it) — but the appended rows do NOT (they land
+/// on different lines and git takes both silently). So after resolving the const
+/// to the next free number, RENUMBER your row to match: whoever merges second
+/// bumps BOTH their const and their row. The `tests::schema_ledger` test turns a
+/// missed renumber into a LOUD build failure (the last row must equal the const,
+/// and the rows must be strictly increasing — a duplicate `/N` from a merge
+/// fails it) instead of a silently-wrong sidecar schema string.
+///
 /// HISTORY TABLE (append-only) — each entry is `/N` (the PLAIN number at that
 /// round) and what changed:
 ///
@@ -376,3 +388,70 @@ pub use oracle::OraclePipeline;
 
 #[cfg(test)]
 mod tests;
+
+/// DEBT-AUDIT LEDGER GUARD (2026-07-18) — the schema history table and
+/// [`SCHEMA_VERSION`] cannot drift silently. Three same-day merge collisions
+/// (`/176` claimed twice, etc.) motivated this: the const line conflicts on
+/// merge and gets resolved, but the appended `/N` doc rows auto-merge silently,
+/// so a missed renumber shipped a const that no longer matched its own table.
+/// This parses THIS source file's history rows and fails the build if the newest
+/// row ≠ the const or the rows aren't strictly increasing (a duplicate `/N`).
+#[cfg(test)]
+mod schema_ledger {
+    use super::SCHEMA_VERSION;
+
+    /// The `/N` numbers of the leading history rows, in file order. A history
+    /// row is a comment line (`//` or `///`) whose first backtick token is
+    /// `` `/<digits>` `` — the "(was `/M`)" back-references and the
+    /// `` `awl-capture/N` `` doc lines are NOT leading `` `/ `` tokens, so they
+    /// don't match. Cross-checked against `grep` at authoring time (86..=177).
+    fn history_rows() -> Vec<u32> {
+        let src = include_str!("capture.rs");
+        let mut rows = Vec::new();
+        for line in src.lines() {
+            // Strip the comment marker (`//`/`///`), then whitespace.
+            let Some(rest) = line.trim_start().strip_prefix("//") else {
+                continue;
+            };
+            let rest = rest.trim_start_matches('/').trim_start();
+            // A leading history row reads `` `/<n>` `` right here.
+            let Some(after) = rest.strip_prefix("`/") else {
+                continue;
+            };
+            let Some(end) = after.find('`') else { continue };
+            if let Ok(n) = after[..end].parse::<u32>() {
+                rows.push(n);
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn schema_version_matches_latest_history_row() {
+        let rows = history_rows();
+        assert!(
+            !rows.is_empty(),
+            "no `/N` history rows parsed — has the table's row format changed? \
+             (see the CLAIM CONVENTION doc above SCHEMA_VERSION)"
+        );
+        // Strictly increasing catches the exact merge collision that bit us:
+        // two branches that each appended a `/176` row leave `.., 176, 176` here.
+        for w in rows.windows(2) {
+            assert!(
+                w[1] > w[0],
+                "schema history rows not strictly increasing (/{} then /{}) — a \
+                 duplicate or out-of-order row, almost certainly an unreconciled \
+                 merge collision; renumber the later row (see CLAIM CONVENTION).",
+                w[0],
+                w[1]
+            );
+        }
+        let last = *rows.last().unwrap();
+        assert_eq!(
+            last, SCHEMA_VERSION,
+            "SCHEMA_VERSION ({SCHEMA_VERSION}) must equal the LAST history row \
+             (/{last}). Bump the const AND append a matching `/N` row together \
+             (see the CLAIM CONVENTION doc above SCHEMA_VERSION)."
+        );
+    }
+}

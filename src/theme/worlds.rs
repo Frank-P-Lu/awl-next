@@ -1399,14 +1399,52 @@ pub const THEMES: [Theme; 17] = [
     WAGTAIL, FIRETAIL,
 ];
 
-/// Index into [`THEMES`] of the default/startup world: **Saltpan** (index 6 —
-/// `TAWNY, MOPOKE, CURRAWONG, POTOROO, GUMTREE, BILBY, SALTPAN, ...`), a warm
-/// light world (sun-bleached salt flat, cinnamon-clay caret on ecru), picked by
-/// the user 2026-07-11 as awl's first impression — a taste round, not a bugfix
-/// (the prior default, index 0 = Tawny, a dark warm-grey mono nocturne, remains
-/// one `C-x t` cycle away). This only governs a genuinely FRESH launch/capture:
-/// the sticky theme preference (`config.toml`'s `theme` key, written whenever
-/// the user switches worlds via Cmd-T) always wins for an EXISTING user —
+/// Const `str` equality (`==` is not available in a `const fn` on stable).
+/// Compares byte-for-byte; used only by [`world_index`] at compile time.
+const fn str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Compile-time index of a world in [`THEMES`] BY NAME. This is the ONE way a
+/// position-derived constant should be born, so a world INSERTED mid-array can
+/// never silently repoint it at a neighbour (the index-vs-name fragility class
+/// the debt audit swept for — the class the frost "regression" made everyone
+/// fear even though that one turned out to be a corrupt build). A name with no
+/// world PANICS at build time — a typo fails the compile, not a capture.
+const fn world_index(name: &str) -> usize {
+    let mut i = 0;
+    while i < THEMES.len() {
+        if str_eq(THEMES[i].name, name) {
+            return i;
+        }
+        i += 1;
+    }
+    panic!("world_index: no world by that name")
+}
+
+/// Index into [`THEMES`] of the default/startup world: **Saltpan**, a warm light
+/// world (sun-bleached salt flat, cinnamon-clay caret on ecru), picked by the
+/// user 2026-07-11 as awl's first impression — a taste round, not a bugfix (the
+/// prior default, Tawny, a dark warm-grey mono nocturne, remains one `C-x t`
+/// cycle away). DERIVED FROM THE NAME via [`world_index`], never a hand-counted
+/// literal: inserting a world anywhere in the roster leaves the default pointing
+/// at Saltpan by construction (a stale literal index would silently hand a
+/// fresh-launch user a DIFFERENT world on upgrade — guarded here, re-asserted by
+/// `tests::roster_position_is_name_stable`). This only governs a genuinely FRESH
+/// launch/capture: the sticky theme preference (`config.toml`'s `theme` key,
+/// written whenever the user switches worlds via Cmd-T — a NAME, never an index,
+/// so it too is insertion-immune) always wins for an EXISTING user —
 /// `Config::apply_sticky_globals` applies it over this constant unless the
 /// `--theme` CLI flag already set the global (see `config/apply.rs`).
-pub const DEFAULT_THEME: usize = 6;
+pub const DEFAULT_THEME: usize = world_index("Saltpan");

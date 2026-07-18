@@ -12,6 +12,7 @@
 
 use super::*;
 
+mod build_integrity;
 mod caret;
 mod caret_block;
 mod chrome_overlay;

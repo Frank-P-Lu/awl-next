@@ -1369,6 +1369,59 @@ fn default_is_saltpan() {
     assert_eq!(THEMES[DEFAULT_THEME].name, "Saltpan");
 }
 
+/// DEBT-AUDIT LAW (2026-07-18) — INDEX-VS-NAME world access. A world INSERTED
+/// mid-roster must not change any OTHER world's behaviour or a user's PERSISTED
+/// selection. The two things that could break on such an insertion are:
+///   (1) a position-derived constant (only `DEFAULT_THEME`, now name-derived via
+///       `world_index("Saltpan")`), and
+///   (2) the sticky-theme round-trip, which stores a NAME (`config.toml`'s
+///       `theme` key via `App::persist_theme` → `Config::apply_sticky_globals` →
+///       `set_active_by_name`), never an array index.
+/// This law pins BOTH so a future roster insert can't silently repoint the
+/// default or resurface a user under a different world:
+///   - names are UNIQUE (name-addressing is well-defined),
+///   - EVERY world round-trips through `set_active_by_name` back to itself
+///     (the persisted-selection path is position-independent for all worlds),
+///   - the default is name-derived (so a FRESH launch is insertion-stable too),
+///   - a NON-world name is `None` (a stale/retired name falls back leniently,
+///     never a crash and never a neighbour by position).
+#[test]
+fn roster_position_is_name_stable() {
+    let _g = crate::testlock::serial();
+
+    // (1) Names are unique — name-addressing has exactly one target per name.
+    for (i, a) in THEMES.iter().enumerate() {
+        for b in THEMES.iter().skip(i + 1) {
+            assert_ne!(a.name, b.name, "two worlds share the name {:?}", a.name);
+        }
+    }
+
+    // (2) Persisted selection is a NAME: every world round-trips to ITSELF
+    // regardless of its array position, so inserting a world before/after any
+    // other cannot change which world that other's remembered name reopens.
+    for t in THEMES.iter() {
+        let got = set_active_by_name(t.name)
+            .unwrap_or_else(|| panic!("{} unreachable by its own name", t.name));
+        assert_eq!(got.name, t.name);
+        // Case-insensitive too (the config value is compared ASCII-insensitively).
+        assert_eq!(
+            set_active_by_name(&t.name.to_ascii_lowercase()).unwrap().name,
+            t.name
+        );
+    }
+
+    // (3) The FRESH-launch default is name-derived — a mid-roster insert leaves
+    // it on Saltpan by construction (this is the const `world_index("Saltpan")`,
+    // re-checked here so the property is a test, not only a compile-time fact).
+    assert_eq!(THEMES[DEFAULT_THEME].name, "Saltpan");
+
+    // (4) A name that is NOT a world falls back leniently to None (never a
+    // panic, never a by-position neighbour) — the door retired names lean on.
+    assert!(set_active_by_name("NotAWorld").is_none());
+
+    set_active(DEFAULT_THEME);
+}
+
 #[test]
 fn cycle_wraps_both_ways() {
     let _g = crate::testlock::serial();
