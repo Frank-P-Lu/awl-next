@@ -93,6 +93,10 @@ mod peek;
 mod paste_image;
 mod pointer_hide;
 mod popover;
+// THE LIVE PROBE HARNESS (`--live-script`): scripted keystrokes + compositor-
+// side window shots against the REAL windowed app — the "extend the harness
+// toward reality" tier for live-only bug classes. See `src/probe.rs`.
+mod probe;
 #[cfg(test)]
 mod println_audit;
 mod project;

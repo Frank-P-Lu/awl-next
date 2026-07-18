@@ -1337,6 +1337,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
                 Config::empty(),
                 false,
                 Some(config),
+                None,
             );
             let _ = std::fs::remove_dir(&root);
             result
@@ -1348,6 +1349,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             notes_root,
             config,
             wait,
+            live,
         } => {
             // STICKY PROJECT RESTORE: on a bare launch (no file argument, no
             // explicit --root) the remembered project root wins; see
@@ -1355,11 +1357,15 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
             let active_root = resolve_root(&root, &file, config.project_root.as_deref());
             // Pass the RAW flags + config; `App::new` folds them (flag > config >
             // default) and re-folds on a live config reload. `wait` (native-only,
-            // the single-instance daemon's `--wait`) rides straight through.
+            // the single-instance daemon's `--wait`) rides straight through, as
+            // does `live` (the `--live-script` probe — see `crate::probe`).
             #[cfg(not(target_arch = "wasm32"))]
-            { app::run(file, active_root, workspace, notes_root, config, wait, None) }
+            { app::run(file, active_root, workspace, notes_root, config, wait, None, live) }
             #[cfg(target_arch = "wasm32")]
-            { app::run(file, active_root, workspace, notes_root, config, wait) }
+            {
+                let _ = live; // native-live-only; parsed as None on wasm
+                app::run(file, active_root, workspace, notes_root, config, wait)
+            }
         }
     }
 }

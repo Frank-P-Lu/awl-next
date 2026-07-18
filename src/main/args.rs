@@ -18,6 +18,12 @@ use crate::{caret, debug, hud, keyspec, lifetime, page, theme, whichkey};
 pub(crate) enum Mode {
     Windowed {
         file: Option<PathBuf>,
+        /// The armed LIVE PROBE (`--live-script` [+ `--live-shots`]) — scripted
+        /// chords + compositor-side window shots against the real windowed app.
+        /// `None` on every normal launch; never constructible from a headless
+        /// capture mode (the flag combination is rejected below). See
+        /// `crate::probe`'s module doc for the harness contract.
+        live: Option<crate::probe::LiveScript>,
         /// The ACTIVE project root (`--root`). When absent it defaults to the
         /// launch file's parent (or cwd) in `app::run`.
         root: Option<PathBuf>,
@@ -481,6 +487,10 @@ pub(crate) fn parse_args() -> Result<Mode> {
     // `--wait` (single-instance daemon; `EDITOR=awl --wait` for git): only
     // meaningful for the windowed editor — see `crate::daemon`'s module doc.
     let mut wait_flag = false;
+    // `--live-script "<steps>"` (+ optional `--live-shots DIR`): the LIVE PROBE
+    // harness — windowed-editor-only, rejected alongside any capture mode below.
+    let mut live_script: Option<String> = None;
+    let mut live_shots: Option<PathBuf> = None;
     // `--strict-replay`: the strict replay gate on `--screenshot --keys` — see
     // `crate::replay`'s module doc. Parsed keys go through the STRICT door
     // (unbound chords error) and the replay aborts on Unsupported effects.
@@ -528,6 +538,20 @@ pub(crate) fn parse_args() -> Result<Mode> {
                     anyhow::anyhow!("--bench-baseline requires a path (e.g. benches/baseline.json)")
                 })?;
                 bench_baseline = Some(PathBuf::from(v));
+            }
+            "--live-script" => {
+                let v = args.next().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--live-script requires a step string (e.g. \"keys Cmd-T; sleep 300; shot open\")"
+                    )
+                })?;
+                live_script = Some(v);
+            }
+            "--live-shots" => {
+                let v = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--live-shots requires a directory"))?;
+                live_shots = Some(PathBuf::from(v));
             }
             "--screenshot" => {
                 let p = args
@@ -867,6 +891,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
             || out.is_some()
             || keys_spec.is_some()
             || wait_flag
+            || live_script.is_some()
             || config_arg.is_some()
             || root.is_some()
             || workspace.is_some()
@@ -907,6 +932,23 @@ pub(crate) fn parse_args() -> Result<Mode> {
     // 1) At most ONE capture-mode flag. With more than one, the Mode chosen below
     //    would silently follow a precedence and drop the rest; refuse instead.
     ensure_single_capture_mode(&capture_modes)?;
+    // 1b) The LIVE PROBE is the windowed editor only — it composes with the
+    //     normal launch flags (file/--theme/--config/--root/…) and with nothing
+    //     headless (the whole point is the real window; a capture mode would
+    //     silently swallow the script).
+    if live_script.is_some() && (out.is_some() || storyboard_arg.is_some()) {
+        bail!("--live-script drives the real windowed app; it does not compose with capture modes");
+    }
+    if live_shots.is_some() && live_script.is_none() {
+        bail!("--live-shots requires --live-script");
+    }
+    let live = match live_script {
+        Some(spec) => Some(crate::probe::LiveScript {
+            steps: crate::probe::parse_script(&spec)?,
+            shots_dir: live_shots.unwrap_or_else(std::env::temp_dir),
+        }),
+        None => None,
+    };
     // 2) Reject verification hooks the chosen mode would silently ignore. After the
     //    single-mode check above at most one mode category is active, so this
     //    mirrors the Mode construction's precedence (held > timeline > motion >
@@ -1138,6 +1180,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
         },
         None => Mode::Windowed {
             file,
+            live,
             root,
             workspace,
             notes_root,

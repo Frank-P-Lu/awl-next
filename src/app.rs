@@ -360,6 +360,14 @@ struct Gpu {
     faults: gpu::GpuFaultInbox,
     #[cfg(not(target_arch = "wasm32"))]
     inject_surface_loss: bool,
+    /// LIVE PROBE frame mirror (`--live-script` only, else forever `None`): a
+    /// persistent texture every PRESENTED frame is blitted into just before
+    /// `present()`, so a probe `shot` can read back what the compositor was
+    /// LAST HANDED — without forcing a redraw that would repaint over exactly
+    /// the stale-frame / missed-redraw bug classes the probe hunts. See
+    /// `Gpu::mirror_presented_frame` + `crate::probe`'s module doc.
+    #[cfg(not(target_arch = "wasm32"))]
+    probe_mirror: Option<wgpu::Texture>,
 }
 
 /// GPU surface + frame loop (device/queue/surface, prepare/render).
@@ -378,6 +386,10 @@ mod apply;
 /// The single-instance DAEMON's App-side wiring (native only): react to a
 /// posted `DaemonEvent`, finish a buffer for C-x #, tear down on quit.
 mod daemon;
+/// The LIVE PROBE HARNESS's App-side wiring (native only): scripted chords
+/// through the real dispatch tail + compositor-side window shots. See
+/// `crate::probe`'s module doc.
+mod probe;
 /// The native macOS MENU BAR's App-side wiring (`cfg(target_os = "macos")`
 /// only): resolve a fired menu item's id and re-dispatch it through the SAME
 /// `App::apply` seam a keypress uses. `crate::menu` owns the pure roster +
@@ -454,6 +466,14 @@ pub struct App {
     soak_recovery_pending: Option<crate::soak_gpu::FaultKind>,
     #[cfg(not(target_arch = "wasm32"))]
     soak_passed: Option<bool>,
+    /// LIVE PROBE (`--live-script`): the one-shot "first frame is up" signal
+    /// the driver thread blocks on before feeding scripted input — sent (and
+    /// the sender dropped) from `on_gpu_ready`, alongside a `focus_window()`
+    /// so the probe window is frontmost/unoccluded (the wgpu macOS occlusion
+    /// tripwire: a non-visible window presents nothing). `None` outside a
+    /// probe run — zero cost on a normal launch.
+    #[cfg(not(target_arch = "wasm32"))]
+    probe_ready: Option<std::sync::mpsc::Sender<()>>,
     /// WASM-only handoff slot for the ASYNC GPU init. The browser main thread can't
     /// block, so `Gpu::new` runs on a `spawn_local` future that parks its result
     /// here; `window_event` moves it into `gpu` on the first frame. `Rc<RefCell>`
@@ -1164,6 +1184,8 @@ impl App {
             soak_recovery_pending: None,
             #[cfg(not(target_arch = "wasm32"))]
             soak_passed: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            probe_ready: None,
             #[cfg(target_arch = "wasm32")]
             gpu_pending: std::rc::Rc::new(std::cell::RefCell::new(None)),
             last_frame: None,
@@ -1469,6 +1491,25 @@ impl App {
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.window.request_redraw();
         }
+        // LIVE PROBE ready signal: the window + GPU exist, so the driver thread
+        // may start feeding scripted input. FIRST make the window unoccludable:
+        // the wgpu macOS occlusion gate returns `SurfaceError::Occluded` before
+        // `nextDrawable()` for a window without `NSWindowOcclusionStateVisible`
+        // — and a probe launched from a (fullscreen) terminal opens BEHIND it,
+        // so without this the run presents ZERO frames (observed: every shot
+        // "no frame has presented yet"). AlwaysOnTop guarantees visibility for
+        // the run's few seconds regardless of the launching terminal;
+        // `focus_window` additionally asks for key status so the run matches
+        // the reported live conditions (focused editing).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(tx) = self.probe_ready.take() {
+            if let Some(gpu) = self.gpu.as_ref() {
+                gpu.window
+                    .set_window_level(winit::window::WindowLevel::AlwaysOnTop);
+                gpu.window.focus_window();
+            }
+            let _ = tx.send(());
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1565,6 +1606,10 @@ pub(crate) enum AwlEvent {
     /// (`App::handle_menu_event`, `app/menu.rs`).
     #[cfg(target_os = "macos")]
     Menu(String),
+    /// A live-probe step posted by the `--live-script` driver thread (see
+    /// `crate::probe`'s module doc) — a scripted chord for the real dispatch
+    /// tail, a compositor-side window shot, or the terminating quit.
+    Probe(crate::probe::ProbeEvent),
 }
 #[cfg(target_arch = "wasm32")]
 type AwlEvent = ();
@@ -1582,6 +1627,7 @@ impl ApplicationHandler<AwlEvent> for App {
             AwlEvent::Daemon(e) => self.handle_daemon_event(e),
             #[cfg(target_os = "macos")]
             AwlEvent::Menu(id) => self.handle_menu_event(id, _event_loop),
+            AwlEvent::Probe(e) => self.handle_probe_event(_event_loop, e),
         }
     }
 
@@ -2235,6 +2281,7 @@ pub fn run(
     config: Config,
     wait: bool,
     #[cfg(not(target_arch = "wasm32"))] soak: Option<crate::soak_gpu::SoakConfig>,
+    #[cfg(not(target_arch = "wasm32"))] live: Option<crate::probe::LiveScript>,
 ) -> anyhow::Result<()> {
     // CRASH VISIBILITY (native only — mirrors the daemon's own CAPTURE GATE
     // exactly): install the panic hook FIRST, before any window/GPU/daemon
@@ -2255,8 +2302,12 @@ pub fn run(
     // already-running instance exits in milliseconds with no window ever
     // created. Under `mas`, Launch Services already refuses a second launch
     // and there is no CLI to hand a path off with, so this is simply absent.
+    // The LIVE PROBE additionally skips the daemon outright (defense in depth
+    // beyond the wrapper script's env isolation): a probe launch must never
+    // hand its file off to — or bind over the socket of — the user's real
+    // running instance. See `crate::probe`'s module doc.
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
-    let instance_listener = if soak.is_some() { None } else { match crate::daemon::startup(file.as_deref(), wait) {
+    let instance_listener = if soak.is_some() || live.is_some() { None } else { match crate::daemon::startup(file.as_deref(), wait) {
         Ok(crate::daemon::StartupOutcome::HandedOff) => return Ok(()),
         Ok(crate::daemon::StartupOutcome::Instance(l)) => Some(l),
         Err(e) => {
@@ -2305,6 +2356,26 @@ pub fn run(
     #[cfg(target_os = "macos")]
     {
         if app.soak.is_none() { app.menu_proxy = Some(proxy.clone()); }
+    }
+    // LIVE PROBE (`--live-script`): arm the ready signal and spawn the driver
+    // thread (the daemon's own EventLoopProxy precedent — scripted steps are
+    // posted into the winit loop, never cross-thread `App` access). Shots land
+    // in the script's shots dir, created here so the very first `shot` step
+    // can't fail on a missing directory.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(script) = live {
+        // Arm the process-global FIRST — `Gpu::new` (called from `resumed`,
+        // strictly later) reads it to add COPY_SRC + the frame mirror.
+        crate::probe::set_live_active();
+        if let Err(e) = std::fs::create_dir_all(&script.shots_dir) {
+            eprintln!("LIVE-PROBE error: cannot create shots dir {}: {e}", script.shots_dir.display());
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.probe_ready = Some(tx);
+        let probe_proxy = proxy.clone();
+        crate::probe::spawn_driver(script, rx, move |e| {
+            probe_proxy.send_event(AwlEvent::Probe(e)).is_ok()
+        });
     }
     #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
     if let Some(listener) = instance_listener {
