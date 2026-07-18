@@ -36,6 +36,10 @@ pub(super) fn base_viewstate(
         text: buffer.text(),
         cursor_line: cursor.0,
         cursor_col: cursor.1,
+        // Carry the buffer's caret wrap affinity into the capture so a `--keys`
+        // replay of C-e / End / Cmd-Right at a shared soft-wrap boundary renders the
+        // caret on the SAME visual row the live app would (Upstream → upper row).
+        caret_affinity: buffer.affinity(),
         zoom,
         misspelled,
         held,

@@ -148,6 +148,15 @@ pub struct Buffer {
     /// (through `clear_kill_flag` / `set_cursor` / `apply_edit`), so it only ever
     /// survives a RUN of consecutive visual vertical moves.
     goal_x: Option<f32>,
+    /// CARET WRAP AFFINITY: which visual row the caret RENDERS on when its column
+    /// sits exactly on a SHARED soft-wrap boundary (see [`crate::caret::Affinity`]).
+    /// `Upstream` (upper row's trailing edge) is set ONLY by a visual line-end
+    /// motion (C-e / End / Cmd-Right); every other motion / edit clears it back to
+    /// `Downstream`, exactly like `goal_x`'s lifecycle — so it only survives on a
+    /// caret parked at a visual-row end. The buffer carries it opaquely; the render
+    /// pipeline reads it (via [`Self::affinity`]) to disambiguate the two legit
+    /// renders of the boundary column.
+    affinity: crate::caret::Affinity,
     /// The file this buffer is bound to (for Cmd-S). `None` for scratch.
     path: Option<PathBuf>,
     /// This buffer's line-ending discipline (the VS Code model): the rope is
@@ -232,6 +241,7 @@ impl Buffer {
             cursor: 0,
             goal_col: None,
             goal_x: None,
+            affinity: crate::caret::Affinity::Downstream,
             path,
             eol: Eol::Lf,
             note_dir: None,
@@ -500,6 +510,29 @@ impl Buffer {
         // visual goal-x is recomputed on the next C-n/C-p. (The visual vertical
         // path uses `set_cursor_visual`, which bypasses this and KEEPS goal_x.)
         self.goal_x = None;
+        // A plain motion / edit also drops any caret wrap-affinity: the caret is no
+        // longer parked at a visual-row END, so at a shared boundary it renders on
+        // the LOWER row again (the default bias). The visual line-END motion re-sets
+        // `Upstream` AFTER its `set_cursor`, so only that survives (see
+        // `crate::caret::Affinity`).
+        self.affinity = crate::caret::Affinity::Downstream;
+    }
+
+    /// The caret's current wrap AFFINITY (which visual row it renders on at a
+    /// shared soft-wrap boundary — see [`crate::caret::Affinity`]). Read by the
+    /// render pipeline's caret placement; `Downstream` for any caret not parked at
+    /// a visual-row end.
+    pub fn affinity(&self) -> crate::caret::Affinity {
+        self.affinity
+    }
+
+    /// Mark the caret's wrap AFFINITY. Called ONLY by the visual line-END motion
+    /// (C-e / End / Cmd-Right) with `Upstream`, AFTER `set_cursor` has parked the
+    /// caret at the boundary column (so it survives that call's clear). Every other
+    /// motion / edit resets it to `Downstream` through `clear_kill_flag` /
+    /// `set_cursor_visual` / `apply_edit`.
+    pub fn set_affinity(&mut self, affinity: crate::caret::Affinity) {
+        self.affinity = affinity;
     }
 
     // --- Word / line bounds (for double / triple click) -------------------

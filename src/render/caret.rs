@@ -62,7 +62,10 @@ impl TextPipeline {
     /// reads that row's top. The caret underline sits at the BOTTOM of this box.
     fn caret_cell_top(&self, col: usize) -> f32 {
         let m = &self.metrics;
-        let line_top = self.visual_row_top(self.cursor_line, col);
+        // Affinity-aware: an `Upstream` caret parked at a shared wrap boundary rides
+        // the UPPER visual row's top, so its box (and the block/morph anchor built on
+        // it) sits on the row the caret visually belongs to, not the lower row.
+        let line_top = self.visual_row_top_aff(self.cursor_line, col, self.caret_affinity);
         // Centre the caret box in the cursor's ACTUAL row height, so on a (taller)
         // heading row the caret sits on the heading's optical centre rather than
         // floating high in a base-height cell. The caret anchor is built from this
@@ -85,7 +88,7 @@ impl TextPipeline {
     pub fn caret_target_xy(&self) -> (f32, f32) {
         let m = &self.metrics;
         let col = self.caret_anchor_col();
-        let (gx, _adv) = self.col_x_and_advance(self.cursor_line, col);
+        let (gx, _adv) = self.col_x_and_advance_aff(self.cursor_line, col, self.caret_affinity);
         let x = self.text_left() + gx;
         // Cell-box vertical center: the resting square is centered on the glyph.
         let y = self.caret_cell_top(col) + m.caret_h * 0.5;
@@ -114,7 +117,8 @@ impl TextPipeline {
     /// [`Self::caret_block_w`], and the IME rect computes its own insertion-point
     /// cell in [`Self::caret_pixel_rect`].
     pub fn caret_target_w(&self) -> f32 {
-        let (_x, adv) = self.col_x_and_advance(self.cursor_line, self.caret_anchor_col());
+        let (_x, adv) =
+            self.col_x_and_advance_aff(self.cursor_line, self.caret_anchor_col(), self.caret_affinity);
         adv.max(self.metrics.caret_w)
     }
 
@@ -140,7 +144,8 @@ impl TextPipeline {
     /// editing a `.rs` shapes the buffer in the world's mono companion, and the
     /// block must follow the grid actually on screen.
     pub fn caret_block_w(&self) -> f32 {
-        let (_x, adv) = self.col_x_and_advance(self.cursor_line, self.caret_anchor_col());
+        let (_x, adv) =
+            self.col_x_and_advance_aff(self.cursor_line, self.caret_anchor_col(), self.caret_affinity);
         if crate::caret::font_is_mono(self.shaped_font) {
             adv.max(self.metrics.caret_w)
         } else {
@@ -397,6 +402,12 @@ impl TextPipeline {
         // Match the run by char column span (same logic as `pick_row`): the run
         // whose [start_col, end_col) contains the anchor column.
         let col = self.caret_anchor_col();
+        // At a SHARED wrap boundary an `Upstream` caret sits on the UPPER visual
+        // row: match that row's run (its `end_col == col`) instead of the lower run
+        // the default `col < end_col` picks, so the block's descender-aware BOTTOM
+        // extension measures against the row the caret actually renders on (else the
+        // block stretches from the upper row down to the lower row's baseline).
+        let upstream = self.caret_affinity == crate::caret::Affinity::Upstream;
         let line_text = self
             .buffer
             .lines
@@ -424,7 +435,9 @@ impl TextPipeline {
             }
             let start_col = byte_col(&line_text, bs);
             let end_col = byte_col(&line_text, be);
-            if col >= start_col && col < end_col {
+            // Upstream at a shared boundary: this run's TRAILING edge owns the col.
+            let owns_upstream = upstream && end_col == col && start_col < col;
+            if owns_upstream || (col >= start_col && col < end_col) {
                 return self.doc_top() + run.line_y;
             }
         }
@@ -433,7 +446,7 @@ impl TextPipeline {
         // paints a silhouette here (it falls back to the slim space bar), so this
         // only keeps the value finite.
         let m = &self.metrics;
-        let line_top = self.visual_row_top(self.cursor_line, col);
+        let line_top = self.visual_row_top_aff(self.cursor_line, col, self.caret_affinity);
         line_top + (m.line_height - m.font_size) * 0.5 + m.font_size * 0.8
     }
 
@@ -840,7 +853,11 @@ impl TextPipeline {
     /// caret look — the OS composition cell marks where text will land, so it must
     /// NOT follow Morph's one-back visual anchor ([`Self::caret_anchor_col`]).
     pub fn caret_pixel_rect(&self) -> (f32, f32, f32, f32) {
-        let (gx, adv) = self.col_x_and_advance(self.cursor_line, self.cursor_col);
+        // Affinity-aware so the OS composition cell sits at the caret's REAL screen
+        // position when it is parked at a shared wrap boundary (matches `caret_cell_top`,
+        // which is affinity-aware too); `Downstream` for any ordinary caret.
+        let (gx, adv) =
+            self.col_x_and_advance_aff(self.cursor_line, self.cursor_col, self.caret_affinity);
         let x = self.text_left() + gx;
         let y = self.caret_cell_top(self.cursor_col);
         (x, y, adv.max(self.metrics.caret_w), self.metrics.caret_h)

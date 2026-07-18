@@ -789,6 +789,45 @@ pub(super) fn pick_row<'r>(rows: &'r [VisualRow], col: usize) -> &'r VisualRow {
     &rows[pick_row_index(rows, col)]
 }
 
+/// [`pick_row`] with a caret wrap `affinity`. `Downstream` is byte-identical to
+/// `pick_row` (the historical lower-row bias). `Upstream` resolves a SHARED wrap
+/// boundary (`col` == a row's `end_col` that also opens the next row) to the UPPER
+/// row instead — the row whose TRAILING edge is `col` — so a caret parked at the
+/// visual-row end (right after C-e / End / Cmd-Right) renders on that row's right
+/// edge, not the lower row's left. At any NON-boundary column exactly one row owns
+/// `col`, so affinity is inert and this is identical to `pick_row`.
+pub(super) fn pick_row_aff<'r>(
+    rows: &'r [VisualRow],
+    col: usize,
+    affinity: crate::caret::Affinity,
+) -> &'r VisualRow {
+    &rows[pick_row_index_aff(rows, col, affinity)]
+}
+
+/// The INDEX form of [`pick_row_aff`]. With `Upstream`, prefer the UPPER row at a
+/// shared boundary (the unique row whose `end_col == col` and `start_col < col` —
+/// a real trailing edge, never an empty row); otherwise fall through to the
+/// default [`pick_row_index`]. With `Downstream` this IS `pick_row_index`.
+pub(super) fn pick_row_index_aff(
+    rows: &[VisualRow],
+    col: usize,
+    affinity: crate::caret::Affinity,
+) -> usize {
+    if affinity == crate::caret::Affinity::Upstream {
+        // `end_col` is strictly increasing across rows, so at most one row ends at
+        // `col`; at a shared boundary that is the upper row (the lower row STARTS at
+        // `col`). `start_col < col` skips a zero-width row that neither owns nor
+        // trails the column (e.g. an empty synthetic row).
+        if let Some(i) = rows
+            .iter()
+            .position(|r| r.end_col == col && r.start_col < col)
+        {
+            return i;
+        }
+    }
+    pick_row_index(rows, col)
+}
+
 /// The INDEX form of [`pick_row`]: the position within `rows` of the visual row
 /// that owns char column `col`, with the identical wrap-boundary bias (the later
 /// row wins at a boundary). Used by the visual-motion oracle to step to the
@@ -1649,8 +1688,21 @@ impl TextPipeline {
     /// so this still equals the logical line index — cursor-follow is unchanged when
     /// nothing wraps and no heading grows a row.
     pub fn visual_row_of(&self, line: usize, col: usize) -> usize {
+        self.visual_row_of_aff(line, col, crate::caret::Affinity::Downstream)
+    }
+
+    /// [`Self::visual_row_of`] with a caret wrap `affinity` — used by the
+    /// cursor-FOLLOW scroll so the viewport tracks the row the caret VISUALLY sits
+    /// on (an `Upstream` caret rides the UPPER row). `Downstream` (search-match /
+    /// zoom-anchor callers) is byte-identical to `visual_row_of`.
+    pub fn visual_row_of_aff(
+        &self,
+        line: usize,
+        col: usize,
+        affinity: crate::caret::Affinity,
+    ) -> usize {
         let rows = self.visual_rows(line);
-        let target = pick_row(&rows, col).line_top;
+        let target = pick_row_aff(&rows, col, affinity).line_top;
         self.row_geom.nearest_row(&self.buffer, &self.metrics, target)
     }
 
@@ -1662,8 +1714,21 @@ impl TextPipeline {
     /// caret row. This is THE replacement for `doc_top() + line * line_height` in
     /// every overlay, so caret / selection / squiggles ride the real wrapped row.
     pub(super) fn visual_row_top(&self, line: usize, col: usize) -> f32 {
+        self.visual_row_top_aff(line, col, crate::caret::Affinity::Downstream)
+    }
+
+    /// [`Self::visual_row_top`] with a caret wrap `affinity` — the ONLY seam the
+    /// caret's own row-placement uses, so an `Upstream` caret at a shared boundary
+    /// rides the UPPER row's top. `Downstream` (every other caller: selection
+    /// popover, etc.) is byte-identical to `visual_row_top`.
+    pub(super) fn visual_row_top_aff(
+        &self,
+        line: usize,
+        col: usize,
+        affinity: crate::caret::Affinity,
+    ) -> f32 {
         let rows = self.visual_rows(line);
-        self.doc_top() + pick_row(&rows, col).line_top
+        self.doc_top() + pick_row_aff(&rows, col, affinity).line_top
     }
 
     /// Pixel x (relative to TEXT_LEFT) of the glyph boundary at char-column `col`
@@ -1673,6 +1738,19 @@ impl TextPipeline {
     /// DEGENERATE mid-line cell (see [`DEGENERATE_CELL_FRAC`]) falls back the same
     /// way so the caret stays visible on a collapsed wrap-boundary space.
     pub(super) fn col_x_and_advance(&self, line: usize, col: usize) -> (f32, f32) {
+        self.col_x_and_advance_aff(line, col, crate::caret::Affinity::Downstream)
+    }
+
+    /// [`Self::col_x_and_advance`] with a caret wrap `affinity` — the seam the
+    /// caret's own X/advance use, so an `Upstream` caret at a shared boundary reads
+    /// the UPPER row's own left-aligned x's (its RIGHT edge) instead of the lower
+    /// row's leading x (~0). `Downstream` is byte-identical to `col_x_and_advance`.
+    pub(super) fn col_x_and_advance_aff(
+        &self,
+        line: usize,
+        col: usize,
+        affinity: crate::caret::Affinity,
+    ) -> (f32, f32) {
         // THE X-RAY caret redirect: on a table row the source glyphs are
         // ZERO-WIDTH concealed (the grid draws in their place), so the caret can't
         // ride them — it rides the FLOATED non-wrapping source instead. Reuses the
@@ -1688,7 +1766,7 @@ impl TextPipeline {
         // non-wrapped line there is exactly one row whose xs == line_glyph_xs, so
         // this is identical to the previous behavior.
         let rows = self.visual_rows(line);
-        let row = pick_row(&rows, col);
+        let row = pick_row_aff(&rows, col, affinity);
         let n = row.xs.len().saturating_sub(1); // char count on the logical line
         let c = col.min(n);
         let x = row.xs[c];

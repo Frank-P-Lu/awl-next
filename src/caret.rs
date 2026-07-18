@@ -360,6 +360,36 @@ pub enum CaretMode {
     Ibeam,
 }
 
+/// Which visual ROW the caret RENDERS on when its char column lands EXACTLY on a
+/// SHARED soft-wrap boundary — a wrap with NO dropped whitespace (mid-word, a long
+/// URL, EVERY CJK wrap), where one visual row's `end_col` equals the next row's
+/// `start_col`. That single char index is a legitimate caret position on BOTH
+/// rows: the TRAILING (right) edge of the upper row and the LEADING (left) edge of
+/// the lower row. Only the ARRIVAL DIRECTION disambiguates, so the caret carries
+/// this one bit to say which render it wants.
+///
+/// * [`Affinity::Downstream`] (the DEFAULT) — the LOWER row's leading edge, where
+///   rightward / Down motion and a fresh cursor land. This is the historical
+///   [`pick_row`](crate::render) bias (later row wins at a boundary), so the whole
+///   editor is byte-identical while affinity stays `Downstream`.
+/// * [`Affinity::Upstream`] — the UPPER row's trailing edge, where a VISUAL
+///   line-END motion (C-e / End / Cmd-Right) lands: it makes C-e visibly stop at
+///   the RIGHT edge of the current visual row instead of appearing to jump one row
+///   down to the same column's left edge.
+///
+/// Lifecycle mirrors [`Buffer::goal_x`](crate::buffer::Buffer): SET to `Upstream`
+/// only by the visual line-end motion, and CLEARED back to `Downstream` by every
+/// other motion / edit (through `clear_kill_flag` / `set_cursor_visual` /
+/// `apply_edit`). So it only ever survives on a caret parked at a line end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Affinity {
+    /// Lower row's leading edge (the default; byte-identical to the old bias).
+    #[default]
+    Downstream,
+    /// Upper row's trailing edge (a caret parked at the visual-row end).
+    Upstream,
+}
+
 impl CaretMode {
     fn as_u8(self) -> u8 {
         match self {

@@ -42,8 +42,11 @@ impl Buffer {
         }
         self.cursor = cursor_after;
         // Any content edit ends a visual vertical run (the wrap geometry just
-        // moved), so the next C-n/C-p recomputes the sticky visual goal-x.
+        // moved), so the next C-n/C-p recomputes the sticky visual goal-x — and
+        // likewise drops any caret wrap-affinity (the caret is no longer parked at
+        // a visual-row end), mirroring `clear_kill_flag`.
         self.goal_x = None;
+        self.affinity = crate::caret::Affinity::Downstream;
         self.dirty = true;
         self.version += 1;
         let edit = Edit {

@@ -42,6 +42,7 @@ mod tables;
 mod theme;
 mod theme_caps_law;
 mod washes;
+mod wrap_affinity;
 #[cfg(not(target_arch = "wasm32"))]
 mod webgl_shader_validation;
 mod wysiwyg;

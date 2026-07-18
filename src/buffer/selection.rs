@@ -138,6 +138,10 @@ impl Buffer {
         self.goal_col = None;
         self.cursor = idx.min(self.rope.len_chars());
         self.goal_x = Some(goal_x);
+        // A vertical move is not a line-END intent, so it drops any wrap-affinity
+        // (mirrors `clear_kill_flag`, which this method deliberately bypasses to
+        // KEEP goal_x): landing on a boundary via Up/Down renders on the LOWER row.
+        self.affinity = crate::caret::Affinity::Downstream;
     }
 
     /// Delete the active selection (if any) and place the cursor at its start.

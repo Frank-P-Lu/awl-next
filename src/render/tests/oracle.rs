@@ -28,23 +28,23 @@ fn oracle_visual_motion_follows_wrapped_rows() {
 
     // DOWN from the very start (goal-x at the left edge) lands on the FIRST
     // column of the SECOND visual row — SAME logical line, different visual row.
-    let gx = p.visual_x_of(0, 0);
-    let (dl, dc) = p.visual_line_down(0, 0, gx);
+    let gx = p.visual_x_of(0, 0, crate::caret::Affinity::Downstream);
+    let (dl, dc) = p.visual_line_down(0, 0, gx, crate::caret::Affinity::Downstream);
     assert_eq!(dl, 0, "down stays in the same wrapped logical line");
     assert_eq!(dc, rows[1].start_col, "down lands at the next visual row's start");
     // UP from there returns to the first visual row's start (col 0).
-    assert_eq!(p.visual_line_up(dl, dc, gx), (0, 0), "up returns to the top row");
+    assert_eq!(p.visual_line_up(dl, dc, gx, crate::caret::Affinity::Downstream), (0, 0), "up returns to the top row");
     // visual_line_start/end bracket the SECOND visual row's column span.
-    assert_eq!(p.visual_line_start(0, dc), (0, rows[1].start_col));
-    assert_eq!(p.visual_line_end(0, dc), (0, rows[1].end_col));
+    assert_eq!(p.visual_line_start(0, dc, crate::caret::Affinity::Downstream), (0, rows[1].start_col));
+    assert_eq!(p.visual_line_end(0, dc, crate::caret::Affinity::Downstream), (0, rows[1].end_col));
 
     // Crossing LOGICAL lines: a short two-line buffer, down from line 0 to
     // line 1 and back up.
     p.set_view(&view("abc\ndefgh", 0, 1));
-    let gx2 = p.visual_x_of(0, 1);
-    let (l, c) = p.visual_line_down(0, 1, gx2);
+    let gx2 = p.visual_x_of(0, 1, crate::caret::Affinity::Downstream);
+    let (l, c) = p.visual_line_down(0, 1, gx2, crate::caret::Affinity::Downstream);
     assert_eq!(l, 1, "down crosses into the next logical line");
-    assert_eq!(p.visual_line_up(l, c, gx2).0, 0, "up crosses back to line 0");
+    assert_eq!(p.visual_line_up(l, c, gx2, crate::caret::Affinity::Downstream).0, 0, "up crosses back to line 0");
 }
 
 /// FULL VERTICAL-MOTION SWEEP over the real CAPTURE.md (wrapped paragraphs,
@@ -105,7 +105,7 @@ fn oracle_vertical_sweep_capture_md_strictly_monotonic() {
             for col in 0..=char_count {
                 let g0 = gvrow(line, col);
                 // DOWN: strictly below unless already at the doc's last visual row.
-                let (dl, dc) = p.visual_line_down(line, col, gx);
+                let (dl, dc) = p.visual_line_down(line, col, gx, crate::caret::Affinity::Downstream);
                 if (dl, dc) == (line, col) {
                     if g0 + 1 != total {
                         fixed_points.push(format!(
@@ -121,7 +121,7 @@ fn oracle_vertical_sweep_capture_md_strictly_monotonic() {
                     ));
                 }
                 // UP: strictly above unless already at the doc's first visual row.
-                let (ul, uc) = p.visual_line_up(line, col, gx);
+                let (ul, uc) = p.visual_line_up(line, col, gx, crate::caret::Affinity::Downstream);
                 if (ul, uc) == (line, col) {
                     if g0 != 0 {
                         fixed_points.push(format!(
@@ -195,11 +195,11 @@ fn oracle_full_vertical_walk_reaches_extremes_capture_md() {
         let mut steps = 0usize;
         loop {
             let (line, col) = buf.cursor_line_col();
-            let goal_x = buf.goal_x().unwrap_or_else(|| p.visual_x_of(line, col));
+            let goal_x = buf.goal_x().unwrap_or_else(|| p.visual_x_of(line, col, crate::caret::Affinity::Downstream));
             let (nl, nc) = if down {
-                p.visual_line_down(line, col, goal_x)
+                p.visual_line_down(line, col, goal_x, crate::caret::Affinity::Downstream)
             } else {
-                p.visual_line_up(line, col, goal_x)
+                p.visual_line_up(line, col, goal_x, crate::caret::Affinity::Downstream)
             };
             let before = buf.cursor_char();
             buf.set_cursor_visual(buf.line_col_to_char(nl, nc), goal_x);
@@ -290,7 +290,7 @@ fn assert_vertical_sweep_clean(p: &TextPipeline, text: &str, label: &str, walks_
                 let g0 = gvrow(line, col);
                 if let Some(t) = down_target {
                     for gx in gxs_for(t) {
-                        let (dl, dc) = p.visual_line_down(line, col, gx);
+                        let (dl, dc) = p.visual_line_down(line, col, gx, crate::caret::Affinity::Downstream);
                         if (dl, dc) == (line, col) {
                             if g0 + 1 != total {
                                 bad.push(format!(
@@ -308,7 +308,7 @@ fn assert_vertical_sweep_clean(p: &TextPipeline, text: &str, label: &str, walks_
                 }
                 if let Some(t) = up_target {
                     for gx in gxs_for(t) {
-                        let (ul, uc) = p.visual_line_up(line, col, gx);
+                        let (ul, uc) = p.visual_line_up(line, col, gx, crate::caret::Affinity::Downstream);
                         if (ul, uc) == (line, col) {
                             if g0 != 0 {
                                 bad.push(format!(
@@ -342,11 +342,11 @@ fn assert_vertical_sweep_clean(p: &TextPipeline, text: &str, label: &str, walks_
             let mut steps = 0usize;
             loop {
                 let (line, col) = buf.cursor_line_col();
-                let gx = buf.goal_x().unwrap_or_else(|| p.visual_x_of(line, col));
+                let gx = buf.goal_x().unwrap_or_else(|| p.visual_x_of(line, col, crate::caret::Affinity::Downstream));
                 let (nl, nc) = if down {
-                    p.visual_line_down(line, col, gx)
+                    p.visual_line_down(line, col, gx, crate::caret::Affinity::Downstream)
                 } else {
-                    p.visual_line_up(line, col, gx)
+                    p.visual_line_up(line, col, gx, crate::caret::Affinity::Downstream)
                 };
                 let before = buf.cursor_char();
                 buf.set_cursor_visual(buf.line_col_to_char(nl, nc), gx);
@@ -478,9 +478,9 @@ fn held_cursor_only_view_pushes_stay_fresh() {
     let (mut line, mut col) = (0usize, 0usize);
     for step in 0..200 {
         // One held C-n, exactly as actions::motion::vertical_motion steps it.
-        let gx = goal.unwrap_or_else(|| p.visual_x_of(line, col));
+        let gx = goal.unwrap_or_else(|| p.visual_x_of(line, col, crate::caret::Affinity::Downstream));
         goal = Some(gx);
-        let (nl, nc) = p.visual_line_down(line, col, gx);
+        let (nl, nc) = p.visual_line_down(line, col, gx, crate::caret::Affinity::Downstream);
         assert_ne!((nl, nc), (line, col), "stuck at ({line},{col}) on step {step}");
         (line, col) = (nl, nc);
         // The cursor-only re-push sync_view does on the auto-repeat.

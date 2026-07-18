@@ -25,15 +25,20 @@ use super::*;
 pub(super) fn vertical_motion(ctx: &mut ActionCtx, down: bool) {
     if let Some(oracle) = ctx.oracle {
         let (line, col) = ctx.buffer.cursor_line_col();
+        // The caret's affinity resolves which visual row it starts on at a shared
+        // boundary (an `Upstream` caret — right after C-e — sits on the UPPER row).
+        // `set_cursor_visual` clears it to `Downstream` after the step, so a RUN of
+        // Up/Down reads `Downstream` from the second move on (byte-identical to before).
+        let aff = ctx.buffer.affinity();
         // Reuse the sticky goal-x across a run; seed it on the first move.
         let goal_x = ctx
             .buffer
             .goal_x()
-            .unwrap_or_else(|| oracle.visual_x_of(line, col));
+            .unwrap_or_else(|| oracle.visual_x_of(line, col, aff));
         let (nl, nc) = if down {
-            oracle.visual_line_down(line, col, goal_x)
+            oracle.visual_line_down(line, col, goal_x, aff)
         } else {
-            oracle.visual_line_up(line, col, goal_x)
+            oracle.visual_line_up(line, col, goal_x, aff)
         };
         let idx = ctx.buffer.line_col_to_char(nl, nc);
         ctx.buffer.set_cursor_visual(idx, goal_x);
@@ -54,13 +59,25 @@ pub(super) fn vertical_motion(ctx: &mut ActionCtx, down: bool) {
 pub(super) fn line_edge_motion(ctx: &mut ActionCtx, end: bool) {
     if let Some(oracle) = ctx.oracle {
         let (line, col) = ctx.buffer.cursor_line_col();
+        // Consult the caret's CURRENT affinity so a repeat C-e / C-a on a caret
+        // already parked at the boundary reads the row it VISUALLY sits on (an
+        // `Upstream` caret is on the UPPER row), not the lower row the default bias
+        // would pick — keeping motion coherent with the render.
+        let aff = ctx.buffer.affinity();
         let (nl, nc) = if end {
-            oracle.visual_line_end(line, col)
+            oracle.visual_line_end(line, col, aff)
         } else {
-            oracle.visual_line_start(line, col)
+            oracle.visual_line_start(line, col, aff)
         };
         let idx = ctx.buffer.line_col_to_char(nl, nc);
         ctx.buffer.set_cursor(idx);
+        if end {
+            // A visual line-END motion parks the caret at the visual-row's TRAILING
+            // edge: mark `Upstream` so at a SHARED wrap boundary the caret renders on
+            // the UPPER row's right edge instead of jumping to the lower row's left.
+            // Set AFTER `set_cursor` (which clears it via `clear_kill_flag`).
+            ctx.buffer.set_affinity(crate::caret::Affinity::Upstream);
+        }
         return;
     }
     if end {
@@ -78,7 +95,10 @@ pub(super) fn line_edge_motion(ctx: &mut ActionCtx, end: bool) {
 pub(super) fn kill_line_motion(ctx: &mut ActionCtx) {
     if let Some(oracle) = ctx.oracle {
         let (line, col) = ctx.buffer.cursor_line_col();
-        let (el, ec) = oracle.visual_line_end(line, col);
+        // Kill to the end of the visual row the caret VISUALLY sits on (affinity
+        // resolves the shared boundary); `Downstream` for any ordinary caret, so a
+        // plain C-k is byte-identical.
+        let (el, ec) = oracle.visual_line_end(line, col, ctx.buffer.affinity());
         let end = ctx.buffer.line_col_to_char(el, ec);
         ctx.buffer.kill_line_to(end);
         return;

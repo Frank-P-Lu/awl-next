@@ -69,22 +69,52 @@ pub(crate) use overlay_nav::stamp_return_to;
 /// Visual-line motion is the FLAT DEFAULT (no logical/visual toggle): every
 /// caller that has a pipeline supplies an oracle, and `apply_core`'s vertical /
 /// line-edge / kill-line motions consult it.
+/// The caret's wrap `affinity` threads through EVERY positional query so a caret
+/// parked at a SHARED soft-wrap boundary (see [`crate::caret::Affinity`]) is read
+/// on the visual row it VISUALLY sits on. `Downstream` (the default for any caret
+/// not just parked at a line end) reproduces the historical lower-row bias
+/// EXACTLY — so every ordinary motion is byte-identical; only a motion issued
+/// FROM an `Upstream` caret (immediately after C-e / End / Cmd-Right) resolves the
+/// boundary to the UPPER row, keeping the follow-up motion coherent with the
+/// render (C-a → that row's start, Up/Down → its neighbour, a repeat C-e → a no-op).
 pub trait LayoutOracle {
     /// The cursor's pixel x on its own visual row (for the sticky goal-x).
-    fn visual_x_of(&self, line: usize, col: usize) -> f32;
+    fn visual_x_of(&self, line: usize, col: usize, affinity: crate::caret::Affinity) -> f32;
     /// One visual row UP from (`line`, `col`), landing the caret nearest `goal_x`.
     /// At the TOP visual row of the current logical line this crosses into the
     /// PREVIOUS logical line's LAST visual row; at the very top of the document it
     /// stays put.
-    fn visual_line_up(&self, line: usize, col: usize, goal_x: f32) -> (usize, usize);
+    fn visual_line_up(
+        &self,
+        line: usize,
+        col: usize,
+        goal_x: f32,
+        affinity: crate::caret::Affinity,
+    ) -> (usize, usize);
     /// One visual row DOWN from (`line`, `col`), landing nearest `goal_x`. At the
     /// BOTTOM visual row of the current logical line this crosses into the NEXT
     /// logical line's FIRST visual row; at the very bottom it stays put.
-    fn visual_line_down(&self, line: usize, col: usize, goal_x: f32) -> (usize, usize);
+    fn visual_line_down(
+        &self,
+        line: usize,
+        col: usize,
+        goal_x: f32,
+        affinity: crate::caret::Affinity,
+    ) -> (usize, usize);
     /// The start (first column) of the current VISUAL row.
-    fn visual_line_start(&self, line: usize, col: usize) -> (usize, usize);
+    fn visual_line_start(
+        &self,
+        line: usize,
+        col: usize,
+        affinity: crate::caret::Affinity,
+    ) -> (usize, usize);
     /// The end (last column) of the current VISUAL row.
-    fn visual_line_end(&self, line: usize, col: usize) -> (usize, usize);
+    fn visual_line_end(
+        &self,
+        line: usize,
+        col: usize,
+        affinity: crate::caret::Affinity,
+    ) -> (usize, usize);
 }
 
 /// Everything `apply_core` may mutate, gathered so the one seam can serve both

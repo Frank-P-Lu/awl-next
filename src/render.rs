@@ -984,6 +984,13 @@ pub struct ViewState {
     /// Cursor line (0-based) and column (0-based, in chars).
     pub cursor_line: usize,
     pub cursor_col: usize,
+    /// The caret's wrap AFFINITY (see [`crate::caret::Affinity`]): which visual row
+    /// the caret RENDERS on when `cursor_col` lands exactly on a shared soft-wrap
+    /// boundary. `Upstream` (set by a visual line-END motion) renders on the UPPER
+    /// row's trailing edge; `Downstream` (the default) on the lower row's leading
+    /// edge. Read ONLY by the caret's own placement (`caret_affinity`), so every
+    /// other overlay is unaffected.
+    pub caret_affinity: crate::caret::Affinity,
     /// Number of VISUAL ROWS scrolled off the top. Each visual row is one
     /// `line_height`-tall soft-wrapped sub-line, so on a wrapped document this is
     /// NOT the same as a logical-line count: it advances by what's actually drawn,
@@ -1217,6 +1224,7 @@ impl ViewState {
             text: String::new(),
             cursor_line: 0,
             cursor_col: 0,
+            caret_affinity: crate::caret::Affinity::Downstream,
             scroll_lines: 0,
             zoom: 1.0,
             selection: None,
@@ -3143,6 +3151,11 @@ pub struct TextPipeline {
     /// Last view state applied (for caret placement + scroll during draw).
     cursor_line: usize,
     cursor_col: usize,
+    /// The caret's wrap AFFINITY latched from the last `set_view` — the caret's own
+    /// row/x placement reads it (via the `_aff` geometry seams) to disambiguate a
+    /// shared soft-wrap boundary (see [`crate::caret::Affinity`]). `Downstream` for
+    /// any caret not parked at a visual-row end, so ordinary placement is unchanged.
+    caret_affinity: crate::caret::Affinity,
     scroll_lines: usize,
     /// Current zoom-derived metrics (single source of truth for layout).
     metrics: Metrics,
@@ -4303,6 +4316,7 @@ impl TextPipeline {
             caret: CaretAnim::new(),
             cursor_line: 0,
             cursor_col: 0,
+            caret_affinity: crate::caret::Affinity::Downstream,
             scroll_lines: 0,
             metrics,
             // 1.0 = no DPI scaling (the headless capture's 1:1 canvas). The live
@@ -4809,6 +4823,7 @@ impl TextPipeline {
         };
         self.cursor_line = view.cursor_line;
         self.cursor_col = view.cursor_col;
+        self.caret_affinity = view.caret_affinity;
         self.caret_from_key = from_key;
         // Re-latch the effective caret LOOK for this frame (see the field doc):
         // the anchor geometry below — including the spring target — reads the
@@ -6096,18 +6111,27 @@ fn col_on_row(rows: &[VisualRow], target: usize, goal_x: f32) -> usize {
 }
 
 impl crate::actions::LayoutOracle for TextPipeline {
-    fn visual_x_of(&self, line: usize, col: usize) -> f32 {
+    fn visual_x_of(&self, line: usize, col: usize, affinity: crate::caret::Affinity) -> f32 {
         // O(line): the oracle needs only per-char xs + row cols, so read this line's
         // OWN wrap rows (see `line_rows_local`), not the whole-doc `visual_rows`.
+        // Affinity resolves a caret parked at a shared boundary to the row it sits
+        // on, so its goal-x seeds from THAT row's x (the UPPER row's right edge for
+        // an `Upstream` caret) — `Downstream` is byte-identical to the old bias.
         let rows = self.line_rows_local(line);
-        let row = pick_row(&rows, col);
+        let row = pick_row_aff(&rows, col, affinity);
         let c = col.min(row.xs.len().saturating_sub(1));
         row.xs[c]
     }
 
-    fn visual_line_up(&self, line: usize, col: usize, goal_x: f32) -> (usize, usize) {
+    fn visual_line_up(
+        &self,
+        line: usize,
+        col: usize,
+        goal_x: f32,
+        affinity: crate::caret::Affinity,
+    ) -> (usize, usize) {
         let rows = self.line_rows_local(line);
-        let idx = pick_row_index(&rows, col);
+        let idx = pick_row_index_aff(&rows, col, affinity);
         if idx > 0 {
             // A wrapped continuation: step to the previous visual row of the SAME
             // logical line, landing under the goal-x (owned by that row — see
@@ -6124,9 +6148,15 @@ impl crate::actions::LayoutOracle for TextPipeline {
         (line - 1, col_on_row(&prev, prev.len() - 1, goal_x))
     }
 
-    fn visual_line_down(&self, line: usize, col: usize, goal_x: f32) -> (usize, usize) {
+    fn visual_line_down(
+        &self,
+        line: usize,
+        col: usize,
+        goal_x: f32,
+        affinity: crate::caret::Affinity,
+    ) -> (usize, usize) {
         let rows = self.line_rows_local(line);
-        let idx = pick_row_index(&rows, col);
+        let idx = pick_row_index_aff(&rows, col, affinity);
         if idx + 1 < rows.len() {
             // A wrapped line with rows below: step to the next visual row of the
             // SAME logical line (owned by that row — `col_on_row` keeps a large
@@ -6143,14 +6173,24 @@ impl crate::actions::LayoutOracle for TextPipeline {
         (line + 1, col_on_row(&next, 0, goal_x))
     }
 
-    fn visual_line_start(&self, line: usize, col: usize) -> (usize, usize) {
+    fn visual_line_start(
+        &self,
+        line: usize,
+        col: usize,
+        affinity: crate::caret::Affinity,
+    ) -> (usize, usize) {
         let rows = self.line_rows_local(line);
-        (line, pick_row(&rows, col).start_col)
+        (line, pick_row_aff(&rows, col, affinity).start_col)
     }
 
-    fn visual_line_end(&self, line: usize, col: usize) -> (usize, usize) {
+    fn visual_line_end(
+        &self,
+        line: usize,
+        col: usize,
+        affinity: crate::caret::Affinity,
+    ) -> (usize, usize) {
         let rows = self.line_rows_local(line);
-        (line, pick_row(&rows, col).end_col)
+        (line, pick_row_aff(&rows, col, affinity).end_col)
     }
 }
 

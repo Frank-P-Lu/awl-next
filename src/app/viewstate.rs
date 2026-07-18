@@ -166,6 +166,10 @@ impl App {
             text,
             cursor_line,
             cursor_col,
+            // The caret's wrap affinity (Upstream only right after a visual line-END
+            // motion) — the pipeline reads it to render the caret on the row it
+            // visually belongs to at a shared soft-wrap boundary.
+            caret_affinity: self.buffer.affinity(),
             scroll_lines: diff_scroll.unwrap_or(self.scroll_lines),
             zoom: self.zoom,
             selection: self.buffer.selection_line_col(),
@@ -374,7 +378,10 @@ impl App {
                 pipeline.zoom_anchor_scroll(anchor.line, anchor.col, anchor.screen_y, height);
         } else if follow {
             let pipeline = &self.gpu.as_ref().unwrap().pipeline;
-            let cursor_row = pipeline.visual_row_of(cursor_line, cursor_col);
+            // Affinity-aware so cursor-follow tracks the row the caret VISUALLY sits
+            // on at a shared boundary (Upstream → the upper row).
+            let cursor_row =
+                pipeline.visual_row_of_aff(cursor_line, cursor_col, self.buffer.affinity());
             self.scroll_lines = match follow_scroll_strategy(
                 crate::typewriter::typewriter_on(),
                 self.dragging,

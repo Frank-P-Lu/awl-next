@@ -3532,7 +3532,7 @@ mod tests {
                 let oracle = op.as_oracle();
                 let (mut l, mut c) = (0usize, 0usize);
                 loop {
-                    let (nl, nc) = oracle.visual_line_down(l, c, 0.0);
+                    let (nl, nc) = oracle.visual_line_down(l, c, 0.0, crate::caret::Affinity::Downstream);
                     steps += 1;
                     if nl != 0 {
                         break;

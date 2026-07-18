@@ -147,10 +147,10 @@ mod tests {
             eprintln!("skipping refresh_picks_up_a_page_measure_change: no wgpu adapter");
             return;
         };
-        let wide = op.as_oracle().visual_line_down(0, 0, 0.0);
+        let wide = op.as_oracle().visual_line_down(0, 0, 0.0, crate::caret::Affinity::Downstream);
         crate::page::set_measure(15);
         op.refresh(&buffer, 1.0);
-        let narrow = op.as_oracle().visual_line_down(0, 0, 0.0);
+        let narrow = op.as_oracle().visual_line_down(0, 0, 0.0, crate::caret::Affinity::Downstream);
         crate::page::set_measure(crate::page::DEFAULT_MEASURE);
         assert_eq!(wide.0, 0, "the long line wraps at measure 30, down stays on line 0");
         assert_eq!(narrow.0, 0, "still wrapped at measure 15");
@@ -178,13 +178,13 @@ mod tests {
             return;
         };
         assert_eq!(
-            op.as_oracle().visual_line_down(0, 0, 0.0).0,
+            op.as_oracle().visual_line_down(0, 0, 0.0, crate::caret::Affinity::Downstream).0,
             1,
             "the short line 0 does not wrap: down crosses into line 1"
         );
         let long = Buffer::from_str(&format!("{}\ntail\n", "word ".repeat(10)));
         op.refresh(&long, 1.0);
-        let (line, col) = op.as_oracle().visual_line_down(0, 0, 0.0);
+        let (line, col) = op.as_oracle().visual_line_down(0, 0, 0.0, crate::caret::Affinity::Downstream);
         crate::page::set_measure(crate::page::DEFAULT_MEASURE);
         assert_eq!(line, 0, "after refresh, down follows the arriving buffer's wrapped line 0");
         assert!(col > 0, "landing on line 0's second visual row, got col {col}");
@@ -206,9 +206,9 @@ mod tests {
             eprintln!("skipping refresh_follows_the_replay_zoom: no wgpu adapter");
             return;
         };
-        let at_one = op.as_oracle().visual_line_down(0, 0, 0.0);
+        let at_one = op.as_oracle().visual_line_down(0, 0, 0.0, crate::caret::Affinity::Downstream);
         op.refresh(&buffer, 1.5);
-        let zoomed = op.as_oracle().visual_line_down(0, 0, 0.0);
+        let zoomed = op.as_oracle().visual_line_down(0, 0, 0.0, crate::caret::Affinity::Downstream);
         assert_eq!((at_one.0, zoomed.0), (0, 0), "the long line wraps at both zooms");
         assert!(
             zoomed.1 < at_one.1,
@@ -226,7 +226,7 @@ mod tests {
             return;
         };
         pinned.refresh(&buffer, 1.5);
-        let still = pinned.as_oracle().visual_line_down(0, 0, 0.0);
+        let still = pinned.as_oracle().visual_line_down(0, 0, 0.0, crate::caret::Affinity::Downstream);
         crate::page::set_measure(crate::page::DEFAULT_MEASURE);
         assert_eq!(still, at_one, "an explicit --zoom pins the oracle's geometry too");
     }

@@ -103,7 +103,7 @@ async fn run_async() -> anyhow::Result<()> {
             let goal_x = 0.0f32;
             while line < last {
                 let t0 = crate::clock::Instant::now();
-                let (nl, _nc) = p.visual_line_down(line, col, goal_x);
+                let (nl, _nc) = p.visual_line_down(line, col, goal_x, crate::caret::Affinity::Downstream);
                 samples.push(t0.elapsed().as_nanos());
                 line = if nl > line { nl } else { line + 1 };
             }
