@@ -451,6 +451,9 @@ mod tests {
         }
     }
 
+    // The window constants are native-only (the probe drives a real NSWindow);
+    // the wasm test target must not reference them.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn probe_window_is_smaller_than_the_center_stage_default() {
         // The "small + cornered" contract: the probe window must be strictly
