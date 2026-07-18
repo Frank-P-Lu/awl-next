@@ -25,7 +25,7 @@ impl App {
         // so the app idles at 0% CPU (DESIGN §6).
         if let Some(pending) = self.prefix_pending_at {
             let deadline = pending + crate::whichkey::PAUSE;
-            let elapsed = Instant::now() >= deadline;
+            let elapsed = self.clock.now() >= deadline;
             if crate::whichkey::should_summon(true, self.whichkey_shown, elapsed) {
                 self.summon_whichkey();
             } else if !self.whichkey_shown && !elapsed && self.last_frame.is_none() {
@@ -39,7 +39,7 @@ impl App {
         // stamp, so nothing re-arms and the app idles at 0% CPU (the which-key pattern).
         if let Some(armed) = self.peek_armed_at {
             let deadline = armed + Duration::from_millis(crate::peek::HOLD_PEEK_MS);
-            if Instant::now() >= deadline {
+            if self.clock.now() >= deadline {
                 // ZOOM-SUPPRESSION GATE: the pause elapsed, but if a zoom is in flight
                 // (the sticky-zoom debounce window is open) the card would pop up over
                 // the text being resized — feed the cancelling `ArmBroken` instead of
@@ -60,7 +60,7 @@ impl App {
         // word isn't squiggled while you're still typing it.
         if let Some(dirty) = self.spell_dirty_at {
             let deadline = dirty + SPELL_DEBOUNCE;
-            if Instant::now() >= deadline {
+            if self.clock.now() >= deadline {
                 self.run_spellcheck_now();
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();
@@ -73,7 +73,7 @@ impl App {
         // it persists calmly as you pause. An empty note writes nothing.
         if let Some(dirty) = self.autosave_dirty_at {
             let deadline = dirty + AUTOSAVE_DEBOUNCE;
-            if Instant::now() >= deadline {
+            if self.clock.now() >= deadline {
                 self.autosave_dirty_at = None;
                 self.autosave_note();
                 if let Some(gpu) = self.gpu.as_ref() {
@@ -89,7 +89,7 @@ impl App {
         // gate), consumed here via the same single-`WaitUntil` pattern as the note
         // autosave above — no hot loop, and structurally unreachable headlessly.
         if let Some(dirty) = self.doc_autosave_at {
-            match debounce_due(dirty, AUTOSAVE_IDLE, Instant::now()) {
+            match debounce_due(dirty, AUTOSAVE_IDLE, self.clock.now()) {
                 true => {
                     self.doc_autosave_at = None;
                     self.autosave_flush();
@@ -119,7 +119,7 @@ impl App {
         // single-`WaitUntil`, idle-safe pattern as the zoom persist below (no hot
         // loop; commit/revert clear the stamp synchronously via `retint_theme_now`).
         if let Some(dirty) = self.theme_font_at {
-            match debounce_due(dirty, THEME_FONT_DEBOUNCE, Instant::now()) {
+            match debounce_due(dirty, THEME_FONT_DEBOUNCE, self.clock.now()) {
                 true => self.apply_deferred_theme_font(),
                 false if self.last_frame.is_none() => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + THEME_FONT_DEBOUNCE));
@@ -132,7 +132,7 @@ impl App {
         // Each new zoom step RE-STAMPS `zoom_persist_at` (via `mark_zoom_dirty`), so the
         // deadline keeps sliding forward until the user pauses — the debounce contract.
         if let Some(dirty) = self.zoom_persist_at {
-            match debounce_due(dirty, ZOOM_PERSIST_DEBOUNCE, Instant::now()) {
+            match debounce_due(dirty, ZOOM_PERSIST_DEBOUNCE, self.clock.now()) {
                 true => {
                     self.zoom_persist_at = None;
                     self.persist_zoom_now();
@@ -161,7 +161,7 @@ impl App {
         // sliding the deadline exactly like the theme-font/zoom-persist debounces
         // above — the same single-`WaitUntil` shape, so a still window costs nothing.
         if let Some(dirty) = self.resize_settle_at {
-            match debounce_due(dirty, RESIZE_SYNC_SETTLE, Instant::now()) {
+            match debounce_due(dirty, RESIZE_SYNC_SETTLE, self.clock.now()) {
                 true => self.finish_resize_settle(),
                 false if self.last_frame.is_none() => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + RESIZE_SYNC_SETTLE));
@@ -172,7 +172,7 @@ impl App {
         // MOVE-stream settle (mirrors the resize debounce above; see
         // `MOVE_SETTLE`'s doc for why its window is deliberately longer).
         if let Some(dirty) = self.move_settle_at {
-            match debounce_due(dirty, MOVE_SETTLE, Instant::now()) {
+            match debounce_due(dirty, MOVE_SETTLE, self.clock.now()) {
                 true => self.finish_move_settle(),
                 false if self.last_frame.is_none() => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + MOVE_SETTLE));
@@ -184,7 +184,7 @@ impl App {
         // see `CROSSING_SYNC_SETTLE`'s doc). Disarms the present-transaction sync
         // and fires the ONE follow-up present once a boundary crossing has rested.
         if let Some(dirty) = self.crossing_settle_at {
-            match debounce_due(dirty, CROSSING_SYNC_SETTLE, Instant::now()) {
+            match debounce_due(dirty, CROSSING_SYNC_SETTLE, self.clock.now()) {
                 true => self.finish_crossing_settle(),
                 false if self.last_frame.is_none() => {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + CROSSING_SYNC_SETTLE));
@@ -217,7 +217,7 @@ impl App {
             self.focused,
             lava_paused,
         ) {
-            let now = Instant::now();
+            let now = self.clock.now();
             match self.lava_tick_at {
                 Some(last) if now.saturating_duration_since(last) >= LAVA_TICK => {
                     // Due: hand the elapsed time to the bounded ambient advance
@@ -264,7 +264,7 @@ impl App {
         // after sibling timers so it can choose the EARLIER deadline instead of
         // delaying a lava tick (or being delayed by one). Poll always wins.
         if let Some(deadline) = self.notice_expires_at {
-            if notice_expired(self.notice_kind, Some(deadline), Instant::now()) {
+            if notice_expired(self.notice_kind, Some(deadline), self.clock.now()) {
                 self.clear_notice();
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();
@@ -281,7 +281,7 @@ impl App {
         // input, lava, or probe wake is the next opportunity. Timeout and
         // surface reconfiguration arrive here after their bounded delay.
         if let Some(deadline) = self.gpu_retry_at {
-            if Instant::now() >= deadline {
+            if self.clock.now() >= deadline {
                 self.gpu_retry_at = None;
                 if let Some(gpu) = self.gpu.as_ref() {
                     gpu.window.request_redraw();

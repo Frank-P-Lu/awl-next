@@ -61,7 +61,7 @@ impl App {
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.pipeline.sync_theme_colors();
             self.theme_font_at = if gpu.pipeline.needs_theme_reshape() {
-                Some(Instant::now())
+                Some(self.clock.now())
             } else {
                 None
             };
@@ -82,7 +82,7 @@ impl App {
             ));
         }
         // Unconditional: every preview frame joins the compositor's transaction.
-        self.crossing_settle_at = Some(Instant::now());
+        self.crossing_settle_at = Some(self.clock.now());
         self.sync_present_txn();
         self.update_title();
     }

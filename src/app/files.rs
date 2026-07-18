@@ -1122,7 +1122,7 @@ impl App {
             Some(crate::hud::HudSaved::Dirty)
         } else {
             self.last_saved_ok
-                .map(|t| crate::hud::HudSaved::Saved(Instant::now().duration_since(t).as_secs()))
+                .map(|t| crate::hud::HudSaved::Saved(self.clock.now().duration_since(t).as_secs()))
         };
         let Some(gpu) = self.gpu.as_mut() else {
             return;
@@ -1333,7 +1333,7 @@ impl App {
                 // a history point (git-managed files + history-off are skipped inside).
                 self.snapshot_after_save();
                 // NOTES VERBS round: the held HUD's SAVED stat.
-                self.last_saved_ok = Some(Instant::now());
+                self.last_saved_ok = Some(self.clock.now());
             }
             // Empty note (no first line yet): nothing to write. Stay quiet.
             Err(_) => {}
@@ -1424,7 +1424,7 @@ impl App {
                 self.autosave_dirty_at = None;
             }
             // NOTES VERBS round: the held HUD's SAVED stat.
-            self.last_saved_ok = Some(Instant::now());
+            self.last_saved_ok = Some(self.clock.now());
             self.set_toast_notice("saved");
         } else {
             self.set_sticky_notice(message);
@@ -1481,7 +1481,7 @@ impl App {
                 }
                 self.set_toast_notice("saved");
                 // NOTES VERBS round: the held HUD's SAVED stat.
-                self.last_saved_ok = Some(Instant::now());
+                self.last_saved_ok = Some(self.clock.now());
             }
             Err(e) => {
                 self.set_sticky_notice(format!("save failed: {e}"));
@@ -1649,9 +1649,9 @@ impl App {
                 }
                 // DEBUG PANEL: stamp the engine's own "last wrote successfully"
                 // clock, the ONLY place it is ever written (see `autosave_last_ok`).
-                self.autosave_last_ok = Some(Instant::now());
+                self.autosave_last_ok = Some(self.clock.now());
                 // NOTES VERBS round: the held HUD's SAVED stat.
-                self.last_saved_ok = Some(Instant::now());
+                self.last_saved_ok = Some(self.clock.now());
                 // Every save records a snapshot (dedup + the git gate live inside).
                 self.snapshot_after_save();
             }
@@ -1693,9 +1693,9 @@ impl App {
                 }
                 // DEBUG PANEL: stamp the engine's own "last wrote successfully"
                 // clock, the ONLY place it is ever written (see `autosave_last_ok`).
-                self.autosave_last_ok = Some(Instant::now());
+                self.autosave_last_ok = Some(self.clock.now());
                 // NOTES VERBS round: the held HUD's SAVED stat.
-                self.last_saved_ok = Some(Instant::now());
+                self.last_saved_ok = Some(self.clock.now());
                 // The persistent scratch grows a timeline of its own.
                 crate::history::record(&path, &text, &self.config);
             }

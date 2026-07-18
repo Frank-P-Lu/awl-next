@@ -67,11 +67,11 @@ impl App {
                 match action {
                     GpuSkipAction::WaitForWake => self.gpu_retry_at = None,
                     GpuSkipAction::RetryAfter(delay) => {
-                        self.gpu_retry_at = Some(Instant::now() + delay);
+                        self.gpu_retry_at = Some(self.clock.now() + delay);
                     }
                     GpuSkipAction::RetryWithNoticeAfter(delay, notice) => {
                         self.set_toast_notice(notice);
-                        self.gpu_retry_at = Some(Instant::now() + delay);
+                        self.gpu_retry_at = Some(self.clock.now() + delay);
                     }
                     GpuSkipAction::HoldWithNotice(notice) => {
                         self.gpu_retry_at = None;
@@ -248,7 +248,7 @@ impl App {
     /// theme-font/zoom-persist debounces. See `resize_settle_at`'s own doc for
     /// the full mechanism + the user-reported symptom this closes.
     pub(super) fn arm_live_resize_sync(&mut self) {
-        self.resize_settle_at = Some(Instant::now());
+        self.resize_settle_at = Some(self.clock.now());
         self.sync_present_txn();
     }
 
@@ -276,7 +276,7 @@ impl App {
         if crate::theme::active().has_ambient_motion() {
             #[cfg(not(target_arch = "wasm32"))]
             if crate::probe::recording() { crate::probe::trace(format_args!("on_moved (ambient world)")); }
-            self.move_settle_at = Some(Instant::now());
+            self.move_settle_at = Some(self.clock.now());
             self.lava_tick_at = None;
             self.sync_present_txn();
         }
@@ -450,7 +450,7 @@ impl App {
         if self.zoom_reflow.take() {
             self.sync_view(true);
         }
-        let now = Instant::now();
+        let now = self.clock.now();
         let dt = match self.last_frame {
             Some(prev) => (now - prev).as_secs_f32(),
             // First animated frame: assume one 60fps tick so the very
@@ -505,11 +505,11 @@ impl App {
                 // `autosave_on()`, the clobber guard's `notice`, and the
                 // engine's own last-write clock — so it can never say
                 // anything the engine didn't just do. The only clock read
-                // here (`Instant::now() - autosave_last_ok`) is gated on
+                // here (`self.clock.now() - autosave_last_ok`) is gated on
                 // `debug_on()` like every other perf read this block makes.
                 let since_secs = self
                     .autosave_last_ok
-                    .map(|t| (Instant::now() - t).as_secs());
+                    .map(|t| (self.clock.now() - t).as_secs());
                 let autosave = crate::debug::autosave_state(
                     self.config.autosave_on(),
                     self.notice.is_some(),

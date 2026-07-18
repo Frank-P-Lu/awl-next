@@ -474,6 +474,14 @@ pub struct App {
     /// Timestamp of the previous animated frame, for real-time spring dt. `None`
     /// while idle; set on the first animating redraw and cleared once settled.
     last_frame: Option<Instant>,
+    /// THE ONE TIME OWNER for scheduling + animation (see `crate::clock::Clock`).
+    /// Every debounce/settle deadline, the frame `dt`, the ambient tick, toast
+    /// expiry, GPU-retry timing, and the App's sense-of-time stamps read
+    /// `self.clock.now()` — never the free `Instant::now()`. `RealClock` on the
+    /// shipped app (a pure pass-through, so captures stay byte-identical);
+    /// `Box<dyn>` so a deterministic clock can slot in behind the same field.
+    /// The `app::clock_law` grep-test fences the module against a raw read.
+    clock: Box<dyn crate::clock::Clock>,
     /// DEBUG panel: ring of the last 120 drawn frames' costs (ms) — `last()` is
     /// the previous completed frame (the one-frame-lag line 1 value), `worst()`
     /// the rolling max that survives stillness. Fed ONLY while the panel is on
@@ -1166,10 +1174,18 @@ impl App {
         // wedge the view. (Theme / page / caret are process-globals already restored
         // in `main` before `App::new`; zoom is per-instance so it lands here.)
         let zoom = render::clamp_zoom(config.zoom.unwrap_or(INITIAL_ZOOM));
+        // THE ONE TIME OWNER: the shipped `RealClock` (a pure `Instant::now()`
+        // pass-through). Built before the literal so the session-timer origin
+        // reads it (a `clock.now()` BORROW), then the box is moved into the
+        // `clock` field. A deterministic clock would swap only this one line.
+        let clock: Box<dyn crate::clock::Clock> = Box::new(crate::clock::RealClock);
+        #[cfg(not(target_arch = "wasm32"))]
+        let stats_origin = clock.now();
         let mut app = Self {
             file,
             buffer,
             keymap,
+            clock,
             mods: Modifiers::default(),
             prefix_pending_at: None,
             whichkey_shown: false,
@@ -1295,7 +1311,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             stats: crate::stats::load(&crate::stats::stats_path()),
             #[cfg(not(target_arch = "wasm32"))]
-            stats_origin: Instant::now(),
+            stats_origin,
             #[cfg(not(target_arch = "wasm32"))]
             stats_last_input_ms: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1370,7 +1386,7 @@ impl App {
         self.notice_kind = NoticeKind::Toast;
         // A real window is the live/capture boundary: unit tests and headless
         // replay keep the text deterministic but never arm a wall-clock expiry.
-        self.notice_expires_at = self.gpu.as_ref().map(|_| Instant::now() + TOAST_LIFETIME);
+        self.notice_expires_at = self.gpu.as_ref().map(|_| self.clock.now() + TOAST_LIFETIME);
     }
 
     fn clear_notice(&mut self) {
@@ -1517,7 +1533,7 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     fn drive_gpu_soak(&mut self, event_loop: &ActiveEventLoop) {
         if self.soak.is_none() { return; }
-        let now = Instant::now();
+        let now = self.clock.now();
         let metal = self.gpu.as_ref().and_then(Gpu::current_gpu_bytes);
         let (finished, stimuli) = {
             let Some(soak) = self.soak.as_mut() else { return };
@@ -1583,7 +1599,8 @@ impl App {
     /// in `RedrawRequested`. Wasm-safe (`crate::clock::Instant`).
     fn stamp_input(&mut self) {
         if crate::debug::debug_on() {
-            self.input_stamp.get_or_insert(Instant::now());
+            let now = self.clock.now();
+            self.input_stamp.get_or_insert(now);
         }
     }
 }
@@ -2231,3 +2248,5 @@ pub fn run(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod clock_law;
