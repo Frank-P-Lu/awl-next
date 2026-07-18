@@ -629,7 +629,7 @@ fn heading_bold_worlds_shape_bold_in_their_own_family() {
     };
     // Sweep helper: the shaped faces of line 1's content glyphs (line-relative
     // byte range `content`), as (family, weight) pairs.
-    let mut faces_of = |p: &mut TextPipeline, text: &str, content: std::ops::Range<usize>| {
+    let faces_of = |p: &mut TextPipeline, text: &str, content: std::ops::Range<usize>| {
         p.set_view(&view_md(text, 0, 0));
         let mut out: Vec<(String, u16)> = Vec::new();
         for run in p.buffer.layout_runs() {
