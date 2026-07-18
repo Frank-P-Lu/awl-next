@@ -2248,18 +2248,30 @@ fn hud_mods_broken(summon: ModifiersState, now: ModifiersState) -> bool {
     !now.contains(summon)
 }
 
-/// Does a held Shift on this action signal SELECT-INTENT (Shift+motion extends
-/// the selection, GUI style)? `M-<` / `M->` need Shift just to TYPE the `<` /
-/// `>` glyph, so that Shift is INCIDENTAL — Emacs treats them as pure motion
-/// (you select via the mark, `C-Space`), so it must NOT extend the selection.
-/// Every other action keeps Shift's normal select-extend meaning. Pure, so it's
-/// unit-testable without a window/event loop. THE ONE OWNER of the rule: both
-/// the live key dispatch (`app/input/keys.rs`) and the headless `--keys` replay
-/// (`main/run.rs::ReplaySession::apply_chord`) derive their `apply_core` shift
-/// flag through this fn, so an `S-` chord in a spec signals select-intent
-/// exactly as a live held Shift does — never a parallel copy of the rule.
-pub(crate) fn motion_honors_shift_select(action: &Action) -> bool {
-    !matches!(action, Action::BufferStart | Action::BufferEnd)
+/// Does a held Shift on this CHORD signal SELECT-INTENT (Shift+motion extends
+/// the selection, GUI style)? The rule keys on the pressed CHORD, not just the
+/// `Action`, because BufferStart/BufferEnd are reached two very different ways:
+///   * `M-<` / `M->` (emacs) need Shift just to TYPE the `<` / `>` glyph — a
+///     `Key::Character` — so that Shift is INCIDENTAL (Emacs treats them as pure
+///     motion; you select via the mark, `C-Space`) and must NOT extend.
+///   * Shift+Cmd-Up/Down (macOS) and Shift+Ctrl-Home/End (Linux) reach the SAME
+///     actions through a `Key::Named` navigation key — a genuine GUI
+///     select-intent Shift the platform text fields all honor — and MUST extend.
+/// So the ONE discriminator is the key's shape: a named navigation key extends,
+/// a printable glyph whose Shift is needed just to type it does not. Every OTHER
+/// action keeps Shift's normal select-extend meaning regardless of key. Pure, so
+/// it's unit-testable without a window/event loop. THE ONE OWNER of the rule:
+/// both the live key dispatch (`app/input/keys.rs`, passing the resolved logical
+/// key) and the headless `--keys` replay
+/// (`main/run.rs::ReplaySession::apply_chord`, passing the chord's key) derive
+/// their `apply_core` shift flag through this fn, so an `S-` chord in a spec
+/// signals select-intent exactly as a live held Shift does — never a parallel
+/// copy of the rule.
+pub(crate) fn motion_honors_shift_select(action: &Action, key: &Key) -> bool {
+    match action {
+        Action::BufferStart | Action::BufferEnd => matches!(key, Key::Named(_)),
+        _ => true,
+    }
 }
 
 /// The UN-composed logical key for a key event — undoing macOS Option dead-key
@@ -2828,20 +2840,102 @@ mod tests {
     }
 
     #[test]
-    fn buffer_endpoints_ignore_incidental_shift() {
-        // `M-<` / `M->` need Shift just to TYPE `<` / `>`, so that Shift is
-        // incidental and must NOT extend the selection — these are pure motion.
-        assert!(!motion_honors_shift_select(&Action::BufferStart));
-        assert!(!motion_honors_shift_select(&Action::BufferEnd));
-        // Every other motion keeps Shift's normal select-extend meaning (the user
-        // deliberately held Shift, e.g. Shift+Arrow / M-Shift-f).
-        assert!(motion_honors_shift_select(&Action::ForwardChar));
-        assert!(motion_honors_shift_select(&Action::ForwardWord));
-        assert!(motion_honors_shift_select(&Action::NextLine));
-        assert!(motion_honors_shift_select(&Action::LineEnd));
+    fn buffer_endpoints_shift_intent_keys_on_the_chord_not_the_action() {
+        use winit::keyboard::NamedKey;
+        // The chord-aware rule: BufferStart/BufferEnd carry INCIDENTAL Shift only
+        // for `M-<` / `M->`, whose Shift is needed just to TYPE the `<` / `>`
+        // glyph (a `Key::Character`) — those stay pure motion and must NOT extend.
+        assert!(!motion_honors_shift_select(&Action::BufferStart, &Key::Character("<".into())));
+        assert!(!motion_honors_shift_select(&Action::BufferEnd, &Key::Character(">".into())));
+        // But the SAME actions reached through a NAMED navigation key carry a
+        // genuine GUI select-intent Shift and MUST extend: Shift+Cmd-Up/Down
+        // (macOS) and Shift+Ctrl-Home/End (Linux) select to document start/end,
+        // exactly like every platform text field (the live bug this round fixed).
+        assert!(motion_honors_shift_select(&Action::BufferStart, &Key::Named(NamedKey::ArrowUp)));
+        assert!(motion_honors_shift_select(&Action::BufferEnd, &Key::Named(NamedKey::ArrowDown)));
+        assert!(motion_honors_shift_select(&Action::BufferStart, &Key::Named(NamedKey::Home)));
+        assert!(motion_honors_shift_select(&Action::BufferEnd, &Key::Named(NamedKey::End)));
+        // Every other motion keeps Shift's normal select-extend meaning regardless
+        // of key shape (the user deliberately held Shift, e.g. Shift+Arrow / M-Shift-f).
+        assert!(motion_honors_shift_select(&Action::ForwardChar, &Key::Named(NamedKey::ArrowRight)));
+        assert!(motion_honors_shift_select(&Action::ForwardChar, &Key::Character("f".into())));
+        assert!(motion_honors_shift_select(&Action::ForwardWord, &Key::Character("f".into())));
+        assert!(motion_honors_shift_select(&Action::NextLine, &Key::Named(NamedKey::ArrowDown)));
+        assert!(motion_honors_shift_select(&Action::LineEnd, &Key::Named(NamedKey::End)));
         // Non-motions are unaffected (Shift is ignored by the motion-select logic
         // for them anyway), so they report the default true.
-        assert!(motion_honors_shift_select(&Action::InsertChar('a')));
+        assert!(motion_honors_shift_select(&Action::InsertChar('a'), &Key::Character("A".into())));
+    }
+
+    #[test]
+    fn shift_cmd_up_down_extend_to_document_bounds_through_the_live_apply_seam() {
+        // LIVE-PATH pin (the resolve → derive-shift → apply_core chain the window
+        // runs, minus winit event plumbing): resolve the real chord through the
+        // persistent keymap exactly as `dispatch_pressed_key` does, derive the
+        // shift flag through the ONE owner keyed on the pressed KEY, then apply.
+        // Shift+Cmd-Up must select from mid-document up to (0,0); Shift+Cmd-Down
+        // must select from there down to the document end — while `M-<` / `M->`,
+        // whose Shift is incidental to typing the glyph, must NOT extend.
+        use winit::event::Modifiers;
+        use winit::keyboard::{ModifiersState, NamedKey};
+        let sup_shift = Modifiers::from(ModifiersState::SUPER | ModifiersState::SHIFT);
+        let meta_shift = Modifiers::from(ModifiersState::ALT | ModifiersState::SHIFT);
+
+        // Helper: resolve a (key, mods) chord and apply it with the live shift
+        // derivation, returning the post-apply selection.
+        fn drive_live(
+            key: Key,
+            mods: winit::event::Modifiers,
+            text: &str,
+            start: usize,
+        ) -> Option<((usize, usize), (usize, usize))> {
+            // Pin the MAC convention: this drives the macOS Cmd-Up/Down chord
+            // (Super+Arrow), so the result must not depend on the ambient
+            // `AWL_CONVENTION_FORCE` the suite may run under (Linux resolves
+            // Super+Arrow differently).
+            let mut km = crate::keymap::KeymapState::new_with_convention(
+                crate::convention::Convention::Mac,
+            );
+            let action = km.resolve(&key, &mods);
+            let shift = mods.state().contains(ModifiersState::SHIFT)
+                && motion_honors_shift_select(&action, &key);
+            let mut buffer = crate::buffer::Buffer::from_str(text);
+            buffer.set_cursor(start);
+            let mut shift_selecting = false;
+            let mut zoom = 1.0;
+            let mut search = None;
+            let mut overlay = None;
+            let mut make_overlay =
+                |_k: crate::overlay::OverlayKind| -> Option<crate::overlay::OverlayState> { None };
+            let mut browse_to = |_k: crate::overlay::OverlayKind,
+                                 _r: Option<String>|
+             -> Option<crate::overlay::OverlayState> { None };
+            let mut ctx = crate::actions::ActionCtx {
+                buffer: &mut buffer,
+                shift_selecting: &mut shift_selecting,
+                zoom: &mut zoom,
+                search: &mut search,
+                scroll_page_lines: 1,
+                overlay: &mut overlay,
+                make_overlay: &mut make_overlay,
+                browse_to: &mut browse_to,
+                oracle: None,
+            };
+            crate::actions::apply_core(&mut ctx, &action, shift);
+            buffer.selection_line_col()
+        }
+
+        const TXT: &str = "alpha beta\ngamma delta\nepsilon zeta\n";
+        // From mid-line (1,3), Shift+Cmd-Up extends up to (0,0).
+        let up = drive_live(Key::Named(NamedKey::ArrowUp), sup_shift, TXT, 14);
+        assert_eq!(up, Some(((0, 0), (1, 3))), "Shift+Cmd-Up selects to document start");
+        // From the same spot, Shift+Cmd-Down extends down to the doc end — the
+        // empty final line after the trailing newline, (3,0).
+        let down = drive_live(Key::Named(NamedKey::ArrowDown), sup_shift, TXT, 14);
+        assert_eq!(down, Some(((1, 3), (3, 0))), "Shift+Cmd-Down selects to document end");
+        // `M-<` (Character `<`, Shift incidental) moves but never extends.
+        let emacs = drive_live(Key::Character("<".into()), meta_shift, TXT, 14);
+        assert_eq!(emacs, None, "M-< incidental Shift stays pure motion (no selection)");
     }
 
     #[test]

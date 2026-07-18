@@ -559,12 +559,16 @@ impl App {
             self.hud_key = Some(logical.clone());
             self.hud_mods = self.mods.state();
         }
-        // `M-<` / `M->` need Shift just to TYPE `<` / `>`, so that Shift is
-        // INCIDENTAL — it must NOT extend the selection (Emacs treats these
-        // as pure motion; select via the mark, `C-Space`). Strip it for those
-        // two actions before it reaches the Shift+motion select logic.
+        // SHIFT = SELECT-INTENT, keyed on the pressed CHORD (the resolved logical
+        // key), not the Action alone. `M-<` / `M->` need Shift just to TYPE the
+        // `<` / `>` glyph (a `Key::Character`), so that Shift is INCIDENTAL and
+        // must NOT extend — but Shift+Cmd-Up/Down (macOS) and Shift+Ctrl-Home/End
+        // (Linux) reach the SAME BufferStart/BufferEnd actions through a named
+        // navigation key and DO extend, exactly like every platform text field.
+        // The ONE owner (`motion_honors_shift_select`) makes that call from key
+        // shape; the headless `--keys` replay derives its flag through the same fn.
         let shift = self.mods.state().contains(ModifiersState::SHIFT)
-            && motion_honors_shift_select(&action);
+            && motion_honors_shift_select(&action, &logical);
         // CHORD door: a keyboard chord is the FAST, learned path the usage ledger
         // graduates on (see `crate::stats::Door`).
         let defer_zoom_sync = matches!(action, Action::ZoomIn | Action::ZoomOut | Action::ZoomReset);

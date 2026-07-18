@@ -349,15 +349,18 @@ impl<'a> ReplaySession<'a> {
         // SHIFT = SELECT-INTENT, the live dispatch's exact derivation
         // (`app/input/keys.rs::on_keyboard_input`): the chord's `S-` modifier
         // extends a selection across a motion, routed through the ONE owner
-        // `crate::app::motion_honors_shift_select` (so `M-<` / `M->`, whose
-        // Shift is incidental to typing the glyph, stay pure motion). Derived
-        // ONCE per pressed chord from the FIRST resolved action and carried
-        // into a palette-chained re-dispatch unchanged — mirroring the live
-        // `Effect::RunAction` arm, which re-applies with the same `shift` bool.
-        // (This retired the old "replay is unshifted" hole: `--keys "S-Right"`
-        // silently ran the motion unshifted and left `selection: null`.)
+        // `crate::app::motion_honors_shift_select` — keyed on the pressed chord's
+        // KEY, not the Action alone, so `M-<` / `M->` (a `Key::Character` whose
+        // Shift is incidental to typing the glyph) stay pure motion while
+        // `S-s-Up`/`S-s-Down` and `S-C-Home`/`S-C-End` (named nav keys reaching
+        // the same actions) extend, exactly like live. Derived ONCE per pressed
+        // chord from the FIRST resolved action and carried into a palette-chained
+        // re-dispatch unchanged — mirroring the live `Effect::RunAction` arm,
+        // which re-applies with the same `shift` bool. (This retired the old
+        // "replay is unshifted" hole: `--keys "S-Right"` silently ran the motion
+        // unshifted and left `selection: null`.)
         let shift = chord.mods.state().contains(winit::keyboard::ModifiersState::SHIFT)
-            && crate::app::motion_honors_shift_select(&resolved);
+            && crate::app::motion_honors_shift_select(&resolved, &chord.key);
         // A tiny worklist so the COMMAND PALETTE's run-on-Enter chains: Enter on a
         // command writes `run_action`, which we then feed back through the core
         // (slot now empty) so an overlay-opening command opens its sub-overlay as
@@ -1523,29 +1526,41 @@ mod tests {
         // list that can drift: a new motion command is swept automatically.
         // For each, replay its chord with an `S-` prefix from mid-document and
         // assert the LIVE equivalence through the one owner: the selection
-        // extends iff `motion_honors_shift_select` says the Shift is
-        // select-intent (BufferStart/BufferEnd carry an incidental Shift live
-        // — `M-<`/`M->` — so they stay pure motion), and when it extends it
-        // spans exactly (pre-cursor, post-cursor).
+        // extends iff `motion_honors_shift_select` — keyed on the pressed CHORD's
+        // KEY, not the Action alone — says the Shift is select-intent. So
+        // Shift+Cmd-Up/Down (a NAMED nav key reaching BufferStart/BufferEnd) DO
+        // extend, GUI-style; only an incidental-Shift printable glyph (`M-<`/`M->`,
+        // a `Key::Character`, pinned at the pure-fn seam in `app.rs`) would not.
+        // When it extends it spans exactly (pre-cursor, post-cursor).
         // Setup: plain arrows walk to (1,3) — unshifted motions build no selection.
         const SETUP: &str = "Down Right Right Right";
         let (pre_sel, pre_cursor) = shift_replay(SETUP);
         assert_eq!(pre_sel, None);
         assert_eq!(pre_cursor, (1, 3), "setup parks the cursor mid-document");
         let mut swept = 0usize;
+        let mut extended_a_named_endpoint = false;
         for cmd in crate::commands::COMMANDS.iter().filter(|c| c.action.is_motion()) {
             for chord in [cmd.native, cmd.emacs] {
                 if chord.is_empty() {
                     continue;
                 }
                 swept += 1;
-                let (sel, cursor) = shift_replay(&format!("{SETUP} S-{chord}"));
+                let spec = format!("S-{chord}");
+                // Key on the pressed CHORD exactly as the replay + live dispatch
+                // do: parse the same `S-{chord}` token and read its resolved key.
+                let key = keyspec::parse_keys(&spec)
+                    .unwrap()
+                    .last()
+                    .expect("one chord")
+                    .key
+                    .clone();
+                let (sel, cursor) = shift_replay(&format!("{SETUP} {spec}"));
                 assert_ne!(
                     cursor, pre_cursor,
                     "{} (S-{chord}): the motion must actually move (witness)",
                     cmd.name
                 );
-                if crate::app::motion_honors_shift_select(&cmd.action) {
+                if crate::app::motion_honors_shift_select(&cmd.action, &key) {
                     let expected = (pre_cursor.min(cursor), pre_cursor.max(cursor));
                     assert_eq!(
                         sel,
@@ -1553,6 +1568,12 @@ mod tests {
                         "{} (S-{chord}): Shift+motion extends exactly like live",
                         cmd.name
                     );
+                    // Witness the fix: at least one BufferStart/BufferEnd endpoint,
+                    // reached via a named key, DID extend (the old rule excluded
+                    // these outright, so Shift+Cmd-Up/Down silently didn't select).
+                    if matches!(cmd.action, Action::BufferStart | Action::BufferEnd) {
+                        extended_a_named_endpoint = true;
+                    }
                 } else {
                     assert_eq!(
                         sel, None,
@@ -1563,6 +1584,10 @@ mod tests {
             }
         }
         assert!(swept >= 10, "the catalog motion roster shrank? swept only {swept} chords");
+        assert!(
+            extended_a_named_endpoint,
+            "a named-key BufferStart/BufferEnd chord must extend now (the shift-select fix)"
+        );
     }
 
     #[test]
@@ -1585,6 +1610,36 @@ mod tests {
                 "{chord}: Shift extends the selection exactly like live"
             );
         }
+    }
+
+    #[test]
+    fn replay_shift_cmd_up_down_extend_to_document_bounds() {
+        // THE BUG THIS ROUND FIXED, pinned at the sidecar seam: Shift+Cmd-Up /
+        // Shift+Cmd-Down (`S-s-Up` / `S-s-Down` — `s-` is Super/Cmd) select to
+        // the document start / end, exactly like every platform text field. The
+        // old rule excluded BufferStart/BufferEnd outright (guarding the retired
+        // `M-<`/`M->` incidental Shift), so these silently produced `selection:
+        // null` — the reported defect. `--keys "S-s-Down"` is what a live drive
+        // would witness in the capture sidecar.
+        const SETUP: &str = "Down Right Right Right";
+        let (_, pre) = shift_replay(SETUP);
+        assert_eq!(pre, (1, 3), "setup parks the cursor mid-document");
+        // Shift+Cmd-Up extends up to the very start (0,0).
+        let (sel, cursor) = shift_replay(&format!("{SETUP} S-s-Up"));
+        assert_eq!(cursor, (0, 0), "Cmd-Up still lands on document start");
+        assert_eq!(
+            sel,
+            Some(((0, 0), (1, 3))),
+            "S-s-Up extends the selection from mid-document to the start"
+        );
+        // Shift+Cmd-Down extends down to the document end.
+        let (sel, cursor) = shift_replay(&format!("{SETUP} S-s-Down"));
+        assert_ne!(cursor, pre, "Cmd-Down moves the caret to the document end");
+        assert_eq!(
+            sel,
+            Some((pre.min(cursor), pre.max(cursor))),
+            "S-s-Down extends the selection from mid-document to the end"
+        );
     }
 
     #[test]
