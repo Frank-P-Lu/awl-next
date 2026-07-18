@@ -331,6 +331,10 @@ pub(in crate::render) use overlay::{
     overlay_card_box_policy, overlay_card_fill_regime, CARD_EDGE_INSET, CARD_EDGE_INSET_FLOOR,
     CARD_MAX_W, CARD_MAX_W_FACETED,
 };
+// The card-DRAW half of the summoned overlay (shape + upload + composite): the
+// geometry/hit-test owner is `overlay`, this turns that settled geometry into GPU
+// work. A cohesive physical carve, byte-identical pixels — see the file's own doc.
+mod overlay_draw;
 mod overlay_shape;
 // Test-only re-export so `render::tests` can name the pure placard-size quantizer
 // without traversing the private `overlay_shape` submodule (the AtlasFull ladder law).
