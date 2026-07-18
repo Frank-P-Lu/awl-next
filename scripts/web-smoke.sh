@@ -59,6 +59,16 @@ echo "==> L0: scripts/site-links.sh (repo-relative site links resolve)"
 echo "==> L1: cargo build --target wasm32-unknown-unknown"
 cargo build --target wasm32-unknown-unknown
 
+# L1.5 — the wasm TEST target must COMPILE, unconditionally. `cargo build`
+# (L1) never touches the #[cfg(test)] code, so a wasm-broken test module (a
+# native-only const in a test, a missing cfg-gate) can sit GREEN for hours —
+# exactly what bit the vanish-fix harness (a broken `cargo test --target
+# wasm32` compile the standard build-only gate never saw). `--no-run` compiles
+# the test binary WITHOUT needing the node runner, so this stage always runs
+# and catches the breakage even where L2 below would be skipped.
+echo "==> L1.5: cargo test --target wasm32-unknown-unknown --no-run"
+cargo test --target wasm32-unknown-unknown --no-run
+
 # L2 — run the core smoke tests in the wasm runtime, IF the runner is present.
 if command -v wasm-bindgen-test-runner >/dev/null 2>&1; then
   echo "==> L2: cargo test --target wasm32-unknown-unknown (node runner)"
