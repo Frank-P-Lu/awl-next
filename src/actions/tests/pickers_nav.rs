@@ -421,6 +421,7 @@ fn history_arrows_cycle_the_lens() {
         id: id.to_string(),
         timestamp: id.parse().unwrap_or(0),
         pinned: false,
+        name: None,
     };
     let mut overlay = Some(OverlayState::new_history(
         vec![row("300"), row("200"), row("100")],

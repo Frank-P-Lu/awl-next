@@ -319,14 +319,22 @@ pub(super) fn settled_viewstate(
         .map(|o| o.mode == "theme" || o.mode == "caret" || o.mode == "history")
         .unwrap_or(false);
     vstate.overlay_query = opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default();
-    // Rename/InsertLink already orient via their own modal prompt (`foot_hint`), so
-    // the render path skips the title prefix for them (mirrors `App::sync_view`'s
-    // `draws_title_prefix` gate); the sidecar's own `overlay.title` field, built in
-    // `main/run.rs`, still reports every kind's title unconditionally.
+    // The modal-prompt minibuffers (Rename/InsertLink/KeepName) already orient via
+    // their own `foot_hint`, so the render path skips the title prefix for them —
+    // consulted through the ONE owner (`OverlayKind::draws_title_prefix`, resolved
+    // from the mode string via `from_mode`), the same gate `App::sync_view` reads,
+    // so a future opt-out kind can't drift this copy (the hand-listed
+    // `mode != "rename" && …` string pair this replaces DID drift when KeepName
+    // landed). An unrecognized mode keeps its title (fail-visible). The sidecar's
+    // own `overlay.title` field, built in `main/run.rs`, still reports every
+    // kind's title unconditionally.
     vstate.overlay_title = opts
         .overlay
         .as_ref()
-        .filter(|o| o.mode != "rename" && o.mode != "insert_link")
+        .filter(|o| {
+            crate::overlay::OverlayKind::from_mode(o.mode)
+                .map_or(true, |k| k.draws_title_prefix())
+        })
         .map(|o| o.title)
         .unwrap_or("");
     vstate.overlay_items = opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default();

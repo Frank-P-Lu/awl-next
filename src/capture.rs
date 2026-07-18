@@ -301,7 +301,15 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // window's final running total (the figure the chart tops out at; the fixed
 // synthetic placeholder total in a capture). Same `streaks_effective_view` +
 // `card_view` owners the pixels read.
-pub const SCHEMA_VERSION: u32 = 174;
+// `/175` — NAMED SAVE POINTS: "Keep version…" now opens a naming MINIBUFFER
+// (`OverlayKind::KeepName`, `overlay.mode == "keep_version"`, the Rename shape:
+// single editable row, prompt via `overlay.hint`). No new sidecar field — the
+// existing `overlay` block carries it; the version bumps because a new overlay
+// mode string is now reachable (the `/148`/`/157` precedent). A History picker's
+// NAMED row also re-shapes its existing cells (name as the primary `items` text,
+// "when · +N −M" in `bindings`); unnamed rows and a default capture are
+// byte-identical.
+pub const SCHEMA_VERSION: u32 = 175;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

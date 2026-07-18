@@ -123,7 +123,7 @@ fn visible_commands_exclude_the_hide_list_on_real_wasm() {
         "Quit",
         "Finish file",
         "Version history…",
-        "Keep version",
+        "Keep version…",
         "Lifetime stats",
         "Clean unused assets…",
         "Recent projects…",

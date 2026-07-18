@@ -649,6 +649,7 @@ fn history_rows() -> Vec<crate::history::TimelineRow> {
         id: id.to_string(),
         timestamp: id.parse().unwrap_or(0),
         pinned: false,
+        name: None,
     };
     vec![
         row("just now", "fix: the engine", "+0 −0", "300"),
@@ -717,6 +718,7 @@ fn history_picker_groups_by_session_and_today_with_injected_now() {
         id: id.to_string(),
         timestamp: ts,
         pinned: false,
+        name: None,
     };
     let rows = vec![
         row("a", 100 * DAY + 4_000), // today AND in this session
@@ -793,12 +795,56 @@ fn history_picker_marks_a_pinned_version_in_the_secondary_column() {
         id: id.to_string(),
         timestamp: id.parse().unwrap_or(0),
         pinned,
+        name: None,
     };
     let ov = OverlayState::new_history(vec![mk("2", true), mk("1", false)], None, None);
     let binds = ov.item_bindings();
     assert!(binds[0].contains(PIN_TAG), "the pinned row is marked: {:?}", binds[0]);
     assert!(binds[0].contains("+0 −1"), "and keeps its changed-count: {:?}", binds[0]);
     assert!(!binds[1].contains(PIN_TAG), "an un-pinned row stays bare: {:?}", binds[1]);
+}
+
+#[test]
+fn history_picker_named_row_shows_name_primary_and_demotes_the_timestamp() {
+    // NAMED SAVE POINTS: a named row's PRIMARY cell is the NAME itself (the
+    // fuzzy corpus too — typing the name finds it), with the timestamp DEMOTED
+    // beside the changed-count in the faint secondary column ("when · +N −M").
+    // The redundant "pinned" tag is dropped for a named row (the name IS the
+    // conscious mark); an unnamed sibling — pinned or not — keeps the exact
+    // pre-name shape. Same corpus/bindings columns, no new layout path.
+    let mk = |id: &str, pinned: bool, name: Option<&str>| crate::history::TimelineRow {
+        when: "2 hr ago".to_string(),
+        which: "edited \"Title\"".to_string(),
+        counts: "+3 −1".to_string(),
+        id: id.to_string(),
+        timestamp: id.parse().unwrap_or(0),
+        pinned,
+        name: name.map(str::to_string),
+    };
+    let ov = OverlayState::new_history(
+        vec![mk("3", true, Some("draft A")), mk("2", true, None), mk("1", false, None)],
+        None,
+        None,
+    );
+    // Primary cells: name for the named row, "when · which" for the rest.
+    assert_eq!(ov.corpus[0], "draft A", "the name IS the primary cell");
+    assert_eq!(ov.corpus[1], "2 hr ago · edited \"Title\"", "unnamed rows unchanged");
+    // Secondary cells: timestamp demoted for the named row; pin tag only on the
+    // unnamed pinned row.
+    let binds = ov.item_bindings();
+    assert_eq!(binds[0], "2 hr ago · +3 −1", "timestamp + count demoted to secondary");
+    assert!(!binds[0].contains(PIN_TAG), "no redundant pin tag on a named row");
+    assert_eq!(binds[1], format!("{PIN_TAG} · +3 −1"), "unnamed pinned row keeps its tag");
+    assert_eq!(binds[2], "+3 −1", "plain row untouched");
+    // The restore ids stay parallel — Enter/Tab on a named row reach id "3".
+    assert_eq!(ov.history_ids, vec!["3", "2", "1"]);
+    // Typing the NAME finds the named row (it rides the fuzzy corpus).
+    let mut ov2 = ov.clone();
+    for c in "draft".chars() {
+        ov2.push(c);
+    }
+    assert_eq!(ov2.item_strings().len(), 1, "the name is fuzzy-findable");
+    assert_eq!(ov2.selected_history_id(), Some("3"));
 }
 
 #[test]
@@ -1082,16 +1128,35 @@ fn every_kind_names_itself_with_a_nonempty_distinct_title() {
         assert_eq!(t, t.to_lowercase(), "{k:?}'s title {t:?} must be lowercase");
         assert!(titles.insert(t), "{k:?}'s title {t:?} collides with another kind's");
     }
-    // Rename/InsertLink are the RENDER exceptions (their own modal prompt already
-    // orients) — every other kind draws its title prefix.
-    for k in [OverlayKind::Rename, OverlayKind::InsertLink] {
+    // Rename/InsertLink/KeepName are the RENDER exceptions (their own modal
+    // prompt already orients) — every other kind draws its title prefix.
+    for k in [OverlayKind::Rename, OverlayKind::InsertLink, OverlayKind::KeepName] {
         assert!(!k.draws_title_prefix(), "{k:?} should not draw the title prefix");
     }
     for k in OverlayKind::ALL {
-        if !matches!(k, OverlayKind::Rename | OverlayKind::InsertLink) {
+        if !matches!(k, OverlayKind::Rename | OverlayKind::InsertLink | OverlayKind::KeepName) {
             assert!(k.draws_title_prefix(), "{k:?} should draw the title prefix");
         }
     }
+}
+
+/// MODE-STRING ROUND-TRIP LAW (born from the KeepName drift audit): every kind's
+/// sidecar mode string resolves back to the kind via [`OverlayKind::from_mode`] —
+/// the lookup the headless capture path uses to consult the REAL per-kind owners
+/// (`draws_title_prefix`) instead of hand-listing mode strings (the aligned copy
+/// in `capture/modes.rs` that silently kept drawing the title prefix on the
+/// KeepName minibuffer until this round caught it in a capture PNG). An unknown
+/// string resolves to None (fail-visible: the capture then keeps the title).
+#[test]
+fn every_mode_string_round_trips_through_from_mode() {
+    for k in OverlayKind::ALL {
+        assert_eq!(
+            OverlayKind::from_mode(k.as_str()),
+            Some(k),
+            "{k:?}'s mode string must resolve back to itself"
+        );
+    }
+    assert_eq!(OverlayKind::from_mode("not-a-mode"), None);
 }
 
 /// BREADCRUMB KINDS ARE VALUE-BASED, never positional. A `return_to` breadcrumb

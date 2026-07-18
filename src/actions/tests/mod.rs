@@ -905,7 +905,12 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         // LINKS V2: the smoke fixture is a markdown buffer with the caret inside
         // an existing link (see the FollowLink note below), so Cmd-K always opens
         // the minibuffer here — an Opener, like every other summon.
-        | Action::InsertLink => SmokeKind::Opener,
+        | Action::InsertLink
+        // NAMED SAVE POINTS: "Keep version…" summons the naming minibuffer
+        // (unconditionally — the store's own gates decide at commit), so it is
+        // an Opener now; the deferred Effect::KeepVersion fires at the
+        // minibuffer's Enter, not at the summon.
+        | Action::KeepVersion => SmokeKind::Opener,
 
         // Deferred effects (the pure core signals; the live App performs).
         Action::Quit
@@ -913,7 +918,6 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::NewNote
         | Action::OpenCredits
         | Action::OpenGuide
-        | Action::KeepVersion
         // THE WRITER'S DIFF: the smoke fixture is a markdown buffer, so
         // "Compare with version…" signals `Effect::CompareLatest` for the live
         // App to resolve the latest version + open the read-only diff view.

@@ -162,9 +162,9 @@ pub fn classify(effect: &Effect) -> Classified {
             "finish_buffer",
             unsupported("the daemon notify + switch-away are live-App-only (the save itself already ran)"),
         ),
-        Effect::KeepVersion => c(
+        Effect::KeepVersion { .. } => c(
             "keep_version",
-            unsupported("pinning writes the local-history store, gated off the capture path"),
+            unsupported("pinning (and naming) writes the local-history store, gated off the capture path"),
         ),
         Effect::CompareVersion(_) => c(
             "compare_version",
@@ -242,7 +242,8 @@ fn accept_class(kind: OverlayKind) -> EffectClass {
         | OverlayKind::Settings
         | OverlayKind::Assets
         | OverlayKind::Rename
-        | OverlayKind::InsertLink => EffectClass::Unsupported {
+        | OverlayKind::InsertLink
+        | OverlayKind::KeepName => EffectClass::Unsupported {
             why: "this picker is not expected to emit an accept effect; classify it in replay::accept_class before strict replay can pass it",
         },
     }
@@ -326,7 +327,7 @@ mod tests {
             Effect::Gulp,
             Effect::LineLand,
             Effect::FinishBuffer,
-            Effect::KeepVersion,
+            Effect::KeepVersion { name: Some("draft A".into()) },
             Effect::FollowLink("https://example.com".into()),
             Effect::ReportProblem,
             Effect::DownloadFile,

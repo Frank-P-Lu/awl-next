@@ -54,6 +54,7 @@ fn history_picker_enter_emits_restore_id_of_the_highlighted_version() {
         id: id.to_string(),
         timestamp: id.parse().unwrap_or(0),
         pinned: false,
+        name: None,
     };
     let rows = vec![
         row("just now", "edited \"A\"", "+0 −0", "300"),
@@ -73,6 +74,9 @@ fn history_picker_tab_emits_compare_version_of_the_highlighted_row() {
     // THE WRITER'S DIFF from the picker: TAB over a highlighted version emits
     // Effect::CompareVersion(<id>) (not a restore) and CLOSES the picker — the
     // caller resolves the id via history::load + renders the read-only diff view.
+    // The highlighted (middle) row is a NAMED SAVE POINT here, deliberately:
+    // a named row rides the same parallel `history_ids`, so Tab-to-compare
+    // works on it exactly like any snapshot — this pins that law.
     let row = |id: &str| crate::history::TimelineRow {
         when: "just now".into(),
         which: String::new(),
@@ -80,9 +84,15 @@ fn history_picker_tab_emits_compare_version_of_the_highlighted_row() {
         id: id.to_string(),
         timestamp: id.parse().unwrap_or(0),
         pinned: false,
+        name: None,
+    };
+    let named = crate::history::TimelineRow {
+        name: Some("draft A".into()),
+        pinned: true,
+        ..row("200")
     };
     let mut overlay = Some(OverlayState::new_history(
-        vec![row("300"), row("200"), row("100")],
+        vec![row("300"), named, row("100")],
         None,
         None,
     ));
@@ -566,7 +576,6 @@ fn every_catalog_command_dispatches_without_panicking() {
                     Action::NewNote => eff == Effect::NewNote,
                     Action::OpenCredits => eff == Effect::OpenCredits,
                     Action::OpenGuide => eff == Effect::OpenGuide,
-                    Action::KeepVersion => eff == Effect::KeepVersion,
                     // Markdown fixture: Compare with version… defers the latest-version
                     // resolve + diff-view open to the live App.
                     Action::CompareVersion => eff == Effect::CompareLatest,

@@ -1479,23 +1479,27 @@ impl App {
         }
     }
 
-    /// THE CONSCIOUS MARK ("Keep version"): record the CURRENT buffer state as a
-    /// PINNED, prune-EXEMPT local-history snapshot ([`crate::history::record_pinned`]).
-    /// Keyed on the SAME path the snapshot store records/restores under
+    /// THE CONSCIOUS MARK ("Keep version…"): record the CURRENT buffer state as a
+    /// PINNED, prune-EXEMPT local-history snapshot ([`crate::history::record_pinned`]),
+    /// optionally NAMED (`name` = the naming minibuffer's typed text, `None` for a
+    /// blank Enter — the plain keep; a NAMED SAVE POINT renders its name as the
+    /// timeline's primary cell and is prune-exempt like any pin). Keyed on the SAME
+    /// path the snapshot store records/restores under
     /// ([`crate::history::source_path`]: the buffer's own path, else `self.file`, else
     /// the persistent scratch's stash path — so the scratch can be pinned too). A
     /// no-op for an unnamed note (no history key yet), a git-managed file (git owns
-    /// its versioning — awl pins nothing there), or `history = false`; the store
-    /// itself enforces those gates. Best-effort: any store error is swallowed inside
-    /// `record_pinned`, so a failed pin never disrupts the buffer.
-    pub(super) fn keep_version(&self) {
+    /// its versioning — awl pins nothing there, named or not: the pre-name story,
+    /// unchanged), or `history = false`; the store itself enforces those gates.
+    /// Best-effort: any store error is swallowed inside `record_pinned`, so a failed
+    /// pin never disrupts the buffer.
+    pub(super) fn keep_version(&self, name: Option<&str>) {
         let path = crate::history::source_path(
             self.buffer.path(),
             self.file.as_deref(),
             self.buffer.is_note(),
         );
         if let Some(path) = path {
-            crate::history::record_pinned(&path, &self.buffer.text(), &self.config);
+            crate::history::record_pinned(&path, &self.buffer.text(), &self.config, name);
         }
     }
 

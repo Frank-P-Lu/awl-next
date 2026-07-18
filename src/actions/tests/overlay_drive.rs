@@ -735,11 +735,12 @@ fn open_settings_signals_caller() {
 }
 
 #[test]
-fn keep_version_signals_the_caller_without_touching_the_buffer() {
-    // THE CONSCIOUS MARK: "Keep version" is a pure signal — the core can't
-    // reach the history store (no fs/config/path), so it returns
-    // Effect::KeepVersion for the live App to pin the snapshot; the buffer and
-    // overlay are untouched (the pin is store-side, not an edit).
+fn keep_version_opens_the_naming_minibuffer_and_enter_commits_the_name() {
+    // NAMED SAVE POINTS: "Keep version…" summons the naming MINIBUFFER
+    // (`OverlayKind::KeepName`, the Rename/InsertLink shape). Typing builds the
+    // optional name in corpus[0]; Enter closes the overlay and signals
+    // Effect::KeepVersion { name: Some(..) } for the live App to pin+name the
+    // snapshot. The buffer is never touched (the pin is store-side, not an edit).
     let mut buffer = Buffer::from_str("keep me\n");
     let before = buffer.text();
     let mut shift = false;
@@ -761,10 +762,73 @@ fn keep_version_signals_the_caller_without_touching_the_buffer() {
         oracle: None,
     };
     let effect = apply_core(&mut ctx, &Action::KeepVersion, false);
-    assert_eq!(effect, Effect::KeepVersion, "KeepVersion must signal the caller");
-    assert!(overlay.is_none(), "the conscious mark opens no overlay");
+    assert_eq!(effect, Effect::None, "the summon itself signals nothing yet");
+    {
+        let ov = ctx.overlay.as_ref().expect("Keep version… opens the naming minibuffer");
+        assert_eq!(ov.kind, OverlayKind::KeepName);
+        assert!(ov.keep_edit.is_some(), "the modal keep_edit sub-state is armed at build");
+        assert_eq!(ov.corpus, vec![String::new()], "the single row opens empty (no old name)");
+        assert_eq!(
+            ov.foot_hint(),
+            "name this version:    Enter keep   Esc cancel",
+            "the prompt rides the same foot_hint seam Rename/InsertLink use"
+        );
+    }
+    // Type a name, then Enter: the intercept closes the overlay and commits.
+    for c in "draft A".chars() {
+        assert_eq!(apply_core(&mut ctx, &Action::InsertChar(c), false), Effect::None);
+    }
+    let effect = apply_core(&mut ctx, &Action::Newline, false);
+    assert_eq!(
+        effect,
+        Effect::KeepVersion { name: Some("draft A".into()) },
+        "Enter commits the typed name"
+    );
+    assert!(overlay.is_none(), "commit closes the minibuffer");
     assert_eq!(buffer.text(), before, "pinning never edits the buffer");
     assert!(!buffer.can_undo(), "a pin is not an undoable edit");
+}
+
+#[test]
+fn keep_version_blank_enter_is_the_plain_keep_and_esc_cancels() {
+    // Zero friction preserved: Enter on the EMPTY prompt commits the plain
+    // (nameless) keep — Effect::KeepVersion { name: None }, exactly today's
+    // behavior one Enter later. Esc cancels with NOTHING signalled.
+    let mut buffer = Buffer::from_str("keep me\n");
+    let mut shift = false;
+    let mut zoom = 1.0;
+    let mut search = None;
+    let mut overlay = None;
+    let mut make_overlay = |_k: OverlayKind| -> Option<OverlayState> { None };
+    let mut browse_to =
+        |_k: OverlayKind, _r: Option<String>| -> Option<OverlayState> { None };
+    let mut ctx = ActionCtx {
+        buffer: &mut buffer,
+        shift_selecting: &mut shift,
+        zoom: &mut zoom,
+        search: &mut search,
+        scroll_page_lines: 1,
+        overlay: &mut overlay,
+        make_overlay: &mut make_overlay,
+        browse_to: &mut browse_to,
+        oracle: None,
+    };
+    // Blank Enter → the plain keep (name: None). A whitespace-only name too.
+    apply_core(&mut ctx, &Action::KeepVersion, false);
+    apply_core(&mut ctx, &Action::InsertChar(' '), false);
+    let effect = apply_core(&mut ctx, &Action::Newline, false);
+    assert_eq!(
+        effect,
+        Effect::KeepVersion { name: None },
+        "a blank (whitespace-only) Enter is the plain, nameless keep"
+    );
+    assert!(ctx.overlay.is_none());
+    // Esc → cancels: the overlay closes and NOTHING is signalled.
+    apply_core(&mut ctx, &Action::KeepVersion, false);
+    apply_core(&mut ctx, &Action::InsertChar('x'), false);
+    let effect = apply_core(&mut ctx, &Action::Cancel, false);
+    assert_eq!(effect, Effect::None, "Esc keeps nothing");
+    assert!(ctx.overlay.is_none(), "Esc closes the minibuffer outright");
 }
 
 #[test]
