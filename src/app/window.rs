@@ -86,6 +86,13 @@ impl App {
     /// re-arms this turn. Inert for a non-lava world (nothing to resume — the tick
     /// gate stays false), so no extra frame is scheduled there.
     pub(super) fn on_focus_gained(&mut self) {
+        // LIVE PROBE focus-theft detector: a probe window is launched non-key
+        // (Accessory + `activate_ignoring_other_apps(false)` + `with_active(false)`
+        // → `orderFront`), so it must NEVER receive `Focused(true)`. If this trace
+        // ever fires during a probe run, the window stole the user's keyboard
+        // focus — a hard regression the smoke run asserts on (grep the stderr).
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::probe::live_active() { crate::probe::trace(format_args!("FOCUS-GAINED (window became key — focus theft!)")); }
         self.focused = true;
         self.lava_tick_at = None;
         if let Some(gpu) = self.gpu.as_ref() { gpu.window.request_redraw(); }

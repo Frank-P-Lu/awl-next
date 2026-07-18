@@ -120,7 +120,7 @@ pub fn live_active() -> bool {
 
 /// The LIVE PROBE window's fixed LOGICAL size (px): small + corner-anchored (see
 /// the window-attrs branch in `App::resumed`), so a probe window never sits
-/// center-stage stealing the eye — the companion to the Accessory activation
+/// center-stage stealing the eye — the companion to the Prohibited activation
 /// policy (`crate::app::run`) that keeps it from stealing keyboard FOCUS. The
 /// wrapping script (`scripts/live-probe.sh`) renders its HEADLESS references at
 /// this exact `--capture-size`, so the pixel comparison stays dpi-agnostic: the

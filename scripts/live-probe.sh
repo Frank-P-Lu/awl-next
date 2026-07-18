@@ -17,7 +17,7 @@
 #   1. renders the cell's HEADLESS reference frames (offscreen, per state);
 #   2. launches an isolated live app (`--theme SRC --live-script ...`) — a
 #      SMALL window appears in the top-left corner for a few seconds. It is a
-#      macOS ACCESSORY app (no Dock/cmd-tab entry) that NEVER takes keyboard
+#      non-activating app (Prohibited policy; no Dock/cmd-tab entry) that NEVER takes keyboard
 #      focus, so you keep typing into whatever you were using; the script injects
 #      its chords directly into the event loop. Visible + unoccluded regardless
 #      (the occlusion gate is about display, not focus — presents still fire);

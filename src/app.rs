@@ -1705,6 +1705,13 @@ impl ApplicationHandler<AwlEvent> for App {
                         crate::probe::PROBE_LOGICAL_H,
                     ))
                     .with_position(winit::dpi::LogicalPosition::new(48.0, 64.0))
+                    // `with_active(false)` → winit shows the window via
+                    // `orderFront` instead of `makeKeyAndOrderFront`, so it never
+                    // becomes the KEY window (no keyboard-focus theft). Paired with
+                    // the Prohibited policy + `activate_ignoring_other_apps(false)`
+                    // in `crate::app::run`. Only the probe opts out of focus; a
+                    // normal launch keeps the default active window.
+                    .with_active(false)
             } else {
             match self.restored_window {
                 Some(frame) => {
@@ -2349,14 +2356,26 @@ pub fn run(
     #[cfg(all(feature = "mas", target_os = "macos"))]
     if soak.is_none() { crate::mas::restore_all_grants(); }
 
-    // LIVE PROBE (`--live-script`): launch as a macOS ACCESSORY app so the probe
-    // window appears ON SCREEN (visible + unoccluded — the wgpu occlusion gate is
-    // about display VISIBILITY, not key-window status, so presents still fire;
-    // verified nonzero in the harness bring-up) but never becomes the KEY window,
-    // never enters the Dock / cmd-tab, and never steals keyboard focus from
-    // whatever the user is typing into. The driver injects chords straight into
-    // the event loop (never OS key focus), so nothing the probe needs is lost. A
-    // normal launch stays Regular — byte-identical activation to before.
+    // LIVE PROBE (`--live-script`): launch WITHOUT STEALING FOCUS. Three winit
+    // defaults each steal it and must all be turned off (the Accessory policy
+    // alone does NOT — it only governs Dock/cmd-tab presence; the app still
+    // activates and auto-keys its window, verified the hard way):
+    //   1. ACTIVATION POLICY → Prohibited: the app can never be ACTIVATED, so
+    //      `activateIgnoringOtherApps` is a no-op and no window of ours can become
+    //      key (Accessory was insufficient — a `Focused(true)` still fired). No
+    //      Dock icon, no cmd-tab entry, no menu-bar takeover either.
+    //   2. `activate_ignoring_other_apps` defaults to TRUE → winit calls
+    //      `NSApp.activateIgnoringOtherApps(true)` at launch, yanking the whole
+    //      app (and the user's keyboard) to the foreground. Forced OFF here.
+    //   3. (paired with the window's `with_active(false)` below → `orderFront`
+    //      instead of `makeKeyAndOrderFront`, so the window shows but never
+    //      becomes KEY.)
+    // Net: the probe window appears on screen (visible + unoccluded — the wgpu
+    // occlusion gate is about display VISIBILITY, not key status, so presents
+    // still fire) while the user keeps typing into whatever they were using. The
+    // driver injects chords straight into the event loop, never OS key focus, so
+    // nothing the probe needs is lost. A normal launch stays Regular + active —
+    // byte-identical activation to before.
     #[cfg(not(target_arch = "wasm32"))]
     let event_loop = {
         #[allow(unused_mut)]
@@ -2364,7 +2383,15 @@ pub fn run(
         #[cfg(target_os = "macos")]
         if live.is_some() {
             use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
-            builder.with_activation_policy(ActivationPolicy::Accessory);
+            // PROHIBITED (not Accessory): Accessory still lets the app ACTIVATE on
+            // launch, and an active app auto-makes its front window key — which
+            // stole the user's keyboard (observed: a `Focused(true)` still fired).
+            // A Prohibited app can never be activated, so `activateIgnoringOtherApps`
+            // is a no-op and no window of ours can become key. The window is still
+            // shown (`orderFront`) and composited, so presents/occlusion are
+            // unaffected (verified nonzero in the smoke run).
+            builder.with_activation_policy(ActivationPolicy::Prohibited);
+            builder.with_activate_ignoring_other_apps(false);
         }
         builder.build()?
     };
