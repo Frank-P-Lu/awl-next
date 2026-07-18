@@ -422,8 +422,9 @@ fn every_classified_motion_extends_shift_selection_and_no_mover_is_missing() {
     // through the SAME apply_core seam every other action rides — a concurrent
     // test flipping the about global without this lock would otherwise leak its
     // state into (or steal it from) this sweep's iterations. Order is safe
-    // regardless: `apply_core` releases about/lifetime before any page writer
-    // (see its SCOPE note), so page-then-about here can never ABBA it.
+    // regardless: `apply_core` holds ONE reentrant process-wide lock for its
+    // whole call, so there is no acquire ORDER left to invert — a
+    // page-then-about sequence here can't ABBA no matter which comes first.
     let _pg = crate::testlock::serial();
     let _ca = crate::testlock::serial();
     let _db = crate::testlock::serial();
@@ -533,9 +534,10 @@ fn every_catalog_command_dispatches_without_panicking() {
     // restore every one, so this sweep leaves NO residue and never races a
     // concurrent reader. `about`/`lifetime` are in the set because the sweep
     // drives `Action::About` / `Action::LifetimeStats` via the same apply_core
-    // seam. Order is safe regardless: `apply_core` releases about/lifetime
-    // before any page writer (see its SCOPE note), so page-then-about/lifetime
-    // here can never ABBA it.
+    // seam. Order is safe regardless: `apply_core` holds ONE reentrant
+    // process-wide lock (`testlock::serial()`) for its whole call, so there is
+    // no acquire ORDER left to invert — a page-then-about/lifetime sequence
+    // here can't ABBA no matter which comes first.
     let _pg = crate::testlock::serial();
     let _ca = crate::testlock::serial();
     let _db = crate::testlock::serial();
