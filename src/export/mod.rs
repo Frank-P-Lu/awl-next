@@ -95,6 +95,12 @@ pub fn to_pdf(markdown: &str, images: &dyn ImageSource) -> Vec<u8> {
     pdf::emit(&doc, images)
 }
 
+/// The native `--bench-perf` harness's fixed PDF-font coverage probe.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn pdf_glyph_probe() -> usize {
+    pdf::glyph_probe()
+}
+
 /// Export `markdown` in `format`, returning the raw bytes to write/download.
 pub fn to_bytes(markdown: &str, format: Format, images: &dyn ImageSource) -> Vec<u8> {
     match format {
