@@ -300,7 +300,7 @@ impl App {
             self.move_settle_at.is_some(),
             self.crossing_settle_at.is_some() || self.crossing_teardown_pending,
         );
-        if want == self.present_sync_on {
+        if self.present_sync_valid && want == self.present_sync_on {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -315,6 +315,7 @@ impl App {
             ));
         }
         self.present_sync_on = want;
+        self.present_sync_valid = true;
         #[cfg(target_os = "macos")]
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.set_presents_with_transaction(want);

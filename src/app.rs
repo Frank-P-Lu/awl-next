@@ -940,6 +940,10 @@ pub struct App {
     /// Tracked on every platform (the objc call itself is macOS-only), so the
     /// state machine stays unit-testable everywhere.
     present_sync_on: bool,
+    /// Whether `present_sync_on` describes the CURRENT GPU's CAMetalLayer.
+    /// Replacing the GPU/layer invalidates the shadow even when the desired bit
+    /// is unchanged; `sync_present_txn` then reapplies it exactly once.
+    present_sync_valid: bool,
     /// The loaded persistent config (keybinding overrides + folder defaults + the
     /// Settings-open path). Re-loaded when the config file is SAVED in the editor,
     /// which live-reapplies the keymap + folders.
@@ -1307,6 +1311,7 @@ impl App {
             crossing_settle_at: None,
             crossing_teardown_pending: false,
             present_sync_on: false,
+            present_sync_valid: false,
             config,
             cli_notes_root,
             cli_workspace,
@@ -1517,9 +1522,16 @@ impl App {
     /// inline after the NATIVE blocking init, and from `window_event` once the WASM
     /// async init deposits its GPU.
     fn on_gpu_ready(&mut self) {
-        let Some(gpu) = self.gpu.as_ref() else { return };
+        if self.gpu.is_none() {
+            return;
+        }
+        // `Gpu::new` owns a fresh surface/CAMetalLayer. The value shadowed for
+        // the previous layer cannot suppress application to this one.
+        self.present_sync_valid = false;
+        self.sync_present_txn();
         self.gpu_retry_at = None;
         self.gpu_timeout_streak = 0;
+        let Some(gpu) = self.gpu.as_ref() else { return };
         let sf = gpu.window.scale_factor() as f32;
         self.dpi = sf;
         if let Some(gpu) = self.gpu.as_mut() {
@@ -1901,6 +1913,7 @@ impl ApplicationHandler<AwlEvent> for App {
         self.crossing_settle_at = None;
         self.crossing_teardown_pending = false;
         self.present_sync_on = false;
+        self.present_sync_valid = false;
     }
 
     fn window_event(

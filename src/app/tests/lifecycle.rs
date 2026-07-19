@@ -155,6 +155,33 @@ fn present_transaction_sync_composes_over_every_source() {
     assert!(present_sync_armed(true, true, true), "all three at once");
 }
 
+/// A GPU rebuild installs a new CAMetalLayer whose transaction flag starts as
+/// unknown to the App. Even if the desired bit equals the old layer's shadow,
+/// the one owner must treat that shadow as invalid and apply it to the new
+/// layer before allowing the equality fast-path again.
+#[test]
+fn gpu_replacement_invalidates_and_reestablishes_the_present_sync_shadow() {
+    let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+
+    app.crossing_settle_at = Some(Instant::now());
+    app.sync_present_txn();
+    assert!(app.present_sync_on);
+    assert!(app.present_sync_valid);
+
+    // This is the state at the replacement seam in `on_gpu_ready`: the old
+    // value remains useful as state, but cannot describe the fresh layer.
+    app.present_sync_valid = false;
+    app.sync_present_txn();
+    assert!(app.present_sync_on, "the live crossing claim is preserved");
+    assert!(
+        app.present_sync_valid,
+        "the current layer's shadow is established before equality may elide work"
+    );
+
+    app.sync_present_txn();
+    assert!(app.present_sync_valid, "steady-state sync stays idempotent");
+}
+
 /// THE MOVE-FLASH REGRESSION PIN (user report 2026-07-15, "kinda back"):
 /// a `Moved` burst must hold the lamp — phase AND field — for the whole
 /// stream, keep presents transaction-synced (the structural gap 318e1fe
