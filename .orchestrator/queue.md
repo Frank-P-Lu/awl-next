@@ -6,7 +6,7 @@
 
 1. **Decomposition children round 2 — behavior-preserving moves.** Split `app/tests.rs` by feature area; split `render/pipeline_draw.rs` into prepare versus render/layers; split `render/chrome/overlay_draw.rs` into card versus rows/facets. Acceptance: per-method multiset/purity proof, native suite and both wasm gates green, and a 12-capture byte-identity sweep.
 2. **6c ordering-law expansion — test only.** Generalize the preview/crossing/present-transaction ordering law into a no-wildcard sweep over arm, disarm, settle, teardown, and present transitions. Acceptance: adding a transition variant fails to compile until handled; suite green.
-3. **Stray-worktree/branch equivalence audit — report only.** Inventory refs and worktrees fresh at execution time; for each, report equivalent-to-main/delete-or-rescue with commit and diff evidence. No branch or worktree deletion in this round.
+3. **Stray-worktree/branch equivalence audit — report only.** 🟡 IN PROGRESS — Codex workflow (codex), 2026-07-19, branch `audit-stray-refs-20260719`. Inventory refs and worktrees fresh at execution time; for each, report equivalent-to-main/delete-or-rescue with commit and diff evidence. No branch or worktree deletion in this round.
 4. **`has_glyph` performance micro-round.** Benchmark `--bench-perf` before and after the lookup change. Acceptance: measured delta reported and no behavior change.
 5. **Frost DPI sibling fix.** Frost currently scales with user zoom but omits device DPI, unlike the landed stars correction. Acceptance: 1×/2× pixel geometry/density law with unchanged logical feel; live Retina taste remains human-confirmed.
 
