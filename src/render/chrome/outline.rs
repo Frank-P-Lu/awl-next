@@ -432,7 +432,7 @@ impl TextPipeline {
             .collect();
         let block_w = widths.iter().copied().fold(0.0_f32, f32::max);
         let left = outline_block_left(layout.right_edge, block_w, crate::render::TEXT_LEFT);
-        let pad_x = crate::lava::FROST_PILL_PAD_X * self.metrics.zoom;
+        let pad_x = crate::lava::frost_px(crate::lava::FROST_PILL_PAD_X, self.metrics.zoom, self.dpi);
         let inset_y = row_h * crate::lava::FROST_PILL_INSET_Y_FRAC;
         let mut rects = Vec::with_capacity(layout.lines.len());
         // Walk each row's own y-band (matching `outline_hit_line`'s stacking: a
