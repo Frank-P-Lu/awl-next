@@ -2,10 +2,6 @@
 
 > This file contains only live execution state. For the multi-tool claiming protocol and board-write rules, see `README.md` beside it. Completed and superseded work lives in git history and `.orchestrator/reports/`; do not duplicate an archive here.
 
-## Active claim
-
-- 🟡 **PDF styling-outcome assertions + paginated blockquote rules** — IN PROGRESS — Codex, 2026-07-19, branch `codex/pdf-followups`. Acceptance: deterministic content-stream/operator assertions prove supported bold, italic, mono/code, highlight, strikethrough, and quote styling outcomes; every occupied page segment of a multi-page blockquote, including nested quotes, carries an in-bounds rule without unrelated layout changes. Verification: red-before-green focused tests, native build/test, both wasm gates, and raster comparison if shipping PDF bytes change.
-
 ## Ready queue
 
 1. **Decomposition children round 2 — behavior-preserving moves.** Split `app/tests.rs` by feature area; split `render/pipeline_draw.rs` into prepare versus render/layers; split `render/chrome/overlay_draw.rs` into card versus rows/facets. Acceptance: per-method multiset/purity proof, native suite and both wasm gates green, and a 12-capture byte-identity sweep.
