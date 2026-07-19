@@ -11,6 +11,11 @@ mod layout;
 mod manifest;
 mod writer;
 
+/// Fixed PDF font-coverage probe exposed only to the crate's performance harness.
+pub(super) fn glyph_probe() -> usize {
+    fonts::glyph_probe()
+}
+
 use super::model::{Document, ImageSource};
 
 pub(super) fn emit(doc: &Document, images: &dyn ImageSource) -> Vec<u8> {

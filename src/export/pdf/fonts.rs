@@ -3,6 +3,7 @@
 //! face with only this document's glyph outlines (plus composite dependencies).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 
 use glyphon::{FontSystem, fontdb};
 use ttf_parser::{Face, GlyphId, Permissions};
@@ -61,6 +62,17 @@ pub(super) const ASSETS: [FontAsset; 4] = [
     },
 ];
 
+/// The immutable source faces behind the PDF coverage checks. Parsing a
+/// TrueType directory for every scalar made ordinary export text needlessly pay
+/// the font-load cost; the bundled bytes are static, so one parsed face per role
+/// is sufficient for the process lifetime.
+static FACES: LazyLock<[Face<'static>; 4]> = LazyLock::new(|| {
+    std::array::from_fn(|index| {
+        let asset = &ASSETS[index];
+        Face::parse(asset.bytes, 0).expect("verified bundled PDF face")
+    })
+});
+
 pub(super) struct Fonts {
     pub system: FontSystem,
     ids: BTreeMap<FontRole, fontdb::ID>,
@@ -110,11 +122,24 @@ pub(super) const fn role_index(role: FontRole) -> usize {
     }
 }
 
+fn face(role: FontRole) -> &'static Face<'static> {
+    &FACES[role_index(role)]
+}
+
 pub(super) fn has_glyph(role: FontRole, ch: char) -> bool {
-    Face::parse(asset(role).bytes, 0)
-        .ok()
-        .and_then(|face| face.glyph_index(ch))
-        .is_some()
+    face(role).glyph_index(ch).is_some()
+}
+
+/// Fixed, representative coverage probe for the CLI micro-benchmark. Keeping
+/// this beside [`has_glyph`] means the benchmark cannot drift to a different
+/// lookup than PDF export actually performs.
+pub(super) fn glyph_probe() -> usize {
+    const SCALARS: &str = "The quick brown fox — café 123 []{}() 😀 🦉";
+    ROLES
+        .iter()
+        .copied()
+        .map(|role| SCALARS.chars().filter(|ch| has_glyph(role, *ch)).count())
+        .sum()
 }
 
 pub(super) fn fallback_char(role: FontRole) -> char {
@@ -422,6 +447,21 @@ mod tests {
             );
         }
         assert!(ofl.contains("SIL OPEN FONT LICENSE Version 1.1"));
+    }
+
+    #[test]
+    fn cached_coverage_lookup_matches_every_bundled_face() {
+        for asset in &ASSETS {
+            let parsed = Face::parse(asset.bytes, 0).expect(asset.pdf_name);
+            for ch in "Awl café — []{}() 😀 🦉\n".chars() {
+                assert_eq!(
+                    has_glyph(asset.role, ch),
+                    parsed.glyph_index(ch).is_some(),
+                    "{} coverage for {ch:?}",
+                    asset.pdf_name
+                );
+            }
+        }
     }
 
     #[test]

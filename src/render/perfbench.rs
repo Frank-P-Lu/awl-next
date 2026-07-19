@@ -1,4 +1,4 @@
-//! PERF micro-benchmark (hidden `--bench-perf` flag) for the FIVE traced hot paths.
+//! PERF micro-benchmark (hidden `--bench-perf` flag) for the five traced hot paths.
 //!
 //! An in-crate `std::time::Instant` harness (the Criterion fallback CAPTURE.md
 //! allows for the GPU-coupled [`TextPipeline`]): these hot fns are `pub(super)`
@@ -17,6 +17,8 @@
 //!     the caret line UNCHANGED (the pure-scroll cost F2 gates).
 //!   * THEME     — `sync_theme`'s font-branch reshape over the long doc (a
 //!     display-face theme switch).
+//!   * HAS GLYPH — PDF export's bundled-font coverage lookup across the four
+//!     emitted faces.
 
 use glyphon::Cache;
 use std::path::Path;
@@ -164,7 +166,7 @@ async fn run_async() -> anyhow::Result<()> {
     }
 
     // ---- THEME: sync_theme font-branch reshape over the long MARKDOWN doc -----
-    {
+    let theme_ns = {
         let mut p = TextPipeline::new(&device, &queue, &cache, FORMAT);
         p.set_size(width, height);
         p.set_view(&bench_view(&md, (0, 0)));
@@ -186,13 +188,31 @@ async fn run_async() -> anyhow::Result<()> {
             samples.push(t0.elapsed().as_nanos());
         }
         crate::theme::set_active(crate::theme::DEFAULT_THEME);
-        println!(
-            "{:>10} | {:>14} | {:>28}",
-            "THEME",
-            median(samples),
-            "sync_theme font reshape"
-        );
-    }
+        median(samples)
+    };
+
+    // ---- HAS GLYPH: PDF bundled-font coverage probe ---------------------------
+    let has_glyph_ns = {
+        const ITERS: usize = 200;
+        let mut samples = Vec::with_capacity(ITERS);
+        let mut sink = 0usize;
+        for _ in 0..ITERS {
+            let t0 = crate::clock::Instant::now();
+            sink = sink.wrapping_add(crate::export::pdf_glyph_probe());
+            samples.push(t0.elapsed().as_nanos());
+        }
+        std::hint::black_box(sink);
+        median(samples)
+    };
+    println!(
+        "{:>10} | {:>14} | {:>28}\n{:>10} | {:>14} | {:>28}",
+        "THEME",
+        theme_ns,
+        "sync_theme font reshape",
+        "HAS GLYPH",
+        has_glyph_ns,
+        "PDF 4-face coverage probe"
+    );
 
     Ok(())
 }
