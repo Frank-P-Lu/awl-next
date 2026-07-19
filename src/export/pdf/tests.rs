@@ -128,7 +128,7 @@ fn pdf_has_exact_classic_xref_object_plan_pages_and_a4_geometry() {
 }
 
 #[test]
-fn four_repository_fonts_are_exact_embedded_installable_full_faces() {
+fn four_repository_fonts_are_per_document_glyph_subsets() {
     let (_, bytes) = rich_bytes();
     let pdf = Pdf::parse(&bytes);
     let inventory = crate::embedded_docs::FONT_LICENSES_MD;
@@ -146,16 +146,15 @@ fn four_repository_fonts_are_exact_embedded_installable_full_faces() {
         assert!(type0.contains(&format!("/ToUnicode {} 0 R", base + 4)));
         assert!(cid.contains("/CIDToGIDMap /Identity"));
         assert!(descriptor.contains(&format!("/FontName /{}", asset.pdf_name)));
-        assert_eq!(
-            pdf.object(base + 3).stream().unwrap(),
-            asset.bytes,
-            "exact FontFile2 bytes"
+        let embedded = pdf.object(base + 3).stream().unwrap();
+        assert!(
+            embedded.len() < asset.bytes.len() / 2,
+            "{} subset is {} bytes versus {}-byte source",
+            asset.pdf_name,
+            embedded.len(),
+            asset.bytes.len()
         );
-
-        // The embedded FontFile2 bytes are the EXACT, COMPLETE face (asserted above:
-        // `pdf.object(base + 3).stream() == asset.bytes`) — full-face embedding, not a
-        // subset. The permission checks below verify the license would even PERMIT
-        // subsetting (a queued follow-up); awl performs none today.
+        let subset = Face::parse(embedded, 0).expect("embedded subset remains valid TrueType");
         let face = Face::parse(asset.bytes, 0).expect(asset.pdf_name);
         assert_eq!(face.permissions(), Some(Permissions::Installable));
         assert!(face.is_outline_embedding_allowed());
@@ -176,20 +175,29 @@ fn four_repository_fonts_are_exact_embedded_installable_full_faces() {
             .unwrap();
         assert!(row.contains("SIL OFL 1.1"), "license inventory row: {row}");
 
-        let start = cid.find("/W [0 [").unwrap() + "/W [0 [".len();
-        let end = cid[start..].find("]] ").unwrap() + start;
-        let widths = cid[start..end]
+        assert_eq!(subset.number_of_glyphs(), face.number_of_glyphs());
+        let start = cid.find("/W [").unwrap() + "/W [".len();
+        let end = cid[start..].find("] >>").unwrap() + start;
+        let values = cid[start..end]
+            .replace(['[', ']'], " ")
             .split_whitespace()
             .map(|value| value.parse::<u16>().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(widths.len(), face.number_of_glyphs() as usize);
+        assert_eq!(values.len() % 2, 0);
         let upm = u32::from(face.units_per_em());
-        for (id, width) in widths.iter().copied().enumerate() {
-            let raw = u32::from(face.glyph_hor_advance(GlyphId(id as u16)).unwrap_or(0));
+        for pair in values.chunks_exact(2) {
+            let id = pair[0];
+            let width = pair[1];
+            let raw = u32::from(face.glyph_hor_advance(GlyphId(id)).unwrap_or(0));
             assert_eq!(
                 width,
                 ((raw * 1000 + upm / 2) / upm) as u16,
                 "hmtx width {id}"
+            );
+            assert_eq!(
+                subset.glyph_hor_advance(GlyphId(id)),
+                face.glyph_hor_advance(GlyphId(id)),
+                "subset hmtx {id}"
             );
         }
         let cmap = std::str::from_utf8(pdf.object(base + 4).stream().unwrap()).unwrap();
@@ -445,7 +453,7 @@ fn pdf_golden_and_public_format_path_are_byte_identical() {
     assert_eq!(crate::export::Format::Pdf.ext(), "pdf");
     let parsed = Pdf::parse(&direct);
     assert!(parsed.page_ids().len() >= 3);
-    assert_eq!(parsed.object(6).stream().unwrap(), ASSETS[0].bytes);
+    assert!(parsed.object(6).stream().unwrap().len() < ASSETS[0].bytes.len() / 2);
     golden("rich.pdf", &direct);
 }
 

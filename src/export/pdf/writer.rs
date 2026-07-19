@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 
-use super::fonts::{FontRole, ROLES, asset, descriptor, glyph_widths, role_index};
+use super::fonts::{FontRole, ROLES, asset, descriptor, glyph_widths, role_index, subset};
 use super::layout::{GlyphOp, Layout, Op, PAGE_H, PAGE_W};
 
 const FONT_BASE: u32 = 3;
@@ -155,12 +155,13 @@ fn write_font_objects(
     let file = base + 3;
     let cmap = base + 4;
     objects[base as usize] = Some(format!("<< /Type /Font /Subtype /Type0 /BaseFont /{} /Encoding /Identity-H /DescendantFonts [{cid} 0 R] /ToUnicode {cmap} 0 R >>", a.pdf_name).into_bytes());
-    let widths = glyph_widths(role)
+    let glyphs = unicode.keys().copied().chain([0]).collect();
+    let widths = glyph_widths(role, &glyphs)
         .iter()
-        .map(u16::to_string)
+        .map(|(id, width)| format!("{id} [{width}]"))
         .collect::<Vec<_>>()
         .join(" ");
-    objects[cid as usize] = Some(format!("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {desc_id} 0 R /CIDToGIDMap /Identity /DW 1000 /W [0 [{widths}]] >>", a.pdf_name).into_bytes());
+    objects[cid as usize] = Some(format!("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {desc_id} 0 R /CIDToGIDMap /Identity /DW 1000 /W [{widths}] >>", a.pdf_name).into_bytes());
     let d = descriptor(role);
     let fixed = matches!(role, FontRole::Mono | FontRole::MonoBold);
     let flags = if fixed { 33 } else { 34 };
@@ -170,7 +171,8 @@ fn write_font_objects(
         80
     };
     objects[desc_id as usize] = Some(format!("<< /Type /FontDescriptor /FontName /{} /Flags {flags} /FontBBox [{} {} {} {}] /ItalicAngle 0 /Ascent {} /Descent {} /CapHeight {} /StemV {stem} /FontFile2 {file} 0 R >>",a.pdf_name,d.bbox[0],d.bbox[1],d.bbox[2],d.bbox[3],d.ascent,d.descent,d.cap_height).into_bytes());
-    objects[file as usize] = Some(stream(&format!("/Length1 {}", a.bytes.len()), a.bytes));
+    let font = subset(role, &glyphs);
+    objects[file as usize] = Some(stream(&format!("/Length1 {}", font.len()), &font));
     objects[cmap as usize] = Some(stream("", to_unicode(a.pdf_name, unicode).as_bytes()));
 }
 
