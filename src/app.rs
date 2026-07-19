@@ -14,6 +14,8 @@ use crate::clock::Instant;
 
 #[cfg(test)]
 mod crossing;
+#[cfg(test)]
+mod present_txn;
 
 // OS clipboard bridge. Native = arboard (the real platform clipboard). wasm =
 // a best-effort ASYNC mirror onto `navigator.clipboard` (the WEB ESCAPE
