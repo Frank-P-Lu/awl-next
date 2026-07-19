@@ -123,6 +123,11 @@ fn capture(out: &Path, doc: &Path, theme: &str, lava: Option<&str>, frost: bool)
     let output = cmd
         .output()
         .expect("failed to spawn the awl binary under CARGO_BIN_EXE_awl");
+    if !output.status.success()
+        && String::from_utf8_lossy(&output.stderr).contains("no wgpu adapter for headless capture")
+    {
+        return false;
+    }
     assert!(
         output.status.success(),
         "awl capture failed: {}\n{}",
