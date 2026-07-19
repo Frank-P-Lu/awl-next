@@ -148,22 +148,7 @@ impl Engine<'_> {
             Block::Paragraph(inlines) => {
                 self.rich(inlines, Style::body(), x, width, 8.0, false, false)
             }
-            Block::BlockQuote(blocks) => {
-                let start_page = self.page;
-                let start_y = self.y;
-                self.y += 3.0;
-                self.blocks_italic(blocks, x + 18.0, (width - 18.0).max(40.0));
-                if start_page == self.page {
-                    self.pages[self.page].ops.push(Op::Line {
-                        x1: x + 4.0,
-                        y1: start_y,
-                        x2: x + 4.0,
-                        y2: self.y - 5.0,
-                        width: 1.2,
-                        gray: 0.65,
-                    });
-                }
-            }
+            Block::BlockQuote(blocks) => self.blockquote(blocks, x, width, 18.0),
             Block::CodeBlock { lang: _, code } => {
                 let mut style = Style::body();
                 style.role = FontRole::Mono;
@@ -206,7 +191,7 @@ impl Engine<'_> {
                     s.italic = true;
                     self.rich(inlines, s, x, width, 6.0, true, false);
                 }
-                Block::BlockQuote(b) => self.blocks_italic(b, x + 14.0, width - 14.0),
+                Block::BlockQuote(b) => self.blockquote(b, x, width, 14.0),
                 Block::CodeBlock { lang: _, code } => {
                     let mut s = Style::body();
                     s.role = FontRole::Mono;
@@ -227,6 +212,38 @@ impl Engine<'_> {
                 Block::List(l) => self.list(l, x, width),
                 Block::Rule => self.block(block, x, width),
                 Block::Table(t) => self.table(t, x, width),
+            }
+        }
+    }
+
+    /// Paint a quote's vertical affordance once per occupied page segment. The
+    /// quote body can page independently; recording the endpoints around that
+    /// layout keeps the rule in the printable box without coupling pagination
+    /// to a particular child block. Nested quotes use their existing tighter
+    /// indent while passing through this same segment owner.
+    fn blockquote(&mut self, blocks: &[Block], x: f32, width: f32, indent: f32) {
+        let start_page = self.page;
+        let start_y = self.y;
+        self.y += 3.0;
+        self.blocks_italic(blocks, x + indent, (width - indent).max(40.0));
+        let end_page = self.page;
+        let end_y = (self.y - 5.0).max(MARGIN_Y);
+        for page in start_page..=end_page {
+            let y1 = if page == start_page {
+                start_y
+            } else {
+                MARGIN_Y
+            };
+            let y2 = if page == end_page { end_y } else { BOTTOM };
+            if y2 > y1 {
+                self.pages[page].ops.push(Op::Line {
+                    x1: x + 4.0,
+                    y1,
+                    x2: x + 4.0,
+                    y2,
+                    width: 1.2,
+                    gray: 0.65,
+                });
             }
         }
     }

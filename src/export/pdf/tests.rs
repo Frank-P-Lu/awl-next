@@ -257,6 +257,74 @@ fn png_alpha_jpeg_and_link_are_backed_by_real_pdf_objects() {
 }
 
 #[test]
+fn rich_styles_are_proven_by_their_emitted_content_stream_operators() {
+    let markdown = "**B** *I* ~~S~~ ==H== `M` **`N`**\n\n> Q\n\n---\n";
+    let bytes = emit(&model::parse(markdown), &NoImages);
+    let pdf = Pdf::parse(&bytes);
+    let streams = pdf.page_streams();
+    assert_eq!(streams.len(), 1);
+    let content = std::str::from_utf8(streams[0]).unwrap();
+    let lines = content.lines().collect::<Vec<_>>();
+
+    let bold = glyph_operator(&lines, 'B');
+    assert!(
+        bold.contains("BT /F2 11.000 Tf"),
+        "bold must select SerifBold: {bold}"
+    );
+
+    let italic = glyph_operator(&lines, 'I');
+    assert!(
+        italic.contains("BT /F1 11.000 Tf 1 0 0.212556 1"),
+        "emphasis must emit the italic shear on Serif: {italic}"
+    );
+
+    let mono = glyph_operator(&lines, 'M');
+    assert!(
+        mono.contains("BT /F3 11.000 Tf"),
+        "code must select Mono: {mono}"
+    );
+    let bold_mono = glyph_operator(&lines, 'N');
+    assert!(
+        bold_mono.contains("BT /F4 11.000 Tf"),
+        "strong code must select MonoBold: {bold_mono}"
+    );
+
+    let highlight_actual = actual_text_line(&lines, 'H');
+    assert!(
+        lines[highlight_actual - 1].contains("q 0.900 g")
+            && lines[highlight_actual - 1].contains(" re f Q"),
+        "highlight must paint its gray fill rectangle: {:?}",
+        lines[highlight_actual - 1]
+    );
+
+    let strike_actual = actual_text_line(&lines, 'S');
+    assert!(
+        lines[strike_actual + 2].starts_with("q 0.200 G 0.550 w ")
+            && lines[strike_actual + 2].ends_with(" l S Q"),
+        "strikethrough must paint its line after the glyph: {:?}",
+        lines[strike_actual + 2]
+    );
+
+    let quote = glyph_operator(&lines, 'Q');
+    assert!(
+        quote.contains("BT /F1 11.000 Tf 1 0 0.212556 1"),
+        "blockquote prose must emit italic text: {quote}"
+    );
+    assert!(
+        content
+            .lines()
+            .any(|line| line.starts_with("q 0.650 G 1.200 w ")),
+        "blockquote must emit its vertical rule"
+    );
+    assert!(
+        content
+            .lines()
+            .any(|line| line.starts_with("q 0.720 G 0.700 w ")),
+        "thematic rule must emit its horizontal drawing operator"
+    );
+}
+
+#[test]
 fn manifest_roster_and_actual_page_text_cover_every_model_element() {
     let (markdown, bytes) = rich_bytes();
     let doc = model::parse(&markdown);
@@ -441,6 +509,49 @@ fn pagination_stays_in_margins_and_prevents_heading_or_paragraph_orphans() {
 }
 
 #[test]
+fn multipage_and_nested_blockquotes_emit_an_in_bounds_rule_on_every_occupied_page() {
+    let mut markdown = String::from("> OUTER START\n>\n");
+    for i in 0..75 {
+        markdown.push_str(&format!(
+            "> > NESTED {i:02} carries enough deterministic prose to wrap and occupy several PDF pages without relying on host state.\n> >\n"
+        ));
+    }
+    markdown.push_str("> OUTER END\n");
+    let bytes = emit(&model::parse(&markdown), &NoImages);
+    let pdf = Pdf::parse(&bytes);
+    let pages = recover_page_text(&pdf);
+    assert!(pages.len() >= 3, "fixture must span pages: {}", pages.len());
+
+    let outer_x = MARGIN_X + 4.0;
+    let nested_x = MARGIN_X + 18.0 + 4.0;
+    for (index, (text, stream)) in pages.iter().zip(pdf.page_streams()).enumerate() {
+        if text.contains("OUTER") || text.contains("NESTED") {
+            let rules = vertical_rules(std::str::from_utf8(stream).unwrap());
+            assert!(
+                rules.iter().any(|&(x, y1, y2)| {
+                    (x - outer_x).abs() < 0.01
+                        && y1 >= MARGIN_Y - 0.01
+                        && y2 <= PAGE_H - MARGIN_Y + 0.01
+                        && y2 > y1
+                }),
+                "outer quote page {index} lacks an in-bounds segment: {rules:?}"
+            );
+            if text.contains("NESTED") {
+                assert!(
+                    rules.iter().any(|&(x, y1, y2)| {
+                        (x - nested_x).abs() < 0.01
+                            && y1 >= MARGIN_Y - 0.01
+                            && y2 <= PAGE_H - MARGIN_Y + 0.01
+                            && y2 > y1
+                    }),
+                    "nested quote page {index} lacks an in-bounds segment: {rules:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn pdf_golden_and_public_format_path_are_byte_identical() {
     let markdown = fixture::markdown();
     let direct = crate::export::to_pdf(&markdown, &Images::new());
@@ -464,6 +575,38 @@ fn numbers_between(text: &str, marker: &str, end_char: char) -> Vec<f32> {
         .split_whitespace()
         .map(|n| n.parse().unwrap())
         .collect()
+}
+
+fn vertical_rules(content: &str) -> Vec<(f32, f32, f32)> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let words = line.split_whitespace().collect::<Vec<_>>();
+            let move_to = words.iter().position(|word| *word == "m")?;
+            let line_to = words.iter().position(|word| *word == "l")?;
+            let x1 = words.get(move_to.checked_sub(2)?)?.parse::<f32>().ok()?;
+            let pdf_y1 = words.get(move_to - 1)?.parse::<f32>().ok()?;
+            let x2 = words.get(line_to.checked_sub(2)?)?.parse::<f32>().ok()?;
+            let pdf_y2 = words.get(line_to - 1)?.parse::<f32>().ok()?;
+            ((x1 - x2).abs() < 0.001).then(|| {
+                let a = PAGE_H - pdf_y1;
+                let b = PAGE_H - pdf_y2;
+                (x1, a.min(b), a.max(b))
+            })
+        })
+        .collect()
+}
+
+fn actual_text_line(lines: &[&str], scalar: char) -> usize {
+    let marker = format!("/Span << /ActualText <FEFF{:04X}> >> BDC", scalar as u32);
+    lines
+        .iter()
+        .position(|line| *line == marker)
+        .unwrap_or_else(|| panic!("missing ActualText operator for {scalar:?}"))
+}
+
+fn glyph_operator<'a>(lines: &'a [&str], scalar: char) -> &'a str {
+    lines[actual_text_line(lines, scalar) + 1]
 }
 
 fn hex_bytes(text: &str) -> Vec<u8> {
