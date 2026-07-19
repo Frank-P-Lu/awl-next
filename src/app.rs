@@ -12,6 +12,9 @@ use std::time::Duration;
 // `crate::clock::system_now()`. Never reach for raw `std::time::…::now()` here.
 use crate::clock::Instant;
 
+#[cfg(test)]
+mod crossing;
+
 // OS clipboard bridge. Native = arboard (the real platform clipboard). wasm =
 // a best-effort ASYNC mirror onto `navigator.clipboard` (the WEB ESCAPE
 // HATCHES round — arboard itself still won't compile for wasm32, and the
