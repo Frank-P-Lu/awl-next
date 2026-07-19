@@ -9,6 +9,7 @@
 3. **Stray-worktree/branch equivalence audit — report only.** ✅ AUDITED — 2026-07-19; corrected roster: 27 local branches besides main, nine non-main worktrees; no deletion. Evidence and rescue/keep verdicts: [`reports/2026-07-19-stray-ref-equivalence-audit.md`](reports/2026-07-19-stray-ref-equivalence-audit.md).
 4. **`has_glyph` performance micro-round.** 🟡 IN PROGRESS — codex, 2026-07-19, branch `codex/has-glyph-perf`. Benchmark `--bench-perf` before and after the lookup change. Acceptance: measured delta reported and no behavior change.
 5. **Frost DPI sibling fix.** 🟡 IN PROGRESS — codex, 2026-07-19, branch `codex/frost-dpi`. Frost currently scales with user zoom but omits device DPI, unlike the landed stars correction. Acceptance: 1×/2× pixel geometry/density law with unchanged logical feel; live Retina taste remains human-confirmed.
+6. **Poster-bars overlays preserve the live page.** 🟡 IN PROGRESS — codex, 2026-07-19, branch `codex/poster-bars-preserve-page`. For centered Bars-style list overlays in Mangrove, Firetail, and Cassowary, replace the opaque full-canvas room with bounded bare plates/local scrims over the existing backdrop treatment while retaining poster bars, placards, rows, selection, shortcuts, anchors, and spell-popup behavior. Acceptance: source glyphs visibly survive; selected/unselected plates are distinct and legible; PNG-pixel outcome laws, sampled capture/sidecar evidence, vision smoke, focused tests, and full suite green; live feel remains human-confirmed.
 
 ## Held — user decision or taste
 
