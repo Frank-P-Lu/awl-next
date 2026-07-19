@@ -335,6 +335,7 @@ pub(in crate::render) use overlay::{
 // geometry/hit-test owner is `overlay`, this turns that settled geometry into GPU
 // work. A cohesive physical carve, byte-identical pixels — see the file's own doc.
 mod overlay_draw;
+mod overlay_rows;
 mod overlay_shape;
 // Test-only re-export so `render::tests` can name the pure placard-size quantizer
 // without traversing the private `overlay_shape` submodule (the AtlasFull ladder law).
