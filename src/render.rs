@@ -174,11 +174,14 @@ pub use viewstate_def::ViewState;
 /// byte-identical). `pipeline_geometry` = reconfigure-from-input setters
 /// (theme / view / size, no draw); `pipeline_overlay` = the `advance(dt)`
 /// animation surface (overlay motion, lava field, juice, preview);
-/// `pipeline_draw` = construction (`new`) + the compose-and-submit frame path
-/// (prepare / blur / render).
+/// `pipeline_draw` = construction (`new`); `pipeline_prepare` = per-frame buffer
+/// preparation + blur state; `pipeline_layers` = render-pass composition and
+/// ordered layer emission.
 mod pipeline_geometry;
 mod pipeline_overlay;
 mod pipeline_draw;
+mod pipeline_prepare;
+mod pipeline_layers;
 
 /// Fixed look-and-feel constants. Keeping these in one spot makes the headless
 /// capture deterministic and keeps windowed/headless visually identical.
