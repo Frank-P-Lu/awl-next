@@ -4,7 +4,7 @@
 
 ## Ready queue
 
-1. **Decomposition children round 2 — behavior-preserving moves.** 🟡 IN PROGRESS — Codex workflow (codex), 2026-07-19, branches `decompose-app-tests-20260719`, `decompose-pipeline-draw-20260719`, `decompose-overlay-draw-20260719`. Split `app/tests.rs` by feature area; split `render/pipeline_draw.rs` into prepare versus render/layers; split `render/chrome/overlay_draw.rs` into card versus rows/facets. Acceptance: per-method multiset/purity proof, native suite and both wasm gates green, and a 12-capture byte-identity sweep.
+1. **Decomposition children round 2 — behavior-preserving moves.** ✅ LANDED @ `f3c4715` — app tests, pipeline stages, and overlay rows split with exact inventory proofs; native/wasm gates passed and 12 PNG+JSON capture pairs were byte-identical after one bounded source-audit path repair.
 2. **6c ordering-law expansion — test only.** Generalize the preview/crossing/present-transaction ordering law into a no-wildcard sweep over arm, disarm, settle, teardown, and present transitions. Acceptance: adding a transition variant fails to compile until handled; suite green.
 3. **Stray-worktree/branch equivalence audit — report only.** ✅ AUDITED — 2026-07-19; corrected roster: 27 local branches besides main, nine non-main worktrees; no deletion. Evidence and rescue/keep verdicts: [`reports/2026-07-19-stray-ref-equivalence-audit.md`](reports/2026-07-19-stray-ref-equivalence-audit.md).
 4. **`has_glyph` performance micro-round.** Benchmark `--bench-perf` before and after the lookup change. Acceptance: measured delta reported and no behavior change.
