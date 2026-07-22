@@ -375,31 +375,49 @@ fn empty_build_ctx<'a>(config_keys: &'a [(String, Vec<String>)]) -> BuildCtx<'a>
 
 #[test]
 fn goto_headings_lens_folds_in_the_docs_headings() {
-    // THE FOLD: a Go-to overlay with the doc's headings attached lists ONLY files
-    // under All / the file lenses, and ONLY the headings under the Headings lens —
-    // which is where the retired standalone Outline picker now lives.
+    // THE FOLD: a Go-to overlay with the doc's headings attached lists them mixed
+    // with the files under the flat `All` home (item 11's unified default), and
+    // ONLY the headings under the dedicated Headings lens — which is where the
+    // retired standalone Outline picker now lives as an explicit refinement.
     let corpus = vec!["README.md".to_string(), "src/main.rs".to_string()];
     let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
     ov.attach_headings(vec![
         ("Introduction".to_string(), 3),
         ("  Details".to_string(), 7),
     ]);
-    // Strip carries the Headings lens, parked last after the file lenses.
+    // Strip carries the Headings lens, parked last — "By type" was CUT (item 11).
     let strip: Vec<String> = ov.lens_strip().into_iter().map(|(l, _)| l).collect();
-    assert_eq!(strip, vec!["All", "Recent", "This folder", "By type", "Headings"]);
-    // ALL home: files only — the appended heading rows are hidden here.
+    assert_eq!(strip, vec!["All", "Recent", "This folder", "Headings"]);
+    // ALL home: files AND headings, mixed in the same fuzzy-ranked list. A heading
+    // row carries the `❡ ` KIND-HINT marker (item 11's rowlayout PRIMARY-cell
+    // disambiguator); a file row never does.
+    const H: &str = OverlayKind::HEADING_MARKER_PREFIX;
     assert_eq!(ov.active_facet_id(), Some("all"));
     let all = ov.item_strings();
     assert!(all.iter().any(|s| s == "README.md") && all.iter().any(|s| s == "src/main.rs"));
-    assert!(!all.iter().any(|s| s == "Introduction"), "headings hidden under All: {all:?}");
-    assert!(!ov.selected_is_heading(), "a file row is not a heading");
-    // Headings lens (strip index 4): ONLY the headings, and each row IS a heading
+    assert!(
+        all.iter().any(|s| s == &format!("{H}Introduction")),
+        "headings mixed into All, marked: {all:?}"
+    );
+    assert!(
+        all.iter().any(|s| s == &format!("{H}  Details")),
+        "headings mixed into All, marked: {all:?}"
+    );
+    assert_eq!(all.len(), 4);
+    // Headings lens (strip index 3): ONLY the headings, and each row IS a heading
     // whose accept is its line number, not a file open.
     ov.focus_facet_id("headings");
     assert_eq!(ov.active_facet_id(), Some("headings"));
-    assert_eq!(ov.item_strings(), vec!["Introduction".to_string(), "  Details".to_string()]);
+    assert_eq!(
+        ov.item_strings(),
+        vec![format!("{H}Introduction"), format!("{H}  Details")]
+    );
     assert!(ov.selected_is_heading(), "the Headings lens rows are headings");
     assert_eq!(ov.selected_line(), Some(3), "the first heading jumps to line 3");
+    // "This folder" (strip index 2): a file-only REFINEMENT — headings drop out.
+    ov.set_facet_lens(2);
+    let folder = ov.item_strings();
+    assert!(!folder.iter().any(|s| s == "Introduction" || s == "  Details"), "{folder:?}");
 }
 
 #[test]
@@ -604,18 +622,24 @@ fn goto_headings_lens_fuzzy_filters_and_jumps_by_line() {
         ("  Usage".to_string(), 9usize),
     ]);
     ov.focus_facet_id("headings");
-    // Rows are the (indented) titles in order; lines stay parallel.
-    assert_eq!(ov.item_strings(), vec!["Intro", "  Setup", "  Usage"]);
+    // Rows are the (indented) titles in order, marker-prefixed; lines stay parallel.
+    const H: &str = OverlayKind::HEADING_MARKER_PREFIX;
+    assert_eq!(
+        ov.item_strings(),
+        vec![format!("{H}Intro"), format!("{H}  Setup"), format!("{H}  Usage")]
+    );
     assert_eq!(ov.selected_line(), Some(0));
     // Fuzzy filter to "Usage" -> selected row jumps to its line (9), not its text.
+    // `selected_value` reads the RAW corpus (unprefixed) — the marker is display-only.
     ov.push('u');
     ov.push('s');
     ov.push('a');
     assert_eq!(ov.selected_value(), Some("  Usage"));
     assert!(ov.selected_is_heading());
     assert_eq!(ov.selected_line(), Some(9));
-    // No git / dir markers on heading rows; the indentation survives in display.
+    // No git / dir markers on heading rows; the indentation + kind-hint survive.
     assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
+    assert!(ov.item_strings().iter().all(|s| s.starts_with(H)));
 }
 
 #[test]
@@ -1218,7 +1242,6 @@ fn empty_state_copy_is_calm_and_context_aware() {
         Some("no recent files yet"),
     );
     assert_eq!(OverlayKind::Goto.empty_lens_message("folder").as_deref(), Some("nothing here"));
-    assert_eq!(OverlayKind::Goto.empty_lens_message("type").as_deref(), Some("nothing here"));
     assert_eq!(OverlayKind::Goto.empty_lens_message("all"), None);
 }
 

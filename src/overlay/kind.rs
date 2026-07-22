@@ -594,6 +594,24 @@ impl OverlayKind {
     /// prefix) read, so the two can never disagree about where the marker ends.
     pub const SETTINGS_MARKER_PREFIX: &'static str = "§ ";
 
+    /// THE UNIFIED-LIST KIND HINT (item 11): a Go-to overlay row that is a document
+    /// HEADING (an appended row, not a file) draws this glyph, dim in muted ink,
+    /// before its (already depth-indented) title — e.g. `"❡ Introduction"` — so it
+    /// reads apart from a file row at a glance once the default `All` list mixes
+    /// both kinds together. ❡ (U+2761, CURVED STEM PARAGRAPH SIGN ORNAMENT) is
+    /// already one of the bundled `AwlMarks.ttf` face's marks (`render::spans::
+    /// is_symbol` lists it), so it renders identically on every world and platform
+    /// — the same guarantee [`Self::SETTINGS_MARKER_PREFIX`]'s § leans on; picked
+    /// over ¶/# (neither bundled) and over reusing § itself (already means
+    /// SETTING, never a second meaning on the same card).
+    ///
+    /// The full marker PREFIX (glyph + one space) — the single owner both
+    /// [`OverlayState::display_of`] (which prepends it) and [`crate::overlay::
+    /// row_split`] (which recognizes it as the muted-ink figure/ground split
+    /// point, exactly like [`Self::SETTINGS_MARKER_PREFIX`]) read, so the two can
+    /// never disagree about where the marker ends.
+    pub const HEADING_MARKER_PREFIX: &'static str = "❡ ";
+
     /// The calm line a FACETING picker shows when a REFINEMENT lens (a strip index
     /// past the flat `All` home) filtered the corpus down to zero — distinct from an
     /// empty CORPUS ([`Self::empty_corpus_message`]) or a query that matched nothing
@@ -612,8 +630,8 @@ impl OverlayKind {
             (OverlayKind::Goto, "headings") => Some("no headings yet"),
             // Project Recent: the recent-projects MRU, empty until you switch projects.
             (OverlayKind::Project, "recent") => Some("no recent projects yet"),
-            // Any other refinement lens (This folder / By type / File / Session / …)
-            // that happens to have no members: one calm catch-all.
+            // Any other refinement lens (This folder / File / Session / …) that
+            // happens to have no members: one calm catch-all.
             (_, "all") => None,
             _ => Some("nothing here"),
         }

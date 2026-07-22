@@ -339,5 +339,12 @@ pub fn row_split(row: &str) -> usize {
     if row.starts_with(OverlayKind::SETTINGS_MARKER_PREFIX) {
         return OverlayKind::SETTINGS_MARKER_PREFIX.len();
     }
+    // ITEM 11: a Go-to HEADING row's marker PREFIX (`"❡ "`, `OverlayKind::
+    // HEADING_MARKER_PREFIX`) is figure/ground-split the same way — the glyph
+    // recedes to muted ink, the (indented) title stays content ink. Checked next
+    // (a heading title never itself starts with the settings glyph).
+    if row.starts_with(OverlayKind::HEADING_MARKER_PREFIX) {
+        return OverlayKind::HEADING_MARKER_PREFIX.len();
+    }
     row.rfind('/').map(|i| i + 1).unwrap_or(0)
 }
