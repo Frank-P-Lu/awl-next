@@ -382,7 +382,10 @@ impl TextPipeline {
         // agree on every row; the hit-test rides the same `lh`, so a click in a
         // gap maps to the nearest row (no dead zones).
         // `list_style` computed once at the top of this fn (drives the pane-drop).
-        let mirror = crate::render::effective_card_anchor().mirrors_growth();
+        // ITEM 45: the selected-bar growth mirror follows the FROZEN alignment (via
+        // the ONE owner), so it composes with the (also-frozen) card placement and
+        // never flips mid-preview when the active world changes.
+        let mirror = crate::render::resolve_overlay_anchor(self.overlay_align).mirrors_growth();
         // ARM B LIVING BAND (`AWL_LIVING_BAND`): the selection band's morph /
         // two-shape choreography. Ships ON (calm MORPH) — `None` only when the knob
         // is `off`. Pane-only; when active it OWNS the band rects (the ordinary

@@ -93,6 +93,15 @@ pub struct ViewState {
     /// True while the summoned navigation OVERLAY is open (go-to / switch). Drives
     /// drawing the overlay card + candidate list + selected-row highlight.
     pub overlay_active: bool,
+    /// ITEM 45 (overlay ALIGNMENT as personality data) — the overlay's horizontal
+    /// alignment FROZEN at SUMMON: `Some(anchor)` while an overlay is open (the value
+    /// [`crate::overlay::OverlayState::align`] captured when the picker opened),
+    /// `None` when closed. The render path resolves it through the ONE owner
+    /// [`crate::render::resolve_overlay_anchor`] — never the live world anchor — so a
+    /// theme-preview crossing between differently-aligned worlds holds the open card
+    /// exactly in place (the HARD RULE; `None` falls back to the live resolver for
+    /// the legacy `set_card_anchor_test_override` placement-policy tests).
+    pub overlay_align: Option<theme::CardAnchor>,
     /// CRISP-BACKDROP exception: true for the overlays whose entire job is showing
     /// the LIVE document state — the THEME PICKER, the CARET-STYLE PICKER, and the
     /// HISTORY TIMELINE — so the document behind them stays CRISP (no frosted blur,
@@ -297,6 +306,7 @@ impl ViewState {
             search_replacement: String::new(),
             search_editing_replacement: false,
             overlay_active: false,
+            overlay_align: None,
             overlay_crisp: false,
             overlay_query: String::new(),
             overlay_title: "",

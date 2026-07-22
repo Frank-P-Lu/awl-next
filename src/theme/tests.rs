@@ -2277,6 +2277,8 @@ fn personality_assignments_are_exactly_the_decided_table() {
         // COMPOSITION-C2: the placard worlds anchor their card TOP-LEFT and let
         // the poster corner DERIVE from that anchor (`Auto` → bottom-RIGHT),
         // opening the opposite corner. Firetail alone keeps an explicit BL.
+        // ITEM 45 (2026-07-23): Cassowary + Mangrove are the fable RIGHT picks —
+        // TopRight card, Auto corner deriving bottom-LEFT (the mirror composition).
         let auto = |ink: PlacardInk| TitleStyle::Placard {
             corner: PlacardCorner::Auto,
             scale: 3.0,
@@ -2306,7 +2308,9 @@ fn personality_assignments_are_exactly_the_decided_table() {
             },
             "Mangrove" => RenderCaps {
                 title_style: auto(PlacardInk::Stipple),
-                card_anchor: model::CardAnchor::TopLeft,
+                // ITEM 45 fable pick (2026-07-23): the tidal margin flipped to a
+                // RIGHT rail (Auto corner then derives bottom-LEFT).
+                card_anchor: model::CardAnchor::TopRight,
                 elevation: Elevation::Bordered,
                 // Mangrove wears BRACKET chips (user's confirmed chip map).
                 list_style: poster_bars,
@@ -2417,9 +2421,10 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 RenderCaps::DEFAULT
             }
             // CASSOWARY (the NERV-terminal statement world): the loud NERV console
-            // overlay — a bold Archivo-Black wordmark placard (Auto corner from the
-            // TopLeft card), BORDERED elevation, the poster Bars list, and BRACKET
-            // facet chips (terminal corner-ticks). The writing page stays calm.
+            // overlay — a bold Archivo-Black wordmark placard (Auto corner derives
+            // bottom-LEFT off the ITEM-45 RIGHT card), BORDERED elevation, the poster
+            // Bars list, and BRACKET facet chips (terminal corner-ticks). The writing
+            // page stays calm.
             "Cassowary" => RenderCaps {
                 // The authentic CRT phosphor cursor — an ink caret (primary ==
                 // base_content) needs the Filled block so a lit green cell knocks
@@ -2430,7 +2435,9 @@ fn personality_assignments_are_exactly_the_decided_table() {
                     scale: 3.0,
                     ink: PlacardInk::Bold,
                 },
-                card_anchor: model::CardAnchor::TopLeft,
+                // ITEM 45 fable pick (2026-07-23): the terminal readout flipped to
+                // a RIGHT rail (Auto corner then derives bottom-LEFT).
+                card_anchor: model::CardAnchor::TopRight,
                 chrome_face: model::ChromeFace::Named("Archivo Black"),
                 elevation: Elevation::Bordered,
                 list_style: poster_bars,

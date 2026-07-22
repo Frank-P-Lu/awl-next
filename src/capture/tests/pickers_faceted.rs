@@ -34,6 +34,8 @@ fn theme_picker_is_flat_and_reports_no_lens() {
     // Fold it into capture opts exactly as the live replay does (see main/run.rs).
     let mut opts = CaptureOpts::default();
     opts.overlay = Some(OverlayInfo {
+        // ITEM 45: reproduce the prior live-resolved anchor for this capture literal.
+        align: crate::render::effective_card_anchor(),
         active: true,
         mode: ov.kind.as_str(),
         title: ov.kind.title(),
@@ -103,6 +105,8 @@ fn overlay_empty_state_renders_and_reports() {
     let buf = Buffer::from_str("preview me\n");
 
     let fold = |ov: &crate::overlay::OverlayState| OverlayInfo {
+        // ITEM 45: reproduce the prior live-resolved anchor for this capture literal.
+        align: crate::render::effective_card_anchor(),
         active: true,
         mode: ov.kind.as_str(),
         title: ov.kind.title(),
@@ -188,6 +192,8 @@ fn file_pickers_faceted_lens_render_and_report() {
     let fold = |ov: &OverlayState| {
         let mut opts = CaptureOpts::default();
         opts.overlay = Some(OverlayInfo {
+            // ITEM 45: reproduce the prior live-resolved anchor for this capture literal.
+            align: crate::render::effective_card_anchor(),
             active: true,
             mode: ov.kind.as_str(),
             title: ov.kind.title(),
@@ -302,6 +308,8 @@ fn faceted_grouped_window_is_bounded_and_scrolls_to_selection() {
     let fold = |ov: &OverlayState| {
         let mut opts = CaptureOpts::default();
         opts.overlay = Some(OverlayInfo {
+            // ITEM 45: reproduce the prior live-resolved anchor for this capture literal.
+            align: crate::render::effective_card_anchor(),
             active: true,
             mode: ov.kind.as_str(),
             title: ov.kind.title(),
@@ -427,6 +435,8 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
     let fold = |ov: &OverlayState| {
         let mut opts = CaptureOpts::default();
         opts.overlay = Some(OverlayInfo {
+            // ITEM 45: reproduce the prior live-resolved anchor for this capture literal.
+            align: crate::render::effective_card_anchor(),
             active: true,
             mode: ov.kind.as_str(),
             title: ov.kind.title(),
@@ -714,6 +724,8 @@ fn history_preview_folds_text_and_reports_preview_id() {
     let mut opts = CaptureOpts::default();
     opts.preview_text = Some("old\n".to_string());
     opts.overlay = Some(OverlayInfo {
+        // ITEM 45: reproduce the prior live-resolved anchor for this capture literal.
+        align: crate::render::effective_card_anchor(),
         active: true,
         mode: "history",
         title: "version history",

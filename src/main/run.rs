@@ -1153,6 +1153,9 @@ pub(crate) fn overlay_capture_info(
     let info = capture::OverlayInfo {
         active: true,
         mode: ov.kind.as_str(),
+        // ITEM 45: the alignment the overlay froze at summon, so the capture places
+        // the card exactly where the live picker did.
+        align: ov.align,
         query: ov.query.clone(),
         items: ov.item_strings(),
         empty: ov.empty_notice(),

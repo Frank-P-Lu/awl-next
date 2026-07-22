@@ -246,7 +246,13 @@ impl TextPipeline {
         }
         // Resolve an `Auto` corner COMPLEMENTARY to the card anchor (the ONE pure
         // owner) so the wordmark lands opposite the command surface, never under it.
-        let corner = crate::render::derived_placard_corner(corner, crate::render::effective_card_anchor());
+        // ITEM 45: the placard corner is derived complementary to the FROZEN card
+        // anchor (via the ONE owner), so a poster world previewed under a picker
+        // opened on a differently-aligned world still lands opposite the frozen card.
+        let corner = crate::render::derived_placard_corner(
+            corner,
+            crate::render::resolve_overlay_anchor(self.overlay_align),
+        );
         // PROPORTIONAL PLACARD SIZING (flip-round spec): the wordmark tracks the
         // WINDOW short side (chrome is Frame — the page-column philosophy), NEVER
         // the zoom-scaled `metrics.font_size` the old formula rode. `scale` stays

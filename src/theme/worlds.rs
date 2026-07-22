@@ -814,12 +814,13 @@ pub const MANGROVE: Theme = Theme {
     render_caps: RenderCaps {
         title_style: TitleStyle::Placard {
             // COMPOSITION-C2: derive the poster corner from the card anchor
-            // (TopLeft → bottom-RIGHT) — a balanced diagonal, poster off the card.
+            // (item-45 fable pick flipped this world RIGHT: TopRight → bottom-LEFT)
+            // — a balanced diagonal, poster off the card.
             corner: PlacardCorner::Auto,
             scale: 3.0,
             ink: PlacardInk::Stipple,
         },
-        card_anchor: CardAnchor::TopLeft,
+        card_anchor: CardAnchor::TopRight,
         elevation: Elevation::Bordered,
         // FLIP ROUND (user FINAL PICKS 2026-07-17): a poster/statement world →
         // the Bars HUG-ALL HYBRID (label-hug plate + bare right-aligned chords,
@@ -1640,7 +1641,7 @@ pub const CASSOWARY: Theme = Theme {
             scale: 3.0,
             ink: PlacardInk::Bold,
         },
-        card_anchor: CardAnchor::TopLeft,
+        card_anchor: CardAnchor::TopRight,
         chrome_face: ChromeFace::Named("Archivo Black"),
         elevation: Elevation::Bordered,
         list_style: POSTER_BARS,

@@ -294,6 +294,11 @@ pub(super) fn settled_viewstate(
     vstate.search_replacement = opts.search_replacement.clone();
     vstate.search_editing_replacement = opts.search_editing_replacement;
     vstate.overlay_active = opts.overlay.as_ref().map(|o| o.active).unwrap_or(false);
+    // ITEM 45 (overlay ALIGNMENT as personality data): the alignment the overlay
+    // FROZE at summon rides through verbatim (`None` when no overlay is open), so the
+    // card lands at the SAME anchor the live picker held — and the `AWL_OVERLAY_ALIGN`
+    // capture knob's right-aligned variant is honored without touching world data.
+    vstate.overlay_align = opts.overlay.as_ref().map(|o| o.align);
     // FORMAT POPOVER force-summon (capture-only probe): the live summon is a MOUSE
     // gesture the headless capture has no pointer for, so the `AWL_POPOVER` env knob
     // floats the format toolbar over the current selection instead — making the

@@ -711,6 +711,8 @@ fn caret_picker_absent_by_default_and_open_reflects_selected_style() {
     crate::caret::set_mode(crate::caret::CaretMode::Ibeam);
     let mut opts = CaptureOpts::default();
     opts.overlay = Some(OverlayInfo {
+        // ITEM 45: reproduce the prior live-resolved anchor for this capture literal.
+        align: crate::render::effective_card_anchor(),
         active: true,
         mode: "caret",
         title: "caret style",
@@ -780,6 +782,8 @@ fn caret_picker_morph_preview_paints_the_silhouette() {
     crate::caret::set_mode(crate::caret::CaretMode::Morph);
     let mut opts = CaptureOpts::default();
     opts.overlay = Some(OverlayInfo {
+        // ITEM 45: reproduce the prior live-resolved anchor for this capture literal.
+        align: crate::render::effective_card_anchor(),
         active: true,
         mode: "caret",
         title: "caret style",
@@ -867,6 +871,8 @@ fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
     ov.move_sel(2);
     let mut opts = CaptureOpts::default();
     opts.overlay = Some(OverlayInfo {
+        // ITEM 45: reproduce the prior live-resolved anchor for this capture literal.
+        align: crate::render::effective_card_anchor(),
         active: true,
         mode: ov.kind.as_str(),
         title: ov.kind.title(),
@@ -1380,6 +1386,8 @@ fn diff_panel_card_dressing_is_visible_around_the_column_in_every_world() {
     );
 
     let history_overlay = |diff_focus: bool| OverlayInfo {
+        // ITEM 45: reproduce the prior live-resolved anchor for this capture literal.
+        align: crate::render::effective_card_anchor(),
         active: true,
         mode: "history",
         title: "version history",
@@ -1562,6 +1570,8 @@ fn open_caret_preview_panel(dir: &std::path::Path, tag: &str) -> (image::RgbaIma
     let buf = Buffer::from_str("preview me\n");
     let opts = CaptureOpts {
         overlay: Some(OverlayInfo {
+            // ITEM 45: reproduce the prior live-resolved anchor for this capture literal.
+            align: crate::render::effective_card_anchor(),
             active: true,
             mode: "caret",
             title: "caret style",
