@@ -652,13 +652,18 @@ exemption (flat is correct here, like the 1-bit exemption), and
 `ground == base_100` keeps the flat page column and the margin floor one seamless
 den.
 
-### The ambient-stars law (`RenderCaps::ambient` — the TWINKLING-STARS round, 2026-07-18)
+### The ambient-stars law (`RenderCaps::ambient` — the TWINKLING-STARS round, 2026-07-18; LIFECYCLE re-scope 2026-07-23)
 
 Currawong's differentiator, and the QUIET pole of the user's decided principle
 (*"Aliveness ≠ loudness. Most worlds should feel ALIVE, including quiet ones —
 twinkling-stars: maximally quiet, unmistakably alive."*): tiny points in the
-page-mode MARGINS, each breathing its brightness on its own slow,
-individually-phased seconds-scale cycle. A CAPABILITY, not a code path —
+page-mode MARGINS, each on its own slow, individually-phased seconds-scale
+LIFECYCLE — a dark dwell at TRUE zero, then rise, brief shine, and fade — so the
+visible population genuinely CHANGES (stars appear and die), not a
+never-vanishing breath. Per-star tint from a low-saturation real-star palette
+(cool blue-white dominant, plus a neutral white and a subtle champagne;
+`stars::star_palette`, the amber guard held by low saturation). A CAPABILITY,
+not a code path —
 `theme::AmbientStyle { None | Stars { tint, cell_px, density, size_px, peak,
 floor } }` on `RenderCaps.ambient`, `None` on every world but Currawong; a
 second world adopts stars by data alone (`theme_caps_law` bans a world-name
@@ -683,11 +688,13 @@ one register quieter:
   deliberately not a float `sin`-fract hash, whose libm results vary across
   platforms); two captures are byte-identical and a resize keeps every star
   anchored to its cell. Per-star rates are INTEGER cycles per ambient loop,
-  so the breath meets its own endpoint at the phase wrap. Laws:
+  so the envelope meets its own endpoint at the phase wrap. Laws:
   `stars::tests::layout_is_deterministic_and_stays_in_viewport`,
   `twinkle_is_seamless_across_the_ambient_loop_wrap`,
   `stars_are_individually_phased_never_in_unison`,
-  `twinkle_stays_inside_its_band_and_actually_breathes`.
+  `lifecycle_dwells_dark_then_shines_within_its_band`,
+  `lifecycle_population_changes_between_phases_and_is_deterministic`,
+  `star_tint_is_a_deterministic_pick_from_the_low_sat_palette`.
 - **Margins only, by a hard gate.** `stars::in_margin` (one owner, shared by
   the renderer's cull and the laws) rejects any star whose quad + AA fringe
   could touch the writing column band + a breathing gap, against the LIVE
@@ -700,16 +707,22 @@ one register quieter:
   (REAL GPU pixels: the two-phase twinkle-diff is non-empty, lives in both
   margins, and NEVER inside the column — appearance proven over bytes, the
   Wagtail lesson).
-- **The quiet band (value-ladder-derived ceiling + visibility floor).** A
-  star's PEAK composited pixel (linear-light alpha blend over each margin
-  gradient endpoint — the GPU's own math) deviates from its local ground by
-  NO MORE than the world's own `muted` rung deviates from `base_100`, and by
-  at least ΔY 0.02 (visible — never the invisible-band trap); the AMBER
-  GUARD holds (a chromatic tint ≥30° off `primary`, never literally the
-  accent) and a true 1-bit world can never carry stars (a fractional-alpha
-  breath composites a forbidden third value). Law:
+- **The visibility band (RELAXED, user-blessed 2026-07-23 + visibility floor).**
+  The old `≤ muted` whisper cap is loosened: a star's shine may now rise ABOVE
+  the muted rung (a real glint, not a whisper), but every palette tint's PEAK
+  composited pixel (linear-light alpha blend over each margin gradient endpoint
+  — the GPU's own math) stays STRICTLY UNDER the `base_content` (text-ink)
+  deviation — a star never outshines the prose. The dimmest LIT star (band
+  floor) still deviates by at least ΔY 0.02 (visible — never the invisible-band
+  trap; the DWELL is a separate, deliberate true zero). The relaxation is REAL,
+  not vestigial (the brightest palette tint clears the old muted cap). The
+  AMBER GUARD holds per palette entry (a chromatic tint ≥30° off `primary`,
+  never literally the accent; champagne holds by low saturation), and a true
+  1-bit world can never carry stars (a fractional-alpha star composites a
+  forbidden third value). Law:
   `theme::tests::ambient_stars_laws_hold_for_every_world` (the real-pixel
-  test above re-asserts the luminance ceiling over the rendered bytes).
+  test above re-asserts the ceiling AND proves the relaxation is wired over the
+  rendered bytes).
 - **Byte-identity for the starless roster.** An `AmbientStyle::None` world
   uploads ZERO star instances through the same prepare path, and page-off
   culls everything even on the stars world. Law: `render::tests::stars::

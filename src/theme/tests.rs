@@ -357,37 +357,44 @@ fn lava_blob_hues_stay_clear_of_the_amber_caret() {
     }
 }
 
-/// THE TWINKLING-STARS LAWS (2026-07-18 — the "aliveness ≠ loudness" round).
-/// Every world's `render_caps.ambient` is swept with a NO-WILDCARD match (a
-/// future `AmbientStyle` variant fails to compile until it's under the law).
-/// For a `Stars` world, four fences — the same shapes that fence the lava:
+/// THE TWINKLING-STARS LAWS (2026-07-18 — the "aliveness ≠ loudness" round;
+/// RE-SCOPED 2026-07-23 for the LIFECYCLE round). Every world's
+/// `render_caps.ambient` is swept with a NO-WILDCARD match (a future
+/// `AmbientStyle` variant fails to compile until it's under the law). Every tint
+/// is drawn from the world's own star PALETTE ([`crate::stars::star_palette`] —
+/// blue-white / white / champagne), the ONE owner the renderer draws from too,
+/// and each palette entry is fenced. For a `Stars` world, four fences — the same
+/// shapes that fence the lava:
 ///
-/// (a) **QUIET-BAND (the value-ladder-derived brightness ceiling).** A star's
-///     PEAK composited pixel — the tint alpha-blended in LINEAR light over each
-///     margin-ground gradient endpoint, exactly the GPU's own SrcAlpha blend on
-///     the sRGB target — deviates from its local ground's relative luminance by
-///     NO MORE than the world's own `muted` rung deviates from `base_100`:
-///     a glint may reach toward the markup ink's presence, never past it (and
-///     therefore never near `base_content` — the figure stays the text's).
-///     Proven over COMPOSITED values, never authored bytes alone (the
-///     Saltpan/camouflage lesson: measure the composite, not the token).
-/// (b) **VISIBLE, not the invisible-band trap.** The same peak composite sits
-///     at least ΔY 0.02 off its local ground — a star that composites to
-///     nothing would pass every mechanism test while the sky ships empty (the
-///     Wagtail invisible-row lesson, applied preemptively).
-/// (c) **AMBER GUARD.** A chromatic tint (HSL sat > 0.15) sits ≥ 30° of hue
-///     from the world's `primary`, and is never literally `primary` — the
-///     one-accent law (DESIGN §3): the caret stays the only warm thing.
-/// (d) **ONE-BIT GUARD.** A star's breath is a FRACTIONAL alpha by
-///     construction — structurally illegal on a true 1-bit world (any
-///     intermediate composite is a forbidden third value), so `Stars` on an
-///     `is_one_bit()` world fails here before a render could ever paint it.
-///     (A future one-bit sky would need a dither-stipple star mode — banked.)
+/// (a) **VISIBILITY BAND (the RELAXED, user-blessed brightness ceiling).** THE
+///     LIFECYCLE round loosens the old `<= muted` whisper cap: a star's shine
+///     may now rise ABOVE the muted rung (a real glint, not a whisper), but its
+///     PEAK composited pixel — each palette tint alpha-blended in LINEAR light
+///     over each margin-ground endpoint, exactly the GPU's SrcAlpha blend —
+///     still stays STRICTLY UNDER the `base_content` (text-ink) deviation: the
+///     figure stays the text's, a star never outshines the prose. And the
+///     relaxation is REAL, not vestigial: the BRIGHTEST palette tint at peak
+///     genuinely exceeds the muted whisper cap over the darker ground (else the
+///     old cap would still bind and nothing changed). Proven over COMPOSITED
+///     values, never authored bytes (the Saltpan/camouflage lesson).
+/// (b) **VISIBLE, not the invisible-band trap.** A star lit only to the band
+///     FLOOR still composites at least ΔY 0.02 off its local ground — the
+///     dimmest LIT star is genuinely seeable (a star that composites to nothing
+///     would pass every mechanism test while the sky ships empty — the Wagtail
+///     invisible-row lesson). (The DWELL is a separate, deliberate true-zero;
+///     the band bounds a star while it is LIT.)
+/// (c) **AMBER GUARD.** Every palette tint: a chromatic one (HSL sat > 0.15)
+///     sits ≥ 30° of hue from the world's `primary`, and none is literally
+///     `primary` — the one-accent law (DESIGN §3): the caret stays the only warm
+///     thing. (Champagne holds this by low saturation despite its warm hue.)
+/// (d) **ONE-BIT GUARD.** A star's alpha is FRACTIONAL by construction —
+///     structurally illegal on a true 1-bit world (any intermediate composite is
+///     a forbidden third value), so `Stars` on an `is_one_bit()` world fails
+///     here before a render could paint it. (A one-bit sky would need a
+///     dither-stipple star mode — banked.)
 ///
-/// Param sanity rides along: bands ordered (`0 < floor < peak <= 1`), density
-/// in `(0, 1]`, and the dot small enough for its cell's jitter band
-/// (`crate::stars::layout` keeps a dot + AA inside its own cell only while
-/// `size_px` stays well under `cell_px`).
+/// Param sanity rides along: band ordered (`0 < floor < peak <= 1`), density in
+/// `(0, 1]`, and the dot small enough for its cell's jitter band.
 #[test]
 fn ambient_stars_laws_hold_for_every_world() {
     fn lin(u: u8) -> f32 {
@@ -415,7 +422,7 @@ fn ambient_stars_laws_hold_for_every_world() {
                 // Param sanity.
                 assert!(
                     0.0 < floor && floor < peak && peak <= 1.0,
-                    "{}: the breath band must be ordered (0 < floor {floor} < peak {peak} <= 1)",
+                    "{}: the visibility band must be ordered (0 < floor {floor} < peak {peak} <= 1)",
                     t.name
                 );
                 assert!(
@@ -431,50 +438,78 @@ fn ambient_stars_laws_hold_for_every_world() {
                 // (d) ONE-BIT GUARD.
                 assert!(
                     !t.is_one_bit(),
-                    "{}: a fractional-alpha star breath is structurally illegal on a true \
+                    "{}: a fractional-alpha star is structurally illegal on a true \
                      1-bit world (any intermediate composite is a forbidden third value)",
                     t.name
                 );
-                // (c) AMBER GUARD.
-                assert_ne!(tint, t.primary, "{}: the star tint must never BE the accent", t.name);
-                let (th, ts, _tl) = tint.to_hsl();
-                if ts > 0.15 {
-                    let (ph, _ps, _pl) = t.primary.to_hsl();
-                    let gap = hue_gap(th, ph);
-                    assert!(
-                        gap >= 30.0,
-                        "{}: star tint hue {th:.0}° sits only {gap:.0}° from the caret's \
-                         {ph:.0}° — a second accent (DESIGN §3)",
-                        t.name
-                    );
+                // The PALETTE the renderer draws from IS the law's subject — one owner.
+                let palette = crate::stars::star_palette(tint);
+                let (ph, _ps, _pl) = t.primary.to_hsl();
+                for st in palette {
+                    // (c) AMBER GUARD, per palette entry.
+                    assert_ne!(st, t.primary, "{}: a star tint must never BE the accent", t.name);
+                    let (sh, ss, _sl) = st.to_hsl();
+                    if ss > 0.15 {
+                        let gap = hue_gap(sh, ph);
+                        assert!(
+                            gap >= 30.0,
+                            "{}: star tint hue {sh:.0}° sits only {gap:.0}° from the caret's \
+                             {ph:.0}° — a second accent (DESIGN §3)",
+                            t.name
+                        );
+                    }
                 }
-                // (a)+(b) QUIET-BAND + VISIBILITY, per local ground endpoint.
+                // (a)+(b) VISIBILITY BAND, per palette entry, per ground endpoint.
                 let muted_dev = (rel_lum(t.muted) - rel_lum(t.base_100)).abs();
-                for (label, ground) in [("from", t.background.from()), ("to", t.background.to())] {
-                    let gy = rel_lum(ground);
-                    let peak_dev = (composite_y(tint, peak, ground) - gy).abs();
-                    assert!(
-                        peak_dev <= muted_dev,
-                        "{}: a peak star over the {label} ground deviates ΔY {peak_dev:.3} — \
-                         past the world's own muted rung ({muted_dev:.3}); the glint must \
-                         stay inside the ladder's quiet band",
-                        t.name
-                    );
-                    assert!(
-                        peak_dev >= 0.02,
-                        "{}: a peak star over the {label} ground deviates only ΔY \
-                         {peak_dev:.3} — the invisible-band trap (present but unseeable)",
-                        t.name
-                    );
-                    // Presence ordering: the floor really is the quiet end.
-                    let floor_dev = (composite_y(tint, floor, ground) - gy).abs();
-                    assert!(
-                        floor_dev < peak_dev,
-                        "{}: the breath must dim toward its floor (floor ΔY {floor_dev:.3} \
-                         !< peak ΔY {peak_dev:.3})",
-                        t.name
-                    );
+                let content_dev = (rel_lum(t.base_content) - rel_lum(t.base_100)).abs();
+                // The BRIGHTEST palette tint drives the relaxation-is-real check.
+                let brightest = palette
+                    .into_iter()
+                    .max_by(|a, b| rel_lum(*a).partial_cmp(&rel_lum(*b)).unwrap())
+                    .unwrap();
+                let mut relaxation_seen = false;
+                for st in palette {
+                    for (label, ground) in [("from", t.background.from()), ("to", t.background.to())] {
+                        let gy = rel_lum(ground);
+                        let peak_dev = (composite_y(st, peak, ground) - gy).abs();
+                        // CALM CEILING: strictly under the text ink — the figure
+                        // stays the prose's, however bright the glint.
+                        assert!(
+                            peak_dev < content_dev,
+                            "{}: a peak star over the {label} ground deviates ΔY {peak_dev:.3} — \
+                             not strictly under the text ink's {content_dev:.3}; a glint must \
+                             never outshine the prose",
+                            t.name
+                        );
+                        // VISIBLE FLOOR: the dimmest LIT star is still seeable.
+                        let floor_dev = (composite_y(st, floor, ground) - gy).abs();
+                        assert!(
+                            floor_dev >= 0.02,
+                            "{}: a floor (dimmest lit) star over the {label} ground deviates only \
+                             ΔY {floor_dev:.3} — the invisible-band trap (lit but unseeable)",
+                            t.name
+                        );
+                        assert!(
+                            floor_dev < peak_dev,
+                            "{}: the band must brighten from floor to peak (floor ΔY {floor_dev:.3} \
+                             !< peak ΔY {peak_dev:.3})",
+                            t.name
+                        );
+                        // RELAXATION IS REAL: the brightest tint at peak clears
+                        // the old muted whisper cap somewhere (the deliberate,
+                        // user-blessed loosening — else nothing actually changed).
+                        if st == brightest && peak_dev > muted_dev {
+                            relaxation_seen = true;
+                        }
+                    }
                 }
+                assert!(
+                    relaxation_seen,
+                    "{}: the brightest star's peak never exceeds the muted whisper cap \
+                     ({muted_dev:.3}) on any ground — the LIFECYCLE round's blessed relaxation \
+                     is vestigial (a real glint must rise above the old cap)",
+                    t.name
+                );
             }
         }
     }
@@ -2248,10 +2283,14 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 ambient: model::AmbientStyle::Stars {
                     tint: Srgb::rgb(0x9D, 0xB0, 0xCF),
                     cell_px: 34.0,
-                    density: 0.16,
+                    // LIFECYCLE round (2026-07-23): denser candidate field
+                    // (~half dark-dwelling at any moment) and the visibility band
+                    // re-scoped to the per-star shine range (a real visible floor,
+                    // a calm ceiling above the muted whisper cap).
+                    density: 0.30,
                     size_px: 2.6,
-                    peak: 0.55,
-                    floor: 0.12,
+                    peak: 0.5,
+                    floor: 0.18,
                 },
                 ..RenderCaps::DEFAULT
             },

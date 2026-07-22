@@ -117,14 +117,24 @@ fn currawong_stars_twinkle_in_the_margins_only_at_real_pixels() {
     let col_left = p.column_left();
     let col_right = col_left + p.column_width();
 
+    // THE RELAXED (LIFECYCLE-round) CEILING: a star pixel may now glint ABOVE
+    // the muted whisper cap (`muted_y`), but stays STRICTLY UNDER the text ink
+    // (`content_y`) — the figure stays the prose's. Both rungs read at real
+    // pixels; the muted one is kept only to prove the relaxation is genuinely
+    // WIRED (a real glint clears it), not to cap.
     let muted_y = rel_lum({
         let m = theme::muted();
         [m.r, m.g, m.b, 0xFF]
+    });
+    let content_y = rel_lum({
+        let c = theme::base_content();
+        [c.r, c.g, c.b, 0xFF]
     });
 
     let mut changed = 0usize;
     let mut changed_left = 0usize;
     let mut changed_right = 0usize;
+    let mut above_whisper = 0usize;
     for y in 0..H as usize {
         for x in 0..W as usize {
             let a = frame_a[y * W as usize + x];
@@ -144,16 +154,19 @@ fn currawong_stars_twinkle_in_the_margins_only_at_real_pixels() {
             } else {
                 changed_right += 1;
             }
-            // The quiet-band ceiling at real pixels: no star pixel (either
-            // phase) outshines the world's own muted rung. Small tolerance for
-            // the rounded-quad AA edge compositing.
+            // Calm ceiling at real pixels: no star pixel (either phase)
+            // outshines the text ink. Small tolerance for the rounded-quad AA
+            // edge compositing.
             for (label, px) in [("A", a), ("B", b)] {
                 let l = rel_lum(px);
                 assert!(
-                    l <= muted_y + 0.02,
+                    l <= content_y + 0.02,
                     "star pixel at ({x}, {y}) phase {label} has luminance {l:.3} — \
-                     past the muted rung's {muted_y:.3} quiet-band ceiling"
+                     past the text ink's {content_y:.3} ceiling (a glint must never outshine prose)"
                 );
+                if l > muted_y + 0.02 {
+                    above_whisper += 1;
+                }
             }
         }
     }
@@ -165,6 +178,15 @@ fn currawong_stars_twinkle_in_the_margins_only_at_real_pixels() {
     assert!(
         changed_left > 0 && changed_right > 0,
         "both margins must carry living stars (left {changed_left}, right {changed_right})"
+    );
+    // THE RELAXATION IS WIRED at real pixels: at least one rendered star glint
+    // clears the OLD muted whisper cap — the LIFECYCLE round's blessed loosening
+    // actually paints brighter stars, not merely a relaxed authored bound. This
+    // fails on the pre-lifecycle render (every star capped at/under muted).
+    assert!(
+        above_whisper > 0,
+        "no rendered star glint rose above the muted whisper cap ({muted_y:.3}) — \
+         the brighter-shine relaxation is not actually wired at pixels"
     );
 
     crate::page::set_page_on(was_page_on);
