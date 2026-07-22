@@ -601,6 +601,33 @@ pub(super) fn add_bullet_conceal_span(
     al.add_span(it.indent..it.indent + 1, &hidden);
 }
 
+/// The document BYTE RANGE covering EVERY LINE the active selection TOUCHES —
+/// `l0..=l1` inclusive (the ordered selection's earlier-to-later LINE
+/// endpoints, column-agnostic — a one-character selection on a line touches
+/// that line's WHOLE markup, exactly like the caret's own line does), from
+/// line `l0`'s first byte to line `l1`'s last byte (its text, excluding the
+/// trailing `\n`). `None` when there is no active (non-empty) selection.
+///
+/// THE shared "selection reveal" extent: [`wysiwyg_reveals`] tests a
+/// concealable span's overlap against it, [`build_line_attrs`]'s rule/bullet
+/// conceal gate tests a line's own byte range against it, and
+/// [`super::TextPipeline::prepare_table_xray`]/`prepare_table_grid` extend
+/// their caret-only table reveal with the SAME line set — so a selection can
+/// never reveal a different line set than its own highlight
+/// ([`super::TextPipeline::selection_rects`]' own `l0..=l1` line loop)
+/// touches. Pure: `line_start(i)` is line `i`'s first document byte,
+/// `line_len(i)` its text length (excluding `\n`) — callers pass whichever
+/// source is in hand (the freshly-diffed lines mid-reshape, or the live
+/// `self.buffer.lines`), so this has no `&self` of its own.
+pub(super) fn selection_touch_bytes(
+    sel: Option<((usize, usize), (usize, usize))>,
+    line_start: impl Fn(usize) -> usize,
+    line_len: impl Fn(usize) -> usize,
+) -> Option<std::ops::Range<usize>> {
+    let ((l0, _), (l1, _)) = sel?;
+    Some(line_start(l0)..(line_start(l1) + line_len(l1)))
+}
+
 /// THE reveal decision for ONE `ConcealMarkup` span — the single rule shared by
 /// [`add_wysiwyg_conceal_spans`] (the renderer) and
 /// [`super::TextPipeline::wysiwyg_report`] (the capture sidecar), so the two can
@@ -608,32 +635,50 @@ pub(super) fn add_bullet_conceal_span(
 /// byte range; `conceal_off_cursor` is true when the caret is on a DIFFERENT
 /// line than the span's own (irrelevant for the BLOCK-scoped kinds);
 /// `cursor_byte` is the document byte offset of the caret's own line's first
-/// byte.
+/// byte. `selection_touch` ([`selection_touch_bytes`]) is the byte extent of
+/// every line the ACTIVE SELECTION touches, or `None` with no selection.
+///
+/// SELECTION REVEAL (user-decided 2026-07-22): a line shows raw markdown when
+/// the caret OR an active selection touches it — today's caret-only rule
+/// widens to "caret line's byte range OR any `selection_touch` overlap",
+/// tested identically for the line-scoped and block-scoped kinds below via
+/// one `range`-overlap check, so a selected table/heading/fence reveals its
+/// real source exactly like the caret landing on it would (a selected table
+/// then shows raw `|` source, giving correct select/copy for free). Threaded
+/// alongside the caret line, never duplicated: every caller computes
+/// `selection_touch` ONCE per reshape/refresh and passes the same reference
+/// through every span/line decision.
 pub(super) fn wysiwyg_reveals(
     ck: crate::markdown::ConcealKind,
     conceal_off_cursor: bool,
     cursor_byte: usize,
     range: &std::ops::Range<usize>,
+    selection_touch: Option<&std::ops::Range<usize>>,
 ) -> bool {
     use crate::markdown::ConcealKind;
+    let selected = selection_touch.is_some_and(|st| st.start < range.end && range.start < st.end);
     match ck {
-        // BLOCK-scoped: reveal iff the caret's line sits anywhere in the block.
-        // A frontmatter block reuses the exact `Fence` rule (it has no body
-        // sub-span to carve out, so the whole range conceals/reveals as one).
-        ConcealKind::Fence | ConcealKind::Frontmatter => range.contains(&cursor_byte),
-        // A TABLE's source NEVER un-conceals in place — THE X-RAY (the user's
+        // BLOCK-scoped: reveal iff the caret's line sits anywhere in the block,
+        // OR the selection touches ANY line inside it. A frontmatter block
+        // reuses the exact `Fence` rule (it has no body sub-span to carve out,
+        // so the whole range conceals/reveals as one).
+        ConcealKind::Fence | ConcealKind::Frontmatter => range.contains(&cursor_byte) || selected,
+        // A TABLE's source NEVER un-conceals IN PLACE — THE X-RAY (the user's
         // canonized metaphor): the drawn GRID stays put so the document never
-        // reflows during a keyboard walk, and the caret's own row floats its raw
+        // reflows during a keyboard walk / selection drag, and each revealed
+        // row (caret's own, or any row the selection touches) floats its raw
         // source as one non-wrapping line OVER the dimmed grid cells
-        // (`prepare_table_xray`), never by growing the document rows. So the source
-        // rows stay zero-width (concealed) at every caret position — the float and
-        // the caret redirect (`col_x_and_advance`) do the reveal, not this in-place
-        // un-conceal.
+        // (`prepare_table_xray`), never by growing the document rows. So the
+        // source rows stay zero-width (concealed) at every caret/selection
+        // state — the float(s) + the caret redirect (`col_x_and_advance`) do
+        // the reveal, not this in-place un-conceal; `prepare_table_grid`
+        // extends the SAME caret-or-selection test to decide which rows swap.
         ConcealKind::Table => false,
-        // LINE-scoped: reveal iff the caret is on THIS line. An IMAGE ref is one
-        // line, and follows the "heading model" (source reveals for editing when
-        // the caret lands, the drawn image parks) exactly like every other
-        // line-scoped kind — see `ConcealKind::Image`.
+        // LINE-scoped: reveal iff the caret is on THIS line, or the selection
+        // touches it. An IMAGE ref is one line, and follows the "heading
+        // model" (source reveals for editing when the caret lands, the drawn
+        // image parks) exactly like every other line-scoped kind — see
+        // `ConcealKind::Image`.
         ConcealKind::Heading
         | ConcealKind::Emphasis
         | ConcealKind::Code
@@ -649,7 +694,7 @@ pub(super) fn wysiwyg_reveals(
         // A blockquote's leading `>` marker(s) hide off their own line — the
         // block's affordance off-caret is the margin-hung pull-quote mark; the
         // raw markers reveal when the caret lands on that line.
-        | ConcealKind::Blockquote => !conceal_off_cursor,
+        | ConcealKind::Blockquote => !conceal_off_cursor || selected,
     }
 }
 
@@ -777,6 +822,7 @@ pub(super) fn line_has_code_span(
 /// list marker (the prior round's bug). `None` (every other image line — bare,
 /// revealed, or feature-off) is byte-identical to the uniform zero-width
 /// treatment every other kind gets.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn add_wysiwyg_conceal_spans(
     al: &mut glyphon::cosmic_text::AttrsList,
     line_text: &str,
@@ -787,6 +833,7 @@ pub(super) fn add_wysiwyg_conceal_spans(
     cursor_byte: usize,
     line_height: f32,
     image_force: Option<(f32, f32)>,
+    selection_touch: Option<&std::ops::Range<usize>>,
 ) {
     if !crate::markdown::wysiwyg_on() {
         return;
@@ -806,7 +853,7 @@ pub(super) fn add_wysiwyg_conceal_spans(
             MdKind::ConcealMarkup(ck) => ck,
             _ => continue,
         };
-        if wysiwyg_reveals(ck, conceal_off_cursor, cursor_byte, r) {
+        if wysiwyg_reveals(ck, conceal_off_cursor, cursor_byte, r, selection_touch) {
             continue;
         }
         if ck == ConcealKind::Fence && line_has_code_span(md_spans, line_doc_start, line_end) {
@@ -902,7 +949,7 @@ pub(super) fn cell_inline_attrs(
     let md_spans = crate::markdown::spans(cell);
     let mut al = glyphon::cosmic_text::AttrsList::new(base);
     add_md_line_spans(&mut al, cell, 0, base, &md_spans);
-    add_wysiwyg_conceal_spans(&mut al, cell, 0, base, &md_spans, true, 0, line_height, None);
+    add_wysiwyg_conceal_spans(&mut al, cell, 0, base, &md_spans, true, 0, line_height, None, None);
     al
 }
 
@@ -1510,10 +1557,15 @@ pub(super) fn scaled_base_attrs(
 /// depth glyph); when clear (the caret is on the line) the raw markup stays dim +
 /// editable and no ornament is drawn. `cursor_byte` (the caret line's first document
 /// byte) additionally drives the WYSIWYG conceal ([`add_wysiwyg_conceal_spans`]) for
-/// its one BLOCK-scoped kind (a fenced code block's marker lines). This is the SINGLE
-/// recipe shared by [`TextPipeline::set_text_incremental`] and
-/// [`TextPipeline::restyle_all_lines`], so the two paths can never drift on layer
-/// ordering or membership.
+/// its one BLOCK-scoped kind (a fenced code block's marker lines). `selection_touch`
+/// ([`selection_touch_bytes`], `None` with no active selection) extends the SAME
+/// reveal rule: a line the selection touches drops BOTH the rule/bullet conceal gate
+/// here (`conceal_off_cursor && !line_selected`) AND (threaded straight through) every
+/// `add_wysiwyg_conceal_spans` kind, so a selected line shows raw markdown exactly
+/// like the caret's own line does. This is the SINGLE recipe shared by
+/// [`TextPipeline::set_text_incremental`], [`TextPipeline::restyle_all_lines`], and
+/// [`TextPipeline::refresh_rule_conceal`], so the three paths can never drift on layer
+/// ordering, membership, or the caret-vs-selection reveal decision.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_line_attrs(
     base: &Attrs<'static>,
@@ -1531,6 +1583,7 @@ pub(super) fn build_line_attrs(
     cursor_byte: usize,
     image_row_height: Option<f32>,
     image_force: Option<(f32, f32)>,
+    selection_touch: Option<&std::ops::Range<usize>>,
 ) -> glyphon::cosmic_text::AttrsList {
     // A BARE image line (`- ![alt](p)`, no other content) or a wrapped-table row
     // reserves a TALL row at its display height — NORMAL font size (so the
@@ -1582,11 +1635,22 @@ pub(super) fn build_line_attrs(
     add_syn_line_spans(&mut al, line_text, line_doc_start, &lb, syn_spans);
     add_script_spans(&mut al, line_text, &lb, doc_lang, cjk_priority, fonts);
     add_symbol_spans(&mut al, line_text, &lb);
-    // REVEAL-ON-CURSOR: when the caret is off this line, conceal a thematic break's
-    // raw `---` (leaving the fleuron) AND a bullet's raw `-` (leaving the depth glyph).
-    // Both are drawn as ornaments on the SAME rows; on the caret's own line the raw
-    // markup reveals for editing and no ornament is drawn.
-    if conceal_off_cursor {
+    // SELECTION REVEAL: does the active selection touch THIS line? Same
+    // overlap test `wysiwyg_reveals` uses for a concealable span's own byte
+    // range, applied here to the whole line's range so the LEGACY (pre-
+    // `ConcealKind`) rule/bullet conceal widens identically — a selected
+    // bulleted list reveals its raw `-`/`*`/`+` exactly like a selected
+    // heading reveals its raw `#`, never a mixed state on the same line.
+    let line_end = line_doc_start + line_text.len();
+    let line_selected = selection_touch
+        .is_some_and(|st| st.start < line_end && line_doc_start < st.end);
+    // REVEAL-ON-CURSOR: when the caret is off this line AND the selection
+    // doesn't touch it, conceal a thematic break's raw `---` (leaving the
+    // fleuron) AND a bullet's raw `-` (leaving the depth glyph). Both are
+    // drawn as ornaments on the SAME rows; on the caret's own line — or any
+    // selected line — the raw markup reveals for editing and no ornament is
+    // drawn.
+    if conceal_off_cursor && !line_selected {
         add_rule_conceal_span(&mut al, line_text, line_doc_start, &lb, md_spans);
         add_bullet_conceal_span(&mut al, line_text, &lb);
     }
@@ -1595,10 +1659,11 @@ pub(super) fn build_line_attrs(
     // A total no-op when `wysiwyg_on()` is false. `base_line_height * scale` is
     // this LINE's own effective row height (matches what `scaled_base_attrs`
     // used to build `lb`), so the zero-width conceal spans below never shrink
-    // the row — see `add_wysiwyg_conceal_spans`'s doc comment.
+    // the row — see `add_wysiwyg_conceal_spans`'s doc comment. `selection_touch`
+    // extends the caret-only reveal to every selected line (see this fn's doc).
     add_wysiwyg_conceal_spans(
         &mut al, line_text, line_doc_start, &lb, md_spans, conceal_off_cursor, cursor_byte,
-        row_lh, image_force,
+        row_lh, image_force, selection_touch,
     );
     al
 }

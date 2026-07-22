@@ -6,15 +6,21 @@
 //! moved.
 
 /// WHICH markdown construct a [`MdKind::ConcealMarkup`] span belongs to — the
-/// WYSIWYG amendment's dispatch key ("if the caret is on that line, show the
-/// actual markdown; otherwise show the preview"). Every kind but [`Fence`](Self::Fence)
-/// is LINE-scoped: it reveals when the caret sits on the span's OWN line, exactly
-/// mirroring the pre-existing hr/bullet reveal-on-cursor. `Fence` is BLOCK-scoped:
-/// a fenced code block's marker lines reveal only when the caret is ANYWHERE
-/// inside the whole block, because the PANEL (drawn from the same span's byte
-/// range, always present) is the block's affordance — ducking the markers in and
-/// out per LINE inside a multi-line block the caret is actively editing would
-/// flicker distractingly.
+/// WYSIWYG amendment's dispatch key ("if the caret OR an active selection
+/// touches that line, show the actual markdown; otherwise show the preview" —
+/// widened 2026-07-22 to also reveal on an ACTIVE SELECTION, not just the
+/// caret; the renderer's one shared reveal decision, `wysiwyg_reveals` in
+/// `render/spans.rs`, is what actually implements this). Every kind but
+/// [`Fence`](Self::Fence)
+/// is LINE-scoped: it reveals when the caret sits on the span's OWN line (or
+/// the selection touches that line), exactly mirroring the pre-existing
+/// hr/bullet reveal-on-cursor, itself widened the same way. `Fence` is
+/// BLOCK-scoped: a fenced code block's marker lines reveal only when the caret
+/// is ANYWHERE inside the whole block, or the selection touches ANY line
+/// inside it, because the PANEL (drawn from the same span's byte range, always
+/// present) is the block's affordance — ducking the markers in and out per
+/// LINE inside a multi-line block the caret is actively editing would flicker
+/// distractingly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConcealKind {
     /// A heading's leading `#` run (+ a trailing ATX close, if any).

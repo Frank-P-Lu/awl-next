@@ -424,11 +424,12 @@ impl TextPipeline {
             // `set_text` bakes spans under it and keeps this in step thereafter.
             shaped_theme: theme::active_index(),
             last_conceal_cursor_line: None,
+            last_conceal_selection: None,
             row_geom: rowgeom::RowGeom::new(),
             ornament_cache: rects::OrnamentCache::new(),
             table_report: std::cell::RefCell::new(Vec::new()),
             table_pan: None,
-            xray: None,
+            xray: Vec::new(),
             image_base_dir: None,
             image_heights: Vec::new(),
             image_force: Vec::new(),

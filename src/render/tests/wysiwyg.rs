@@ -62,6 +62,142 @@ fn wysiwyg_conceals_each_line_scoped_kind_off_cursor_and_reveals_on() {
     crate::markdown::set_wysiwyg_on(true);
 }
 
+/// SELECTION REVEAL (user-decided 2026-07-22): a MULTI-LINE selection reveals
+/// EVERY touched line's raw markdown, not just the caret's own line — the
+/// caret sits FAR AWAY (an untouched blank line) for every assertion here, so
+/// only the selection extent drives the reveal/conceal split.
+#[test]
+fn wysiwyg_selection_reveals_every_touched_line_caret_elsewhere() {
+    let _w = crate::testlock::serial();
+    crate::markdown::set_wysiwyg_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping wysiwyg_selection_reveals_every_touched_line_caret_elsewhere: no wgpu adapter");
+        return;
+    };
+    // Line 0: heading. Line 1: emphasis. Line 2: inline code. Line 3:
+    // highlight. Line 4: strikethrough. Line 5: blank (the caret's home,
+    // touched by neither the caret's own reveal rule nor the selection).
+    let text = "# Title\n**bold**\n`code`\n==mark==\n~~cut~~\n";
+    let mut v = view(text, 5, 0);
+    v.is_markdown = true;
+    // Selection spans lines 0..=2 (heading, emphasis, code) — column-agnostic
+    // per the reveal contract (a one-character selection still reveals the
+    // WHOLE line's markup, exactly like the caret's own line does).
+    v.selection = Some(((0, 3), (2, 1)));
+    p.set_view(&v);
+    assert!(!p.concealed_at(0, 0), "heading reveals: selection touches its line");
+    assert!(!p.concealed_at(1, 0), "emphasis reveals: selection touches its line");
+    assert!(!p.concealed_at(2, 0), "inline code reveals: selection touches its line");
+    // Lines 3-4 sit OUTSIDE the selection and the caret is on line 5 — both
+    // stay concealed, proving the widened rule doesn't over-reveal.
+    assert!(p.concealed_at(3, 0), "highlight stays concealed: outside the selection");
+    assert!(p.concealed_at(4, 0), "strikethrough stays concealed: outside the selection");
+
+    crate::markdown::set_wysiwyg_on(true);
+}
+
+/// Collapsing the selection back to a plain caret RE-CONCEALS every line that
+/// was only revealed by the selection (never by the caret's own line).
+#[test]
+fn wysiwyg_collapsing_selection_reconceals() {
+    let _w = crate::testlock::serial();
+    crate::markdown::set_wysiwyg_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping wysiwyg_collapsing_selection_reconceals: no wgpu adapter");
+        return;
+    };
+    let text = "# Title\nprose\n";
+    let mut selected = view(text, 1, 0);
+    selected.is_markdown = true;
+    selected.selection = Some(((0, 0), (0, 7)));
+    p.set_view(&selected);
+    assert!(!p.concealed_at(0, 0), "heading reveals while the selection touches it");
+
+    // Same caret line, selection cleared (`None`, the plain `view` default).
+    let mut cleared = view(text, 1, 0);
+    cleared.is_markdown = true;
+    p.set_view(&cleared);
+    assert!(p.concealed_at(0, 0), "heading re-conceals once the selection clears");
+
+    crate::markdown::set_wysiwyg_on(true);
+}
+
+/// TRIPWIRE (docs/markdown.md): a reveal toggle changes glyph ADVANCES, not
+/// just color, so `refresh_rule_conceal` must invalidate `row_geom` on a
+/// SELECTION change exactly like it does on a caret-line change. The caret's
+/// LINE stays IDENTICAL across every `set_view` below — only the selection
+/// changes — so this exercises the gate directly: a stale
+/// `last_conceal_cursor_line`-only comparison would skip the rescan on the
+/// second and third calls (same cursor line) and serve STALE advances.
+#[test]
+fn wysiwyg_selection_change_alone_invalidates_row_geom() {
+    let _w = crate::testlock::serial();
+    crate::markdown::set_wysiwyg_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping wysiwyg_selection_change_alone_invalidates_row_geom: no wgpu adapter");
+        return;
+    };
+    let text = "# Title\nprose\n";
+
+    // No selection, caret on line 1 ("prose"): line 0 concealed (near-zero
+    // advance).
+    let mut off = view(text, 1, 0);
+    off.is_markdown = true;
+    p.set_view(&off);
+    let xs_off = p.visual_rows(0)[0].xs.clone();
+    assert!(xs_off[2] < 1.0, "no selection: heading concealed: {xs_off:?}");
+
+    // SAME caret line (1) — only a NEW selection touching line 0 changes.
+    let mut selected = view(text, 1, 0);
+    selected.is_markdown = true;
+    selected.selection = Some(((0, 0), (0, 7)));
+    p.set_view(&selected);
+    let xs_selected = p.visual_rows(0)[0].xs.clone();
+    assert!(
+        xs_selected[2] > 5.0,
+        "selection touches line 0: heading reveals to full width (row_geom reflowed): {xs_selected:?}"
+    );
+
+    // SAME caret line (1) again — the selection clears. Must re-conceal, not
+    // keep serving the previous frame's revealed geometry.
+    let mut cleared = view(text, 1, 0);
+    cleared.is_markdown = true;
+    p.set_view(&cleared);
+    let xs_after = p.visual_rows(0)[0].xs.clone();
+    assert!(
+        xs_after[2] < 1.0,
+        "selection cleared: heading re-conceals (row_geom invalidated again): {xs_after:?}"
+    );
+
+    crate::markdown::set_wysiwyg_on(true);
+}
+
+/// The CARET-ONLY behavior (no active selection anywhere) is UNCHANGED by
+/// this round — `view()`'s default `selection: None` reproduces the exact
+/// pre-existing single-kind test above; this restates it as an explicit,
+/// named "no regression" anchor for the selection-reveal round.
+#[test]
+fn wysiwyg_no_selection_matches_pre_existing_caret_only_behavior() {
+    let _w = crate::testlock::serial();
+    crate::markdown::set_wysiwyg_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping wysiwyg_no_selection_matches_pre_existing_caret_only_behavior: no wgpu adapter");
+        return;
+    };
+    let text = "# Title\n**bold**\n`code`\n==mark==\n~~cut~~\n";
+    let mut v = view(text, 0, 0); // caret ON the heading line; no selection.
+    v.is_markdown = true;
+    assert!(v.selection.is_none(), "view() defaults to no selection");
+    p.set_view(&v);
+    assert!(!p.concealed_at(0, 0), "caret's own line reveals, exactly as before this round");
+    assert!(p.concealed_at(1, 0), "every other line stays concealed, exactly as before this round");
+    assert!(p.concealed_at(2, 0), "every other line stays concealed, exactly as before this round");
+    assert!(p.concealed_at(3, 0), "every other line stays concealed, exactly as before this round");
+    assert!(p.concealed_at(4, 0), "every other line stays concealed, exactly as before this round");
+
+    crate::markdown::set_wysiwyg_on(true);
+}
+
 /// WYSIWYG FENCE (BLOCK-scoped): a fenced code block's marker lines (the
 /// info-string line + the closing fence) conceal when the caret is OUTSIDE
 /// the whole block, and reveal together the instant the caret lands
@@ -214,25 +350,86 @@ fn wysiwyg_pill_and_panel_rects_present_when_on() {
 
 /// The pure reveal decision for an IMAGE conceal is LINE-scoped, exactly like
 /// heading/emphasis: reveal (show source) iff the caret is on the image's own
-/// line; conceal (draw image) otherwise.
+/// line; conceal (draw image) otherwise. No active selection here (`None`) —
+/// the caret-only behavior stays unchanged from before the selection-reveal
+/// round (see `wysiwyg_reveals_selection_widens_every_kind` for the new axis).
 #[test]
 fn wysiwyg_reveals_image_is_line_scoped() {
     use crate::markdown::ConcealKind;
     let range = 5..30;
     // off-cursor (caret on a DIFFERENT line) -> conceal the source.
-    assert!(!super::spans::wysiwyg_reveals(ConcealKind::Image, true, 0, &range));
+    assert!(!super::spans::wysiwyg_reveals(ConcealKind::Image, true, 0, &range, None));
     // on-cursor (caret on THIS line) -> reveal the raw `![alt](path)` source.
-    assert!(super::spans::wysiwyg_reveals(ConcealKind::Image, false, 10, &range));
+    assert!(super::spans::wysiwyg_reveals(ConcealKind::Image, false, 10, &range, None));
 }
 
 /// A link's `[`/`](url)` plumbing is LINE-scoped, exactly like emphasis /
-/// headings / images: concealed off its own line, revealed on it.
+/// headings / images: concealed off its own line, revealed on it. No active
+/// selection here (`None`) — the caret-only behavior is unchanged.
 #[test]
 fn wysiwyg_reveals_link_is_line_scoped() {
     use crate::markdown::ConcealKind;
     let range = 4..25;
-    assert!(!super::spans::wysiwyg_reveals(ConcealKind::Link, true, 0, &range));
-    assert!(super::spans::wysiwyg_reveals(ConcealKind::Link, false, 10, &range));
+    assert!(!super::spans::wysiwyg_reveals(ConcealKind::Link, true, 0, &range, None));
+    assert!(super::spans::wysiwyg_reveals(ConcealKind::Link, false, 10, &range, None));
+}
+
+/// SELECTION REVEAL (user-decided 2026-07-22): `wysiwyg_reveals` widens EVERY
+/// kind's caret-only rule with a `selection_touch` overlap, off the caret line
+/// entirely — line-scoped, block-scoped, AND (unlike every other kind) the
+/// pure decision for `Table` itself stays `false` (its reveal is the SEPARATE
+/// x-ray float mechanism — `prepare_table_xray`/`prepare_table_grid` extend
+/// the SAME `selection_touch` test there instead of through this fn).
+#[test]
+fn wysiwyg_reveals_selection_widens_every_kind() {
+    use crate::markdown::ConcealKind;
+    let span = 40..60;
+    let touching = 50..70; // overlaps `span`
+    let disjoint = 100..120; // does not overlap `span`
+    // LINE-scoped (Heading stands in for Emphasis/Code/Highlight/Strikethrough/
+    // Image/Link/Blockquote, which share this exact match arm): caret off this
+    // line (`conceal_off_cursor = true`) but the selection touches the span ->
+    // reveal.
+    assert!(super::spans::wysiwyg_reveals(
+        ConcealKind::Heading,
+        true,
+        0,
+        &span,
+        Some(&touching)
+    ));
+    // A selection that does NOT overlap this span leaves it concealed.
+    assert!(!super::spans::wysiwyg_reveals(
+        ConcealKind::Heading,
+        true,
+        0,
+        &span,
+        Some(&disjoint)
+    ));
+    // BLOCK-scoped (Fence/Frontmatter): caret outside the block, but the
+    // selection overlaps it -> reveal.
+    assert!(super::spans::wysiwyg_reveals(
+        ConcealKind::Fence,
+        true,
+        0,
+        &span,
+        Some(&touching)
+    ));
+    assert!(!super::spans::wysiwyg_reveals(
+        ConcealKind::Fence,
+        true,
+        0,
+        &span,
+        Some(&disjoint)
+    ));
+    // Table's OWN in-place reveal decision stays false REGARDLESS of a
+    // touching selection — the x-ray float mechanism owns the table reveal.
+    assert!(!super::spans::wysiwyg_reveals(
+        ConcealKind::Table,
+        true,
+        0,
+        &span,
+        Some(&touching)
+    ));
 }
 
 /// END-TO-END WYSIWYG links: off the caret's line the `[`/`](url)` plumbing

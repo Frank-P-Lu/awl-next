@@ -45,12 +45,13 @@ impl TextPipeline {
     /// `concealed` lists exactly the `(start_byte, end_byte, kind_tag)` ranges
     /// the renderer is ACTUALLY drawing transparent this settled frame (empty
     /// when `on` is false, or when every concealable span sits revealed under
-    /// the caret). Shares the ONE reveal rule ([`wysiwyg_reveals`]) and the ONE
-    /// fence body/marker split ([`line_has_code_span`]) with
-    /// `add_wysiwyg_conceal_spans` (the renderer), so the sidecar can never claim
-    /// something is concealed that isn't actually drawn that way. `md_spans`
-    /// itself is UNCHANGED by this round (still tagged `"markup"`/`"code"`); this
-    /// is the separate, additive report the WYSIWYG round introduces.
+    /// the caret OR the active selection). Shares the ONE reveal rule
+    /// ([`wysiwyg_reveals`], [`selection_touch_bytes`]) and the ONE fence
+    /// body/marker split ([`line_has_code_span`]) with `add_wysiwyg_conceal_spans`
+    /// (the renderer), so the sidecar can never claim something is concealed
+    /// that isn't actually drawn that way. `md_spans` itself is UNCHANGED by
+    /// this round (still tagged `"markup"`/`"code"`); this is the separate,
+    /// additive report the WYSIWYG round introduces.
     pub fn wysiwyg_report(&self) -> (bool, Vec<(usize, usize, &'static str)>) {
         let on = crate::markdown::wysiwyg_on();
         let mut out = Vec::new();
@@ -66,6 +67,11 @@ impl TextPipeline {
                 .get(self.cursor_line)
                 .map(|l| l.text().len())
                 .unwrap_or(0);
+        let selection_touch = selection_touch_bytes(
+            self.selection,
+            |i| self.line_doc_byte_start(i),
+            |i| self.buffer.lines.get(i).map(|l| l.text().len()).unwrap_or(0),
+        );
         // Line byte-offset table, built lazily only if a Fence span is present
         // (the common non-fence case never pays for it).
         let mut line_starts: Option<Vec<usize>> = None;
@@ -78,7 +84,7 @@ impl TextPipeline {
             // exactly "this span's start doesn't fall in the caret line's byte
             // bounds" (irrelevant for `Fence`, which ignores this flag).
             let conceal_off_cursor = !(r.start >= cursor_start && r.start < cursor_end);
-            if wysiwyg_reveals(ck, conceal_off_cursor, cursor_start, r) {
+            if wysiwyg_reveals(ck, conceal_off_cursor, cursor_start, r, selection_touch.as_ref()) {
                 continue;
             }
             if ck != ConcealKind::Fence {
@@ -123,9 +129,17 @@ impl TextPipeline {
     /// source row's character count, `pan` the clamped horizontal float offset (0
     /// when the row fits). A pure function of the stash [`Self::prepare_table_xray`]
     /// laid this frame — `None` on every non-table-caret frame (byte-identical).
+    ///
+    /// SCHEMA NOTE: `self.xray` may hold ADDITIONAL entries for table rows the
+    /// active SELECTION touches (not the caret's own) — this report deliberately
+    /// surfaces ONLY the caret's entry, unchanged shape, so the sidecar `xray`
+    /// block's contract stays exactly what it always was; the selection-only rows
+    /// are render-only state, verified over the PNG / `table_cell_lines_drawn`
+    /// (the state-vs-appearance tripwire — CAPTURE.md).
     pub fn xray_report(&self) -> Option<(usize, usize, f32)> {
         self.xray
-            .as_ref()
+            .iter()
+            .find(|x| x.line == self.cursor_line)
             .map(|x| (x.line, x.glyph_xs.len().saturating_sub(1), x.pan))
     }
 

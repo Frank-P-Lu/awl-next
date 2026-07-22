@@ -815,6 +815,17 @@ impl TextPipeline {
         // first document byte (not just its line index) to test containment in a
         // fenced block's whole byte range. `line_starts` is already built above.
         let cursor_byte = line_starts.get(cursor_line).copied().unwrap_or(0);
+        // SELECTION REVEAL: the byte extent of every line the active selection
+        // touches (`None` with no selection), computed ONCE from the freshly-
+        // diffed `line_starts`/`new_lines` (not `self.buffer.lines`, which is
+        // still the STALE pre-edit text at this point in the splice) — see
+        // `selection_touch_bytes`'s own doc comment for why this is the ONE
+        // owner every reveal decision below reads.
+        let selection_touch = selection_touch_bytes(
+            self.selection,
+            |i| line_starts.get(i).copied().unwrap_or(0),
+            |i| new_lines.get(i).map_or(0, |l| l.len()),
+        );
         let doc_lang = self.doc_lang;
         let cjk_priority = &self.cjk_priority;
         let line_attrs = |lt: &str, start: usize, li: usize| {
@@ -824,6 +835,7 @@ impl TextPipeline {
                 cjk_priority, &fonts, conceal_off_cursor, cursor_byte,
                 image_heights.get(li).copied().flatten(),
                 image_force.get(li).copied().flatten(),
+                selection_touch.as_ref(),
             )
         };
         // `split('\n')` on "a\n" yields ["a", ""] — exactly the trailing-empty-line
@@ -991,6 +1003,13 @@ impl TextPipeline {
         // `cursor_byte` additionally drives the WYSIWYG fence conceal's BLOCK scope.
         let cursor_line = self.cursor_line;
         let cursor_byte = self.line_doc_byte_start(cursor_line);
+        // SELECTION REVEAL: same extent `set_text_incremental` computes, from
+        // the CURRENT `self.buffer.lines` (valid here, unlike mid-splice).
+        let selection_touch = selection_touch_bytes(
+            self.selection,
+            |i| self.line_doc_byte_start(i),
+            |i| self.buffer.lines.get(i).map(|l| l.text().len()).unwrap_or(0),
+        );
         let mut start = 0usize;
         for li in 0..self.buffer.lines.len() {
             let tlen = self.buffer.lines[li].text().len();
@@ -1000,6 +1019,7 @@ impl TextPipeline {
                     doc_lang, &cjk_priority, &fonts, li != cursor_line, cursor_byte,
                     image_heights.get(li).copied().flatten(),
                     image_force.get(li).copied().flatten(),
+                    selection_touch.as_ref(),
                 );
                 line.set_attrs_list(al);
             }
@@ -1015,15 +1035,17 @@ impl TextPipeline {
     }
 
     /// REVEAL-ON-CURSOR upkeep: re-lay every line whose conceal state depends on the
-    /// CARET — the markdown horizontal-rule / bullet-marker conceal (each keyed to its
-    /// OWN line) AND, since this round, every WYSIWYG-concealable
+    /// CARET OR ACTIVE SELECTION — the markdown horizontal-rule / bullet-marker
+    /// conceal (each keyed to its OWN line) AND every WYSIWYG-concealable
     /// [`crate::markdown::MdKind::ConcealMarkup`] span (heading/emphasis/inline-code/
     /// highlight, each line-scoped like the hr/bullet; a fenced block's marker lines,
-    /// block-scoped) — so it all matches the CURRENT caret line/position. The
-    /// incremental text path only rebuilds lines whose TEXT changed, so a PURE cursor
-    /// move (no edit) would otherwise leave a stale conceal/reveal; this closes that
-    /// gap. Called from `set_view`'s sync (which runs on every `set_view`), so the
-    /// toggle tracks the caret with no new state threaded through `render.rs`.
+    /// block-scoped) — so it all matches the CURRENT caret line/position AND the
+    /// current selection's touched lines (2026-07-22, "selection reveals raw
+    /// markdown"). The incremental text path only rebuilds lines whose TEXT changed,
+    /// so a PURE cursor/selection move (no edit) would otherwise leave a stale
+    /// conceal/reveal; this closes that gap. Called from `set_view`'s sync (which
+    /// runs on every `set_view`), so the toggle tracks the caret AND the selection
+    /// with no new state threaded through `render.rs`.
     ///
     /// Cheap + idempotent: only lines carrying a concealable span are visited, and
     /// rebuilding the SAME attrs no-ops in `set_attrs_list` (it resets shaping only
@@ -1032,19 +1054,36 @@ impl TextPipeline {
     pub(super) fn refresh_rule_conceal(&mut self, force: bool) {
         if self.md_spans.is_empty() {
             self.last_conceal_cursor_line = Some(self.cursor_line);
+            self.last_conceal_selection = self.selection;
             return;
         }
-        // GATE (byte-identical): the conceal only toggles on a caret-LINE change, so a
-        // pure scroll / same-line move / idle redraw would re-lay the SAME attrs and
-        // no-op. Skip the O(lines × md_spans) rescan in that case. `force` (a reshape /
-        // text edit / restyle just happened) always runs it, because the reshape drops
-        // the per-line attrs and a newly-typed `---`/bullet/heading/etc. must (re)conceal.
-        if !force && self.last_conceal_cursor_line == Some(self.cursor_line) {
+        // GATE (byte-identical): the conceal only toggles on a caret-LINE change OR
+        // a SELECTION change (which line set now selection-reveals), so a pure
+        // scroll / same-line-same-selection move / idle redraw would re-lay the SAME
+        // attrs and no-op. Skip the O(lines × md_spans) rescan in that case. `force`
+        // (a reshape / text edit / restyle just happened) always runs it, because the
+        // reshape drops the per-line attrs and a newly-typed `---`/bullet/heading/etc.
+        // must (re)conceal. TRIPWIRE: comparing the WHOLE selection (not just its
+        // touched-line extent) means a selection that starts/ends/clears without
+        // changing which LINES it touches still re-runs the (idempotent) rescan below
+        // — a harmless no-op, never a missed reveal/conceal transition.
+        if !force
+            && self.last_conceal_cursor_line == Some(self.cursor_line)
+            && self.last_conceal_selection == self.selection
+        {
             return;
         }
         self.last_conceal_cursor_line = Some(self.cursor_line);
+        self.last_conceal_selection = self.selection;
         let cursor_line = self.cursor_line;
         let cursor_byte = self.line_doc_byte_start(cursor_line);
+        // SELECTION REVEAL: same extent `set_text_incremental`/`restyle_all_lines`
+        // compute (see `selection_touch_bytes`), from the CURRENT `self.buffer.lines`.
+        let selection_touch = selection_touch_bytes(
+            self.selection,
+            |i| self.line_doc_byte_start(i),
+            |i| self.buffer.lines.get(i).map(|l| l.text().len()).unwrap_or(0),
+        );
         let attrs = self.doc_attrs();
         let fonts = self.resolve_script_fonts();
         let doc_lang = self.doc_lang;
@@ -1160,6 +1199,7 @@ impl TextPipeline {
                         doc_lang, &cjk_priority, &fonts, li != cursor_line, cursor_byte,
                         image_heights.get(li).copied().flatten(),
                         image_force.get(li).copied().flatten(),
+                        selection_touch.as_ref(),
                     );
                     changed |= line.set_attrs_list(al);
                 }
