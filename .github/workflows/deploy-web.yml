@@ -63,8 +63,11 @@ jobs:
       # --public-url /editor/ is what makes the generated index.html
       # reference its wasm/js under /editor/ instead of the root / — the
       # site mounts the editor at that sub-path (see site/README.md).
+      # scripts/with-remap.sh strips the runner's $HOME/registry paths from the
+      # compiled wasm (rustc bakes compile-time source locations otherwise). The
+      # repo is public; the shipped bundle must carry no builder path.
       - name: trunk build --release --public-url /editor/
-        run: trunk build --release --public-url /editor/
+        run: scripts/with-remap.sh trunk build --release --public-url /editor/
 
       # Assemble the deployable site: a copy of site/ (landing, Caddyfile,
       # Dockerfile, fly.toml, fonts, images…) with its editor/ subdirectory

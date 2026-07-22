@@ -96,7 +96,9 @@ done
 if [[ "$MAS" -eq 1 ]]; then
   command -v cargo >/dev/null 2>&1 || { echo "!! cargo not found on PATH" >&2; exit 1; }
   echo "==> building MAS (--features mas) release binary..."
-  (cd "$ROOT" && cargo build --release --features mas)
+  # with-remap.sh strips the builder's $HOME/registry paths from this shipped
+  # release binary (rustc bakes compile-time source locations otherwise).
+  (cd "$ROOT" && "$ROOT/scripts/with-remap.sh" cargo build --release --features mas)
   BIN_PATH="$ROOT/target/release/awl"
   OUT_DIR="${POSITIONAL[0]:-$ROOT/dist}"
 else
