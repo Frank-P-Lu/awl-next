@@ -590,6 +590,7 @@ impl TextPipeline {
             }
         }
         let _ = md_spans;
+        let _ = selection_touch;
         self.image_force = force;
         heights
     }
