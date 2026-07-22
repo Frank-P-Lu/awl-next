@@ -453,6 +453,61 @@ fn inline_image_off_cursor_draws_one_quad_and_stays_drawn_when_revealed() {
     restore();
 }
 
+/// GPU DRAW (item 5a): the MIXED-line counterpart to the bare-line test above —
+/// OFF-cursor the image draws its one quad (offset to the row's bottom `dh`
+/// band per `image_row_offset`); ON-cursor (revealed, its raw source wrapping
+/// as plain text — see `mixed_list_image_reveal_wraps_as_plain_text_and_parks_
+/// the_image`) it draws NO quad at all — the caption model's "stays drawn,
+/// dimmed" only holds for a BARE line's fixed single-row geometry, not a mixed
+/// line's wrap-dependent reveal (see `compute_image_layout`'s doc comment for
+/// why). Fixture: `samples/photo.png`.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn mixed_list_image_draws_off_cursor_and_parks_when_revealed() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    if std::fs::metadata("samples/photo.png").is_err() {
+        eprintln!("skipping: samples/photo.png fixture not present");
+        return;
+    }
+    let prev = crate::markdown::inline_images_on();
+    let prevw = crate::markdown::wysiwyg_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let restore = || {
+        crate::markdown::set_inline_images_on(prev);
+        crate::markdown::set_wysiwyg_on(prevw);
+    };
+    let Some((device, queue, mut p)) = headless_pipeline_dq() else {
+        eprintln!("skipping mixed_list_image_draws_off_cursor_and_parks_when_revealed: no wgpu adapter");
+        restore();
+        return;
+    };
+    let text = "- a caption sits before the image on this very same list line ![alt|300](samples/photo.png)\nafter\n";
+    // Caret on line 1 ("after") — the image line is off-cursor.
+    let mut v = view(text, 1, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert_eq!(
+        p.image_pipeline.instance_count(),
+        1,
+        "off-cursor: the mixed line's image draws its one quad"
+    );
+
+    // Caret ON the image line: the reveal wraps as plain text; the image parks.
+    let mut v0 = view(text, 0, 0);
+    v0.is_markdown = true;
+    p.set_view(&v0);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert_eq!(
+        p.image_pipeline.instance_count(),
+        0,
+        "revealed: the mixed line's image draws NO quad (parked for this one frame)"
+    );
+    restore();
+}
+
 /// GPU DRAW: a MISSING-file image draws the calm rounded PLACEHOLDER quad (one),
 /// and NO image quad — a missing image is a calm state, never an error.
 #[cfg(not(target_arch = "wasm32"))]
@@ -560,4 +615,309 @@ fn no_image_buffer_draws_neither_quad_nor_placeholder() {
         "no images: no placeholder"
     );
     crate::markdown::set_inline_images_on(prev);
+}
+
+/// ITEM 5a — LIST ITEM WITH TEXT AND AN IMAGE (`- caption text ![pic](p)`):
+/// STRATEGY DECIDED 2026-07-22 — the image gets its OWN row below the text row,
+/// no hybrid blend. cosmic-text centers a row's content around its own natural
+/// glyph height unconditionally (`buffer.rs`'s `centering_offset`, no per-span
+/// bias hook), so the only overlap-free way to give the caption text a clean
+/// `dh`-tall gap below it in ONE reserved document row is to reserve `base_lh +
+/// 2*dh` (see `TextPipeline::compute_image_layout`'s doc comment for the full
+/// derivation + the ruled-out alternatives) — the caption renders at its own
+/// normal list metrics (untouched), and the drawn image anchors to the row's
+/// BOTTOM `dh` band via `image_row_offset`, landing exactly at the reserved
+/// row's bottom edge with zero overlap. A bare `- ![pic](p)` (no other content)
+/// stays exactly `dh`, regression-guarded by
+/// `inline_image_reserves_tall_row_and_reveals_source_on_cursor` above. Fixture:
+/// `samples/tiny.png` (120x48 -> 48px `dh`).
+#[test]
+fn mixed_list_image_reserves_a_combined_row_and_anchors_below_the_text() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    let prev = crate::markdown::inline_images_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping mixed_list_image_reserves_a_combined_row: no wgpu adapter");
+        crate::markdown::set_inline_images_on(prev);
+        return;
+    };
+    let text = "- caption text ![pic](samples/tiny.png)\nafter\n";
+    // Caret OFF the image line (line 1) so the row sits at its steady reservation.
+    let mut v = view(text, 1, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+    let report = p.images_report();
+    assert_eq!(report.len(), 1, "one image reported: {report:?}");
+    let dh = report[0].display_h;
+    assert!((dh - 48.0).abs() < 1.0, "fixture fit height: {dh}");
+    let base_lh = p.metrics.line_height;
+    let row_h = p.visual_rows(0)[0].line_height;
+    let expected = base_lh + 2.0 * dh;
+    assert!(
+        (row_h - expected).abs() < 1.0,
+        "mixed line reserves base_lh + 2*dh: {row_h} vs {expected} (base_lh={base_lh}, dh={dh})"
+    );
+    // The drawn image anchors to the row's BOTTOM dh band, not the row top (which
+    // would overlap the centred caption text).
+    let rects = p.image_hit_rects();
+    assert_eq!(rects.len(), 1, "one image hit rect: {rects:?}");
+    let img_top = rects[0].1[1];
+    let row_top = p.line_ornament_top(0);
+    let expected_offset = base_lh + dh; // reserved (base_lh + 2*dh) minus dh
+    assert!(
+        (img_top - (row_top + expected_offset)).abs() < 1.0,
+        "image anchors to the bottom dh band: top={img_top} row_top={row_top} offset={expected_offset}"
+    );
+    // The image's bottom edge lands exactly at the reserved row's bottom — no
+    // overflow into the following document line.
+    let img_bottom = img_top + rects[0].1[3];
+    assert!(
+        (img_bottom - (row_top + row_h)).abs() < 1.0,
+        "image bottom == reserved row bottom: {img_bottom} vs {}",
+        row_top + row_h
+    );
+    crate::markdown::set_inline_images_on(prev);
+}
+
+/// ITEM 5a — REVEALED MIXED LINE (caret ON the line), the case a straightforward
+/// "just apply the combined reservation always" implementation gets WRONG:
+/// unconcealed, the raw source (caption + `![alt](path)`) is long enough here
+/// to WRAP onto a second visual row. Empirically, cosmic-text's per-visual-row
+/// `line_height_opt` MAX (`buffer.rs`) is taken PER WRAPPED ROW, so a fixed
+/// per-LINE `base_lh + 2*dh` override (as used off-cursor) would inflate BOTH
+/// wrapped rows independently (confirmed while building this: two rows landed
+/// at 432px each, not the intended combined total once) and strand the image
+/// mid-text. `compute_image_layout` avoids this by reserving NOTHING for a
+/// revealed mixed line (plain, un-scaled rows — ordinary word wrap) and the
+/// draw side skips the image for that one frame (`image_row_reserved`). This
+/// asserts the OUTCOME: every wrapped row of the revealed line stays at the
+/// PLAIN base line height (no inflation, no matter how many rows it wraps
+/// onto), and no image hit-rect is armed while revealed. The image reappears
+/// the instant the caret leaves — covered by
+/// `mixed_list_image_reserves_a_combined_row_and_anchors_below_the_text`
+/// (caret off) above. Fixture: `samples/photo.png` (420x280).
+#[test]
+fn mixed_list_image_reveal_wraps_as_plain_text_and_parks_the_image() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    let prev = crate::markdown::inline_images_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping mixed_list_image_reveal_wraps_as_plain_text: no wgpu adapter");
+        crate::markdown::set_inline_images_on(prev);
+        return;
+    };
+    if std::fs::metadata("samples/photo.png").is_err() {
+        eprintln!("skipping: samples/photo.png fixture not present");
+        crate::markdown::set_inline_images_on(prev);
+        return;
+    }
+    let text = "- a caption sits before the image on this very same list line ![alt|300](samples/photo.png)\nafter\n";
+    // Caret ON the image line (0): the raw source reveals, unconcealed, and
+    // (at this narrow-ish default pipeline width) wraps onto >1 visual row.
+    let mut v = view(text, 0, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+    let base_lh = p.metrics.line_height;
+    let rows = p.visual_rows(0);
+    assert!(
+        rows.len() > 1,
+        "the revealed source is long enough to wrap: {} row(s)",
+        rows.len()
+    );
+    for (i, r) in rows.iter().enumerate() {
+        assert!(
+            (r.line_height - base_lh).abs() < 1.0,
+            "revealed row {i} stays at the PLAIN base line height, not the combined reservation: {} vs base_lh {base_lh}",
+            r.line_height
+        );
+    }
+    // No image drawn/armed while its own line is being edited — nothing to
+    // overlap the wrapped-out reveal text.
+    assert!(
+        p.image_hit_rects().is_empty(),
+        "the image parks (no hit rect) while its mixed line is revealed: {:?}",
+        p.image_hit_rects()
+    );
+    crate::markdown::set_inline_images_on(prev);
+}
+
+/// ITEM 5a companion: a BARE list image (`- ![pic](p)`, no other caption text)
+/// keeps the pre-existing `dh`-only reservation and draws at the row TOP — the
+/// `image_row_offset` added for the mixed case is `0.0` here, so this is
+/// byte-identical to the images-v1 behavior. Guards against the mixed-line
+/// detector over-firing on the list marker itself (which conceals to its own
+/// bullet glyph and must NOT count as "other content"). Fixture:
+/// `samples/tiny.png`.
+#[test]
+fn bare_list_image_keeps_the_dh_only_row_and_draws_at_the_top() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    let prev = crate::markdown::inline_images_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping bare_list_image_keeps_the_dh_only_row: no wgpu adapter");
+        crate::markdown::set_inline_images_on(prev);
+        return;
+    };
+    let text = "- ![pic](samples/tiny.png)\nafter\n";
+    let mut v = view(text, 1, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+    let dh = p.images_report()[0].display_h;
+    let row_h = p.visual_rows(0)[0].line_height;
+    assert!(
+        (row_h - dh).abs() < 1.0,
+        "bare list image: row is dh alone, no combined reservation: {row_h} vs {dh}"
+    );
+    let rects = p.image_hit_rects();
+    let row_top = p.line_ornament_top(0);
+    assert!(
+        (rects[0].1[1] - row_top).abs() < 1.0,
+        "bare list image draws at the row top (offset 0): {} vs {row_top}",
+        rects[0].1[1]
+    );
+    crate::markdown::set_inline_images_on(prev);
+}
+
+/// ITEM 5b — ROW GEOMETRY OWNS IMAGE HEIGHT (the core fix): the scroll<->pixel
+/// table (`RowGeom`, delegated via `TextPipeline::row_top_px`) must place the
+/// row AFTER an image at the image's REAL rendered height — not a constant
+/// `LINE_HEIGHT` — or scroll visibly JUMPS as the image enters/leaves view (the
+/// item's reported bug). `build_line_attrs` bakes the reserved height into the
+/// shaped row's `line_height` (an absolute `Attrs::metrics` override, the same
+/// seam headings use), and `RowGeom::ensure` reads it straight off
+/// `layout_runs()` — so this is the END-TO-END proof the mechanism holds for
+/// both the BARE image case (unchanged since images-v1) and the item-5a MIXED
+/// combined reservation (`base_lh + 2*dh`). Fixture: `samples/tiny.png` (120x48
+/// -> 48px `dh`).
+#[test]
+fn row_geometry_places_the_row_after_an_image_at_its_real_height() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    let prev = crate::markdown::inline_images_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping row_geometry_places_the_row_after_an_image: no wgpu adapter");
+        crate::markdown::set_inline_images_on(prev);
+        return;
+    };
+    // BARE case: `![pic](p)` on its own line.
+    let bare = "![pic](samples/tiny.png)\nprose one\nprose two\n";
+    let mut vb = view(bare, 1, 0);
+    vb.is_markdown = true;
+    p.set_view(&vb);
+    let dh = p.images_report()[0].display_h;
+    let row1 = p.visual_row_of(1, 0);
+    let top1 = p.row_top_px(row1);
+    assert!(
+        (top1 - dh).abs() < 1.0,
+        "bare: the row after the image sits at dh ({dh}), not a jump: {top1}"
+    );
+    assert!(
+        (top1 - LINE_HEIGHT).abs() > 5.0,
+        "sanity: a constant-LINE_HEIGHT guess would be wrong here (that's the bug): {top1} vs {LINE_HEIGHT}"
+    );
+    // No jump at the document's total height either — it must include the
+    // image's real height, not fall back to a uniform per-row count. Compares
+    // against the LAST visual row's own top+height (not a hardcoded line index,
+    // since `text.split('\n')` yields a trailing empty logical line too).
+    let doc_h = p.total_doc_height();
+    let last_row = p.total_visual_rows() - 1;
+    let expected_doc_h = p.row_top_px(last_row) + p.row_height_px(last_row);
+    assert!(
+        (doc_h - expected_doc_h).abs() < 1.0,
+        "total doc height matches the real cumulative row geometry: {doc_h} vs {expected_doc_h}"
+    );
+
+    // MIXED case (item 5a): `- text ![pic](p)` reserves base_lh + 2*dh.
+    let mixed = "- text ![pic](samples/tiny.png)\nafter\n";
+    let mut vm = view(mixed, 1, 0);
+    vm.is_markdown = true;
+    p.set_view(&vm);
+    let dh2 = p.images_report()[0].display_h;
+    let base_lh = p.metrics.line_height;
+    let expected2 = base_lh + 2.0 * dh2;
+    let row1b = p.visual_row_of(1, 0);
+    let top1b = p.row_top_px(row1b);
+    assert!(
+        (top1b - expected2).abs() < 1.0,
+        "mixed: the row after the image sits at base_lh + 2*dh ({expected2}): {top1b}"
+    );
+    crate::markdown::set_inline_images_on(prev);
+}
+
+/// ITEM 5c — THE THEME-SWITCH SLOWDOWN PROBE (user-reported: "first switches
+/// slow, later fine", suspects image reload). WITNESS, not a vague timing claim
+/// (the documented "a bench measuring nothing" trap): `ImageCache::ensure` is
+/// keyed by canonical PATH + file MTIME (`image_cache.rs`), never by theme, and
+/// `sync_theme`/`sync_theme_colors`/`sync_theme_font` (the whole live theme-
+/// switch apply path) never touch `TextPipeline::image_cache` — so a switch
+/// RE-TINTS colors + re-shapes TEXT but must NEVER re-decode an already-cached
+/// image. Drives a real `prepare()` (the only call site of `ImageCache::ensure`)
+/// across five real theme switches with the SAME image on screen throughout,
+/// asserting the DECODE counter (a new instrumentation counter, incremented
+/// only on an actual cache MISS) stays flat at 1 the whole time — the mechanism
+/// itself, not a proxy. Fixture: `samples/tiny.png`.
+///
+/// NOT REPRODUCED: this test PASSES on the current code — image decode is
+/// already keyed independently of theme, so a switch never reloads. The
+/// user-visible "first switches slow" is very likely `sync_theme`'s documented
+/// FONT reshape (a real per-face cosmic-text restyle + fresh-glyph atlas
+/// rasterization the FIRST time a family is visited — see `--bench-theme-burst`
+/// / `pipeline_geometry.rs`'s `sync_theme` doc), unrelated to images; "later
+/// fine" matches atlas retention once every face has been visited once. Flagged
+/// for LIVE confirmation (the harness cannot measure real wall-clock feel), not
+/// claimed fixed — there was nothing to fix here.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn theme_switch_never_redecodes_a_cached_image() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    if std::fs::metadata("samples/tiny.png").is_err() {
+        eprintln!(
+            "skipping theme_switch_never_redecodes_a_cached_image: samples/tiny.png fixture not present"
+        );
+        return;
+    }
+    let prev_images = crate::markdown::inline_images_on();
+    crate::markdown::set_inline_images_on(true);
+    let prev_theme = crate::theme::active().name;
+    let Some((device, queue, mut p)) = headless_pipeline_dq() else {
+        eprintln!("skipping theme_switch_never_redecodes_a_cached_image: no wgpu adapter");
+        crate::markdown::set_inline_images_on(prev_images);
+        return;
+    };
+    let text = "![pic](samples/tiny.png)\nprose here\n";
+    let mut v = view(text, 1, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert_eq!(
+        p.image_decode_count(),
+        1,
+        "the first frame decodes the image exactly once"
+    );
+
+    // Five theme switches, the SAME image staying on screen throughout — the
+    // exact "switching themes with images" scenario reported.
+    for name in ["Mopoke", "Currawong", "Potoroo", "Bombora", "Tawny"] {
+        crate::theme::set_active_by_name(name).expect("a real world name");
+        p.sync_theme();
+        p.set_view(&v);
+        p.prepare(&device, &queue, 1200, 800).unwrap();
+    }
+    assert_eq!(
+        p.image_decode_count(),
+        1,
+        "5 theme switches with the same image on screen: still exactly ONE decode (no reload)"
+    );
+
+    crate::theme::set_active_by_name(prev_theme);
+    crate::markdown::set_inline_images_on(prev_images);
 }

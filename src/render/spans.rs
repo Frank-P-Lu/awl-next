@@ -675,6 +675,29 @@ pub(super) fn line_has_image_span(
     })
 }
 
+/// INLINE IMAGES (item 5a, "list item with text and an image"): true when
+/// `line_text` carries REAL content besides its own list marker (if any) and the
+/// image markup at `image_local` (BYTE range relative to `line_text`'s own start,
+/// not the document) — i.e. `- caption text ![alt](p)` is "mixed", a bare
+/// `- ![alt](p)` (or plain `![alt](p)`) is not. The list marker's own bytes
+/// (`crate::markdown::list_item`'s `content` offset — the marker conceals to its
+/// own bullet glyph regardless, see `add_bullet_conceal_span`) are excluded from
+/// the scan alongside the image span itself; ANY other non-whitespace byte makes
+/// it mixed. Pure — read by [`super::TextPipeline::compute_image_layout`] to
+/// decide the row-height RESERVATION (see its doc comment for the "own row below
+/// the text row" strategy this drives).
+pub(super) fn image_line_has_other_content(
+    line_text: &str,
+    image_local: std::ops::Range<usize>,
+) -> bool {
+    let content_start = crate::markdown::list_item(line_text)
+        .map(|it| it.content)
+        .unwrap_or(0);
+    let b = line_text.as_bytes();
+    (content_start.min(b.len())..b.len())
+        .any(|i| !b[i].is_ascii_whitespace() && !(i >= image_local.start && i < image_local.end))
+}
+
 /// True when a `Code`/`CodeSyntax` span (a fenced-block BODY byte) overlaps the
 /// document byte range `[line_doc_start, line_end)` — i.e. this line is a fence
 /// BODY line, not a marker line. Shared by [`add_wysiwyg_conceal_spans`]'s
