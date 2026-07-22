@@ -29,7 +29,7 @@ set -euo pipefail
 # Pin this Mac's toolchain so cargo is findable regardless of cwd or a bare
 # shell. Prefer a cargo already on PATH; only fall back otherwise.
 if ! command -v cargo >/dev/null 2>&1; then
-  export PATH="/Users/frank/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
+  export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
 fi
 if ! command -v cargo >/dev/null 2>&1; then
   echo "error: cargo not found on PATH. Install Rust (https://rustup.rs) or add cargo to PATH." >&2

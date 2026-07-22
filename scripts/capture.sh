@@ -20,7 +20,7 @@ set -euo pipefail
 # including this Mac's pinned toolchain. Keeps the script portable across hosts.
 if ! command -v cargo >/dev/null 2>&1; then
   for p in "$HOME/.cargo/bin" \
-           "/Users/frank/.rustup/toolchains/stable-aarch64-apple-darwin/bin"; do
+           "$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin"; do
     if [[ -x "$p/cargo" ]]; then export PATH="$p:$PATH"; break; fi
   done
 fi

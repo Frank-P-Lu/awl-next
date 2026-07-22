@@ -12,7 +12,7 @@ PNG) — never by driving a GUI.
 The cargo invocation must be prefixed with the toolchain PATH on this machine:
 
 ```sh
-export PATH="/Users/frank/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
+export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
 ```
 
 Single file → PNG + sidecar:

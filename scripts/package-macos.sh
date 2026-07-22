@@ -74,7 +74,7 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Pin this Mac's toolchain so cargo is findable regardless of cwd / a bare
 # shell (only matters for --mas, which invokes cargo itself).
 if ! command -v cargo >/dev/null 2>&1; then
-  export PATH="/Users/frank/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
+  export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
 fi
 
 MAS=0

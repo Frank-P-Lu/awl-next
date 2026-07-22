@@ -60,7 +60,7 @@ whose asset URLs are all rooted at `/editor/`.
 Rebuild it (from the worktree/repo root — NOT `trunk serve`, per `WEB.md`):
 
 ```sh
-export PATH="/Users/frank/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
+export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
 trunk build --release --public-url /editor/   # emits dist/ with /editor/-rooted paths
 rm -rf site/editor && cp -R dist site/editor  # mount it at the sub-path
 ```
@@ -77,7 +77,7 @@ Every PNG in `img/` is a **real** native-app capture from the headless harness
 after any theme-polish batch that shifts grounds / ornaments):
 
 ```sh
-export PATH="/Users/frank/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
+export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
 cargo run --release -- --screenshot site/img/hero.png --theme Bombora site/sample.md
 for W in Gumtree Bilby Magpie Saltpan Quokka Galah Potoroo Mopoke \
          Bombora Mulga Bowerbird Mangrove Tawny Currawong; do

@@ -292,7 +292,7 @@ mod tests {
             ),
             // The navigable explorers list bare folder / file names; their
             // ViewState still carries a parallel (all-empty) label column.
-            OverlayKind::Project => (vec!["awl-next/".into(), "code2026/".into()], Some(0)),
+            OverlayKind::Project => (vec!["awl-next/".into(), "projects/".into()], Some(0)),
             OverlayKind::Browse => (vec!["src/".into(), "README.md".into()], Some(0)),
             OverlayKind::MoveDest => (vec!["notes/".into(), "archive/".into()], Some(0)),
             // Theme picker: every world name (no right column drawn).

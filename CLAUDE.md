@@ -13,8 +13,8 @@ awl is a WYSIWYG editor on the Obsidian Live-Preview model: the file stays plain
 ## Build & test
 
 ```sh
-export PATH="/Users/frank/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
-cargo build && cargo test        # from /Users/frank/code2026/awl-next
+export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
+cargo build && cargo test        # from the repo root
 ```
 
 Incremental builds only (a clean rebuild is slow — no `cargo clean`). Edit in place, matching the file's own style. Judge feel in `--release`: dev frames are 10–20× slower, so perf claims are only honest there.
@@ -74,6 +74,7 @@ Audit agents run on Sonnet. Probe form: enumerate state × surface × world, sam
 - Picker rows go through `render/rowlayout` (docs/render.md), never hand-placed.
 - Design discipline (DESIGN.md): one accent — the caret; figure/ground by value; summoned overlays over persistent chrome; four syntax roles, no rainbow.
 - No web artifacts: design ideas are prototyped in awl via headless capture, not HTML mockups.
+- The repo is public: tracked files carry no personal-machine paths or private-notes references — `$HOME` over `/Users/<name>`, "the repo root" over absolute paths, "the user's notes (private)" over their location.
 - A new `ViewState` field gets an inert default in `ViewState::base()`; the one exhaustive construction site is `sync_view`, which must fail to compile on the new field — forcing a conscious render decision.
 - When replay is clean but the user still sees it, hunt the live-only classes: stale caches across buffer swaps, missing invalidation on resize/page-drag, redraw-scheduling gaps.
 
@@ -91,4 +92,4 @@ Development happens on local `main` (it may run ahead of origin; `git remote sho
 - **History ownership (settled):** a git-managed file's timeline is `git log` alone. Loose files snapshot on every save, pruned by the aged ladder. Autosave still writes git files (writing ≠ version-meddling).
 - **Shift-PageDown/PageUp** deliberately do not extend a selection (documented non-movers in the `is_motion` test); promoting them is a conscious follow-up, not a bug.
 - **Shared orchestration board:** build queues, dependencies, and status live in `.orchestrator/queue.md` — the one tool-neutral source of truth (ROADMAP.md is product direction). Protocol in `.orchestrator/README.md`: claim on the board and commit before writing code; work in a worktree named on the claim line; board writes are orchestrator-only — workers report shas + outcomes.
-- **Design-session flow (2026-07-22, README §Design sessions):** brainstormed decisions land as self-contained queue items committed with an `orchestrator: decisions` subject; git is the log — no decisions file. `~/notes/` is the user's space: agents read there, never write.
+- **Design-session flow (2026-07-22, README §Design sessions):** brainstormed decisions land as self-contained queue items committed with an `orchestrator: decisions` subject; git is the log — no decisions file. The user's notes (private, outside the repo) are the user's space: agents read there, never write.

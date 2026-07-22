@@ -578,7 +578,7 @@
         // scheme with no host, an empty string, a multi-line clipboard.
         assert!(!is_url("the essay"));
         assert!(!is_url("https://has a space"));
-        assert!(!is_url("/Users/frank/notes.md"));
+        assert!(!is_url("/Users/alex/notes.md"));
         assert!(!is_url("./relative/path"));
         assert!(!is_url("http://")); // nothing after `://`
         assert!(!is_url("://nohost"));

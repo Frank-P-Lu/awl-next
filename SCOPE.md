@@ -45,7 +45,7 @@ good picker is, deliberately, enough.
    awl: its feel couldn't be agent-verified, so the build loop never converged.)
 
 ## Why this order
-The old awl (`code2026/awl`, ~76k LOC) had no plain editor underneath — it went
+The old awl (a separate prior project, ~76k LOC) had no plain editor underneath — it went
 straight to a 3D prism. This time the editor is the foundation; modes are skins
 on top of a thing that already works.
 
