@@ -49,6 +49,15 @@ struct Entry {
 #[derive(Default)]
 pub(crate) struct ImageCache {
     map: HashMap<PathBuf, Entry>,
+    /// ITEM 5c (the reported theme-switch slowdown probe): counts every actual
+    /// DECODE — a cache MISS in [`Self::ensure`] (stale/absent entry, the
+    /// `decode_upload` branch) — never a cache HIT. A theme switch RE-TINTS
+    /// colors and re-shapes TEXT (`sync_theme`/`sync_theme_colors`/
+    /// `sync_theme_font`), none of which touch `self.map` or this counter, so
+    /// it stays FLAT across repeated switches with the same images in view —
+    /// the WITNESS `render::tests::images::theme_switch_never_redecodes_a_
+    /// cached_image` asserts exactly that.
+    decodes: usize,
 }
 
 /// The file's modification time as nanoseconds since the Unix epoch, or `0` when
@@ -112,8 +121,17 @@ impl ImageCache {
         if !fresh {
             let state = decode_upload(device, queue, resolved, display_w, max_dim);
             self.map.insert(key.clone(), Entry { mtime_ns: now, state });
+            self.decodes += 1;
         }
         &self.map.get(&key).expect("just inserted").state
+    }
+
+    /// The running count of actual DECODES since this cache was created (see the
+    /// `decodes` field doc) — the item-5c witness's read. Test-only (no
+    /// production reader today; probe-grade instrumentation).
+    #[cfg(test)]
+    pub(crate) fn decode_count(&self) -> usize {
+        self.decodes
     }
 
     /// Prune every entry whose canonical path is NOT in `keep` — the current

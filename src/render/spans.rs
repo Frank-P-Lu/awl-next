@@ -675,6 +675,29 @@ pub(super) fn line_has_image_span(
     })
 }
 
+/// INLINE IMAGES (item 5a, "list item with text and an image"): true when
+/// `line_text` carries REAL content besides its own list marker (if any) and the
+/// image markup at `image_local` (BYTE range relative to `line_text`'s own start,
+/// not the document) — i.e. `- caption text ![alt](p)` is "mixed", a bare
+/// `- ![alt](p)` (or plain `![alt](p)`) is not. The list marker's own bytes
+/// (`crate::markdown::list_item`'s `content` offset — the marker conceals to its
+/// own bullet glyph regardless, see `add_bullet_conceal_span`) are excluded from
+/// the scan alongside the image span itself; ANY other non-whitespace byte makes
+/// it mixed. Pure — read by [`super::TextPipeline::compute_image_layout`] to
+/// decide the row-height RESERVATION (see its doc comment for the "own row below
+/// the text row" strategy this drives).
+pub(super) fn image_line_has_other_content(
+    line_text: &str,
+    image_local: std::ops::Range<usize>,
+) -> bool {
+    let content_start = crate::markdown::list_item(line_text)
+        .map(|it| it.content)
+        .unwrap_or(0);
+    let b = line_text.as_bytes();
+    (content_start.min(b.len())..b.len())
+        .any(|i| !b[i].is_ascii_whitespace() && !(i >= image_local.start && i < image_local.end))
+}
+
 /// True when a `Code`/`CodeSyntax` span (a fenced-block BODY byte) overlaps the
 /// document byte range `[line_doc_start, line_end)` — i.e. this line is a fence
 /// BODY line, not a marker line. Shared by [`add_wysiwyg_conceal_spans`]'s
@@ -727,6 +750,33 @@ pub(super) fn line_has_code_span(
 /// [`scaled_base_attrs`] used to build `base`/`lb`) — see
 /// [`CONCEAL_ZERO_WIDTH_FONT_SIZE`]'s doc comment for why the concealed span's
 /// paired line-height override must match it exactly rather than shrinking.
+///
+/// `image_force` (item 5 rework, `Some((dh, target_advance_px))` only for a
+/// MIXED off-cursor image line — see [`super::TextPipeline::image_force`]'s
+/// field doc for the full mechanism): when set, the line's OWN `Image` conceal
+/// span is NOT collapsed uniformly like every other kind here. Instead its
+/// SECOND byte (the `[` of `![alt](p)`) gets an ADDITIONAL
+/// `letter_spacing(target_advance_px / CONCEAL_ZERO_WIDTH_FONT_SIZE)` —
+/// cosmic-text divides `letter_spacing` by the SAME per-glyph font-scale factor
+/// it divides `x_advance` by, so the raw value must be pre-multiplied by
+/// `1 / CONCEAL_ZERO_WIDTH_FONT_SIZE` to land the glyph's ACTUAL on-screen
+/// advance at `target_advance_px` — forcing `Wrap::WordOrGlyph` to push it (and
+/// the rest of the markup right after, which trivially fits alongside it) onto
+/// a genuine NEW visual row of this same logical line, both at
+/// `line_height = dh` (so that row reports `dh`, never the caption's own
+/// `line_height`). NEVER the leading `!` itself: Unicode UAX14 rule LB13
+/// ("do not break before `!`/`;`/`/`/`]`") forbids a line break immediately
+/// before `!`, so forcing on `!` glues the CAPTION'S OWN LAST WORD to it as one
+/// unbreakable unit — dragging that real, visible word onto the `dh`-tall row
+/// too and re-stranding it (confirmed empirically; this was the actual bug in
+/// an earlier build of this same mechanism, distinct from the prior round's
+/// row-inflation bug but with the identical stranded-word symptom). `[` carries
+/// no such restriction, so `!` stays a plain, non-forcing zero-width glyph and
+/// `[` becomes the forcing one. The caption's OWN row is UNTOUCHED — no metrics
+/// override at all touches it — so it never centers/strands away from its own
+/// list marker (the prior round's bug). `None` (every other image line — bare,
+/// revealed, or feature-off) is byte-identical to the uniform zero-width
+/// treatment every other kind gets.
 pub(super) fn add_wysiwyg_conceal_spans(
     al: &mut glyphon::cosmic_text::AttrsList,
     line_text: &str,
@@ -736,6 +786,7 @@ pub(super) fn add_wysiwyg_conceal_spans(
     conceal_off_cursor: bool,
     cursor_byte: usize,
     line_height: f32,
+    image_force: Option<(f32, f32)>,
 ) {
     if !crate::markdown::wysiwyg_on() {
         return;
@@ -767,9 +818,58 @@ pub(super) fn add_wysiwyg_conceal_spans(
         }
         let lo = r.start.max(line_doc_start);
         let hi = r.end.min(line_end);
-        if lo < hi {
-            al.add_span((lo - line_doc_start)..(hi - line_doc_start), &hidden);
+        if lo >= hi {
+            continue;
         }
+        if ck == ConcealKind::Image {
+            if let Some((dh, target_advance)) = image_force {
+                // FORCED TRAILING ROW (see this fn's doc comment). The forcing
+                // glyph carries a huge `letter_spacing`, so cosmic-text's
+                // `Wrap::WordOrGlyph` engine pushes it (and everything after)
+                // onto a new visual row — EXCEPT it must NOT be the markup's
+                // very first char (`!`). Unicode UAX14 rule LB13 ("do not break
+                // before `!`/`;`/`/`/`]`") forbids a line break immediately
+                // before `!`, so cosmic-text's word-breaker GLUES the preceding
+                // word (the caption's own last word) to a forcing `!` as ONE
+                // unbreakable unit — dragging that real, visible word onto the
+                // `dh`-tall trailing row and stranding IT instead (confirmed
+                // empirically: forcing on `!` reliably drops the caption's last
+                // word, regardless of margin). `[` (the markup's SECOND char,
+                // always present — every image ref is `![...]`) carries no such
+                // restriction, so `!` stays a plain (non-forcing) zero-width
+                // glyph and `[` becomes the forcing one instead.
+                let mut chars = line_text[(lo - line_doc_start)..].char_indices();
+                let bang_len = chars.next().map_or(1, |(_, c)| c.len_utf8());
+                let second_len = chars.next().map_or(0, |(_, c)| c.len_utf8());
+                let bang_end = (lo + bang_len).min(hi);
+                let force_end = (bang_end + second_len).min(hi);
+                // `!` (row 0, alongside the caption): the row's OWN natural
+                // height already stays correct with no override needed, but
+                // `hidden`'s paired `line_height` (the caller's row height)
+                // is harmless here regardless.
+                if bang_end > lo {
+                    al.add_span((lo - line_doc_start)..(bang_end - line_doc_start), &hidden);
+                }
+                // `[` onward (the trailing row): every glyph here MUST pair
+                // with `dh`, not `line_height` — they land on the FORCED row,
+                // whose height a smaller `line_height` value could otherwise
+                // win the MAX against if `dh` is unusually small (a tiny image).
+                let dh_hidden = hidden
+                    .clone()
+                    .metrics(GlyphMetrics::new(CONCEAL_ZERO_WIDTH_FONT_SIZE, dh));
+                if force_end > bang_end {
+                    let forcing = dh_hidden
+                        .clone()
+                        .letter_spacing(target_advance / CONCEAL_ZERO_WIDTH_FONT_SIZE);
+                    al.add_span((bang_end - line_doc_start)..(force_end - line_doc_start), &forcing);
+                }
+                if force_end < hi {
+                    al.add_span((force_end - line_doc_start)..(hi - line_doc_start), &dh_hidden);
+                }
+                continue;
+            }
+        }
+        al.add_span((lo - line_doc_start)..(hi - line_doc_start), &hidden);
     }
 }
 
@@ -802,7 +902,7 @@ pub(super) fn cell_inline_attrs(
     let md_spans = crate::markdown::spans(cell);
     let mut al = glyphon::cosmic_text::AttrsList::new(base);
     add_md_line_spans(&mut al, cell, 0, base, &md_spans);
-    add_wysiwyg_conceal_spans(&mut al, cell, 0, base, &md_spans, true, 0, line_height);
+    add_wysiwyg_conceal_spans(&mut al, cell, 0, base, &md_spans, true, 0, line_height, None);
     al
 }
 
@@ -1430,17 +1530,24 @@ pub(super) fn build_line_attrs(
     conceal_off_cursor: bool,
     cursor_byte: usize,
     image_row_height: Option<f32>,
+    image_force: Option<(f32, f32)>,
 ) -> glyphon::cosmic_text::AttrsList {
-    // An IMAGE line reserves a TALL row at its display height — NORMAL font size
-    // (so the revealed `![alt](path)` source stays readable when the caret lands)
-    // over a tall LINE-HEIGHT (the row cosmic-text derives from the row's max
-    // glyph line-height). This is the "per-line metric override" the headings use,
+    // A BARE image line (`- ![alt](p)`, no other content) or a wrapped-table row
+    // reserves a TALL row at its display height — NORMAL font size (so the
+    // revealed `![alt](path)` source stays readable when the caret lands) over a
+    // tall LINE-HEIGHT (the row cosmic-text derives from the row's max glyph
+    // line-height). This is the "per-line metric override" the headings use,
     // but with an ABSOLUTE line-height rather than a font-size scale, so it stays
     // decoupled from the font size. `row_lh` also feeds the zero-width conceal
     // below so the off-cursor (fully concealed) source keeps the row tall.
     //
+    // A MIXED image line (`- caption text ![alt](p)`) does NOT use this at all —
+    // `image_row_height` is always `None` there; instead `image_force` (below)
+    // drives a forced-trailing-ROW mechanism on the SAME (untouched) line so the
+    // caption's own row never inflates (see `add_wysiwyg_conceal_spans`'s doc).
+    //
     // CAPTION-STYLE REVEAL (re-decided 2026-07-09, supersedes the reveal-GROW
-    // model): the image row is ALWAYS exactly the image height `h` — the caret
+    // model): a BARE image row is ALWAYS exactly the image height `h` — the caret
     // landing on / leaving the line causes ZERO row-height change and ZERO reflow
     // (the headline win). Off the caret's line the source CONCEALS (zero-width) and
     // the image fills the row. ON the caret's line the source REVEALS at body size
@@ -1491,7 +1598,7 @@ pub(super) fn build_line_attrs(
     // the row — see `add_wysiwyg_conceal_spans`'s doc comment.
     add_wysiwyg_conceal_spans(
         &mut al, line_text, line_doc_start, &lb, md_spans, conceal_off_cursor, cursor_byte,
-        row_lh,
+        row_lh, image_force,
     );
     al
 }

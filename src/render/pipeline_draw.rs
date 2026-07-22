@@ -431,6 +431,7 @@ impl TextPipeline {
             xray: None,
             image_base_dir: None,
             image_heights: Vec::new(),
+            image_force: Vec::new(),
             image_report: std::cell::RefCell::new(Vec::new()),
             image_preview: None,
             image_preview_dirty: false,

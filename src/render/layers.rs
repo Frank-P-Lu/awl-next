@@ -2120,12 +2120,24 @@ impl TextPipeline {
         // real image line is revealed with WYSIWYG on.
         let mut scrim_bands: Vec<[f32; 4]> = Vec::new();
         for im in &report {
-            if !self.line_ornament_visible(im.line) || (im.revealed && !wysiwyg) {
+            // ITEM 5 REWORK: a REVEALED MIXED line reserves nothing this frame
+            // (`compute_image_layout`'s doc comment — the raw source wraps as
+            // plain text instead), so there is no well-defined place to draw
+            // the image; skip it for that one frame, like the `!wysiwyg` arm.
+            if !self.line_ornament_visible(im.line)
+                || (im.revealed && !wysiwyg)
+                || (im.revealed && !self.image_row_reserved(im.line))
+            {
                 continue;
             }
             let dw = im.display_w.max(1.0);
             let dh = im.display_h.max(1.0);
-            let row_top = self.line_ornament_top(im.line);
+            // ITEM 5 REWORK: a bare image-only line's row IS `dh` tall, so this is
+            // just its row top (byte-identical to before). A MIXED line instead
+            // reads its LAST visual row's own top — the genuine cosmic-text row the
+            // forcing glyph landed on (`Self::image_draw_top`'s doc) — directly
+            // below the untouched marker+caption row, never overlapping it.
+            let row_top = self.image_draw_top(im.line);
             // Revealed: the image stays at the row top, DIMMED, and the source
             // reveals CENTRED over it (the caption model). Off-cursor / missing: full
             // opacity, source concealed. A missing placeholder never dims.
