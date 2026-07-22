@@ -1151,6 +1151,19 @@ fn finish_manual_save_clears_a_regular_files_dirty_marker_immediately() {
 
 #[test]
 fn sync_view_retitles_only_on_an_actual_dirty_flip() {
+    // HERMETIC: install an InMemoryFs before `App::new` so this test never
+    // touches the machine's real `session.toml`/stash (`app_on(None, ..)` runs
+    // the full App startup, including the scratch-stash restore). FsGuard also
+    // holds `testlock::serial()` for the test's life — without it this
+    // uninstalled `app_on(None, ..)` read the PROCESS-GLOBAL active fs, so under
+    // CI parallelism it raced INTO a concurrent test's installed InMemoryFs and,
+    // finding that test's deliberately-corrupt scratch stash, preserved a second
+    // `.corrupt-*` sibling into it — the deterministic CI-only failure of
+    // `scratch_stash_invalid_utf8_preserves_a_corrupt_sibling_then_starts_a_blank_scratch`
+    // (mirrors `duplicate_current_file_on_a_pathless_buffer_is_a_quiet_no_op`).
+    use crate::fs::InMemoryFs;
+    let mem = InMemoryFs::new().with_dir("/proj");
+    let _g = crate::fs::FsGuard::install(Arc::new(mem));
     let mut app = app_on(None, "/proj", Config::empty());
     assert!(!app.title_dirty, "a fresh scratch buffer starts clean");
     // No gpu/window in a hermetic App: `sync_view` bails before the title
