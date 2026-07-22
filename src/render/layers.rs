@@ -1479,69 +1479,148 @@ impl TextPipeline {
         self.last_table_cell_lines.borrow().clone()
     }
 
-    /// THE X-RAY (the user's canonized metaphor): when the caret sits on a GFM
-    /// table ROW, stash that row's RAW SOURCE shaped as ONE NON-WRAPPING line
-    /// ([`crate::render::XrayRow`]) so (a) the caret's own `col_x_and_advance`
-    /// redirects onto it (the concealed doc row is zero-width — see the redirect in
-    /// `geometry.rs`), (b) `caret_band_scale` sizes the caret to the source band,
-    /// and (c) `prepare_table_grid` floats it, centered, over the row band its OWN
-    /// grid cells were skipped for (the true source SWAP — see that function's own
-    /// doc comment), panning to keep the caret visible. Run BEFORE
-    /// [`Self::prepare_caret_layer`] so the
-    /// redirect is ready when the caret geometry is computed. Clears the stash
-    /// first (a caret NOT on a table row heals the row), carrying the previous
-    /// frame's pan for the same row so a walk along it doesn't jitter. Gated on
-    /// WYSIWYG + markdown; `None` for every other frame (byte-identical capture).
+    /// TEST-ONLY: `(line, raw source)` for every X-RAYED table row this frame
+    /// (see [`Self::prepare_table_xray`]) — the caret's own row (if a caret
+    /// sits on a table row) PLUS every row the active selection touches. The
+    /// complement of [`Self::table_cell_lines_drawn`]: a line here never
+    /// appears there (its grid cells were skipped so its raw source could
+    /// float instead), so a test can assert BOTH "the grid stayed off" and
+    /// "the real `|` source is what floats" without a GPU pixel diff.
+    #[cfg(test)]
+    pub(super) fn xray_lines_report(&self) -> Vec<(usize, String)> {
+        self.xray.iter().map(|x| (x.line, x.source.clone())).collect()
+    }
+
+    /// THE X-RAY (the user's canonized metaphor): for every GFM table ROW the
+    /// caret sits on OR the active SELECTION touches, stash that row's RAW SOURCE
+    /// shaped as ONE NON-WRAPPING line ([`crate::render::XrayRow`]) so (a) the
+    /// caret's own `col_x_and_advance` redirects onto ITS row (the concealed doc
+    /// row is zero-width — see the redirect in `geometry.rs`), (b)
+    /// `caret_band_scale` sizes the caret to the source band on any x-rayed row,
+    /// and (c) `prepare_table_grid` floats each one, centered, over the row band
+    /// its OWN grid cells were skipped for (the true source SWAP — see that
+    /// function's own doc comment). Only the CARET's own row pans horizontally to
+    /// keep the caret visible (the find-field single-line pan model, carrying the
+    /// previous frame's pan for that SAME row so a walk along it doesn't jitter);
+    /// a row revealed purely by selection has no caret column to pan toward and
+    /// always floats flush-left (`pan = 0`). Run BEFORE [`Self::prepare_caret_layer`]
+    /// so the redirect is ready when the caret geometry is computed. Clears the
+    /// stash first (a caret/selection that no longer touches a table row heals
+    /// it). Gated on WYSIWYG + markdown; empty for every other frame
+    /// (byte-identical capture).
+    ///
+    /// PER-FRAME COST STAYS BOUNDED (never O(doc lines)): the candidate set is
+    /// found by walking TABLE BLOCKS (mirrors `prepare_table_grid`'s own Phase A
+    /// block walk) and intersecting each block's OWN line span with the caret
+    /// line / selection range, so a Select-All across a huge document costs
+    /// O(this doc's table rows), never O(doc lines) — a document with no table
+    /// under the cursor/selection never even enters the per-line loop. A
+    /// selection-only (non-caret) row additionally passes the SAME
+    /// `line_ornament_visible` cull `prepare_table_grid` uses to skip off-screen
+    /// tables, so a Select-All spanning an off-screen table doesn't shape
+    /// thousands of `GlyphBuffer`s a frame; the caret's own row is never culled
+    /// (it is on-screen by construction).
     pub(super) fn prepare_table_xray(&mut self) {
-        // Carry the previous pan for the SAME row (stable walk), then reset.
+        // Carry the previous pan for the CARET's row only (stable walk) before
+        // clearing the stash.
         let prev_pan = self
             .xray
-            .as_ref()
-            .filter(|x| x.line == self.cursor_line)
+            .iter()
+            .find(|x| x.line == self.cursor_line)
             .map(|x| x.pan)
             .unwrap_or(0.0);
-        self.xray = None;
+        self.xray = Vec::new();
         if !(crate::markdown::wysiwyg_on() && self.md_enabled) {
             return;
         }
-        let line = self.cursor_line;
-        let line_byte = self.line_doc_byte_start(line);
-        let in_table = self
-            .table_blocks()
-            .into_iter()
-            .any(|(_, r)| r.start <= line_byte && line_byte < r.end);
-        if !in_table {
+        let blocks = self.table_blocks();
+        if blocks.is_empty() {
             return;
         }
-        let Some(src) = self.buffer.lines.get(line).map(|l| l.text().to_string()) else {
-            return;
-        };
-        // Shape the RAW source NON-WRAPPING (Wrap::None) — one line that pans, so
-        // the row NEVER grows (the whole point of the x-ray).
+        let cursor_line = self.cursor_line;
+        // The active selection's LINE span (`l0..=l1`, column-agnostic — the SAME
+        // extent `selection_touch_bytes` derives, never re-derived a second way),
+        // or `None` with no selection.
+        let sel_lines = self.selection.map(|((l0, _), (l1, _))| l0..=l1);
+        let last_doc_line = self.buffer.lines.len().saturating_sub(1);
         let m = self.metrics;
         let body = GlyphMetrics::new(m.font_size, m.line_height);
         let base = self.doc_attrs().color(theme::base_content().to_glyphon());
-        let mut buf = GlyphBuffer::new(&mut self.font_system, body);
-        buf.set_wrap(&mut self.font_system, Wrap::None);
-        buf.set_size(&mut self.font_system, None, Some(m.line_height * 2.0));
-        buf.set_text(&mut self.font_system, &src, &base, Shaping::Advanced, None);
-        buf.shape_until_scroll(&mut self.font_system, false);
-        let mut clusters: Vec<(usize, usize, f32, f32)> = Vec::new();
-        for run in buf.layout_runs() {
-            for g in run.glyphs.iter() {
-                clusters.push((g.start, g.end, g.x, g.x + g.w));
-            }
-        }
-        let glyph_xs = super::geometry::assemble_glyph_xs(&src, &clusters, m.char_width);
-        let content_w = glyph_xs.last().copied().unwrap_or(0.0);
         let view_w = self.text_wrap_width().max(1.0);
         let pad = crate::render::TABLE_CELL_PAD_X * m.zoom;
-        let cc = self.cursor_col.min(glyph_xs.len().saturating_sub(1));
-        let caret_x = glyph_xs.get(cc).copied().unwrap_or(0.0);
-        let pan = super::geometry::xray_pan_for_caret(caret_x, content_w, view_w, pad, prev_pan);
-        let top = self.line_ornament_top(line);
-        let height = self.cursor_row_height();
-        self.xray = Some(crate::render::XrayRow { line, source: src, glyph_xs, top, height, pan });
+        let mut rows: Vec<crate::render::XrayRow> = Vec::new();
+        // Walk TABLES, never document lines: a Select-All across a huge document
+        // must cost O(this table's own rows), not O(doc lines) — the candidate
+        // set below is bounded by the block's OWN line span, intersected with the
+        // (already column-agnostic) selection range.
+        for (header_line, range) in &blocks {
+            if *header_line > last_doc_line {
+                continue;
+            }
+            // This block's own line span, found by walking its SOURCE lines
+            // (mirrors `prepare_table_grid`'s Phase A block walk) — bounded by
+            // the table's own row count, never the document's.
+            let mut li = *header_line;
+            let mut b = self.line_doc_byte_start(*header_line);
+            let mut last_line_of_block = *header_line;
+            while li <= last_doc_line && b < range.end {
+                last_line_of_block = li;
+                b += self.buffer.lines[li].text().len() + 1;
+                li += 1;
+            }
+            let caret_here =
+                (*header_line..=last_line_of_block).contains(&cursor_line);
+            for line in *header_line..=last_line_of_block {
+                let is_caret = caret_here && line == cursor_line;
+                let is_selected = !is_caret
+                    && sel_lines.as_ref().is_some_and(|sl| sl.contains(&line));
+                if !is_caret && !is_selected {
+                    continue;
+                }
+                // VISIBLE-BAND CULL for selection-only rows (never the caret's
+                // own — it is on-screen by construction, auto-scroll keeps it
+                // there): a Select-All spanning an off-screen table must not
+                // shape thousands of GlyphBuffers every frame.
+                if is_selected && !self.line_ornament_visible(line) {
+                    continue;
+                }
+                let Some(src) = self.buffer.lines.get(line).map(|l| l.text().to_string()) else {
+                    continue;
+                };
+                // Shape the RAW source NON-WRAPPING (Wrap::None) — one line that
+                // pans, so the row NEVER grows (the whole point of the x-ray).
+                let mut buf = GlyphBuffer::new(&mut self.font_system, body);
+                buf.set_wrap(&mut self.font_system, Wrap::None);
+                buf.set_size(&mut self.font_system, None, Some(m.line_height * 2.0));
+                buf.set_text(&mut self.font_system, &src, &base, Shaping::Advanced, None);
+                buf.shape_until_scroll(&mut self.font_system, false);
+                let mut clusters: Vec<(usize, usize, f32, f32)> = Vec::new();
+                for run in buf.layout_runs() {
+                    for g in run.glyphs.iter() {
+                        clusters.push((g.start, g.end, g.x, g.x + g.w));
+                    }
+                }
+                let glyph_xs = super::geometry::assemble_glyph_xs(&src, &clusters, m.char_width);
+                let content_w = glyph_xs.last().copied().unwrap_or(0.0);
+                let (pan, height) = if is_caret {
+                    let cc = self.cursor_col.min(glyph_xs.len().saturating_sub(1));
+                    let caret_x = glyph_xs.get(cc).copied().unwrap_or(0.0);
+                    let pan = super::geometry::xray_pan_for_caret(
+                        caret_x, content_w, view_w, pad, prev_pan,
+                    );
+                    (pan, self.cursor_row_height())
+                } else {
+                    // Selection-only reveal: no caret column on this row to pan
+                    // toward — always flush-left, sized to the row's own
+                    // (single, non-wrapping-source) visual row height.
+                    let h = super::geometry::pick_row(&self.visual_rows(line), 0).line_height;
+                    (0.0, h)
+                };
+                let top = self.line_ornament_top(line);
+                rows.push(crate::render::XrayRow { line, source: src, glyph_xs, top, height, pan });
+            }
+        }
+        self.xray = rows;
     }
 
     /// WYSIWYG TABLE GRID: place every off-cursor GFM table's cells by PIXEL column
@@ -1621,6 +1700,15 @@ impl TextPipeline {
         // `table_grid_cache` (the one shape site), never recomputed at draw time.
         let rule_thick = (TABLE_RULE_THICKNESS * m.zoom).max(1.0);
         let cursor_byte = self.line_doc_byte_start(self.cursor_line);
+        // SELECTION REVEAL: the SAME touched-line byte extent `wysiwyg_reveals`
+        // widens its own caret-only rule with (`selection_touch_bytes`) — a
+        // table whose range the selection overlaps is "revealed" exactly like
+        // one the caret sits inside.
+        let selection_touch = selection_touch_bytes(
+            self.selection,
+            |i| self.line_doc_byte_start(i),
+            |i| self.buffer.lines.get(i).map(|l| l.text().len()).unwrap_or(0),
+        );
         let content = theme::base_content().to_glyphon();
 
         // PHASE A — parse each block into owned data (no font work yet).
@@ -1683,7 +1771,10 @@ impl TextPipeline {
                 ncols,
                 aligns,
                 sep_doc_line: *header_line + 1,
-                revealed: range.contains(&cursor_byte),
+                revealed: range.contains(&cursor_byte)
+                    || selection_touch
+                        .as_ref()
+                        .is_some_and(|st| st.start < range.end && range.start < st.end),
                 visible,
                 grid_rows,
             });
@@ -1719,12 +1810,14 @@ impl TextPipeline {
         let view_w = avail;
         let pan_bar_thick = (crate::render::TABLE_PAN_BAR_THICKNESS * m.zoom).max(1.0);
         let muted = theme::muted().to_glyphon();
-        // THE X-RAY float: the caret's table-row RAW SOURCE shaped NON-WRAPPING into
-        // a LOCAL buffer (so `areas` can borrow it below without fighting the
-        // renderer's own `&mut self` borrows). Drawn dim ("the markdown bones") over
-        // the dimmed grid cells, panned by `x.pan` to keep the caret column visible.
-        let mut xray_float: Option<(GlyphBuffer, f32, f32, f32, usize)> = None;
-        if let Some(x) = self.xray.clone() {
+        // THE X-RAY floats: every caret- or selection-revealed table row's RAW
+        // SOURCE, each shaped NON-WRAPPING into its own LOCAL buffer (so `areas`
+        // can borrow them below without fighting the renderer's own `&mut self`
+        // borrows). Drawn dim ("the markdown bones") over the dimmed grid cells;
+        // the caret's OWN row pans by `x.pan` to keep the caret column visible,
+        // every other (selection-only) row floats flush-left (`x.pan == 0`).
+        let mut xray_floats: Vec<(GlyphBuffer, f32, f32, f32, usize)> = Vec::new();
+        for x in self.xray.clone() {
             let bodym = GlyphMetrics::new(m.font_size, m.line_height);
             let base = self.doc_attrs().color(muted);
             let mut buf = GlyphBuffer::new(&mut self.font_system, bodym);
@@ -1732,9 +1825,9 @@ impl TextPipeline {
             buf.set_size(&mut self.font_system, None, Some(m.line_height * 2.0));
             buf.set_text(&mut self.font_system, &x.source, &base, Shaping::Advanced, None);
             buf.shape_until_scroll(&mut self.font_system, false);
-            xray_float = Some((buf, x.top, x.height, x.pan, x.line));
+            xray_floats.push((buf, x.top, x.height, x.pan, x.line));
         }
-        let xray_line = xray_float.as_ref().map(|f| f.4);
+        let xray_lines: Vec<usize> = xray_floats.iter().map(|f| f.4).collect();
         let mut areas: Vec<TextArea> = Vec::new();
         let mut rule_rects: Vec<[f32; 4]> = Vec::new();
         let mut pan_writeback: Option<(usize, f32)> = None;
@@ -1755,25 +1848,25 @@ impl TextPipeline {
             };
             // THE X-RAY table (the caret is inside): the grid stays DRAWN (the
             // document never reflowed — the source rows are still concealed), the
-            // caret's own row is DIMMED, and its raw source floats over it (pushed
-            // after the loop). No reading-pan applies while editing — the float owns
-            // the horizontal.
+            // caret/selection-touched row(s) are DIMMED, and their raw source
+            // floats over them (pushed after the loop). No reading-pan applies
+            // while editing/selecting — the float(s) own the horizontal.
             if meta.revealed {
                 let content_w = col_x
                     .last()
                     .zip(col_w.last())
                     .map(|(x, w)| x + w)
                     .unwrap_or(0.0);
-                // TRUE SWAP, not dim-under-float (the fix): the caret's OWN row
-                // uploads NO grid cells at all — the x-ray source float (pushed
-                // after this loop, centered in the row's own band) is the ONLY
-                // text drawn in that band, per the drop-to-source-on-cursor
-                // contract. Every OTHER row of a revealed table still draws its
-                // grid at full ink — only the one row the caret occupies drops
-                // to source; the block never "parks" wholesale.
+                // TRUE SWAP, not dim-under-float (the fix): every caret- or
+                // selection-touched row uploads NO grid cells at all — its x-ray
+                // source float (pushed after this loop, centered in the row's own
+                // band) is the ONLY text drawn in that band, per the
+                // drop-to-source-on-cursor/selection contract. Every OTHER row of
+                // a revealed table still draws its grid at full ink — only the
+                // touched rows drop to source; the block never "parks" wholesale.
                 for (gr, c, buf, cw) in &s.cells {
                     let doc_line = meta.grid_rows[*gr].0;
-                    if Some(doc_line) == xray_line {
+                    if xray_lines.contains(&doc_line) {
                         continue;
                     }
                     #[cfg(test)]
@@ -1894,11 +1987,13 @@ impl TextPipeline {
                 }
             }
         }
-        // THE X-RAY FLOAT — drawn LAST so it composites over the dimmed grid cells:
-        // the caret row's raw source as one non-wrapping line, panned by `pan` to
-        // keep the caret visible, centred in its row band, clipped to the writing
-        // column (so a long source doesn't spill into the margins).
-        if let Some((buf, top, row_h, pan, _line)) = xray_float.as_ref() {
+        // THE X-RAY FLOATS — drawn LAST so each composites over its own dimmed
+        // grid row: every caret/selection-touched row's raw source as one
+        // non-wrapping line (the caret's own panned by `pan` to keep the caret
+        // visible; every other flush-left at `pan == 0`), centred in its row
+        // band, clipped to the writing column (so a long source doesn't spill
+        // into the margins).
+        for (buf, top, row_h, pan, _line) in xray_floats.iter() {
             let float_top = top + (row_h - m.line_height) * 0.5;
             areas.push(TextArea {
                 buffer: buf,
@@ -2298,13 +2393,26 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// SELECTION REVEAL (regression fix, item 16 follow-up): `revealed` is true
+    /// when the CURRENT caret line OR the active selection touches the image's
+    /// own span — the SAME [`selection_touches`] overlap test
+    /// [`super::spans::wysiwyg_reveals`] uses for the raw markup, never
+    /// re-derived — so a selected image line PARKS (dims + scrims, or for a
+    /// mixed caption line, skips the draw) exactly like a caret-revealed one,
+    /// instead of drawing full-brightness under revealed source text.
     pub fn images_report(&self) -> Vec<crate::render::ImageReport> {
+        let selection_touch = selection_touch_bytes(
+            self.selection,
+            |i| self.line_doc_byte_start(i),
+            |i| self.buffer.lines.get(i).map(|l| l.text().len()).unwrap_or(0),
+        );
         self.image_report
             .borrow()
             .iter()
             .cloned()
             .map(|mut r| {
-                r.revealed = r.line == self.cursor_line;
+                r.revealed = r.line == self.cursor_line
+                    || selection_touches(selection_touch.as_ref(), &(r.range.0..r.range.1));
                 r
             })
             .collect()

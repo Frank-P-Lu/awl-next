@@ -1722,11 +1722,10 @@ impl TextPipeline {
         // ZERO-WIDTH concealed (the grid draws in their place), so the caret can't
         // ride them — it rides the FLOATED non-wrapping source instead. Reuses the
         // stash `prepare_table_xray` laid before the caret layer; pure `xray_col_x`
-        // maps the caret column onto the float's own advances (minus the pan).
-        if let Some(x) = self.xray.as_ref() {
-            if x.line == line {
-                return xray_col_x(x, col, self.metrics.char_width);
-            }
+        // maps the caret column onto the float's own advances (minus the pan). The
+        // caret only ever sits on ONE line, so at most one `xray` entry matches.
+        if let Some(x) = self.xray.iter().find(|x| x.line == line) {
+            return xray_col_x(x, col, self.metrics.char_width);
         }
         // Use the VISUAL ROW that owns `col` so a wrapped column reads its run's
         // own left-aligned x's (each wrapped run restarts near x=0). For a
@@ -1811,10 +1810,11 @@ impl TextPipeline {
         if crate::markdown::wysiwyg_on() && self.line_is_inline_image(li) {
             return 1.0;
         }
-        // THE X-RAY table row: the caret rides the FLOATED body-size source, not
-        // the (possibly tall, wrapped-cell) grid row — so the band sizes to the
-        // source line, exactly like the image caption model above.
-        if self.xray.as_ref().is_some_and(|x| x.line == li) {
+        // THE X-RAY table row: the caret (or an active selection) rides the
+        // FLOATED body-size source, not the (possibly tall, wrapped-cell) grid
+        // row — so the band sizes to the source line, exactly like the image
+        // caption model above.
+        if self.xray.iter().any(|x| x.line == li) {
             return 1.0;
         }
         let lh = self.metrics.line_height;

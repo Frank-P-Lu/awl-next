@@ -945,7 +945,9 @@ pub const HELLO_TEXT: &str = "awl - hello";
 /// sidecar block — so a headless assertion can read the grid's shape (row/col
 /// counts, measured column widths, reveal state) without eyeballing pixels.
 /// `col_widths` are the laid-out (post-clamp) column box widths in px; `revealed`
-/// is true when the caret is inside the table (grid parked, raw source shown).
+/// is true when the caret is inside the table OR the active selection touches it
+/// (grid stays drawn, each caret-or-selection-touched row's raw source floats
+/// instead — see [`XrayRow`]).
 #[derive(Clone, Debug)]
 pub struct TableReport {
     pub range: (usize, usize),
@@ -956,20 +958,24 @@ pub struct TableReport {
 }
 
 /// THE X-RAY (the user's canonized metaphor: the caret is an x-ray into the
-/// standing structure). When the caret sits on a GFM table ROW, the table's
-/// drawn GRID stays put (the source rows stay concealed → the document NEVER
-/// reflows during a keyboard walk) and this row's RAW SOURCE floats as ONE
-/// NON-WRAPPING line over the dimmed grid cells, panning horizontally to keep the
-/// caret column visible (the find-field single-line pan model). `line` is the
-/// caret's document line; `glyph_xs` are the source glyphs' left-x's
-/// (`char_count + 1` entries, 0-based from the row's left, the last = the line's
-/// end x) used BOTH to place the float and to REDIRECT the caret's own
-/// `col_x_and_advance` onto the floated glyphs (the concealed doc row has
-/// zero-width advances, so the caret must ride the float); `pan` is the clamped
-/// horizontal offset. Stashed by [`TextPipeline::prepare_table_xray`] (before the
-/// caret layer, so the redirect is ready) and consumed by the grid draw + the
-/// caret geometry. `None` whenever the caret is not on a table row (every capture
-/// without a caret-in-table, so byte-identical).
+/// standing structure). When the caret sits on a GFM table ROW — or the active
+/// selection touches one — the table's drawn GRID stays put (the source rows
+/// stay concealed → the document NEVER reflows during a keyboard walk or a
+/// selection drag) and that row's RAW SOURCE floats as ONE NON-WRAPPING line
+/// over the dimmed grid cells; the CARET's own row additionally pans
+/// horizontally to keep the caret column visible (the find-field single-line
+/// pan model) — a row revealed only by selection has no caret to pan toward and
+/// always floats at `pan = 0` (flush-left). `line` is this row's document line;
+/// `glyph_xs` are the source glyphs' left-x's (`char_count + 1` entries, 0-based
+/// from the row's left, the last = the line's end x) used BOTH to place the
+/// float and — for the caret's OWN entry — to REDIRECT `col_x_and_advance` onto
+/// the floated glyphs (the concealed doc row has zero-width advances, so the
+/// caret must ride the float); `pan` is the clamped horizontal offset. Stashed
+/// as a `Vec` (one entry per revealed row, across every table) by
+/// [`TextPipeline::prepare_table_xray`] (before the caret layer, so the redirect
+/// is ready) and consumed by the grid draw + the caret geometry. Empty whenever
+/// no row is caret- or selection-revealed (every default capture, so the frame
+/// stays byte-identical).
 #[derive(Clone, Debug)]
 pub(crate) struct XrayRow {
     pub line: usize,
@@ -2981,6 +2987,14 @@ pub struct TextPipeline {
     /// forces the next refresh (the initial state, and after every reshape/edit, which
     /// pass `force`), so a stale cached value can never suppress a needed re-conceal.
     last_conceal_cursor_line: Option<usize>,
+    /// The active SELECTION [`Self::refresh_rule_conceal`] was last refreshed for —
+    /// the selection-reveal companion to `last_conceal_cursor_line` (2026-07-22,
+    /// "selection reveals raw markdown"): a selection change can widen or shrink the
+    /// touched-line set WITHOUT moving the caret's own line (e.g. a Shift-click that
+    /// keeps the caret's line but moves the anchor, or a C-g that clears the mark),
+    /// so the gate compares this TOO, never just the cursor line. `None` forces the
+    /// next refresh (the initial state, and after every reshape/edit).
+    last_conceal_selection: Option<((usize, usize), (usize, usize))>,
     /// VARIABLE-ROW-HEIGHT geometry cache + the lazily-cached total visual-row
     /// count, owned as a cohesive sub-struct (see [`rowgeom::RowGeom`]). With
     /// heading lines the visual rows are no longer a uniform `line_height` tall, so
@@ -3013,13 +3027,20 @@ pub struct TextPipeline {
     /// changes widths). Fed by [`Self::try_table_pan`] on a horizontal wheel; NEVER
     /// set on the headless path, so a default `--screenshot` stays byte-identical.
     table_pan: Option<(usize, f32)>,
-    /// THE X-RAY: the caret's table ROW source floated non-wrapping over the grid
-    /// (see [`XrayRow`]). Filled by [`Self::prepare_table_xray`] BEFORE the caret
-    /// layer (the caret's `col_x_and_advance` redirects onto `glyph_xs`), drawn by
-    /// `prepare_table_grid`, and read by `caret_band_scale` (a table row sizes the
-    /// caret to the SOURCE band, like an image line). `None` whenever the caret is
-    /// not on a table row — every default capture — so the frame stays byte-identical.
-    xray: Option<XrayRow>,
+    /// THE X-RAY: every table ROW currently floating its raw source non-wrapping
+    /// over the grid — the caret's OWN row (as before), PLUS every OTHER row the
+    /// active selection touches (2026-07-22, "selection reveals raw markdown" — a
+    /// selected table shows its raw `|` source, not just the caret's one row). See
+    /// [`XrayRow`]. Filled by [`Self::prepare_table_xray`] BEFORE the caret layer
+    /// (the caret's `col_x_and_advance` redirects onto the entry whose `line`
+    /// matches), drawn by `prepare_table_grid` (one float per entry), and read by
+    /// `caret_band_scale` (a table row sizes the caret to the SOURCE band, like an
+    /// image line). Empty whenever no table row is caret- or selection-revealed —
+    /// every default capture — so the frame stays byte-identical. `xray_report`
+    /// (the sidecar) still surfaces only the CARET's own entry (schema-unchanged);
+    /// the selection-only entries are render-only, verified by pixel/instance-count
+    /// arithmetic rather than the sidecar (the state-vs-appearance tripwire).
+    xray: Vec<XrayRow>,
     /// INLINE IMAGES: the directory a relative image path resolves against (the
     /// open doc's parent dir), copied from [`ViewState::doc_dir`] in
     /// [`Self::sync_view_fields`]. `None` = resolve relative paths against cwd.

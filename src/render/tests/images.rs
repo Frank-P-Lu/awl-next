@@ -121,6 +121,61 @@ fn inline_image_reserves_tall_row_and_reveals_source_on_cursor() {
     crate::markdown::set_inline_images_on(prev);
 }
 
+/// SELECTION REVEAL REGRESSION (item 16 follow-up, defect found in adversarial
+/// verify of `0828112`): a SELECTION touching a BARE image's own line — the
+/// caret itself parked elsewhere — must reveal the source EXACTLY like the
+/// caret landing on the line does (mirrors the test above): the raw markup
+/// un-conceals, `images_report().revealed` flips true, and the reserved row
+/// height stays the image's own `dh` unchanged (never a second, taller
+/// reservation stacked on top — the pre-fix shape would have left `revealed`
+/// caret-only while the markup already revealed, i.e. an un-dimmed image
+/// drawn under now-visible raw source). Fixture: `samples/tiny.png`.
+#[test]
+fn inline_image_reveals_under_selection_caret_elsewhere() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    let prev = crate::markdown::inline_images_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping inline_image_reveals_under_selection_caret_elsewhere: no wgpu adapter");
+        crate::markdown::set_inline_images_on(prev);
+        return;
+    };
+    let text = "![pic](samples/tiny.png)\nprose here\n";
+    // Caret on line 1 (prose), no selection: off-cursor, concealed, unrevealed.
+    let mut off = view(text, 1, 0);
+    off.is_markdown = true;
+    p.set_view(&off);
+    assert!(p.concealed_at(0, 0), "no selection: the image source stays concealed");
+    assert!(!p.images_report()[0].revealed, "no selection: not revealed");
+
+    // Caret STILL on line 1 (prose) — it never lands on the image line at all —
+    // but a SELECTION spans from line 0 (the image) through line 1.
+    let mut sel = view(text, 1, 4);
+    sel.is_markdown = true;
+    sel.selection = Some(((0, 0), (1, 4)));
+    p.set_view(&sel);
+    assert!(
+        !p.concealed_at(0, 0),
+        "a selection touching the image line reveals its raw source, caret or not"
+    );
+    assert!(
+        p.images_report()[0].revealed,
+        "SELECTION REVEAL: images_report().revealed is selection-aware, not caret-only"
+    );
+    // No double reservation: the row height is still exactly the image's own
+    // display height (48px) — the reveal parks it, it never grows/duplicates
+    // the row on top of the revealed source.
+    let h = p.visual_rows(0)[0].line_height;
+    assert!(
+        (h - 48.0).abs() < 2.0,
+        "selection reveal parks at the image's own row height, no double reservation: {h}"
+    );
+
+    crate::markdown::set_inline_images_on(prev);
+}
+
 /// FIX (2026-07-09): selecting chars on a REVEALED image line must draw a
 /// BODY-height selection band — the SAME height the caret draws there — NOT a
 /// char-wide × whole-image-height PILLAR (the reported selection bug). The caret
@@ -454,6 +509,67 @@ fn inline_image_off_cursor_draws_one_quad_and_stays_drawn_when_revealed() {
     restore();
 }
 
+/// GPU DRAW — SELECTION REVEAL REGRESSION (item 16 follow-up, the defect this
+/// round fixes): the SAME dimmed + scrim draw the caret-revealed test above
+/// asserts, reached through a SELECTION instead — the caret stays parked on
+/// the prose line; a selection spans the image line. BEFORE the fix
+/// `images_report().revealed` stayed caret-only, so this exact frame drew the
+/// image at FULL brightness (alpha 1.0, no scrim quad) directly under the
+/// already-revealed raw `![alt](path)` source (item 16 already made the
+/// MARKUP selection-aware) — an un-dimmed, unscrimmed, illegible
+/// double-render. MUTATION CHECK: reverting `images_report`'s `revealed` (or
+/// `compute_image_layout`'s `revealed_now`) back to `r.line ==
+/// self.cursor_line` alone fails this test (scrim count drops to 0). Fixture:
+/// `samples/tiny.png`.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn inline_image_selection_reveal_draws_dimmed_with_scrim_not_full_bright() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    if std::fs::metadata("samples/tiny.png").is_err() {
+        eprintln!("skipping: samples/tiny.png fixture not present");
+        return;
+    }
+    let prev = crate::markdown::inline_images_on();
+    let prevw = crate::markdown::wysiwyg_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let restore = || {
+        crate::markdown::set_inline_images_on(prev);
+        crate::markdown::set_wysiwyg_on(prevw);
+    };
+    let Some((device, queue, mut p)) = headless_pipeline_dq() else {
+        eprintln!(
+            "skipping inline_image_selection_reveal_draws_dimmed_with_scrim_not_full_bright: no wgpu adapter"
+        );
+        restore();
+        return;
+    };
+    let text = "![pic](samples/tiny.png)\nprose here\n";
+    // Caret on line 1 (prose) — a SELECTION spans line 0 (the image) through
+    // line 1. The caret itself never touches the image line.
+    let mut v = view(text, 1, 4);
+    v.is_markdown = true;
+    v.selection = Some(((0, 0), (1, 4)));
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert!(
+        p.images_report()[0].revealed,
+        "the selection touches the image line: revealed"
+    );
+    assert_eq!(
+        p.image_pipeline.instance_count(),
+        1,
+        "SELECTION REVEAL: still exactly one image quad drawn (no double geometry)"
+    );
+    assert!(
+        p.image_scrim_pipeline.instance_count() >= 1,
+        "SELECTION REVEAL: a caption scrim band backs the source, exactly like the caret-revealed case (never a bare full-brightness draw): {}",
+        p.image_scrim_pipeline.instance_count()
+    );
+    restore();
+}
+
 /// GPU DRAW (item 5 rework): the MIXED-line counterpart to the bare-line test
 /// above — OFF-cursor the image draws its one quad (at the forced trailing
 /// row's own top, per `TextPipeline::image_draw_top`); ON-cursor (revealed,
@@ -528,6 +644,151 @@ fn mixed_list_image_draws_off_cursor_and_parks_when_revealed() {
         p.image_pipeline.instance_count(),
         0,
         "revealed: the mixed line's image draws NO quad (parked for this one frame)"
+    );
+    restore();
+}
+
+/// GPU DRAW — SELECTION REVEAL REGRESSION, item-5 INTERACTION (item 16
+/// follow-up): the MIXED-line counterpart to the bare-line selection test
+/// above, reached via a PURE selection change on ALREADY-SHAPED text — no
+/// caret move, no edit. `set_view`'s composed-text compare skips the reshape
+/// entirely on the second frame here (asserted below via `reshape_count`), so
+/// this exercises `refresh_rule_conceal`'s forced-trailing-row rescan ALONE,
+/// never `compute_image_layout`. That rescan re-derives `image_force` on
+/// every caret/selection tick; if it only widened `compute_image_layout`'s own
+/// gate and kept its OWN `want` test caret-only, it would immediately
+/// re-force the row open again on this very tick, silently undoing the park a
+/// selection-only interaction that never triggers a reshape depends on
+/// entirely. MUTATION CHECK: reverting `refresh_rule_conceal`'s `revealed_now`
+/// back to `li == cursor_line` alone re-forces the row and fails this test
+/// (instance count reverts to 1). Fixture: `samples/photo.png`.
+///
+/// PRE-EXISTING GAP NOTED, NOT FIXED HERE (found probing this exact scenario,
+/// confirmed unrelated to this round — it reproduces identically with a pure
+/// CARET move onto this same off-cursor mixed line, zero selection involved):
+/// `image_hit_rects` (drag-resize handle arming, live pointer-only) reads the
+/// STORED `image_report`'s `revealed` field directly, never through
+/// `images_report()`'s always-fresh override, so on THIS pure-selection (or a
+/// pure caret) tick — no reshape, so `compute_image_layout` never re-runs — it
+/// still holds frame 1's stale `revealed: false` and arms a handle at a
+/// garbage position for the now-parked line. Out of scope for this focused
+/// regression fix (a real bug, but pre-existing and orthogonal to the
+/// draw/reveal double-render this round closes); flagged for a follow-up
+/// queue item rather than asserted here.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn mixed_list_image_parks_under_a_pure_selection_change_no_reshape() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    if std::fs::metadata("samples/photo.png").is_err() {
+        eprintln!("skipping: samples/photo.png fixture not present");
+        return;
+    }
+    let prev = crate::markdown::inline_images_on();
+    let prevw = crate::markdown::wysiwyg_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let restore = || {
+        crate::markdown::set_inline_images_on(prev);
+        crate::markdown::set_wysiwyg_on(prevw);
+    };
+    let Some((device, queue, mut p)) = headless_pipeline_dq() else {
+        eprintln!(
+            "skipping mixed_list_image_parks_under_a_pure_selection_change_no_reshape: no wgpu adapter"
+        );
+        restore();
+        return;
+    };
+    let text = "- a caption sits before the image on this very same list line ![alt|300](samples/photo.png)\nafter\n";
+    // First frame: caret on line 1, no selection — off-cursor, one quad drawn.
+    // A fresh pipeline's `shaped_key` is `None`, so this ALSO forces the
+    // initial reshape (`compute_image_layout` runs once, populating
+    // `image_force` for the off-cursor mixed line).
+    let mut v0 = view(text, 1, 0);
+    v0.is_markdown = true;
+    p.set_view(&v0);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert_eq!(p.image_pipeline.instance_count(), 1, "off-cursor: one quad drawn");
+    let reshape_before = p.reshape_count;
+
+    // Second frame: SAME TEXT, caret STILL on line 1 — only a SELECTION is
+    // added, spanning line 0 (the image line). Confirm no reshape ran (the
+    // park below can only be coming from `refresh_rule_conceal`).
+    let mut v1 = view(text, 1, 0);
+    v1.is_markdown = true;
+    v1.selection = Some(((0, 0), (0, 10)));
+    p.set_view(&v1);
+    assert_eq!(
+        p.reshape_count, reshape_before,
+        "a pure selection change on unchanged text does not reshape"
+    );
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert_eq!(
+        p.image_pipeline.instance_count(),
+        0,
+        "SELECTION REVEAL, no reshape: the mixed line's image still parks (0 quads)"
+    );
+    assert!(
+        p.images_report()[0].revealed,
+        "the selection touches the mixed image line: revealed"
+    );
+    restore();
+}
+
+/// GPU DRAW — SELECTION REVEAL REGRESSION, `compute_image_layout` site (item 16
+/// follow-up): the RESHAPE-time counterpart to the pure-selection test above —
+/// here the selection is present on the VERY FIRST `set_view` (a fresh
+/// pipeline's `shaped_key` is `None`, so this call always reshapes and runs
+/// `compute_image_layout` itself), so a MIXED line the selection touches must
+/// never even reserve the forced trailing row in the first place — the same
+/// outcome as the caret-revealed case, reached the OTHER way this feature can
+/// fire (open a doc / edit elsewhere with a stale selection already sitting on
+/// an image line). MUTATION CHECK: reverting `compute_image_layout`'s
+/// `revealed_now` back to `line == cursor_line` alone re-reserves the row and
+/// fails this test (instance count reverts to 1). Fixture: `samples/photo.png`.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn mixed_list_image_parks_when_selection_present_at_first_reshape() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    if std::fs::metadata("samples/photo.png").is_err() {
+        eprintln!("skipping: samples/photo.png fixture not present");
+        return;
+    }
+    let prev = crate::markdown::inline_images_on();
+    let prevw = crate::markdown::wysiwyg_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let restore = || {
+        crate::markdown::set_inline_images_on(prev);
+        crate::markdown::set_wysiwyg_on(prevw);
+    };
+    let Some((device, queue, mut p)) = headless_pipeline_dq() else {
+        eprintln!(
+            "skipping mixed_list_image_parks_when_selection_present_at_first_reshape: no wgpu adapter"
+        );
+        restore();
+        return;
+    };
+    let text = "- a caption sits before the image on this very same list line ![alt|300](samples/photo.png)\nafter\n";
+    // The VERY FIRST `set_view` call already carries a selection spanning the
+    // image line, caret parked on line 1 — this call always reshapes (a fresh
+    // `shaped_key` is `None`), so `compute_image_layout` itself must decide the
+    // park, not `refresh_rule_conceal`.
+    let mut v = view(text, 1, 0);
+    v.is_markdown = true;
+    v.selection = Some(((0, 0), (0, 10)));
+    p.set_view(&v);
+    assert!(p.reshape_count > 0, "sanity: the first set_view reshapes");
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert_eq!(
+        p.image_pipeline.instance_count(),
+        0,
+        "RESHAPE-time selection reveal: the mixed line's image parks (0 quads), never reserved"
+    );
+    assert!(
+        p.images_report()[0].revealed,
+        "the selection touches the mixed image line at reshape time: revealed"
     );
     restore();
 }

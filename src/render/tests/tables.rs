@@ -348,6 +348,180 @@ fn revealed_row_uploads_no_grid_cells_other_rows_still_draw() {
     crate::page::set_measure(crate::page::DEFAULT_MEASURE);
 }
 
+/// SELECTION REVEAL (user-decided 2026-07-22): a table the CARET never
+/// touches still reveals — and each row the active SELECTION touches swaps to
+/// its raw `|` source — when the selection overlaps the table's byte range.
+/// This is the table-specific manifestation of "a line shows raw markdown
+/// when the caret OR an active selection touches it": both body rows the
+/// selection spans drop their grid cells and float their real pipe-delimited
+/// source, while the untouched header row keeps drawing its styled grid, and
+/// the sidecar's CARET-scoped `xray` block stays `None` throughout (schema
+/// unchanged — see `TextPipeline::xray_report`'s doc comment).
+#[test]
+fn selected_table_rows_swap_to_raw_source_caret_never_touches_table() {
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _w = crate::testlock::serial();
+    crate::markdown::set_wysiwyg_on(true);
+    crate::page::set_page_on(true);
+    crate::page::set_measure(80);
+    let got = pollster::block_on(async {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("awl table-selection-swap test device"),
+                ..Default::default()
+            })
+            .await
+            .ok()?;
+        let cache = Cache::new(&device);
+        let mut p =
+            TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+        p.set_size(1200.0, 800.0);
+        Some((device, queue, p))
+    });
+    let Some((device, queue, mut p)) = got else {
+        eprintln!("skipping selected_table_rows_swap_to_raw_source_caret_never_touches_table: no wgpu adapter");
+        return;
+    };
+    // Doc lines: 0 prose (caret's home, outside the table entirely), 1
+    // header, 2 separator, 3 first body row, 4 second body row.
+    let text = "prose above\n\
+                | World | Ground |\n\
+                |-------|--------|\n\
+                | Row1  | a      |\n\
+                | Row2  | b      |\n";
+    let mut v = view_md(text, 0, 0); // caret on line 0 — never inside the table.
+    v.selection = Some(((3, 0), (4, 6))); // selection spans BOTH body rows.
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+
+    let rep = p.tables_report();
+    assert_eq!(rep.len(), 1, "one table laid out");
+    assert!(
+        rep[0].revealed,
+        "the table is revealed: the selection overlaps its range (caret never touches it)"
+    );
+
+    // The CARET-scoped sidecar report stays `None` — the caret is not on any
+    // table row, and this contract's schema is deliberately unchanged (the
+    // selection-only reveal is render state, verified below instead).
+    assert!(
+        p.xray_report().is_none(),
+        "xray_report() stays caret-scoped: None when the caret itself isn't on a table row"
+    );
+
+    let drawn = p.table_cell_lines_drawn();
+    assert!(
+        !drawn.contains(&3) && !drawn.contains(&4),
+        "both selection-touched body rows (doc lines 3, 4) upload NO grid cells: {drawn:?}"
+    );
+    assert!(
+        drawn.contains(&1),
+        "the untouched header row (doc line 1) still draws its grid cells: {drawn:?}"
+    );
+
+    // The X-RAY float itself carries the REAL pipe-delimited source for each
+    // selection-touched row — the "shows raw `|` source" outcome, not just
+    // "the grid stopped drawing there".
+    let xrayed = p.xray_lines_report();
+    let line3 = xrayed.iter().find(|(l, _)| *l == 3).map(|(_, s)| s.clone());
+    let line4 = xrayed.iter().find(|(l, _)| *l == 4).map(|(_, s)| s.clone());
+    assert_eq!(
+        line3.as_deref(),
+        Some("| Row1  | a      |"),
+        "doc line 3 floats its exact raw source: {xrayed:?}"
+    );
+    assert_eq!(
+        line4.as_deref(),
+        Some("| Row2  | b      |"),
+        "doc line 4 floats its exact raw source: {xrayed:?}"
+    );
+    assert!(
+        xrayed.iter().all(|(l, _)| *l != 1 && *l != 0),
+        "neither the caret's own line (0, not a table row) nor the untouched \
+         header row (1) is x-rayed: {xrayed:?}"
+    );
+
+    crate::page::set_page_on(false);
+    crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+}
+
+/// Clearing the selection heals every selection-only x-ray row: with the
+/// caret still outside the table, the table returns to a plain, fully-drawn
+/// grid (nothing revealed, nothing floated).
+#[test]
+fn clearing_selection_heals_table_back_to_a_plain_grid() {
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _w = crate::testlock::serial();
+    crate::markdown::set_wysiwyg_on(true);
+    crate::page::set_page_on(true);
+    crate::page::set_measure(80);
+    let got = pollster::block_on(async {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .ok()?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("awl table-selection-clear test device"),
+                ..Default::default()
+            })
+            .await
+            .ok()?;
+        let cache = Cache::new(&device);
+        let mut p =
+            TextPipeline::new(&device, &queue, &cache, wgpu::TextureFormat::Rgba8UnormSrgb);
+        p.set_size(1200.0, 800.0);
+        Some((device, queue, p))
+    });
+    let Some((device, queue, mut p)) = got else {
+        eprintln!("skipping clearing_selection_heals_table_back_to_a_plain_grid: no wgpu adapter");
+        return;
+    };
+    let text = "prose above\n\
+                | World | Ground |\n\
+                |-------|--------|\n\
+                | Row1  | a      |\n\
+                | Row2  | b      |\n";
+    let mut selected = view_md(text, 0, 0);
+    selected.selection = Some(((3, 0), (4, 6)));
+    p.set_view(&selected);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert!(p.tables_report()[0].revealed, "revealed while selected");
+    assert!(!p.xray_lines_report().is_empty(), "rows x-rayed while selected");
+
+    // SAME caret line (0) — only the selection clears.
+    let cleared = view_md(text, 0, 0);
+    p.set_view(&cleared);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    assert!(
+        !p.tables_report()[0].revealed,
+        "no longer revealed once the selection clears (caret never touched the table)"
+    );
+    assert!(
+        p.xray_lines_report().is_empty(),
+        "no row stays x-rayed once the selection clears: {:?}",
+        p.xray_lines_report()
+    );
+    let drawn = p.table_cell_lines_drawn();
+    assert!(
+        drawn.contains(&3) && drawn.contains(&4),
+        "both body rows draw their grid cells again: {drawn:?}"
+    );
+
+    crate::page::set_page_on(false);
+    crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+}
+
 /// BUG FIX (one-owner law): the per-frame DRAW never reshapes its own copy of
 /// the table geometry — it only ever reads whatever
 /// [`TextPipeline::compute_table_layout`] shaped ([`TableGridCache`], the ONE
