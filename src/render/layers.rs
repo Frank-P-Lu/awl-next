@@ -180,10 +180,16 @@ impl TextPipeline {
         } else {
             Vec::new()
         };
+        // FROST RECIPE AS DATA: the ONE runtime consumer reads the active world's
+        // `frost` capability (see `theme::Frost`), never the bare consts — so a
+        // world dials its own softened-lamp recipe with no per-world code path
+        // (`theme_caps_law`). Every world carries `Frost::DEFAULT` (the shipped
+        // `crate::lava` values), so this is byte-identical until a world tunes.
+        let frost = crate::theme::active().render_caps.frost;
         let frost_params = [
-            crate::lava::FROST_DIM,
-            crate::lava::frost_px(crate::lava::FROST_BLUR_PX, self.metrics.zoom, self.dpi),
-            crate::lava::frost_px(crate::lava::FROST_FEATHER_PX, self.metrics.zoom, self.dpi),
+            frost.dim,
+            crate::lava::frost_px(frost.blur_px, self.metrics.zoom, self.dpi),
+            crate::lava::frost_px(frost.feather_px, self.metrics.zoom, self.dpi),
         ];
         let params = self.effective_background().lava_params().map(
             |(ground, lo, hi, edge, dithered)| {
@@ -572,12 +578,17 @@ impl TextPipeline {
         // legible (InverseVideo flips it, Filled knocks it out), so Morph degrades
         // to Block here. Ibeam is UNCHANGED — its thin bar sits BETWEEN glyph
         // cells, never over one, so it never collides with a glyph's own ink.
+        // Read the PER-FRAME latched look (`caret_look`), not the live global, so
+        // the paint path agrees with the geometry — and so a live drag's insertion
+        // BAR override (`ViewState::selecting_drag`, latched into `caret_look`)
+        // reaches the draw path too. When not dragging, `caret_look` == the global,
+        // so every non-drag frame is byte-identical.
         let mode = if theme::active().render_caps.caret_block_style.folds_morph_to_block()
-            && crate::caret::mode() == CaretMode::Morph
+            && self.caret_look == CaretMode::Morph
         {
             CaretMode::Block
         } else {
-            crate::caret::mode()
+            self.caret_look
         };
         let settle = self.caret.settle_factor();
         let has_glyph = mode == CaretMode::Morph && self.prepare_caret_masks(device, queue);

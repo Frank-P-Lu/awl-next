@@ -58,6 +58,15 @@ pub struct ViewState {
     /// tap (`false`) keeps the gap-suppressed lone-hop behaviour. The deterministic
     /// capture/test paths leave this `false`.
     pub held: bool,
+    /// True while a live MOUSE text-selection drag is in progress (the left
+    /// button is down and the gesture is a text drag, `App::dragging`). Drives
+    /// the DRAG-BAR: while dragging, the caret renders as the thin insertion BAR
+    /// (the I-beam form) regardless of the configured caret mode, then returns to
+    /// the configured look on release. A pure state bit — the mouse POINTER's own
+    /// i-beam cursor is a separate OS concern. The headless capture/test paths
+    /// leave this `false` (real mouse drag isn't replayable); a render test drives
+    /// it directly through this field.
+    pub selecting_drag: bool,
     /// Active isearch matches as ordered ((l0,c0),(l1,c1)) CHAR ranges in
     /// document order. Empty when search inactive or zero hits. Same coordinate
     /// convention as `selection`, so highlight rects reuse the selection rect
@@ -268,6 +277,7 @@ impl ViewState {
             misspelled: Vec::new(),
             is_edit_move: false,
             held: false,
+            selecting_drag: false,
             search_matches: Vec::new(),
             search_current: None,
             search_query: String::new(),

@@ -350,3 +350,66 @@ fn cosmetic_trail_anchor_follows_morph_linestart_bar() {
 
     crate::caret::set_mode(CaretMode::Block);
 }
+
+/// ITEM 33 — the DRAG-BAR: while a live mouse text-selection drag is in
+/// progress (`ViewState::selecting_drag`), the caret renders as the thin
+/// insertion BAR regardless of the configured caret mode, then returns to the
+/// configured look on release. Driven through the one seam (`caret_look`
+/// latched in `set_view`), so `caret_is_bar_form` — the owner every reader
+/// consults — reports bar form during the drag and the cell form otherwise.
+///
+/// Real mouse drag isn't replayable headlessly, so the `selecting_drag` state
+/// bit is driven directly (its live wiring, `sync_view` ← `App::dragging`, is
+/// flagged for human confirmation). Non-vacuous: before the drag override the
+/// look came straight from `crate::caret::mode()`, so a Block/Morph caret stayed
+/// a CELL during a drag — this asserts the bar.
+#[test]
+fn drag_selection_melts_caret_to_bar() {
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let _c = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping drag_selection_melts_caret_to_bar: no wgpu adapter");
+        return;
+    };
+    // A proportional world so the configured look is a genuine CELL form (Morph
+    // silhouette / Block quad), NOT already a bar — the drag override must be
+    // what turns it into a bar.
+    theme::set_active_by_name("Gumtree").unwrap();
+    p.sync_theme();
+    let text = "abc def"; // mid-line, a real glyph under the cursor (no line-start degrade)
+
+    // Both configured looks that are a CELL at rest: Block and Morph.
+    for mode in [CaretMode::Block, CaretMode::Morph] {
+        crate::caret::set_mode(mode);
+
+        // NO drag: the caret keeps its configured CELL form (not a bar).
+        p.set_view(&view(text, 0, 4)); // on 'e' of "def", a real glyph
+        assert!(
+            !p.caret_is_bar_form(),
+            "{mode:?}: a mid-line caret with no drag must be the cell form, not a bar"
+        );
+
+        // DRAG in progress: the same caret melts to the insertion bar.
+        let dragging = ViewState {
+            selecting_drag: true,
+            ..view(text, 0, 4)
+        };
+        p.set_view(&dragging);
+        assert!(
+            p.caret_is_bar_form(),
+            "{mode:?}: a caret under a live selection drag must render as the bar"
+        );
+
+        // RELEASE: back to the configured cell form.
+        p.set_view(&view(text, 0, 4));
+        assert!(
+            !p.caret_is_bar_form(),
+            "{mode:?}: releasing the drag must restore the configured cell form"
+        );
+    }
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+    crate::caret::set_mode(CaretMode::Block);
+}

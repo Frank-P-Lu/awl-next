@@ -476,6 +476,21 @@ impl TextPipeline {
                 } else {
                     std::collections::BTreeMap::new()
                 };
+                // ITEM 35 — OVERLAY TEXT SITS ON A SURFACE. Under the HugLabel poster
+                // HYBRID the label plate hugs the LABEL alone, so the right-aligned
+                // SHORTCUT chord floats BARE over the backdrop (the user's "floating
+                // commands"). Give each row's chord its OWN hugging plate — measured
+                // here (before the &mut prepare calls, like `primary_px`) from the
+                // right buffer, so the poster's ragged label plates are preserved AND
+                // no glyph sits over an unplated backdrop. FullWidth already covers
+                // the chord (its plate spans the card); HugText composes it INLINE —
+                // so a chord plate is needed ONLY for a hug extent that leaves the
+                // chord in the right column (`!inline_shortcut`).
+                let chord_px = if hug && !extent.inline_shortcut() {
+                    self.overlay_row_secondary_px(geom)
+                } else {
+                    std::collections::BTreeMap::new()
+                };
                 // V6 P5 [`theme::BarExtent::HugText`] — the natural `(x, w)` span
                 // for a display row: full-width, or hugging the row's own content
                 // (label + inline shortcut) + a symmetric pad. EVERY row hugs; the
@@ -609,6 +624,50 @@ impl TextPipeline {
                     }
                     _ => Vec::new(),
                 };
+                // ITEM 35 — the per-row CHORD PLATE. When a hug extent leaves the
+                // chord in the right column (`chord_px` non-empty ⇒ HugLabel with a
+                // right column), lay a plate hugging each row's right-aligned chord
+                // so it never floats bare. The chord's right edge is flush with the
+                // card's right TEXT edge (`text_left + text_w`, where
+                // `shape_overlay_right` right-aligns it); the plate hugs the chord
+                // glyphs + a symmetric `BAR_TEXT_PAD`, clamped inside the full-width
+                // bar's right edge. A row gets its chord plate at the SAME value as
+                // its own label bar: the SELECTED row's chord plate rides the
+                // selected band (so `selected_secondary_on_band` flips its ink for
+                // contrast), every plated UNSELECTED row (coverage `All`) rides the
+                // quiet unselected value. Under `SelectedOnly` the unselected rows
+                // are deliberately bare (label included), so their chords stay bare —
+                // consistent, not the plated-label-bare-chord defect this fixes.
+                let mut sel = sel;
+                let mut unsel = unsel;
+                if !chord_px.is_empty() {
+                    let (fx, fw) = super::bar_full_span(geom.card_x, geom.card_w);
+                    let full_right = fx + fw;
+                    let chord_right = geom.text_left + geom.text_w;
+                    let chord_plate = |k: usize, top: f32| -> [f32; 4] {
+                        let w_c = chord_px.get(&k).copied().unwrap_or(0.0);
+                        let right = (chord_right + super::BAR_TEXT_PAD).min(full_right);
+                        let plate_w = w_c + 2.0 * super::BAR_TEXT_PAD;
+                        let left = (right - plate_w).max(fx);
+                        [left, top + bar_off, (right - left).max(1.0), bar_h]
+                    };
+                    let row_top = |k: usize| {
+                        overlay_row_top(geom.text_top, geom.header_rows, geom.header_gap, k, lh)
+                    };
+                    for &k in &item_rows {
+                        // Only rows that carry a chord AND that already show a plate
+                        // (the selected row always; unselected rows only under
+                        // coverage `All`) get a chord plate.
+                        if !chord_px.contains_key(&k) {
+                            continue;
+                        }
+                        if Some(k) == sel_disp {
+                            sel.push(chord_plate(k, row_top(k)));
+                        } else if coverage == theme::BarCoverage::All {
+                            unsel.push(chord_plate(k, row_top(k)));
+                        }
+                    }
+                }
                 (sel, unsel)
             }
         };

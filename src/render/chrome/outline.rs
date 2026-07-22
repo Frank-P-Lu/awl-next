@@ -253,6 +253,16 @@ impl TextPipeline {
         if !crate::outline::outline_on() || !crate::page::page_on() {
             return None;
         }
+        // SUMMONED OVERLAYS OWN THE MARGINS (item 34): while ANY overlay is open —
+        // the blurred-backdrop pickers AND the CRISP theme/caret/history pickers
+        // (all `overlay_active`) — the persistent margin outline yields, returning
+        // on dismissal. Consistent with the lava rail-carve precedent: chrome
+        // cedes the margin to the summoned surface. This is the ONE outline-layout
+        // owner every reader (draw, hit-test, frost pills, stars, sidecar
+        // `outline_visible`) routes through, so the whole outline goes dark at once.
+        if self.overlay_active {
+            return None;
+        }
         if !self.md_enabled || self.outline_headings.is_empty() {
             return None;
         }

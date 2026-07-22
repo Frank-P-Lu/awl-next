@@ -39,6 +39,38 @@ fn command_palette_enter_dispatches_selected_action() {
     assert!(accept.is_none(), "the palette runs an action, it does not accept a value");
 }
 
+/// ITEM 36 — accepting a Date-format picker row COMMITS that format: the core
+/// sets the process-global `active_format` AND emits `OverlayAccept(Date, slug)`
+/// so the App persists the sticky pref (the Dictionary/CjkLang accept shape). The
+/// row is resolved by CORPUS INDEX (its primary text is the example date, not a
+/// mappable label), so selecting row 2 (ISO) commits ISO.
+#[test]
+fn accepting_a_date_row_sets_the_active_format_and_emits_accept() {
+    use crate::dateformat::DateFormat;
+    let _g = crate::testlock::serial();
+    let saved = crate::dateformat::active_format();
+    crate::dateformat::set_active_format(DateFormat::DdMmYy);
+
+    let mut overlay: Option<OverlayState> =
+        Some(OverlayState::new_date(DateFormat::DdMmYy, (2009, 3, 7)));
+    let mut accept = None;
+    // Select the ISO row (corpus index 2) and accept it.
+    overlay.as_mut().unwrap().selected = 2;
+    drive(&mut overlay, &mut accept, &Action::Newline);
+    assert_eq!(
+        crate::dateformat::active_format(),
+        DateFormat::Iso,
+        "accept set the process-global active format"
+    );
+    assert_eq!(
+        accept,
+        Some((OverlayKind::Date, "iso".to_string())),
+        "accept emits (Date, config-slug) for the App to persist"
+    );
+
+    crate::dateformat::set_active_format(saved); // restore, no leak
+}
+
 #[test]
 fn clicking_a_palette_row_runs_that_command() {
     // The MOUSE mechanic (mirror of the keyboard path): a hover/click resolves the

@@ -10,7 +10,7 @@ use super::cjk::{
 use super::color::Srgb;
 use super::model::{
     AmbientStyle, Backdrop, Background, CardAnchor, CaretBlockStyle, ChipVariant, ChromeFace,
-    DecorativeWash, Elevation, FacetStyle, HighlightTexture, ImageReveal, LavaEdge, ListStyle,
+    DecorativeWash, Elevation, FacetStyle, Frost, HighlightTexture, ImageReveal, LavaEdge, ListStyle,
     MotionJuice, PageFrame, PlacardCorner, PlacardInk, RenderCaps, RoleOverrides, SelectionStyle,
     SPELL_UNDERLINE_GAP_DEFAULT, Theme, ThemeTags, TitleStyle, WashOverride,
 };
@@ -1362,6 +1362,11 @@ pub const WAGTAIL: Theme = Theme {
         // for. Listed explicitly because this literal names every field (no
         // `..DEFAULT` spread).
         spell_underline_gap: SPELL_UNDERLINE_GAP_DEFAULT,
+        // FROST-AS-CAPABILITY round: dormant DATA on the silent 1-bit pole — the
+        // recipe never renders (no lava ground; the consumer gates on the lava
+        // capability, so the 1-bit exclusion stays structural, not a world name).
+        // Listed explicitly because this literal names every field (no `..DEFAULT`).
+        frost: Frost::DEFAULT,
     },
 };
 

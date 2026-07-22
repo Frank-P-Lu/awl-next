@@ -1083,3 +1083,79 @@ fn lava_gutter_frost_pill_follows_gutter_visibility() {
     crate::page::set_page_on(false);
     crate::page::set_measure(80);
 }
+
+/// ITEM 34 — SUMMONED OVERLAYS OWN THE MARGINS. While ANY overlay is open the
+/// persistent margin OUTLINE and the bottom-left GUTTER both yield (zero ink),
+/// and both return on dismissal. The gate is `overlay_active` — true for every
+/// summoned picker, INCLUDING the CRISP theme/caret/history pickers (which add
+/// no backdrop blur, but still own the margin). Asserted at the ONE layout owner
+/// every reader (draw, frost pills, hit-test, sidecar) routes through:
+/// `outline_visible`/`outline_draw_report` and `gutter_visible`/`gutter_report`.
+///
+/// Non-vacuous: the control frame (no overlay) draws BOTH, so the suppression is
+/// what turns them off — not a fixture that never drew them.
+#[test]
+fn summoned_overlays_suppress_the_outline_and_gutter() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping summoned_overlays_suppress_the_outline_and_gutter: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    crate::outline::set_outline_on(true);
+    crate::page::set_page_on(true);
+    crate::page::set_measure(40);
+    let height = 900u32;
+    p.set_size(1900.0, height as f32);
+    let text = "# Title\n\nprose\n\n## Section A\n\nbody\n\n### Deep\n";
+
+    // CONTROL (no overlay): both the outline and the gutter draw.
+    let mut base = view_md(text, 0, 0);
+    base.gutter_name = "notes.md".to_string();
+    base.gutter_project = "awl".to_string();
+    p.set_view(&base);
+    assert!(p.outline_visible(height), "control: the outline draws with no overlay");
+    assert!(p.gutter_visible(), "control: the gutter draws with no overlay");
+    assert!(p.outline_draw_report(height).is_some(), "control: outline has drawn rows");
+    assert!(p.gutter_report().is_some(), "control: gutter reports its stack");
+
+    // ANY overlay open ⇒ BOTH margins yield (zero outline + gutter ink). Cover a
+    // BLURRED-backdrop overlay (overlay_crisp = false) and a CRISP picker
+    // (overlay_crisp = true — theme/caret): the margin yields under both.
+    for crisp in [false, true] {
+        let mut open = view_md(text, 0, 0);
+        open.gutter_name = "notes.md".to_string();
+        open.gutter_project = "awl".to_string();
+        open.overlay_active = true;
+        open.overlay_crisp = crisp;
+        p.set_view(&open);
+        assert!(
+            !p.outline_visible(height),
+            "overlay open (crisp={crisp}): the outline must yield the margin"
+        );
+        assert!(
+            p.outline_draw_report(height).is_none(),
+            "overlay open (crisp={crisp}): no outline rows draw"
+        );
+        assert!(
+            p.lava_frost_pill_rects(height).is_empty(),
+            "overlay open (crisp={crisp}): no outline frost pills (no outline ink)"
+        );
+        assert!(
+            !p.gutter_visible(),
+            "overlay open (crisp={crisp}): the gutter must yield the margin"
+        );
+        assert!(
+            p.gutter_report().is_none(),
+            "overlay open (crisp={crisp}): the gutter reports nothing (zero ink)"
+        );
+    }
+
+    // DISMISSAL: both return.
+    p.set_view(&base);
+    assert!(p.outline_visible(height), "dismissal: the outline returns");
+    assert!(p.gutter_visible(), "dismissal: the gutter returns");
+
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}

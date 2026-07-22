@@ -60,6 +60,21 @@ pub enum OverlayKind {
     /// live App and a headless `--keys` replay observe the promotion. Esc/C-g
     /// simply closes (nothing was ever previewed to revert).
     CjkLang,
+    /// The DATE-FORMAT picker (Settings → "Date format…"): lists the five insert
+    /// formats ([`crate::dateformat::DateFormat::ALL`]), EACH row rendered with
+    /// TODAY's date as its primary text — pick by sight, what you see is what
+    /// inserts — plus the format's human name ([`crate::dateformat::DateFormat::
+    /// label`]) as the dim secondary column, mirroring the DICTIONARY picker's
+    /// shape. NO live preview (there is nothing in the document to preview —
+    /// picking a format only changes what a future Insert-Date types); the
+    /// example dates ARE the preview. Enter COMMITS the highlighted format (set
+    /// core-level via [`crate::dateformat::set_active_format`], persisted by the
+    /// caller). Esc/C-g simply closes. The corpus order == [`DateFormat::ALL`]
+    /// order, so the selected corpus index maps straight back to the format.
+    /// In a headless capture the example dates use the FIXED placeholder
+    /// ([`crate::dateformat::CAPTURE_PLACEHOLDER_YMD`]) so the frame stays
+    /// deterministic (item 14's gate).
+    Date,
     /// The COMMAND PALETTE (Cmd-P): a fuzzy search over the command CATALOG names
     /// (`commands::COMMANDS`), each row showing the command's current key binding
     /// dim beside it. Enter RUNS the selected command's `Action`; the catalog
@@ -190,7 +205,7 @@ impl OverlayKind {
     /// `rowlayout` — are the real compile-time guards; this is iteration
     /// convenience, kept in lockstep by hand like `CaretMode::ALL`).
     #[allow(dead_code)] // consumed only by the `facets`/law tests today.
-    pub const ALL: [OverlayKind; 17] = [
+    pub const ALL: [OverlayKind; 18] = [
         OverlayKind::Goto,
         OverlayKind::Project,
         OverlayKind::Browse,
@@ -198,6 +213,7 @@ impl OverlayKind {
         OverlayKind::Caret,
         OverlayKind::Dictionary,
         OverlayKind::CjkLang,
+        OverlayKind::Date,
         OverlayKind::MoveDest,
         OverlayKind::Command,
         OverlayKind::Spell,
@@ -230,6 +246,7 @@ impl OverlayKind {
             OverlayKind::Caret => "caret",
             OverlayKind::Dictionary => "dictionary",
             OverlayKind::CjkLang => "cjk_lang",
+            OverlayKind::Date => "date",
             OverlayKind::MoveDest => "move",
             OverlayKind::Command => "command",
             OverlayKind::Spell => "spell",
@@ -268,7 +285,8 @@ impl OverlayKind {
             OverlayKind::Theme
             | OverlayKind::Caret
             | OverlayKind::Dictionary
-            | OverlayKind::CjkLang => ValuePick,
+            | OverlayKind::CjkLang
+            | OverlayKind::Date => ValuePick,
             // Trash an orphan (row leaves, list stays), start a rebind capture, or the
             // settings menu's own toggles / sub-picker swaps / inline value edits — the
             // accept never closes the overlay.
@@ -425,6 +443,9 @@ impl OverlayKind {
             // CJK-priority language: no live preview (mirrors Dictionary) — ↵
             // promotes the highlighted language to the front of the ladder.
             OverlayKind::CjkLang => vec![enter("apply")],
+            // Date format: no live preview (the example dates ARE the preview) —
+            // ↵ applies + persists the highlighted format.
+            OverlayKind::Date => vec![enter("apply")],
             // The faceted command palette: ↵ runs, ←/→ switch the lens (All / File /
             // Edit / View / Recent).
             OverlayKind::Command => vec![enter("run"), key("\u{2190}/\u{2192}", "lens")],
@@ -507,6 +528,7 @@ impl OverlayKind {
             | OverlayKind::Caret
             | OverlayKind::Dictionary
             | OverlayKind::CjkLang
+            | OverlayKind::Date
             | OverlayKind::Command
             | OverlayKind::Keybindings
             | OverlayKind::Settings => "no matches",
@@ -543,6 +565,7 @@ impl OverlayKind {
             OverlayKind::MoveDest => "move note",
             OverlayKind::Dictionary => "dictionary",
             OverlayKind::CjkLang => "ambiguous cjk",
+            OverlayKind::Date => "date format",
             OverlayKind::Command => "commands",
             OverlayKind::Spell => "spelling",
             OverlayKind::Keybindings => "keybindings",

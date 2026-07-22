@@ -705,8 +705,12 @@ impl TextPipeline {
     /// never drift back onto the cell centre for a bar-form caret (previously
     /// it only special-cased literal I-beam mode, so a Morph caret melted to
     /// the line-start bar still anchored its trail on the cell midpoint).
-    fn caret_is_bar_form(&self) -> bool {
-        match crate::caret::mode() {
+    ///
+    /// Reads the PER-FRAME latched look (`caret_look`), so a live text-selection
+    /// DRAG — which overrides `caret_look` to the I-beam bar form
+    /// ([`crate::render::ViewState::selecting_drag`]) — reports bar form here too.
+    pub(super) fn caret_is_bar_form(&self) -> bool {
+        match self.caret_look {
             CaretMode::Ibeam => true,
             CaretMode::Morph => crate::caret::morph_line_start(self.cursor_col),
             CaretMode::Block => false,

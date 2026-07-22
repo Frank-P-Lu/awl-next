@@ -196,12 +196,18 @@ fn cosmetic_trail_anchor_is_mode_aware() {
     let to = Sample { x: tx, y: ty };
 
     // The streak draws on over the sweep window, so nudge it past zero length.
+    // The trail anchor reads the PER-FRAME latched look (`caret_look`), so a mode
+    // switch must be followed by a frame (`set_view`) to take effect — exactly as
+    // the live app re-latches every prepared frame. Re-`set_view` at the same
+    // position after each `set_mode` so the latch tracks the global under test.
     crate::caret::set_mode(CaretMode::Block);
+    p.set_view(&view(text, 1, 2));
     p.caret.kick_trail(from, to, false);
     p.caret.step_trail(0.03);
     let (block_x, ..) = p.caret_trail_geometry().expect("block trail active");
 
     crate::caret::set_mode(CaretMode::Ibeam);
+    p.set_view(&view(text, 1, 2));
     p.caret.kick_trail(from, to, false);
     p.caret.step_trail(0.03);
     let (ibeam_x, ..) = p.caret_trail_geometry().expect("ibeam trail active");

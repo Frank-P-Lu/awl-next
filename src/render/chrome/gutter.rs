@@ -35,19 +35,16 @@ impl TextPipeline {
         if !crate::page::page_on() || self.gutter_name.is_empty() {
             return None;
         }
-        // DESIGNER PIXEL-PASS FIX (2026-07-16): a BARS-mode takeover drops the
-        // boxed card, so nothing covers the bottom-left margin — the sharp,
-        // crisp-path gutter (filename/project) collided with the overlay's foot
-        // HINT row ("↑/↓ move …"), two inks interleaving. The local footer plate
-        // protects its own text, and the orientation gutter is redundant noise while
-        // a full picker is summoned, so hide it there. Pane/no-overlay are
-        // untouched (the card covers the gutter, or there is no overlay).
-        if self.overlay_active
-            && matches!(
-                crate::render::effective_list_style(),
-                theme::ListStyle::Bars { .. }
-            )
-        {
+        // SUMMONED OVERLAYS OWN THE MARGINS (item 34): while ANY overlay is open —
+        // every summoned picker, the blurred-backdrop ones AND the CRISP
+        // theme/caret/history ones (all `overlay_active`) — the bottom-left
+        // orientation gutter yields, returning on dismissal. This generalizes the
+        // earlier Bars-only suppression (a Bars takeover drops the boxed card, so
+        // the gutter collided with the overlay's foot HINT row): the gutter is
+        // redundant orientation noise under ANY summoned surface, and ceding the
+        // margin is the lava rail-carve precedent. The ONE gutter-layout owner
+        // every reader routes through (draw, frost carve, sidecar `gutter_report`).
+        if self.overlay_active {
             return None;
         }
         let gap = self.metrics.char_width * MARGIN_COLUMN_GAP_CHARS;

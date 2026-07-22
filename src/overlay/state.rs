@@ -483,6 +483,51 @@ impl OverlayState {
         s
     }
 
+    /// Build the DATE-FORMAT picker: the corpus is the five formats' EXAMPLE
+    /// DATES — each format rendered with `today` ([`crate::dateformat::DateFormat::
+    /// format`]), so the PRIMARY column shows exactly what an Insert-Date would
+    /// type (what-you-see-is-what-inserts) — with the format's human NAME
+    /// ([`crate::dateformat::DateFormat::label`]) as the dim `bindings` secondary
+    /// column, the SAME shape as [`new_dictionary`](Self::new_dictionary) /
+    /// [`new_cjk_lang`](Self::new_cjk_lang) (no live-preview/revert bookkeeping —
+    /// nothing in the document previews on move; the example dates ARE the
+    /// preview). `today` is the caller's `today_ymd` (live clock, or the fixed
+    /// [`crate::dateformat::CAPTURE_PLACEHOLDER_YMD`] in a headless capture), so a
+    /// capture stays deterministic. `active` pre-selects the current format. The
+    /// corpus order == [`crate::dateformat::DateFormat::ALL`] order, so the
+    /// accept path maps the selected corpus index straight back to the format.
+    pub fn new_date(active: crate::dateformat::DateFormat, today: (i32, u32, u32)) -> Self {
+        let (y, m, d) = today;
+        let names: Vec<String> = crate::dateformat::DateFormat::ALL
+            .iter()
+            .map(|f| f.format(y, m, d))
+            .collect();
+        let descriptions: Vec<String> = crate::dateformat::DateFormat::ALL
+            .iter()
+            .map(|f| f.label().to_string())
+            .collect();
+        let n = names.len();
+        let mut s = Self::new_marked(
+            OverlayKind::Date,
+            names,
+            vec![false; n],
+            vec![false; n],
+            Vec::new(),
+            Vec::new(),
+            None,
+        );
+        s.bindings = descriptions;
+        if let Some(active_index) =
+            crate::dateformat::DateFormat::ALL.iter().position(|&f| f == active)
+        {
+            if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
+                s.selected = pos;
+                s.scroll_to_selected();
+            }
+        }
+        s
+    }
+
     /// Build a PROJECT explorer level for the ABSOLUTE directory `dir_abs`,
     /// listing its child `folders` (each `(name, is_git)`). A synthetic `"."`
     /// row is pinned at the TOP (a non-directory entry) meaning "accept THIS

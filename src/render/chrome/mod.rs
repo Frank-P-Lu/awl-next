@@ -682,19 +682,22 @@ pub(super) fn bars_inline_shortcut() -> bool {
 /// Whether the SELECTED row's SECONDARY (right-column) chord sits ON the
 /// selected-row value band — the ONE reader [`TextPipeline::shape_overlay_right`]
 /// consults to decide whether the band-contrast ink FLIP
-/// ([`theme::selected_row_secondary_ink`]) applies. TRUE when the fill spans the
-/// whole row under the chord: [`theme::ListStyle::Pane`] (the band is the row) and
-/// FULL-WIDTH bars (the plate spans the card, chord included). FALSE for a HUGGING
-/// plate ([`theme::BarExtent::HugLabel`], the poster hybrid): its plate hugs the
-/// LABEL alone, leaving the bare right chord over the GROUND, where `muted` is
-/// already legible EXACTLY as on the unselected rows — flipping it to contrast the
-/// band there drives it INTO the ground (the slant-on-bars invisible-selected-chord
-/// regression: Firetail's selected `⌘O` washed to a background 13.5 maxlum while
-/// the unselected rows read 135). `HugText` composes its chord INLINE and never
-/// reaches this path (`bars_inline_shortcut`), so it is inert here.
+/// ([`theme::selected_row_secondary_ink`]) applies. TRUE for EVERY Bars extent
+/// and [`theme::ListStyle::Pane`]: the chord always sits on a plate now — Pane's
+/// band IS the row, FULL-WIDTH bars span the card (chord included), and under the
+/// HugLabel poster HYBRID item 35's per-row CHORD PLATE puts the selected chord on
+/// the selected band too (`overlay_rows.rs`). The ink flips to contrast that band.
+///
+/// This retires the old HugLabel exception (`!extent.hugs()`): that exception
+/// existed BECAUSE the hug plate left the selected chord bare over the GROUND,
+/// where flipping the ink drove it invisible (the slant-on-bars regression —
+/// Firetail's selected `⌘O` washed to a background 13.5 maxlum). Now the chord
+/// rides its own band plate, so the flip is correct again. `HugText` composes its
+/// chord INLINE and never reaches this path (`bars_inline_shortcut`), so it is
+/// inert here regardless.
 pub(super) fn selected_secondary_on_band() -> bool {
     match crate::render::effective_list_style() {
-        theme::ListStyle::Bars { extent, .. } => !extent.hugs(),
+        theme::ListStyle::Bars { .. } => true,
         theme::ListStyle::Pane => true,
     }
 }
