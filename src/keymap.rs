@@ -501,6 +501,19 @@ pub enum Action {
     /// prompt is prefilled from the kill/clipboard head when it looks like a URL
     /// ([`crate::buffer::is_url`]), else empty. See `overlay::LinkEdit`.
     InsertLink,
+    /// Palette "Insert Date": insert TODAY'S date at the caret, formatted per
+    /// the user's chosen [`crate::dateformat::DateFormat`] (Settings menu →
+    /// "Date format", default `22/07/26` DD/MM/YY), as ONE undoable edit. The
+    /// pure core can't read a clock or `Config`, so this only SIGNALS
+    /// [`crate::actions::Effect::InsertDate`]; the live App
+    /// (`App::insert_date`) reads the real wall clock + the active format
+    /// process-global and performs the insert, and the headless `--keys`
+    /// replay does the SAME insert against a FIXED placeholder date
+    /// (`dateformat::CAPTURE_PLACEHOLDER_YMD`) so a capture stays
+    /// deterministic. No default chord (both slots empty, like Align Table) —
+    /// palette-summoned, rebindable via `[keys] insert_date`. See
+    /// `dateformat.rs`.
+    InsertDate,
     // Prefix: C-x was pressed; we are waiting for the next key.
     BeginPrefix,
     /// Pressed a key that does nothing (e.g. lone modifier); ignore it.
@@ -1674,6 +1687,7 @@ lifetime_stats|||
 writing_streaks|||
 line_endings|||
 align_table|||
+insert_date|||
 report_a_problem|||
 download_file|||
 check_for_updates|||

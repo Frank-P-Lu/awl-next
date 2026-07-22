@@ -440,6 +440,18 @@ pub enum Effect {
     /// pathless buffer (scratch / an unnamed note) is a calm no-op — there is nothing
     /// to duplicate yet. See [`crate::app::App::duplicate_current_file`].
     DuplicateNote,
+    /// Palette "Insert Date" (`Action::InsertDate`): insert TODAY'S date at the
+    /// caret, formatted per the active [`crate::dateformat::DateFormat`]. The
+    /// pure core can reach neither the wall clock nor `Config`, so it only
+    /// signals this; the caller performs the ONE undoable text insert —
+    /// `App::insert_date` (live: the real clock via
+    /// [`crate::dateformat::today_from_system_clock`]) and the headless
+    /// `--keys` replay (a FIXED placeholder date,
+    /// [`crate::dateformat::CAPTURE_PLACEHOLDER_YMD`], so a capture stays
+    /// deterministic) both apply through the SAME [`crate::buffer::Buffer::insert_text`]
+    /// seam, reading the SAME format process-global
+    /// ([`crate::dateformat::active_format`]).
+    InsertDate,
 }
 
 /// Apply one resolved `action` to the editor core. `shift` is whether Shift was
@@ -879,6 +891,13 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // own doc). Markdown-only, calm no-op elsewhere. The actual edit lands on
         // Enter, inside the modal intercept (`overlay_nav::overlay_intercept`).
         Action::InsertLink => open_insert_link(ctx),
+        // INSERT DATE: the core can't read a clock or `Config`, so it only
+        // signals the request — the caller (`App::insert_date` live, the
+        // headless replay's own arm) performs the actual ONE-undoable-edit
+        // insert. See `Effect::InsertDate`'s own doc.
+        Action::InsertDate => {
+            effect = Effect::InsertDate;
+        }
         // Summon the navigation overlay. The caller's `make_overlay` builds the
         // candidate list (file index for Goto, workspace children for Project);
         // if it returns None (no active project), the open is a quiet no-op.

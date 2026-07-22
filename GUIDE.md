@@ -156,6 +156,7 @@ markers below, byte for byte).
 | Writing streaks |  |  |
 | Line endings… |  |  |
 | Align table |  |  |
+| Insert Date |  |  |
 | Report a Problem |  |  |
 | Download file |  |  |
 | Check for Updates |  |  |

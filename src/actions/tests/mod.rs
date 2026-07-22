@@ -547,6 +547,7 @@ pub(super) fn delete_flinch_fixture(
         | Action::ExportWord
         | Action::ExportHtml
         | Action::ExportPdf
+        | Action::InsertDate
         | Action::Ignore => None,
     }
 }
@@ -746,6 +747,7 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::ExportWord
             | Action::ExportHtml
             | Action::ExportPdf
+            | Action::InsertDate
             | Action::Ignore => {}
         }
     }
@@ -852,6 +854,7 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::ExportWord,
         Action::ExportHtml,
         Action::ExportPdf,
+        Action::InsertDate,
         Action::Ignore,
     ]
 }
@@ -933,7 +936,8 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::ExportWord
         | Action::ExportHtml
         | Action::ExportPdf
-        | Action::DuplicateNote => SmokeKind::Deferred,
+        | Action::DuplicateNote
+        | Action::InsertDate => SmokeKind::Deferred,
 
         // Real catalog commands that mutate locally (buffer / globals / zoom /
         // search) — asserted only to not panic. (`Ignore` is no longer a catalog

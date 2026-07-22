@@ -206,17 +206,33 @@ fn every_settings_toggle_row_dispatches_live_and_flips_its_value() {
         .collect();
     assert_eq!(
         toggle_rows.len(),
-        15,
+        16,
         "the toggle roster changed size — update this sweep deliberately"
     );
 
+    let gather = |app: &App| {
+        crate::settings::SettingsValues::gather(
+            &app.config,
+            &app.root,
+            app.zoom,
+            crate::dateformat::CAPTURE_PLACEHOLDER_YMD,
+        )
+    };
     for row in &toggle_rows {
         let key = crate::settings::toggle_key(row.name).expect("a Toggle row always has a key");
-        let values0 = crate::settings::SettingsValues::gather(&app.config, &app.root, app.zoom);
+        let values0 = gather(&app);
         let before = crate::settings::value_for(row, &values0);
 
+        // DATE FORMAT is a genuine FIVE-way CYCLE (unlike every other Toggle
+        // row here, which is a plain bool OR "Keymap"'s own 2-state cycle) —
+        // snapshot the process-global directly so restoration below doesn't
+        // assume "two toggles returns to start" (true for a 2-state row,
+        // false for a 5-state one).
+        let date_format_before =
+            (row.name == "Date format").then(crate::dateformat::active_format);
+
         app.setting_toggle(key);
-        let values1 = crate::settings::SettingsValues::gather(&app.config, &app.root, app.zoom);
+        let values1 = gather(&app);
         let after = crate::settings::value_for(row, &values1);
         assert_ne!(
             before, after,
@@ -224,10 +240,15 @@ fn every_settings_toggle_row_dispatches_live_and_flips_its_value() {
             row.name, key
         );
 
+        if let Some(saved) = date_format_before {
+            crate::dateformat::set_active_format(saved); // restore, no leak
+            continue;
+        }
+
         // Toggle back — restores the global/config AND proves the flip is
         // a clean round-trip, not a one-way ratchet.
         app.setting_toggle(key);
-        let values2 = crate::settings::SettingsValues::gather(&app.config, &app.root, app.zoom);
+        let values2 = gather(&app);
         let restored = crate::settings::value_for(row, &values2);
         assert_eq!(
             restored, before,

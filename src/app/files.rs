@@ -217,6 +217,9 @@ impl App {
             // KEYMAP FLAVOR: a quoted string ("native"/"emacs"), not a bool — mirrors
             // "theme"/"caret_mode"/"dictionary" above, not the bool toggles.
             "keymap" => self.config.keymap = Some(value.trim_matches('"').to_string()),
+            // DATE FORMAT: a quoted slug ("ddmmyy"/"mmddyy"/"iso"/"yyyymmdd"/
+            // "dmonthyyyy"), not a bool — mirrors "keymap"/"caret_mode" above.
+            "date_format" => self.config.date_format = Some(value.trim_matches('"').to_string()),
             // The CJK ladder is written as a whole TOML array (see
             // `persist_cjk_priority`); the mirror reads the LIVE process global
             // (already updated by the picker's core-level accept) rather than
@@ -271,6 +274,13 @@ impl App {
         // by its own dedicated door (`toggle_keymap_flavor`).
         if key == "keymap" {
             self.toggle_keymap_flavor();
+            return;
+        }
+        // DATE FORMAT is a 5-way CYCLE, not a bool, so it can't ride the
+        // generic mechanism below either — special-cased here exactly like
+        // "keymap", before the generic `now`/`next` match.
+        if key == "date_format" {
+            self.cycle_date_format();
             return;
         }
         // Read the CURRENT value from the SAME owner the readout reads, then negate.
@@ -401,6 +411,42 @@ impl App {
         }
     }
 
+    /// THE DATE-FORMAT CYCLE (Enter on the Settings menu's "Date format" row):
+    /// step [`crate::dateformat::active_format`] to the NEXT of the five
+    /// formats ([`crate::dateformat::DateFormat::cycle_next`], wrapping
+    /// DD/MM/YY -> MM/DD/YY -> ISO -> YYYY/MM/DD -> D Month YYYY -> back),
+    /// apply it LIVE (the process-global every reader — Insert Date, the
+    /// row's own value cell, a future capture — consults), PERSIST it (a
+    /// quoted slug, like `keymap`/`caret_mode`), then refresh the still-open
+    /// menu so the secondary column's live TODAY preview updates immediately.
+    /// Mirrors [`Self::toggle_keymap_flavor`]'s exact shape (the same "not a
+    /// bool, special-cased before the generic match" seam `setting_toggle`
+    /// routes both through), minus the keymap rebuild this doesn't need.
+    pub(super) fn cycle_date_format(&mut self) {
+        let next = crate::dateformat::active_format().cycle_next();
+        crate::dateformat::set_active_format(next);
+        self.persist_pref("date_format", &format!("\"{}\"", next.config_name()));
+        self.refresh_settings_overlay();
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// "Insert Date" (`Effect::InsertDate`): insert TODAY'S date at the caret,
+    /// formatted per the active [`crate::dateformat::DateFormat`], as ONE
+    /// undoable edit (`Buffer::insert_text` — sealed on both sides, so it
+    /// never coalesces with adjacent typing). The real wall clock is read
+    /// HERE (the live-only half of the seam — `apply_core` never touches a
+    /// clock); the headless `--keys` replay's own `Effect::InsertDate` arm
+    /// performs the identical insert against the FIXED
+    /// [`crate::dateformat::CAPTURE_PLACEHOLDER_YMD`] instead, so only the
+    /// DATE differs between the two, never the mechanism.
+    pub(super) fn insert_date(&mut self) {
+        let fmt = crate::dateformat::active_format();
+        let (y, m, d) = crate::dateformat::today_from_system_clock();
+        self.buffer.insert_text(&fmt.format(y, m, d));
+    }
+
     /// After a settings toggle, rebuild the STILL-OPEN settings menu's value cells in
     /// place (mirrors [`Self::refresh_rebind_overlay`]): re-gather the config/project
     /// values so the flipped row's SECONDARY column reflects the new state (the
@@ -412,8 +458,12 @@ impl App {
     /// filtered), but a refresh must stay index-coherent with `ov.corpus`
     /// (`visible_names()`) even on web, where "Edit config as text" is hidden.
     pub(super) fn refresh_settings_overlay(&mut self) {
-        let values =
-            crate::settings::SettingsValues::gather(&self.config, &self.root, self.zoom);
+        let values = crate::settings::SettingsValues::gather(
+            &self.config,
+            &self.root,
+            self.zoom,
+            crate::dateformat::today_from_system_clock(),
+        );
         if let Some(ov) = self.overlay.as_mut() {
             if ov.kind == crate::overlay::OverlayKind::Settings {
                 ov.bindings = crate::settings::visible_value_cells(&values);

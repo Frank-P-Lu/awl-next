@@ -342,7 +342,17 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // harness. `overlay.preview_id` keeps its meaning (the compared version's id);
 // the previewed `text` is now the transcript. A default capture is
 // byte-identical apart from the two new always-present overlay keys.
-pub const SCHEMA_VERSION: u32 = 177;
+// `/178` — INSERT DATE: a new top-level `date_format` block, `{ format,
+// example }` — the active `crate::dateformat::DateFormat`'s persisted slug
+// (`"ddmmyy"` by default) and that format rendered against the FIXED
+// `dateformat::CAPTURE_PLACEHOLDER_YMD` (no clock in a headless capture, so
+// "today" is always this same placeholder civil date — a reviewer can
+// eyeball DD/MM vs MM/DD ordering and zero-padding straight from the
+// sidecar). Always present, unconditional — mirrors `caret_mode`/
+// `dictionary`'s own always-present shape. A default `--screenshot` reports
+// `{ "format": "ddmmyy", "example": "07/03/09" }` and is otherwise
+// byte-identical.
+pub const SCHEMA_VERSION: u32 = 178;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

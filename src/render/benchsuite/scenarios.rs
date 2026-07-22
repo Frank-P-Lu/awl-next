@@ -405,7 +405,12 @@ fn palette(cx: &mut Cx) -> Result<CellOut> {
             history_entries: Vec::new(),
             history_now: None,
             history_session_start: None,
-            settings_values: crate::settings::SettingsValues::gather(cx.config, &temp_root, 1.0),
+            settings_values: crate::settings::SettingsValues::gather(
+                cx.config,
+                &temp_root,
+                1.0,
+                crate::dateformat::CAPTURE_PLACEHOLDER_YMD,
+            ),
             assets: Vec::new(),
         };
         let t0 = Instant::now();

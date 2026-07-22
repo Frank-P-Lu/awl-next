@@ -667,6 +667,7 @@ fn every_catalog_command_dispatches_without_panicking() {
                     Action::DownloadFile => eff == Effect::None,
                     Action::CheckForUpdates => eff == Effect::CheckForUpdates,
                     Action::DuplicateNote => eff == Effect::DuplicateNote,
+                    Action::InsertDate => eff == Effect::InsertDate,
                     // The smoke fixture is a markdown buffer, so export signals
                     // its format for the live App to render + write.
                     Action::ExportWord => eff == Effect::Export(crate::export::Format::Docx),

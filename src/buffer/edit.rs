@@ -58,6 +58,34 @@ impl Buffer {
         self.insert_char('\n');
     }
 
+    /// Insert literal `s` at the cursor as ONE atomic, undoable edit —
+    /// replacing an active selection exactly like [`Self::insert_char`], but
+    /// SEALED on both sides (mirrors [`Self::apply_format`]'s own sealing
+    /// discipline) so it never coalesces with adjacent typing: a single
+    /// Cmd-Z removes exactly `s`, regardless of whether the user was
+    /// mid-typing right before or after. A plain multi-char sibling of
+    /// `insert_char` (char-by-char) for a DISCRETE, non-typing insert — used
+    /// by "Insert Date" (`App::insert_date` / the headless replay's
+    /// `Effect::InsertDate` arm) to land the formatted date string. A no-op
+    /// for an empty `s` (nothing to insert, nothing to seal around).
+    pub fn insert_text(&mut self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        self.clear_kill_flag();
+        self.goal_col = None;
+        let before = self.cursor;
+        self.seal_undo_group();
+        if let Some((start, end)) = self.selection_range() {
+            self.anchor = None;
+            self.apply_edit(start, end - start, s, before, start + s.chars().count());
+        } else {
+            self.anchor = None;
+            self.apply_edit(self.cursor, 0, s, before, before + s.chars().count());
+        }
+        self.seal_undo_group();
+    }
+
     /// Tab: insert spaces up to the next tab stop (soft tabs, 4-wide) as ONE
     /// atomic edit, so a single undo removes the whole indent. Replaces an active
     /// selection like a normal insert. Tab stops are measured in chars from the

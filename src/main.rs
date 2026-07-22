@@ -51,6 +51,7 @@ mod crashlog;
 mod credits;
 mod cursor_shape;
 mod daemon;
+mod dateformat;
 mod debug;
 mod durable;
 mod ease;

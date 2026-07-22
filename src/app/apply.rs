@@ -551,6 +551,10 @@ impl App {
                 &self.config,
                 &self.root,
                 self.zoom,
+                // LIVE "today" for the "Date format" row's preview — the same
+                // clock read `recency_now` above uses, decomposed to a civil
+                // date (see `dateformat::today_from_system_clock`'s doc).
+                crate::dateformat::today_from_system_clock(),
             ),
             assets,
         };
@@ -688,6 +692,10 @@ impl App {
             // Guide: open the embedded GUIDE.md into the buffer (refresh the
             // on-disk view first, then reuse the ordinary load_path door).
             actions::Effect::OpenGuide => self.open_guide(),
+            // Insert Date: the pure core can't read a clock/Config, so it only
+            // signalled the request — insert the real TODAY, formatted per the
+            // active `DateFormat`, as one undoable edit.
+            actions::Effect::InsertDate => self.insert_date(),
             // The overlay ACCEPTED (Enter): open the chosen file / switch project /
             // move the note. Browse emits its file picks as Goto, so Goto covers both.
             actions::Effect::OverlayAccept(kind, val) => match kind {
