@@ -119,34 +119,31 @@ jobs:
       - name: cargo test
         run: cargo test
 
-  # ── The "free mac-VM tier" experiment (INFORMATIONAL, NEVER GATING) ─────────
-  # GitHub's macos-latest runners are real macOS VMs with a WindowServer. Open
-  # question: does a headful awl window actually PRESENT frames there, or does
-  # the wgpu occlusion gate (an NSWindow lacking NSWindowOcclusionStateVisible
-  # returns Occluded BEFORE nextDrawable() → presents=0 — see CLAUDE.md's
-  # --soak-gpu tripwire) zero it? If frames flow, awl's "live-only" bug tier
-  # (present/compositor races, redraw-scheduling gaps) is reproducible in
-  # ordinary CI for free. Either answer is worth one CI run.
+  # ── The mac live-probe (free mac-VM tier — now GATING) ──────────────────────
+  # GitHub's macos-latest runners are real macOS VMs with a WindowServer, and
+  # the "does a headful awl window PRESENT frames there?" question has been
+  # answered YES: a headful awl window clears the wgpu occlusion gate (an
+  # NSWindow lacking NSWindowOcclusionStateVisible returns Occluded BEFORE
+  # nextDrawable() → presents=0 — see CLAUDE.md's --soak-gpu tripwire) and the
+  # deterministic --soak-gpu stimulus schedule runs its full GPU contract. So
+  # awl's "live-only" bug tier (present/compositor races, redraw-scheduling
+  # gaps) is now reproducible in ordinary CI — and worth GATING on: a
+  # soak-contract regression (frames stop presenting, an injected GPU fault
+  # fails to recover, slideshow-grade degradation) should turn main red here.
   #
-  # NON-BLOCKING BY CONSTRUCTION — this can NEVER turn main red:
-  #   1. It is a SEPARATE job from the gating `mac` job (no shared step; a hang
-  #      or a nonzero exit here cannot touch mac's `cargo test`).
-  #   2. `continue-on-error: true` at the JOB level makes the workflow ignore
-  #      this job's conclusion entirely — so even a job-level timeout (a hang)
-  #      is swallowed, not just a step failure.
-  #   3. The step ALSO carries `continue-on-error: true` (belt and suspenders),
-  #      and `scripts/ci-live-probe.sh` itself always `exit 0`s: a build error,
-  #      a presents=0 contract FAIL (which makes `awl` exit nonzero), a missing
-  #      report line, or a runner with no console session are all reported and
-  #      swallowed. The presents count is echoed + written to the job summary
-  #      regardless of outcome.
-  # Not run on pull_request (informational only — keep PR checks lean); fires on
-  # push to main and on manual workflow_dispatch.
+  # GATING (eyes-open, user decision 2026-07-22): the earlier three
+  # failure-swallowing layers are GONE — the job-level and step-level
+  # `continue-on-error: true`, and `scripts/ci-live-probe.sh`'s terminal
+  # always-`exit 0`. The probe now propagates a non-zero exit when the soak
+  # fails its verification contract (`awl` bails on presents=0 / faults<3 / a
+  # non-recovered fault) OR the presents floor (>=100 per 25s run) isn't met,
+  # and that exit reds the run. Still NOT run on pull_request (fires on push to
+  # main and on manual workflow_dispatch) — a SEPARATE job from the gating `mac`
+  # job, so it gates independently.
   mac-live-probe:
-    name: mac live-probe (free mac-VM tier — non-gating)
+    name: mac live-probe (free mac-VM tier — gating)
     runs-on: macos-latest
     if: github.event_name != 'pull_request'
-    continue-on-error: true
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -155,9 +152,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # Launches a SHORT headful --soak-gpu, greps `presents=N` from the report
-      # line, and echoes a loud verdict. The wrapper always exits 0; the
-      # step-level continue-on-error is a redundant guard.
+      # Launches a SHORT headful --soak-gpu, greps `presents=N`/`faults=N` from
+      # the report line, and asserts the contract. A soak-contract failure or a
+      # sub-floor presents count exits non-zero and fails this (gating) job.
       - name: live-probe (does the mac VM present frames?)
-        continue-on-error: true
         run: scripts/ci-live-probe.sh 25
