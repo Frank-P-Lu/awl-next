@@ -4,7 +4,8 @@
 //! monolithic `render::tests` (2026-07 code-organization pass).
 
 use super::super::*;
-use super::{headless_pipeline, view};
+use super::pixeldiff::{self, DistinguishFloor, Region};
+use super::{headless_dqp, headless_pipeline, view};
 
 /// WRITING NITS: the muted STRAIGHT underline geometry flags exactly the three
 /// mechanical typos (double space, space-before-punct, trailing whitespace) and
@@ -603,4 +604,79 @@ fn spell_squiggle_baseline_dial_pulls_bilby_tighter_than_the_shared_default() {
     theme::set_active(theme::DEFAULT_THEME);
     p.sync_theme();
     crate::nits::set_nits_on(true);
+}
+
+/// NEIGHBORHOOD AUDIT (2026-07-22, item 19, Trigger-3 sweep over item 6's
+/// spell-squiggle class): every existing squiggle test above proves the
+/// PROTO geometry (thickness/amp/period/y-offset) is right, and the color
+/// test below proves the VALUE clears a contrast floor — but none of them
+/// render a real GPU frame, so none proves the wave actually reaches the
+/// framebuffer (exactly the mechanism-vs-outcome gap item 4(a) closed for
+/// strikethrough: `strike_lines` returning non-empty had shipped a whole
+/// round before a real-pixel test existed). This is that APPEARANCE ORACLE
+/// for the squiggle, SAMPLED across a few worlds (never the whole roster —
+/// the color-contrast test below already sweeps all of `theme::THEMES` at
+/// the value level, so this only needs to prove the mechanism reaches real
+/// pixels, not re-derive per-world contrast): Tawny (the shared default
+/// baseline dial), Bilby (the item 6(b) tighter per-world dial), Wagtail
+/// (the one-bit monochrome world — the tightest color budget the amber-guard
+/// class of law worries about), and Saltpan (a light-ground serif world, the
+/// opposite contrast direction from the dark defaults).
+#[test]
+fn spell_squiggle_paints_real_pixels_across_a_world_sample() {
+    let _g = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping spell_squiggle_paints_real_pixels_across_a_world_sample: no wgpu adapter");
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    // Byte-identical text in both renders ("wrold" — a real 5-char word/anagram
+    // shape); the ONLY difference is whether it is flagged as a misspelling.
+    // Caret parked on line 2, off the word's own line, so reveal-on-cursor
+    // never suppresses the one squiggle each render might draw.
+    let text = "wrold\n\nprose\n";
+    let mis = vec![crate::spell::Misspelling { line: 0, start_col: 0, end_col: 5 }];
+
+    for world in ["Tawny", "Bilby", "Wagtail", "Saltpan"] {
+        theme::set_active_by_name(world).unwrap();
+        p.sync_theme();
+
+        let mut clean = view(text, 2, 0);
+        clean.misspelled = Vec::new();
+        p.set_view(&clean);
+        assert!(p.spell_squiggles().is_empty(), "{world}: no misspelling, no squiggle proto");
+        p.prepare(&device, &queue, w, h).unwrap();
+        let a = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+        let mut flagged = view(text, 2, 0);
+        flagged.misspelled = mis.clone();
+        p.set_view(&flagged);
+        let squiggles = p.spell_squiggles();
+        assert_eq!(squiggles.len(), 1, "{world}: one squiggle proto");
+        let s = squiggles[0];
+        p.prepare(&device, &queue, w, h).unwrap();
+        let b = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+        // A TIGHT region hugging the wave's own band (a small pad for the
+        // wave's amplitude/AA) — the full row height would dilute the
+        // differing-pixel fraction below the floor (a thin wave against a
+        // whole glyph-cell-tall region), exactly the ratio
+        // `fence_lang_label_paints_real_pixels_on_the_fence_row` avoids by
+        // restricting to the label's own band rather than the whole row.
+        let pad = s.amp + s.thickness;
+        let region = Region::new(s.x, s.y - pad, s.w, s.h + 2.0 * pad);
+        pixeldiff::assert_perceptibly_different(
+            &a,
+            &b,
+            w as i64,
+            h as i64,
+            region,
+            DistinguishFloor::DEFAULT,
+            &format!("{world}: a flagged word's squiggle must paint real pixels under it"),
+        );
+    }
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
 }
