@@ -883,6 +883,72 @@ fn firetail_palette_is_numerically_distinct_from_every_other_world() {
     }
 }
 
+/// TAWNY↔MOPOKE DIFFERENTIATION law (Option A, 2026-07-22 — see MOPOKE's own
+/// doc comment in `worlds.rs`): the pair used to ship a BYTE-IDENTICAL caret
+/// (`#FFC05E`) and selection (`#3A6FD8`), measuring only 24.6 RMS redmean
+/// whole-palette distance apart — awl's tightest pair. Locks the separation
+/// so it can never regress back to identity: Mopoke's caret and selection
+/// (RGB, ignoring the unchanged selection alpha) must each differ from
+/// Tawny's, and the pair's whole-palette RMS (the SAME `redmean`/`tokens`
+/// recipe [`firetail_palette_is_numerically_distinct_from_every_other_world`]
+/// uses) must clear a floor comfortably above the old identical-pair value —
+/// measured ~76.1 post-change, floor set at 60 for margin.
+#[test]
+fn tawny_and_mopoke_carets_and_selections_are_now_numerically_distinct() {
+    fn redmean(a: Srgb, b: Srgb) -> f32 {
+        let rbar = (a.r as f32 + b.r as f32) * 0.5;
+        let dr = a.r as f32 - b.r as f32;
+        let dg = a.g as f32 - b.g as f32;
+        let db = a.b as f32 - b.b as f32;
+        ((2.0 + rbar / 256.0) * dr * dr
+            + 4.0 * dg * dg
+            + (2.0 + (255.0 - rbar) / 256.0) * db * db)
+            .sqrt()
+    }
+    fn tokens(t: &Theme) -> [Srgb; 10] {
+        [
+            t.base_100,
+            t.base_200,
+            t.base_300,
+            t.base_content,
+            t.muted,
+            t.faint,
+            t.primary,
+            t.primary_content,
+            t.error,
+            Srgb::rgb(t.selection.r, t.selection.g, t.selection.b),
+        ]
+    }
+
+    assert_ne!(
+        TAWNY.primary, MOPOKE.primary,
+        "the caret must no longer be byte-identical between Tawny and Mopoke"
+    );
+    assert_ne!(
+        (TAWNY.selection.r, TAWNY.selection.g, TAWNY.selection.b),
+        (MOPOKE.selection.r, MOPOKE.selection.g, MOPOKE.selection.b),
+        "the selection tint must no longer be byte-identical between Tawny and Mopoke"
+    );
+    assert_eq!(
+        TAWNY.selection.a, MOPOKE.selection.a,
+        "the selection ALPHA is unchanged by this round — only the hue moved"
+    );
+
+    let (tawny, mopoke) = (tokens(&TAWNY), tokens(&MOPOKE));
+    let rms = (tawny
+        .iter()
+        .zip(mopoke)
+        .map(|(&a, b)| redmean(a, b).powi(2))
+        .sum::<f32>()
+        / tawny.len() as f32)
+        .sqrt();
+    assert!(
+        rms >= 60.0,
+        "Tawny-Mopoke whole-palette distance is only {rms:.1} RMS redmean (floor 60; \
+         was 24.6 before the differentiation round)"
+    );
+}
+
 /// The `Background::Lava` DATA accessors (exercised via a literal, since no world
 /// ships it yet): it degrades to a FLAT margin ground (`from == to == ground`,
 /// shader 0) that the lava overlay overdraws, names itself `"lava"`, is the ONLY

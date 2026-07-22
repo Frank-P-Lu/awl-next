@@ -489,8 +489,25 @@ pub const TAWNY: Theme = Theme {
 };
 
 /// Mopoke — Tawny warmed a notch: the cool near-black neutrals nudged to a warm
-/// charcoal so the room reads cosy, not void. Subtlest of the warm-Tawny trio.
-/// Same IBM Plex Mono home + amber-eye caret. (Provisional name; warm-Tawny "A".)
+/// charcoal so the room reads cosy, not void. Same IBM Plex Mono home.
+///
+/// TAWNY↔MOPOKE DIFFERENTIATION (DECIDED Option A, user + fable, 2026-07-22):
+/// the two worlds shipped with a BYTE-IDENTICAL caret (`#FFC05E`) and selection
+/// (`#3A6FD8`) — a gallery round measured the pair's whole-palette RMS redmean
+/// at only 24.6, awl's tightest. Mopoke (never Tawny, the anchor) moves both:
+/// the caret golden→copper/ember (hue ~16°, deeper/redder than the gallery's
+/// `#F78645` exploration — still warm, still legible, stops short of pure
+/// red), and the selection blue→violet-plum `#7B39C6` at the same `0x52`
+/// alpha. The pair's RMS now measures ~76
+/// (`tawny_and_mopoke_carets_and_selections_are_now_numerically_distinct`,
+/// `theme::tests`). `primary_content` stays the shared dark-warm ink
+/// (`#261A08`) — it's an authored token, not derived from `primary`, and
+/// reads fine under either hue (it's also render-inert here: Mopoke's block
+/// caret is `CaretBlockStyle::Normal`, which never repaints the covered
+/// glyph in `primary_content` — that knockout is the `Filled` arm's alone).
+/// Fable: the plum selection is the felt workhorse (it harmonizes with
+/// Mopoke's warm ground, keeps its cosy character); copper+plum are warmer
+/// jewellery on the same room, not a new world.
 pub const MOPOKE: Theme = Theme {
     name: "Mopoke",
     dark: true,
@@ -500,10 +517,13 @@ pub const MOPOKE: Theme = Theme {
     base_content: Srgb::rgb(0xE8, 0xE4, 0xDC),
     muted: Srgb::rgb(0x97, 0x8C, 0x7E),
     faint: Srgb::rgb(0x57, 0x50, 0x47),
-    primary: Srgb::rgb(0xFF, 0xC0, 0x5E),
+    // Copper/ember (hue ~16°, sat 0.90, light 0.60) — was Tawny's shared gold
+    // `#FFC05E`; see the doc comment above for the differentiation round.
+    primary: Srgb::rgb(0xF5, 0x6E, 0x3D),
     primary_content: Srgb::rgb(0x26, 0x1A, 0x08),
     error: Srgb::rgb(0xE5, 0x4B, 0x4B),
-    selection: Srgb::rgba(0x3A, 0x6F, 0xD8, 0x52),
+    // Violet-plum, same 0x52 alpha as before — was Tawny's shared blue `#3A6FD8`.
+    selection: Srgb::rgba(0x7B, 0x39, 0xC6, 0x52),
     background: Background::Dots {
         from: Srgb::rgb(0x1B, 0x18, 0x14),
         to: Srgb::rgb(0x25, 0x21, 0x1B),
