@@ -66,6 +66,37 @@ pub fn heading_scale(level: u8) -> f32 {
     }
 }
 
+/// The ROW-HEIGHT LEAD — vertical breathing room a heading's ROW grows
+/// BEYOND what its own [`heading_scale`] SIZE already gives its font, decoupled
+/// from glyph size exactly like an inline image's absolute row height
+/// (`render::spans::build_line_attrs`'s `image_row_height` arm). THEME-QA
+/// round (2026-07-22): a no-bold world (`Theme::heading_bold == false` —
+/// Bombora, Mulga, …) has neither WEIGHT nor, at the SUBHEAD rung, much SIZE
+/// to carry `###` above body text — measured, its row-to-row gap around an h3
+/// was pixel-identical to the gap between two ordinary body paragraphs (the
+/// reported bug: "h3 reads as body"). A real spacing floor gives every
+/// world's heading hierarchy a SECOND axis to read on (size AND space, not
+/// size alone), universal DATA keyed by LEVEL — never a per-world branch, so
+/// it helps the no-bold worlds where it is load-bearing and costs the bold
+/// worlds only a little extra (still calibrated small enough that Tawny's
+/// already-legible weight+size break doesn't grow into an ungainly gap — see
+/// `render::tests::markdown_headings::heading_levels_stay_measurably_distinct_from_body_in_every_world`).
+///
+/// Rungs run OPPOSITE `heading_scale`'s own direction: SUBHEAD has the LEAST
+/// size to lean on, so it gets the MOST lead; TITLE already commands the room
+/// via 1.6x size alone, so it gets the least. `0` (body / a non-heading line,
+/// including a thematic break — see `render::spans::md_line_scale`) is
+/// exactly `1.0`, so every non-heading row's height is BYTE-IDENTICAL to
+/// before this constant existed.
+pub fn heading_row_lead(level: u8) -> f32 {
+    match level {
+        0 => 1.0,
+        1 => 1.15,
+        2 => 1.26,
+        _ => 1.34,
+    }
+}
+
 /// THE ONE OWNER of "does THIS heading level shape at real BOLD weight?" —
 /// the weight half of the heading ladder, beside [`heading_scale`]'s size
 /// half. Two facts compose here and nowhere else:

@@ -147,4 +147,17 @@ pub const BULLET_SCALE_PLAIN: f32 = 1.0;
 /// ORNAMENT bullet scale — a hedera / fleuron / manicule shaped at ~half body so it
 /// reads as a quiet bullet-sized marker, not a section-break flourish. A TASTE
 /// DEFAULT (one dial for every characterful world), tuned from the veto gallery.
+///
+/// **Two logged exceptions (theme-QA round, padding audit):** the shared tier
+/// is a reasonable default, but it is a byproduct of two UNRELATED font
+/// metrics — the concealed `"<marker> "` prefix's advance in the world's own
+/// BODY font, and the ornament glyph's own ink width in its ORNAMENT face —
+/// that happen to pair badly on two worlds: Bombora's antique manicule ☞
+/// against EB Garamond's narrow punctuation advance (the glyph's ink reached,
+/// and on some rows touched, the following text) and Mopoke's rosette against
+/// iA Writer Quattro S's wide duospaced advance (too small to fill the gap).
+/// Both worlds carry their OWN literal (`worlds.rs::BOMBORA`/`MOPOKE`) instead
+/// of this constant — every other characterful world stays on the shared tier,
+/// byte-identical. See `render::tests::markdown::
+/// bullet_glyph_never_touches_the_following_text_in_any_world`.
 pub const BULLET_SCALE_ORNAMENT: f32 = 0.55;

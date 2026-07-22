@@ -1312,8 +1312,41 @@ pub(super) fn add_syn_line_spans(
 /// [`md_attrs`]; this governs SIZE alone, so an in-progress `#foo` is big but not yet
 /// bold until it becomes a real heading.
 pub(super) fn md_line_scale(line_text: &str, md: bool) -> f32 {
+    let level = md_line_heading_level(line_text, md);
+    if level > 0 {
+        return crate::markdown::heading_scale(level);
+    }
+    // A THEMATIC BREAK (`---`/`***`/`___`) grows its row to fit the bigger centered
+    // ornament fleuron (drawn by `prepare_ornaments`), exactly the heading-row
+    // machinery above — the tall row centers the glyph. The scale is the ACTIVE
+    // world's per-world `ornament_scale` (the SAME value `prepare_ornaments` shapes
+    // the glyph at), UNIFORM per break line regardless of caret, so the row never
+    // reflows on cursor move (the raw `---` reveals in place when the caret lands, at
+    // the same scaled size). A theme switch that changes the scale re-fits the row via
+    // `restyle_all_lines`, like the heading sizes. `md` was already folded into
+    // `level` above (non-markdown never reaches this branch's `is_thematic_break`
+    // check either — a `false` `md` yields `level == 0` for every line, but a
+    // non-heading, non-markdown line still needs this same early-out, so `md` is
+    // re-checked here rather than threading a second bool out of the shared scan).
+    if md && crate::markdown::is_thematic_break(line_text) {
+        return crate::theme::active().ornament_scale;
+    }
+    1.0
+}
+
+/// The heading LEVEL implied by a line's LEADING `#` run — 0 (not a heading) /
+/// 1 (`#`) / 2 (`##`) / 3+ (`###` and deeper, unclamped — every consumer's own
+/// `_ =>` arm treats 3+ uniformly). The SHARED scan [`md_line_scale`] (the SIZE
+/// half) and `build_line_attrs`'s row-lead computation (the SPACING half, see
+/// [`crate::markdown::heading_row_lead`]) both key off this ONE function, so
+/// the two can never read a different level for the same line. Keyed off the
+/// raw hash COUNT, NOT a fully-valid ATX heading, so a line grows the instant
+/// you type `#` — before the space and title (and even for `#foo`). Only the
+/// LEADING run counts (after optional indent), so a `#` mid-prose is ignored.
+/// `md` gates it: a non-markdown buffer is always level `0`.
+pub(super) fn md_line_heading_level(line_text: &str, md: bool) -> u8 {
     if !md {
-        return 1.0;
+        return 0;
     }
     let b = line_text.as_bytes();
     let mut i = 0;
@@ -1325,43 +1358,42 @@ pub(super) fn md_line_scale(line_text: &str, md: bool) -> f32 {
         hashes = hashes.saturating_add(1);
         i += 1;
     }
-    if hashes > 0 {
-        return crate::markdown::heading_scale(hashes);
-    }
-    // A THEMATIC BREAK (`---`/`***`/`___`) grows its row to fit the bigger centered
-    // ornament fleuron (drawn by `prepare_ornaments`), exactly the heading-row
-    // machinery above — the tall row centers the glyph. The scale is the ACTIVE
-    // world's per-world `ornament_scale` (the SAME value `prepare_ornaments` shapes
-    // the glyph at), UNIFORM per break line regardless of caret, so the row never
-    // reflows on cursor move (the raw `---` reveals in place when the caret lands, at
-    // the same scaled size). A theme switch that changes the scale re-fits the row via
-    // `restyle_all_lines`, like the heading sizes.
-    if crate::markdown::is_thematic_break(line_text) {
-        return crate::theme::active().ornament_scale;
-    }
-    1.0
+    hashes
 }
 
-/// `base` with a per-line metrics override applied (heading lines render LARGER).
-/// At `scale == 1.0` this returns a plain clone with NO `metrics_opt`, so a
-/// non-heading line shapes byte-identically to the pre-heading-size renderer.
-/// Otherwise it sets `Attrs::metrics(base_font * scale, base_line * scale)`;
-/// cosmic-text derives a row's height from the MAX of its glyphs' per-span line
-/// heights (`shape.rs`), so applying this to the line's default attrs AND to every
-/// span built from it makes the whole heading row taller and its glyphs bigger.
-/// The values are ABSOLUTE pixels (already zoom/DPI-folded), so any zoom/DPI change
-/// must rebuild these (see [`TextPipeline::restyle_all_lines`]).
+/// `base` with a per-line metrics override applied (heading lines render LARGER,
+/// and — theme-QA round — grow their ROW a further, DECOUPLED amount beyond
+/// what their font size alone needs, the same "absolute line-height, unlinked
+/// from font size" shape an inline image's row already uses). At
+/// `font_scale == row_scale == 1.0` this returns a plain clone with NO
+/// `metrics_opt`, so a non-heading line shapes byte-identically to the
+/// pre-heading-size renderer. Otherwise it sets
+/// `Attrs::metrics(base_font * font_scale, base_line * row_scale)`; cosmic-text
+/// derives a row's height from the MAX of its glyphs' per-span line heights
+/// (`shape.rs`), so applying this to the line's default attrs AND to every span
+/// built from it makes the whole heading row taller (by `row_scale`) and its
+/// glyphs bigger (by `font_scale`) — INDEPENDENTLY, so a heading's SIZE ladder
+/// (Ladder J) and its row's SPACING lead (`crate::markdown::heading_row_lead`)
+/// can each be tuned without moving the other. `font_scale == row_scale` for
+/// every pre-existing caller shape (plain body lines and thematic breaks both
+/// still pass the SAME value twice), so this is a pure signature widening, not
+/// a behavior change for either. The values are ABSOLUTE pixels (already
+/// zoom/DPI-folded), so any zoom/DPI change must rebuild these (see
+/// [`TextPipeline::restyle_all_lines`]).
 pub(super) fn scaled_base_attrs(
     base: &Attrs<'static>,
     base_font_size: f32,
     base_line_height: f32,
-    scale: f32,
+    font_scale: f32,
+    row_scale: f32,
 ) -> Attrs<'static> {
-    if (scale - 1.0).abs() < 1e-3 {
+    if (font_scale - 1.0).abs() < 1e-3 && (row_scale - 1.0).abs() < 1e-3 {
         return base.clone();
     }
-    base.clone()
-        .metrics(GlyphMetrics::new(base_font_size * scale, base_line_height * scale))
+    base.clone().metrics(GlyphMetrics::new(
+        base_font_size * font_scale,
+        base_line_height * row_scale,
+    ))
 }
 
 /// Assemble ONE buffer line's complete `AttrsList` from the base doc attrs plus
@@ -1419,14 +1451,23 @@ pub(super) fn build_line_attrs(
     // row (cosmic-text gives each line ONE vertically-centred baseline), so we lean
     // into the centering rather than fight it.
     let scale = md_line_scale(line_text, md);
+    // ROW-HEIGHT LEAD (theme-QA round): a heading's row grows a further,
+    // DECOUPLED amount beyond `scale` alone gives its font — vertical
+    // breathing room, a second axis (besides size/weight) for the hierarchy
+    // to read on. `heading_row_lead` is `1.0` for every non-heading line
+    // (body text AND thematic breaks alike — `md_line_heading_level` is `0`
+    // for both), so `row_scale == scale` there, unchanged from before this
+    // round.
+    let heading_level = md_line_heading_level(line_text, md);
+    let row_scale = scale * crate::markdown::heading_row_lead(heading_level);
     let (lb, row_lh) = match image_row_height {
         Some(h) => (
             base.clone().metrics(GlyphMetrics::new(base_font_size, h)),
             h,
         ),
         None => (
-            scaled_base_attrs(base, base_font_size, base_line_height, scale),
-            base_line_height * scale,
+            scaled_base_attrs(base, base_font_size, base_line_height, scale, row_scale),
+            base_line_height * row_scale,
         ),
     };
     let mut al = glyphon::cosmic_text::AttrsList::new(&lb);

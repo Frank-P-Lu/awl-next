@@ -5,7 +5,8 @@
 //! markdown-styling suite.
 
 use super::super::*;
-use super::{headless_pipeline, view};
+use super::pixeldiff;
+use super::{headless_dqp, headless_pipeline, view};
 
 /// The blockquote `>` marker CONCEALS off the caret's line (collapses to
 /// near-zero advance, so the quote text starts flush at the column edge) and
@@ -236,7 +237,9 @@ fn heading_rows_are_taller_and_gated_to_markdown() {
     let text = "# Big\n\nbody one\nbody two\n";
 
     // MARKDOWN: the heading row (row 0) is taller than a body row (row 2) by
-    // ~heading_scale(1), while the body rows stay uniform.
+    // ~heading_scale(1) * heading_row_lead(1) — the SIZE ladder's own factor
+    // further widened by the theme-QA round's row-height lead (the extra
+    // breathing room decoupled from font size; see that fn's doc comment).
     let mut md = view(text, 0, 0);
     md.is_markdown = true;
     p.set_view(&md);
@@ -245,7 +248,7 @@ fn heading_rows_are_taller_and_gated_to_markdown() {
     let body = p.row_height_px(2);
     assert!(body > 0.0);
     let ratio = h1 / body;
-    let want = crate::markdown::heading_scale(1);
+    let want = crate::markdown::heading_scale(1) * crate::markdown::heading_row_lead(1);
     assert!(
         (ratio - want).abs() < 0.05,
         "h1 row should be ~{want}x a body row, got {ratio} ({h1}/{body})"
@@ -490,4 +493,117 @@ fn zoom_on_heading_line_keeps_caret_target_aligned() {
          stale pre-restyle row height (latched={:?}, correct=({correct_x}, {correct_y}))",
         target_after_zoom
     );
+}
+
+/// LAW (theme-QA round, the reported cell "no-bold worlds: h3 reads as body —
+/// headings need vertical spacing"): on a NO-BOLD world
+/// (`Theme::heading_bold == false` — Bombora, Mulga, …), the BLANK GAP BEFORE
+/// a heading (tested at the WEAKEST rung, SUBHEAD `###`, since it has the
+/// least size lead over body to begin with) must read MEASURABLY TALLER at
+/// REAL GPU PIXELS than the gap between two ordinary body paragraphs in the
+/// SAME document — real GPU pixels, not the row-geometry accessors alone
+/// (the Wagtail lesson, CLAUDE.md's harness section: appearance is proven
+/// over bytes, never inferred from state — a mechanism could report a taller
+/// row while the extra height painted no visible gap at all). Before
+/// `heading_row_lead` existed, this was the bug in one sentence: a no-bold
+/// world's `###` grew ONLY with its own font size (SUBHEAD's modest 1.15x) —
+/// the blank-line gap around it was pixel-identical to a plain paragraph
+/// break, so the heading read as body with a slightly bigger font, no rhythm
+/// to it.
+///
+/// GAP BEFORE only, not after — a real rendering-mechanics finding from this
+/// round's own instrumentation, not an assumption: cosmic-text places a
+/// heading's enlarged line-box leading ABOVE its baseline (measured: the
+/// row's own leading-before-ink offset grows with `heading_row_lead`, while
+/// its trailing overflow past the row's nominal bottom stays roughly
+/// constant across a plain body row and a heading row alike). That happens to
+/// be the RIGHT typographic convention anyway (space-before a heading reads
+/// bigger than space-after — a heading separates from what came before and
+/// hugs what it introduces), so the law asserts the axis this mechanism
+/// actually moves, and the gap AFTER is asserted merely NOT SHRUNK (never
+/// worse than the plain baseline), never claimed to grow.
+///
+/// NO-WILDCARD-ish sweep: every world whose OWN `heading_bold` bit is `false`
+/// in the roster (not a hand-picked pair), so a future no-bold world is
+/// enrolled automatically; also asserts the sweep actually ran (guards
+/// against every world someday flipping to `heading_bold: true` and this law
+/// going vacuous).
+#[test]
+fn no_bold_worlds_get_more_gap_before_a_heading_than_between_paragraphs_at_real_pixels() {
+    let _t = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping no_bold_worlds_get_more_gap_before_a_heading_than_between_paragraphs_at_real_pixels: no wgpu adapter"
+        );
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    // line0/2: a plain paragraph pair (line1 blank) — the BASELINE gap.
+    // line4: `### Heading Three` (line3 blank before it, line5 blank after) —
+    // the HEADING gap on both sides. Short lines, so no wrap: logical line
+    // index == visual row index (matches the sibling heading tests' idiom).
+    let text = "Body paragraph one, the plain-gap baseline.\n\nBody paragraph two, still plain prose.\n\n### Heading Three\n\nBody paragraph three, right after the heading.\n";
+    let mut checked = 0usize;
+    for t in crate::theme::THEMES.iter().filter(|t| !t.heading_bold) {
+        theme::set_active_by_name(t.name).unwrap();
+        p.sync_theme();
+        let mut v = view(text, 6, 0); // caret on the trailing line, off every measured line
+        v.is_markdown = true;
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        let pixels = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+        let text_left = p.text_left() as i64;
+        let x0 = text_left.max(0);
+        let x1 = (text_left + 700).min(w as i64);
+        // Background reference: a row well below every measured line, still
+        // page column (never the margin).
+        let bg = pixels[((h as i64 - 10) * w as i64 + (x0 + 5)) as usize];
+
+        let scan_top = (p.row_top_px(0) as i64).max(0);
+        let scan_bot = ((p.row_top_px(6) + p.row_height_px(6)) as i64).min(h as i64);
+        let bands = pixeldiff::ink_row_bands(
+            &pixels, w as i64, h as i64, x0, x1, scan_top, scan_bot, bg, 18,
+        );
+        let ink_idx: Vec<usize> =
+            bands.iter().enumerate().filter(|(_, b)| b.ink).map(|(i, _)| i).collect();
+        assert_eq!(
+            ink_idx.len(),
+            4,
+            "{}: expected 4 ink bands (para1, para2, heading, para3), got {bands:?}",
+            t.name
+        );
+        // The gap BAND sitting between two consecutive ink bands is the band
+        // at the index right after the first one's — `bands` alternates
+        // ink/gap/ink/gap/…, so `ink_idx[i]+1` is always a gap (never past
+        // the vec's end, since the scan starts and ends mid-content here).
+        let gap_h = |after_ink: usize| -> i64 {
+            let b = bands[ink_idx[after_ink] + 1];
+            assert!(!b.ink, "{}: expected a gap band, got {b:?}", t.name);
+            b.x1 - b.x0 + 1
+        };
+        let baseline_gap = gap_h(0); // between para1 and para2 — plain
+        let pre_heading_gap = gap_h(1); // between para2 and the heading
+        let post_heading_gap = gap_h(2); // between the heading and para3
+
+        assert!(
+            pre_heading_gap > baseline_gap + 3,
+            "{}: gap BEFORE the heading ({pre_heading_gap}px) must read MEASURABLY \
+             taller than the plain paragraph gap ({baseline_gap}px) — the reported \
+             \"h3 reads as body\" bug",
+            t.name
+        );
+        assert!(
+            post_heading_gap + 2 >= baseline_gap,
+            "{}: gap AFTER the heading ({post_heading_gap}px) must never read SMALLER \
+             than the plain paragraph gap ({baseline_gap}px)",
+            t.name
+        );
+        checked += 1;
+    }
+    assert!(checked >= 1, "no no-bold world ran — the sweep's filter matched nothing");
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
 }

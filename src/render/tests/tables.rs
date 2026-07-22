@@ -4,7 +4,8 @@
 //! (2026-07 code-organization pass).
 
 use super::super::*;
-use super::{headless_pipeline, view, view_md};
+use super::pixeldiff;
+use super::{headless_dqp, headless_pipeline, view, view_md};
 
 /// TABLE COLUMN ALLOCATION (the CSS auto-table shape — the fix for the
 /// "Da wn"/"Tim e" mid-word-break bug): a wide GFM table's TOKEN columns
@@ -579,4 +580,76 @@ fn table_grid_reclamps_to_the_column_on_a_real_window_resize() {
 
     crate::page::set_page_on(false);
     crate::page::set_measure(crate::page::DEFAULT_MEASURE);
+}
+
+/// GUARD (theme-QA audit, reported cell "Potoroo TABLE text ink wrong"):
+/// INVESTIGATED, DID NOT REPRODUCE. A GFM table's cell text
+/// (`prepare_table_grid`'s `default_color: content`, both the ordinary grid
+/// and — read its own doc comment — the revealed/x-ray state's other rows)
+/// is `theme::base_content()` verbatim; there is no per-world override
+/// anywhere in the table draw path. This pins that OUTCOME over REAL GPU
+/// PIXELS — not the attrs-level `color_opt.is_none()` mechanism check
+/// `table_cell_plain_text_is_unchanged_from_base` already makes above,
+/// appearance proven over bytes, never inferred from a mechanism (the
+/// Wagtail lesson, CLAUDE.md's harness section) — so a future table-render
+/// change can't silently regress it into the reported bug: a table HEADER
+/// cell, a table BODY cell, and an ordinary body-prose line in the SAME
+/// document render with the IDENTICAL dominant ink color on Potoroo.
+#[test]
+fn potoroo_table_cell_ink_matches_body_prose_at_real_pixels() {
+    let _t = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping potoroo_table_cell_ink_matches_body_prose_at_real_pixels: no wgpu adapter"
+        );
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    theme::set_active_by_name("Potoroo").unwrap();
+    p.sync_theme();
+    crate::markdown::set_wysiwyg_on(true);
+    // Line 0: plain body prose (the reference ink). Line 2 (header) / line 4
+    // (one body row): a two-column table. Caret parked on line 0, so the
+    // table stays in its ORDINARY drawn-grid state (not revealed/x-ray).
+    let text = "Body prose ink reference line here.\n\n| Name | Role |\n| --- | --- |\n| Alpha | Lead |\n";
+    let mut v = view(text, 0, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let pixels = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    let text_left = p.text_left() as i64;
+    let row_h = (p.metrics.line_height as i64).max(1);
+    // Background reference: a row well below all five lines, still page
+    // column (never the margin).
+    let bg = pixels[((h as i64 - 20) * w as i64 + (text_left + 20)) as usize];
+
+    let prose_top = p.line_ornament_top(0) as i64;
+    let header_top = p.line_ornament_top(2) as i64;
+    let body_top = p.line_ornament_top(4) as i64;
+    let prose_region = pixeldiff::Region::new(text_left as f32, prose_top as f32, 400.0, row_h as f32);
+    let header_region =
+        pixeldiff::Region::new(text_left as f32, header_top as f32, 200.0, row_h as f32);
+    let body_region = pixeldiff::Region::new(text_left as f32, body_top as f32, 200.0, row_h as f32);
+
+    let prose_ink = pixeldiff::dominant_ink_color(&pixels, w as i64, h as i64, prose_region, bg, 18)
+        .expect("body prose line must paint SOME ink");
+    let header_ink =
+        pixeldiff::dominant_ink_color(&pixels, w as i64, h as i64, header_region, bg, 18)
+            .expect("table header cell must paint SOME ink");
+    let body_ink = pixeldiff::dominant_ink_color(&pixels, w as i64, h as i64, body_region, bg, 18)
+        .expect("table body cell must paint SOME ink");
+
+    assert_eq!(
+        header_ink, prose_ink,
+        "Potoroo table HEADER cell ink {header_ink:?} != body prose ink {prose_ink:?}"
+    );
+    assert_eq!(
+        body_ink, prose_ink,
+        "Potoroo table BODY cell ink {body_ink:?} != body prose ink {prose_ink:?}"
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
 }
