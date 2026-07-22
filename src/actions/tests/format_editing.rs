@@ -330,6 +330,29 @@ fn smart_newline_parser_declines_plain_and_inside_marker() {
 }
 
 #[test]
+fn dash_then_enter_leaves_a_writable_line_item_40() {
+    // ITEM 40 regression — `-` then Enter must never strand an UNWRITABLE empty
+    // item. Decided semantics (2026-07-23): a lone `-` (no trailing space) is not
+    // a list yet, so Enter falls through to a PLAIN newline — the dash stays a
+    // literal `-` on its own line with a fresh blank line below. Drive the whole
+    // gesture through the REAL apply_core seam exactly as `--keys "- Enter x"`
+    // does (InsertChar → Newline → InsertChar), then assert the typed character
+    // actually LANDED after the newline and the caret advanced onto it — i.e. the
+    // new line is writable, not eaten. (`-` alone yields no `md_spans`, so nothing
+    // conceals; the buffer-level writability contract is the floor this pins.)
+    let mut b = md("", 0);
+    drive_act(&mut b, &Action::InsertChar('-'));
+    drive_act(&mut b, &Action::Newline);
+    drive_act(&mut b, &Action::InsertChar('x'));
+    assert_eq!(b.text(), "-\nx", "the dash stays literal and `x` lands on the new line");
+    // Caret sits AFTER the `x`: char 3 over "-\nx" — the line the user landed on
+    // genuinely took the keystroke.
+    assert_eq!(b.cursor_char(), 3, "caret advanced past the written `x`");
+    let (line, col) = b.cursor_line_col();
+    assert_eq!((line, col), (1, 1), "caret is on the new line, one column in");
+}
+
+#[test]
 fn smart_newline_ordered_marker_at_usize_max_saturates_no_overflow() {
     // A pathological ordered marker of exactly `usize::MAX` parses fine, but the
     // continuation used to compute `n + 1` — which OVERFLOWS (panic in debug,
