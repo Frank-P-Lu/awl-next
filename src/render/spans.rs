@@ -601,6 +601,56 @@ pub(super) fn add_bullet_conceal_span(
     al.add_span(it.indent..it.indent + 1, &hidden);
 }
 
+/// PER-LEVEL LIST INDENT (item 15, the other half of bullet-level readability):
+/// widens a nested list item's LEADING-SPACE run (bytes `0..it.indent`) by the
+/// active world's own [`crate::theme::Theme::list_indent_scale`], so each
+/// nesting level reads with a touch more breathing room than its literal typed
+/// two-spaces-per-level alone gives it. PURE ADVANCE: the leading run is always
+/// plain spaces (`markdown::list_item` only counts `b' '` bytes into `indent`),
+/// which carry no ink, so inflating their metrics FONT SIZE only widens the
+/// blank gap before the marker — never draws a visible glyph — and the paired
+/// line-height half is pinned to `row_lh` (the line's own real row height,
+/// exactly [`CONCEAL_ZERO_WIDTH_FONT_SIZE`]'s established discipline, scaled UP
+/// instead of down) so a wide-indent line never grows its own row. A no-op at
+/// depth 0 (`it.indent == 0`, nothing to widen — every world's top-level items
+/// stay byte-identical) and at `list_indent_scale == 1.0` (the geometric/
+/// technical worlds' tier — also byte-identical). Because the indent BYTE
+/// COUNT already grows linearly with depth (`markdown::LIST_INDENT` per level),
+/// scaling the whole leading run by one constant factor makes the EXTRA width
+/// grow linearly with depth for free — no per-depth multiplier needed.
+///
+/// Detected via the SAME shared [`crate::markdown::list_item`] scan as the
+/// bullet conceal above, but — unlike that reveal-on-cursor gate — applied
+/// UNCONDITIONALLY (ordered AND unordered items alike, caret on the line or
+/// not): indent is a permanent LAYOUT choice, not a WYSIWYG reveal toggle,
+/// mirroring how a heading's SIZE never un-scales on cursor entry (only its
+/// `#` markup conceals/reveals). Called LAST in [`build_line_attrs`] so it
+/// wins over the leading `Markup` dim-ink span [`add_md_line_spans`] already
+/// painted there — invisible either way, since spaces carry no ink regardless
+/// of color/weight/family.
+pub(super) fn add_list_indent_span(
+    al: &mut glyphon::cosmic_text::AttrsList,
+    line_text: &str,
+    base: &Attrs<'static>,
+    base_font_size: f32,
+    row_lh: f32,
+) {
+    let Some(it) = crate::markdown::list_item(line_text) else {
+        return;
+    };
+    if it.indent == 0 {
+        return; // depth 0: no indent run to widen, byte-identical
+    }
+    let list_indent_scale = crate::theme::active().list_indent_scale;
+    if (list_indent_scale - 1.0).abs() < 1e-3 {
+        return; // the PLAIN tier: byte-identical to the pre-item-15 renderer
+    }
+    let wide = base
+        .clone()
+        .metrics(GlyphMetrics::new(base_font_size * list_indent_scale, row_lh));
+    al.add_span(0..it.indent, &wide);
+}
+
 /// The document BYTE RANGE covering EVERY LINE the active selection TOUCHES —
 /// `l0..=l1` inclusive (the ordered selection's earlier-to-later LINE
 /// endpoints, column-agnostic — a one-character selection on a line touches
@@ -1682,5 +1732,9 @@ pub(super) fn build_line_attrs(
         &mut al, line_text, line_doc_start, &lb, md_spans, conceal_off_cursor, cursor_byte,
         row_lh, image_force, selection_touch,
     );
+    // PER-LEVEL LIST INDENT (item 15): UNCONDITIONAL (not gated on
+    // `conceal_off_cursor` — a permanent layout choice, not a reveal toggle),
+    // applied LAST so it always wins over the leading `Markup` span above.
+    add_list_indent_span(&mut al, line_text, &lb, base_font_size, row_lh);
     al
 }

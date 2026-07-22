@@ -15,9 +15,9 @@ use super::model::{
     SPELL_UNDERLINE_GAP_DEFAULT, Theme, ThemeTags, TitleStyle, WashOverride,
 };
 use super::ornament::{
-    Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, ORNAMENT_GARAMOND,
-    ORNAMENT_JUNICODE, ORNAMENT_MARKS, ORNAMENT_SCALE_FLEURON, ORNAMENT_SCALE_GEOMETRIC,
-    ORNAMENT_SCALE_ORNATE,
+    Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, LIST_INDENT_SCALE_PLAIN,
+    LIST_INDENT_SCALE_WIDE, ORNAMENT_GARAMOND, ORNAMENT_JUNICODE, ORNAMENT_MARKS,
+    ORNAMENT_SCALE_FLEURON, ORNAMENT_SCALE_GEOMETRIC, ORNAMENT_SCALE_ORNATE,
 };
 
 /// FLIP ROUND (user FINAL PICKS 2026-07-17) — the SHIPPING poster list surface,
@@ -74,9 +74,11 @@ pub const GUMTREE: Theme = Theme {
     ornaments: Ornaments { dash: '\u{E67D}', star: '\u{E270}', underscore: '\u{E68A}' },
     ornament_face: ORNAMENT_JUNICODE,
     ornament_scale: ORNAMENT_SCALE_ORNATE,
-    // Eucalyptus reading room → a small botanical hedera leaf + its mirror.
-    bullets: ('❧', '☙'),
+    // Eucalyptus reading room → a small botanical hedera leaf + its mirror + the
+    // family's third fleuron for level 3 (item 15's per-level rotation).
+    bullets: ('❧', '☙', '❦'),
     bullet_scale: BULLET_SCALE_ORNAMENT,
+    list_indent_scale: LIST_INDENT_SCALE_WIDE,
     // Pale cool-green ground → Day; Literata reading serif → Refined / Literary; green hue → Cool.
     // Curated: shows under Day / Literary / Cool; opts OUT of Register (crowded → Bilby/Saltpan/Bombora keep Refined).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Cool") },
@@ -129,6 +131,7 @@ pub const POTOROO: Theme = Theme {
     // All-mono burrow → plain geometric bullets (restraint is its character).
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     // Dark burnt-orange room → Dusk (warm dark); Monaspace mono → Humble / Technical; rust hue → Warm.
     // Curated: a headliner on ALL four — Dusk / Humble / Technical / Warm are each its clearest exemplar.
     tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: Some("Technical"), temperature: Some("Warm") },
@@ -195,9 +198,11 @@ pub const BILBY: Theme = Theme {
     ornaments: Ornaments { dash: '❧', star: '☙', underscore: '❦' },
     ornament_face: ORNAMENT_GARAMOND,
     ornament_scale: ORNAMENT_SCALE_FLEURON,
-    // Refined editorial serif → refined Renaissance fleuron bullets.
-    bullets: ('❧', '❦'),
+    // Refined editorial serif → refined Renaissance fleuron bullets + the
+    // family's third fleuron for level 3 (item 15's per-level rotation).
+    bullets: ('❧', '❦', '☙'),
     bullet_scale: BULLET_SCALE_ORNAMENT,
+    list_indent_scale: LIST_INDENT_SCALE_WIDE,
     // Pale rose-gold first-light ground → Dawn (the bilby is dawn-active); Newsreader
     // display serif → Refined / Literary; warm horizon → Warm.
     // Curated: shows under Dawn / Refined; opts OUT of Voice (Literary crowded) +
@@ -269,9 +274,11 @@ pub const SALTPAN: Theme = Theme {
     ornaments: Ornaments { dash: '\u{F01B}', star: '\u{F01D}', underscore: '\u{F01E}' },
     ornament_face: ORNAMENT_JUNICODE,
     ornament_scale: ORNAMENT_SCALE_ORNATE,
-    // Old-style salt-flat at first light → an airy floral-heart + leaf pair.
-    bullets: ('❦', '❧'),
+    // Old-style salt-flat at first light → an airy floral-heart + leaf pair +
+    // the family's third fleuron for level 3 (item 15's per-level rotation).
+    bullets: ('❦', '❧', '☙'),
     bullet_scale: BULLET_SCALE_ORNAMENT,
+    list_indent_scale: LIST_INDENT_SCALE_WIDE,
     // Warm ecru salt flat → Dawn (warm-soft light); Fraunces old-style serif → Refined / Literary; sand hue → Warm.
     // Curated: shows under Dawn / Refined; opts OUT of Voice (Literary crowded) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dawn"), register: Some("Refined"), voice: None, temperature: None },
@@ -318,6 +325,7 @@ pub const QUOKKA: Theme = Theme {
     // Friendly modern reef → plain geometric bullets (unfussy, restrained).
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     // Warm peach reef → Dawn (warm-soft light); Fira Sans friendly humanist → Everyday / Modern; peach hue → Warm.
     // Curated: a headliner on ALL four — Dawn / Everyday / Modern / Warm each read clearly on the friendly peach sans.
     tags: ThemeTags { time: Some("Dawn"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Warm") },
@@ -377,7 +385,9 @@ pub const BOMBORA: Theme = Theme {
     // pointing hand, native to EB Garamond) at level 1, a hedera at level 2. The
     // one world that gets the manicule — a pointing hand on every bullet is loud,
     // so it rides the top level alone. The showpiece pick; flagged for veto.
-    bullets: ('☞', '❧'),
+    // Level 3 (item 15's per-level rotation) draws EB Garamond's remaining
+    // fleuron, NEVER the hand again.
+    bullets: ('☞', '❧', '❦'),
     // PADDING FIX (theme-QA round): the manicule's own ink is unusually WIDE for
     // a bullet glyph — at the shared [`BULLET_SCALE_ORNAMENT`] tier its right
     // edge reached (and on some rows touched) the list text that follows, since
@@ -388,6 +398,7 @@ pub const BOMBORA: Theme = Theme {
     // [`BULLET_SCALE_ORNAMENT`] for every characterful world) keeps every other
     // hedera/fleuron world's bullet byte-identical.
     bullet_scale: 0.35,
+    list_indent_scale: LIST_INDENT_SCALE_WIDE,
     // Dark violet current → Night; EB Garamond classic serif → Refined / Literary; violet-blue hue → Cool.
     // Curated: shows under Night / Refined / Literary (the classical serif's home); opts OUT of Temperature (Cool crowded).
     tags: ThemeTags { time: Some("Night"), register: Some("Refined"), voice: Some("Literary"), temperature: None },
@@ -439,9 +450,11 @@ pub const MULGA: Theme = Theme {
     ornament_face: ORNAMENT_JUNICODE,
     ornament_scale: ORNAMENT_SCALE_ORNATE,
     // Slab-sturdy literary night → reversed leaf + floral heart (distinct from its
-    // ⁂/⁑ asterism section trio).
-    bullets: ('☙', '❦'),
+    // ⁂/⁑ asterism section trio) + the family's third fleuron for level 3
+    // (item 15's per-level rotation).
+    bullets: ('☙', '❦', '❧'),
     bullet_scale: BULLET_SCALE_ORNAMENT,
+    list_indent_scale: LIST_INDENT_SCALE_WIDE,
     // Blackish-olive night → Night; Zilla Slab workhorse slab → Everyday; slab-serif face → Literary; olive-green hue → Cool.
     // Curated: headlines Everyday alone (Night/Literary/Cool are each crowded); still reachable via All.
     tags: ThemeTags { time: None, register: Some("Everyday"), voice: None, temperature: None },
@@ -489,6 +502,7 @@ pub const TAWNY: Theme = Theme {
     // The plain default home world → plain geometric bullets.
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     // Warm-grey neutral nocturne → Night; IBM Plex Mono → Humble / Technical; near-neutral grey → Neutral.
     // Curated: shows under Humble / Neutral (its plainest traits); opts OUT of Time (Night crowded) + Voice (Technical crowded).
     tags: ThemeTags { time: None, register: Some("Humble"), voice: None, temperature: Some("Neutral") },
@@ -561,7 +575,9 @@ pub const MOPOKE: Theme = Theme {
     // `---` ornament already draws at ORNATE scale — "the ornament trio, one
     // level down" made literal) for a mark that reads as a bullet AND stays
     // in Mopoke's own established vocabulary.
-    bullets: ('\u{E670}', '❦'),
+    // Level 3 (item 15's per-level rotation) draws the remaining Garamond-pool
+    // fleuron ❧ (Junicode's own — see the doc above), distinct from both.
+    bullets: ('\u{E670}', '❦', '❧'),
     // PADDING FIX (theme-QA round): at the shared [`BULLET_SCALE_ORNAMENT`] tier
     // the rosette's ink was too small for iA Writer Quattro S's wide duospaced
     // `"- "` marker+space advance, leaving a canyon before the text (measured
@@ -570,6 +586,7 @@ pub const MOPOKE: Theme = Theme {
     // A dedicated, larger-than-the-shared-tier literal closes it without
     // touching any other world's bullet.
     bullet_scale: 0.8,
+    list_indent_scale: LIST_INDENT_SCALE_WIDE,
     // Warm charcoal cosy dark → Dusk (warm dark); iA Writer Quattro utilitarian → Humble; sans-class writing face → Modern; warm hue → Warm.
     // Curated: shows under Dusk / Humble (its cosy utilitarian core); opts OUT of Voice (Modern crowded) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: None, temperature: None },
@@ -618,6 +635,7 @@ pub const BOWERBIRD: Theme = Theme {
     // Crisp technical navy → plain geometric bullets.
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     // Midnight-navy nocturne → Night; IBM Plex Sans workhorse → Everyday / Modern; blue-black hue → Cool.
     // Curated: a headliner on ALL four — the crisp midnight dive reads clearly Night / Everyday / Modern / Cool.
     tags: ThemeTags { time: Some("Night"), register: Some("Everyday"), voice: Some("Modern"), temperature: Some("Cool") },
@@ -664,6 +682,7 @@ pub const CURRAWONG: Theme = Theme {
     // Stark OLED coder's den → plain geometric bullets (stark restraint).
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     // Near-pure-black OLED → Night; Iosevka → Humble / Technical; true-black neutral → Neutral.
     // Curated: shows under Night (the darkest, most iconic) / Technical / Neutral; opts OUT of Register (Humble crowded).
     tags: ThemeTags { time: Some("Night"), register: None, voice: Some("Technical"), temperature: Some("Neutral") },
@@ -765,6 +784,7 @@ pub const MANGROVE: Theme = Theme {
     // Cool rooted tidal-teal → plain geometric bullets.
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     // Dark tidal-teal den → Night; JetBrains Mono → Humble / Technical; teal hue → Cool.
     // Curated: shows under Technical / Cool (its rooted teal-mono character); opts OUT of Time (Night crowded) + Register (Humble crowded).
     tags: ThemeTags { time: None, register: None, voice: Some("Technical"), temperature: Some("Cool") },
@@ -836,6 +856,7 @@ pub const GALAH: Theme = Theme {
     // Warm friendly dawn → plain geometric bullets (modern, unfussy).
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     // Dusty-pink reading room → Dawn (warm-soft light); Figtree humanist sans → Everyday / Modern; rose hue → Warm.
     // Curated: shows under Dawn / Modern / Warm (its soft rosy dawn feel); opts OUT of Register (Everyday crowded).
     tags: ThemeTags { time: Some("Dawn"), register: None, voice: Some("Modern"), temperature: Some("Warm") },
@@ -904,9 +925,11 @@ pub const MAGPIE: Theme = Theme {
     ornament_scale: ORNAMENT_SCALE_ORNATE,
     // Paper-white high-contrast manuscript → floral-heart + leaf, marginalia on
     // stark paper. (The manicule would suit Magpie too, but the bundled Junicode
-    // ornament subset lacks ☞ — hederas instead; see the round report.)
-    bullets: ('❦', '☙'),
+    // ornament subset lacks ☞ — hederas instead; see the round report.) Level 3
+    // (item 15's per-level rotation) draws the family's third fleuron.
+    bullets: ('❦', '☙', '❧'),
     bullet_scale: BULLET_SCALE_ORNAMENT,
+    list_indent_scale: LIST_INDENT_SCALE_WIDE,
     // Paper-white high-contrast page → Day; Bitter high-contrast slab → Everyday; slab-serif face → Literary; near-neutral hue → Neutral.
     // Curated: shows under Day / Literary / Neutral (sharp black-on-white slab); opts OUT of Register (Everyday crowded).
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Literary"), temperature: Some("Neutral") },
@@ -1012,6 +1035,7 @@ pub const BROLGA: Theme = Theme {
     // Clean cool sky → plain geometric bullets (unfussy restraint).
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     // Clear cool daylight sky → Day (roomy — Gumtree/Magpie); pale blue → Cool
     // (its defining trait — joins Gumtree/Bowerbird/Mangrove as the 4th, at the
     // curated cap). Opts OUT of Register + Voice (both already at their 3-world
@@ -1246,6 +1270,7 @@ pub const WAGTAIL: Theme = Theme {
     // Restraint IS monochrome's whole character → plain geometric bullets.
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     // Willie Wagtails are crepuscular (dawn/dusk-active) → Dusk (the one lens
     // section with curation room: Potoroo + Mopoke, 2 of a 2-3 band). Register /
     // Voice / Temperature are ALL already at their curated 3-world cap, so
@@ -1393,6 +1418,7 @@ pub const FIRETAIL: Theme = Theme {
     // The living ground IS the statement → plain geometric bullets, restrained chrome.
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     // Warm lava den → Temperature=Warm (its clearest read). Every Time / Register /
     // Voice section already sits at its curated cap, so Firetail — like Wagtail —
     // opts OUT of them rather than crowd a section, headlining Warm alone (which the
@@ -1569,6 +1595,7 @@ pub const CASSOWARY: Theme = Theme {
     // Stark terminal → plain geometric bullets (restraint is its character).
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     // NERV bunker terminal → Night; Iosevka mechanical mono → Technical. Opts OUT
     // of Register + Temperature (both crowded near their cap, and to leave room for
     // the concurrent roster growth) — headlines Night + Technical, its clearest reads.
@@ -1657,6 +1684,7 @@ pub const CASSOWARY_LIGHT: Theme = Theme {
     ornament_scale: ORNAMENT_SCALE_GEOMETRIC,
     bullets: BULLETS_PLAIN,
     bullet_scale: BULLET_SCALE_PLAIN,
+    list_indent_scale: LIST_INDENT_SCALE_PLAIN,
     tags: ThemeTags { time: Some("Day"), register: None, voice: Some("Technical"), temperature: None },
     role_overrides: RoleOverrides::NONE,
     // The same NERV console overlay as the dark anchor, so the user compares the

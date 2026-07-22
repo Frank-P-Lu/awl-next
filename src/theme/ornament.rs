@@ -116,7 +116,7 @@ pub const ORNAMENT_SCALE_FLEURON: f32 = 1.8;
 /// geometric marks read best kept modest, so they sit lowest on the tier ladder.
 pub const ORNAMENT_SCALE_GEOMETRIC: f32 = 1.5;
 
-// --- The per-world LIST BULLET pair + scale (the ornament trio, one level down) --
+// --- The per-world LIST BULLET triple + scale (the ornament trio, one level down) --
 //
 // The unordered-list bullet ([`crate::theme::Theme::bullets`], drawn over a concealed `-`/`*`/`+`
 // the caret is off) is PER-WORLD DATA in the world's own [`crate::theme::Theme::ornament_face`] —
@@ -124,21 +124,35 @@ pub const ORNAMENT_SCALE_GEOMETRIC: f32 = 1.5;
 // scoped by flavour:
 //
 //   * The MODERN / TECHNICAL / geometric worlds (the [`ORNAMENT_MARKS`] worlds) keep
-//     the plain [`BULLETS_PLAIN`] `•`/`◦` at [`BULLET_SCALE_PLAIN`] (byte-identical to
-//     before this round) — restraint IS their character; a bullet is not the place to
-//     decorate them for symmetry.
+//     the plain [`BULLETS_PLAIN`] `•`/`◦`/`▪` at [`BULLET_SCALE_PLAIN`] (byte-identical
+//     to before this round, level 1/2) — restraint IS their character; a bullet is not
+//     the place to decorate them for symmetry.
 //   * The ANTIQUE / LITERARY serifs (the [`ORNAMENT_JUNICODE`] + [`ORNAMENT_GARAMOND`]
 //     worlds) draw a small hedera / fleuron — and Bombora the antique MANICULE ☞ —
 //     at [`BULLET_SCALE_ORNAMENT`] (~half body), so the mark reads as quiet list
 //     RHYTHM, never a loud flourish. Garamond ships the manicule (☞ U+261E) and the
 //     three fleurons ❧ ❦ ☙; Junicode ships ❧ ❦ ☙ ⁑ (no plain `•`), so those worlds'
-//     pairs come from that pool — every pick verified present in its own face by
+//     triples come from that pool — every pick verified present in its own face by
 //     `render::tests::markdown::bullet_glyphs_resolve_in_each_worlds_assigned_face`.
+//
+// PER-LEVEL ROTATION (item 15, bullet-level readability): [`crate::theme::Theme::bullets`]
+// widened from a two-glyph PAIR to a three-glyph TRIPLE — [`crate::theme::Theme::bullet_for_depth`]
+// now cycles `.0`/`.1`/`.2` every THREE levels (was every two), composing the new
+// LEVEL axis with item 7's existing per-WORLD axis: `.0` (depth 0) and `.1` (depth 1)
+// are UNCHANGED from before this round on every world (Bombora's manicule, Mopoke's
+// rosette, and every geometric world's `•`/`◦` all still land exactly where item 7 put
+// them), and `.2` (depth 2, cycling back to `.0` at depth 3) is the new third rung —
+// for [`BULLETS_PLAIN`] the literal filled/hollow/small-square trio the round's brief
+// asked for, for a Junicode/Garamond world the one hedera of its own three-fleuron
+// family `{❧, ❦, ☙}` its pair didn't already use (Bombora's manicule stays exclusive to
+// depth 0 — "a pointing hand on every bullet is loud" — so its `.2` picks from the
+// fleuron pool alongside `.1`, never the hand again).
 
-/// The plain geometric bullet pair — level-1 `•` (U+2022) / level-2 `◦` (U+25E6),
-/// both in the merged [`ORNAMENT_MARKS`] face — the modern/technical worlds' bullets
-/// (byte-identical to the pre-round `•`/`◦` levels).
-pub const BULLETS_PLAIN: (char, char) = ('•', '◦');
+/// The plain geometric bullet triple — level-1 `•` (U+2022, filled) / level-2 `◦`
+/// (U+25E6, hollow) / level-3 `▪` (U+25AA, small square), all three in the merged
+/// [`ORNAMENT_MARKS`] face — the modern/technical worlds' bullets (levels 1/2
+/// byte-identical to the pre-item-15 `•`/`◦` pair; level 3 is the new rung).
+pub const BULLETS_PLAIN: (char, char, char) = ('•', '◦', '▪');
 
 /// PLAIN bullet scale — the geometric `•`/`◦` worlds keep body size (1.0), so their
 /// bullets render exactly as before this round.
@@ -161,3 +175,41 @@ pub const BULLET_SCALE_PLAIN: f32 = 1.0;
 /// byte-identical. See `render::tests::markdown::
 /// bullet_glyph_never_touches_the_following_text_in_any_world`.
 pub const BULLET_SCALE_ORNAMENT: f32 = 0.55;
+
+// --- The per-world LIST-ITEM INDENT scale (item 15, the other half of bullet-
+// level readability) ---------------------------------------------------------
+//
+// A nested list item's visual indent was, before this round, ENTIRELY a
+// byproduct of its literal typed leading spaces (`markdown::LIST_INDENT` = 2
+// per level) rendered at plain body-font advance — never a deliberate render
+// choice, just whatever a world's own space-glyph happened to measure.
+// [`crate::theme::Theme::list_indent_scale`] makes the per-level STEP a real,
+// PER-WORLD DATA dial: `render::spans::add_list_indent_span` widens a list
+// line's leading-space RUN (bytes `0..indent`) by this factor before layout,
+// so each nesting level reads with a touch more breathing room than the bare
+// two typed spaces alone give it — pure advance, no visible glyph (spaces
+// carry no ink), and depth 0 (`indent == 0`) is an empty range, so a top-level
+// item is byte-identical on every world regardless of this dial.
+//
+// Two tiers, mirroring [`BULLET_SCALE_PLAIN`]/[`BULLET_SCALE_ORNAMENT`]'s own
+// shape: the modern/technical/geometric worlds stay at the byte-identical
+// [`LIST_INDENT_SCALE_PLAIN`] (restraint, no change), while the antique/
+// literary-serif worlds (the same roster [`BULLET_SCALE_ORNAMENT`] already
+// singles out) step up to [`LIST_INDENT_SCALE_WIDE`] — their more decorative
+// register earns the roomier rail. SENSIBLE DEFAULTS, not final taste: the
+// exact multipliers are judged in the pre-tag pass (item 20); the MECHANISM
+// (a pure per-world dial, read fresh off the active theme, composing for free
+// with every existing nesting depth) is what this round commits to.
+
+/// PLAIN list-indent scale — the geometric/technical worlds' nested list items
+/// render at exactly their literal typed indent (byte-identical to before this
+/// round).
+pub const LIST_INDENT_SCALE_PLAIN: f32 = 1.0;
+
+/// WIDE list-indent scale — the antique/literary-serif worlds' nested list
+/// items get a touch more breathing room per level: each leading-space run
+/// renders 50% wider than its literal typed width, so a depth-1 item (2 typed
+/// spaces) gains one extra space-width of rail, a depth-2 item (4 typed
+/// spaces) gains two, and so on — linear in depth for free, since the typed
+/// indent itself already is.
+pub const LIST_INDENT_SCALE_WIDE: f32 = 1.5;

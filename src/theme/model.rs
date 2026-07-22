@@ -1292,25 +1292,40 @@ pub struct Theme {
     /// a theme switch that changes this re-fits the break rows via `restyle_all_lines`
     /// (the same absolute-pixel path the heading sizes ride).
     pub ornament_scale: f32,
-    /// The per-world UNORDERED-LIST BULLET pair — the depth-derived conceal glyph
+    /// The per-world UNORDERED-LIST BULLET triple — the depth-derived conceal glyph
     /// drawn over a `-`/`*`/`+` marker the caret is NOT on (`.0` = level 1, `.1` =
-    /// level 2, cycling every two levels; see [`Self::bullet_for_depth`]). Like the
-    /// section-break [`Self::ornaments`] trio one level down, it is PER-WORLD DATA
-    /// shaped in this world's own [`Self::ornament_face`] — so the antique/literary
-    /// serifs draw hederas / small fleurons / a manicule while the modern/technical
-    /// worlds keep the plain [`super::ornament::BULLETS_PLAIN`] `•`/`◦` (restraint IS their character).
-    /// The CALM RULE: a bullet is RHYTHM, not punctuation — quieter than a section
-    /// ornament, faint ink unchanged, shaped small (see [`Self::bullet_scale`]).
-    /// Both glyphs must exist in [`Self::ornament_face`] (NEVER-TOFU law).
-    pub bullets: (char, char),
-    /// How big the list bullet reads relative to body ink — a plain `•`/`◦` keeps
+    /// level 2, `.2` = level 3, cycling every THREE levels; item 15's per-level
+    /// rotation, see [`Self::bullet_for_depth`]). Like the section-break
+    /// [`Self::ornaments`] trio one level down, it is PER-WORLD DATA shaped in this
+    /// world's own [`Self::ornament_face`] — so the antique/literary serifs draw
+    /// hederas / small fleurons / a manicule while the modern/technical worlds keep
+    /// the plain [`super::ornament::BULLETS_PLAIN`] `•`/`◦`/`▪` (restraint IS their
+    /// character). `.0`/`.1` are UNCHANGED from before item 15 on every world
+    /// (Bombora's manicule, Mopoke's rosette, every geometric world's `•`/`◦`); `.2`
+    /// is the new third rung the level axis adds. The CALM RULE: a bullet is
+    /// RHYTHM, not punctuation — quieter than a section ornament, faint ink
+    /// unchanged, shaped small (see [`Self::bullet_scale`]). All three glyphs must
+    /// exist in [`Self::ornament_face`] (NEVER-TOFU law).
+    pub bullets: (char, char, char),
+    /// How big the list bullet reads relative to body ink — a plain `•`/`◦`/`▪` keeps
     /// body size ([`super::ornament::BULLET_SCALE_PLAIN`], byte-identical to before this round), while
     /// a characterful hedera / manicule shapes at ~half body ([`super::ornament::BULLET_SCALE_ORNAMENT`])
     /// so it reads as a quiet marker, never a loud section flourish. The glyph is
     /// centered in the row's full line-height (cosmic-text's own centering), so a
     /// scaled-down bullet still sits on the text's optical middle. A pure function of
-    /// the active theme, read by `render::layers::prepare_ornaments`.
+    /// the active theme, read by `render::layers::prepare_ornaments`. Shared across
+    /// all three levels of [`Self::bullets`] (one dial, not one per level).
     pub bullet_scale: f32,
+    /// The per-world NESTED LIST-ITEM INDENT scale (item 15's other half): how much
+    /// wider than its literal typed leading spaces a list line's indent RUN renders
+    /// (bytes `0..indent`) — [`super::ornament::LIST_INDENT_SCALE_PLAIN`] (1.0,
+    /// byte-identical) for the geometric/technical worlds, [`super::ornament::LIST_INDENT_SCALE_WIDE`]
+    /// for the antique/literary-serif worlds. A depth-0 item (`indent == 0`) is
+    /// unaffected on every world by construction — there is no indent run to widen.
+    /// Read by `render::spans::add_list_indent_span`, applied UNCONDITIONALLY
+    /// (unlike the reveal-on-cursor bullet glyph, indent is a permanent layout
+    /// choice, not a WYSIWYG toggle).
+    pub list_indent_scale: f32,
     /// The world's AXIS coordinates — its value on each of the four axes (Time /
     /// Register / Voice / Temperature), DERIVED from this world's palette + font (see
     /// [`ThemeTags`]). Once the theme picker's runtime lens-switcher; that strip was
@@ -1391,15 +1406,17 @@ impl Theme {
     }
 
     /// The unordered-list BULLET glyph for a list item at nesting `depth` (0 = top
-    /// level): the per-world [`Self::bullets`] PAIR, cycling `.0`/`.1` every two
-    /// levels (even depth → level-1 glyph, odd → level-2). Pure + total — the
-    /// theme's own version of the retired `markdown::bullet_for_depth`, now that the
-    /// glyph is per-world DATA rather than a fixed geometric triple.
+    /// level): the per-world [`Self::bullets`] TRIPLE, cycling `.0`/`.1`/`.2` every
+    /// THREE levels (item 15's per-level rotation — was every two, pre-item-15;
+    /// `.0`/`.1` land identically to before that round on every world, so depth 0/1
+    /// are byte-identical and only depth 2+ changes). Pure + total — the theme's own
+    /// version of the retired `markdown::bullet_for_depth`, now that the glyph is
+    /// per-world DATA rather than a fixed geometric triple.
     pub const fn bullet_for_depth(&self, depth: usize) -> char {
-        if depth % 2 == 0 {
-            self.bullets.0
-        } else {
-            self.bullets.1
+        match depth % 3 {
+            0 => self.bullets.0,
+            1 => self.bullets.1,
+            _ => self.bullets.2,
         }
     }
 

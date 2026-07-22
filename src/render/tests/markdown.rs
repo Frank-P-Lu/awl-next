@@ -223,52 +223,55 @@ fn thematic_break_ornament_tracks_the_syntax_per_line() {
 
 #[test]
 fn nested_bullets_cycle_by_depth_and_reveal_on_cursor() {
-    // Pin the world explicitly (Tawny's own plain •/◦ pair is what this test is
-    // about, independent of whichever world happens to be the launch DEFAULT) and
-    // hold the theme lock, since this reads the process-global active theme.
+    // Pin the world explicitly (Tawny's own plain •/◦/▪ triple is what this test
+    // is about, independent of whichever world happens to be the launch DEFAULT)
+    // and hold the theme lock, since this reads the process-global active theme.
     let _g = crate::testlock::serial();
     theme::set_active_by_name("Tawny").unwrap();
     let Some(mut p) = headless_pipeline() else {
         eprintln!("skipping nested_bullets_cycle_by_depth_and_reveal_on_cursor: no wgpu adapter");
         return;
     };
-    // Three nested bullets at depth 0/1/2 (0/2/4 leading spaces), typed with MIXED
-    // markers (-, *, +) to prove the glyph is DEPTH-derived, not char-derived.
-    let text = "- top\n  * mid\n    + deep\n";
+    // FOUR nested bullets at depth 0/1/2/3 (0/2/4/6 leading spaces), typed with
+    // MIXED markers (-, *, +, -) to prove the glyph is DEPTH-derived, not
+    // char-derived. Depth 3 proves the item-15 THREE-level rotation wraps back
+    // to the level-1 glyph (was a two-level wrap pre-item-15).
+    let text = "- top\n  * mid\n    + deep\n      - deeper\n";
 
-    // Tawny → the plain `•`/`◦` pair, cycling every TWO levels. CARET OFF every
-    // list line (on the trailing blank line 3): each bullet draws its depth
-    // glyph • ◦ • and its raw marker is concealed (transparent ink).
-    let mut off = view(text, 3, 0);
+    // Tawny → the plain `•`/`◦`/`▪` triple, cycling every THREE levels. CARET
+    // OFF every list line (on the trailing blank line 4): each bullet draws its
+    // depth glyph • ◦ ▪ • and its raw marker is concealed (transparent ink).
+    let mut off = view(text, 4, 0);
     off.is_markdown = true;
     p.set_view(&off);
     assert_eq!(
         p.bullet_glyphs(),
-        vec!['•', '◦', '•'],
-        "depth 0/1/2 => • ◦ • (pair cycles) regardless of the -,*,+ typed: {:?}",
+        vec!['•', '◦', '▪', '•'],
+        "depth 0/1/2/3 => • ◦ ▪ • (triple cycles every 3) regardless of the -,*,+ typed: {:?}",
         p.bullet_glyphs()
     );
-    for li in 0..3 {
+    for li in 0..4 {
         assert!(
             p.bullet_marker_concealed(li),
             "caret off => the raw marker on line {li} is concealed"
         );
     }
 
-    // CARET ON the middle bullet (line 1): its raw `*` REVEALS (editable) and no
-    // glyph draws for it; the other two keep their depth-0/2 glyph (both •).
+    // CARET ON the second bullet (line 1, depth 1): its raw `*` REVEALS
+    // (editable) and no glyph draws for it; the other three keep their
+    // depth-0/2/3 glyphs (•, ▪, •).
     let mut on = view(text, 1, 3);
     on.is_markdown = true;
     p.set_view(&on);
     assert_eq!(
         p.bullet_glyphs(),
-        vec!['•', '•'],
-        "caret on the mid bullet suppresses only its ◦ (lines 0 and 2 keep •): {:?}",
+        vec!['•', '▪', '•'],
+        "caret on the depth-1 bullet suppresses only its ◦ (lines 0/2/3 keep •/▪/•): {:?}",
         p.bullet_glyphs()
     );
     assert!(!p.bullet_marker_concealed(1), "caret on => the mid `*` reveals");
     assert!(
-        p.bullet_marker_concealed(0) && p.bullet_marker_concealed(2),
+        p.bullet_marker_concealed(0) && p.bullet_marker_concealed(2) && p.bullet_marker_concealed(3),
         "the other bullets stay concealed"
     );
 
@@ -280,17 +283,21 @@ fn nested_bullets_cycle_by_depth_and_reveal_on_cursor() {
 
     // NON-markdown buffer: no bullets at all (a `.rs` file with `- x` is
     // byte-identical — the glyph is gated on `md_enabled`).
-    let mut plain = view(text, 3, 0);
+    let mut plain = view(text, 4, 0);
     plain.is_markdown = false;
     p.set_view(&plain);
     assert!(p.bullet_glyphs().is_empty(), "non-markdown => no bullet glyphs");
 }
 
 /// PER-WORLD BULLETS: the depth-derived glyph swaps to the ACTIVE world's own
-/// [`theme::Theme::bullets`] pair (drawn in its ornament face) — a technical
-/// world keeps `•`/`◦`, a literary serif draws its characterful pair, and
-/// Bombora the manicule. Reveal-on-cursor is unchanged (off-caret only). Proves
-/// the glyph is theme-DATA, not a fixed geometric triple.
+/// [`theme::Theme::bullets`] triple (drawn in its ornament face) — a technical
+/// world keeps `•`/`◦`/`▪`, a literary serif draws its characterful triple, and
+/// Bombora the manicule at level 1 alone. Reveal-on-cursor is unchanged
+/// (off-caret only). Proves the glyph is theme-DATA, not a fixed geometric
+/// triple hardcoded in the renderer — AND (item 15) that the per-level
+/// rotation composes with item 7's per-world pick: `.0`/`.1` below are the
+/// EXACT pre-item-15 pair for every world (Bombora/Mopoke's fixes included),
+/// with `.2` the new third rung.
 #[test]
 fn bullet_glyphs_swap_per_world() {
     // set_active_by_name mutates the theme global; bullet_marks folds page
@@ -301,34 +308,35 @@ fn bullet_glyphs_swap_per_world() {
         eprintln!("skipping bullet_glyphs_swap_per_world: no wgpu adapter");
         return;
     };
-    // Two nested bullets at depth 0/1, caret parked off both list lines (line 2).
-    let text = "- top\n  - sub\n";
+    // Three nested bullets at depth 0/1/2, caret parked off every list line
+    // (line 3).
+    let text = "- top\n  - sub\n    - deep\n";
     let cases = [
-        ("Tawny", ('•', '◦')),       // geometric world: plain, byte-identical
-        ("Bombora", ('☞', '❧')),    // the manicule showpiece + hedera
-        ("Gumtree", ('❧', '☙')),     // Junicode botanical hederas
-        ("Bilby", ('❧', '❦')),       // Garamond Renaissance fleurons
-        ("Mopoke", ('\u{E670}', '❦')), // its own damask rosette (theme-QA glyph fix)
+        ("Tawny", ('•', '◦', '▪')),        // geometric world: plain, byte-identical
+        ("Bombora", ('☞', '❧', '❦')),     // the manicule showpiece (level 1 only) + hedera + fleuron
+        ("Gumtree", ('❧', '☙', '❦')),      // Junicode botanical hederas
+        ("Bilby", ('❧', '❦', '☙')),        // Garamond Renaissance fleurons
+        ("Mopoke", ('\u{E670}', '❦', '❧')), // its own damask rosette (theme-QA glyph fix) + fleurons
     ];
-    for (world, (g0, g1)) in cases {
+    for (world, (g0, g1, g2)) in cases {
         theme::set_active_by_name(world).unwrap();
-        let mut off = view(text, 2, 0);
+        let mut off = view(text, 3, 0);
         off.is_markdown = true;
         p.set_view(&off);
         assert_eq!(
             p.bullet_glyphs(),
-            vec![g0, g1],
-            "{world}: depth 0/1 draws its per-world pair {:?}",
-            (g0, g1)
+            vec![g0, g1, g2],
+            "{world}: depth 0/1/2 draws its per-world triple {:?}",
+            (g0, g1, g2)
         );
         // Reveal-on-cursor still holds: caret on the top bullet (line 0) drops
-        // its glyph, leaving only the depth-1 glyph.
+        // its glyph, leaving only the depth-1/2 glyphs.
         let mut on = view(text, 0, 2);
         on.is_markdown = true;
         p.set_view(&on);
         assert_eq!(
             p.bullet_glyphs(),
-            vec![g1],
+            vec![g1, g2],
             "{world}: caret on the top bullet reveals its raw marker (no glyph)"
         );
     }
@@ -336,13 +344,14 @@ fn bullet_glyphs_swap_per_world() {
     p.sync_theme();
 }
 
-/// NEVER-TOFU (per-world LIST BULLETS): both glyphs of every world's
-/// [`theme::Theme::bullets`] pair resolve to a REAL glyph in that world's
+/// NEVER-TOFU (per-world LIST BULLETS): all three glyphs of every world's
+/// [`theme::Theme::bullets`] triple resolve to a REAL glyph in that world's
 /// [`theme::Theme::ornament_face`] — the font-DB half of the structural
 /// `theme::tests::every_world_has_a_bullet_pair` law, mirroring
 /// `ornament_glyphs_resolve_in_each_worlds_assigned_face` for the section trio.
 /// This is what proves the manicule ☞ actually lives in EB Garamond and every
-/// Junicode hedera in the bundled ornament subset.
+/// Junicode/Garamond hedera/fleuron (levels 1/2 AND the item-15 level-3
+/// addition) in its bundled ornament face.
 #[test]
 fn bullet_glyphs_resolve_in_each_worlds_assigned_face() {
     let Some(mut p) = headless_pipeline() else {
@@ -362,7 +371,7 @@ fn bullet_glyphs_resolve_in_each_worlds_assigned_face() {
             .get_font(id, glyphon::cosmic_text::fontdb::Weight::NORMAL)
             .unwrap_or_else(|| panic!("{}: ornament face {:?} loads", t.name, t.ornament_face));
         let charmap = font.as_swash().charmap();
-        for (level, ch) in [("level-1", t.bullets.0), ("level-2", t.bullets.1)] {
+        for (level, ch) in [("level-1", t.bullets.0), ("level-2", t.bullets.1), ("level-3", t.bullets.2)] {
             assert!(
                 charmap.map(ch) != 0,
                 "{}: {} bullet {:?} (U+{:04X}) is NOT in its ornament face {:?} — tofu",
@@ -435,6 +444,155 @@ fn bullet_glyph_never_touches_the_following_text_in_any_world() {
             t.name,
         );
     }
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}
+
+/// ITEM 15's own OUTCOME half: the padding audit above only ever drew a
+/// depth-0 bullet, so it never exercised either the per-level rotation's NEW
+/// third glyph (`Theme::bullets.2`) or the per-world `list_indent_scale` rail
+/// that now widens a nested line's leading run. SAMPLED along the changed
+/// axis (the standing audit policy's own phrase for this shape): a full
+/// three-level nested list, real GPU pixels, NO-WILDCARD over `theme::THEMES`
+/// — every world's depth-2 bullet must still read as ink separate from the
+/// text that follows it, proving the new rotation + the wider rail never
+/// collide with the following text the way the pre-fix Bombora/Mopoke
+/// depth-0 bugs once did.
+#[test]
+fn bullet_glyph_never_touches_the_following_text_at_depth_two_in_any_world() {
+    let _t = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping bullet_glyph_never_touches_the_following_text_at_depth_two_in_any_world: no wgpu adapter"
+        );
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    // Nested to depth 2 (0/2/4-space indent); caret parked off every list line
+    // (the trailing blank line 3) so all three ornaments draw.
+    let text = "- a\n  - a\n    - a\n\nb\n";
+    for t in theme::THEMES.iter() {
+        theme::set_active_by_name(t.name).unwrap();
+        p.sync_theme();
+        let mut v = view(text, 3, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        let pixels = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+        let marks = p.bullet_marks();
+        assert_eq!(marks.len(), 3, "{}: three nested bullets place: {marks:?}", t.name);
+        let (row_top, bullet_x, _ch) = marks[2]; // the depth-2 (third) line
+        let row_top = row_top as i64;
+        let bullet_x = bullet_x as i64;
+        let row_h = (p.metrics.line_height as i64).max(1);
+        let y0 = row_top.max(0);
+        let y1 = (row_top + row_h).min(h as i64);
+        let y_mid = ((y0 + y1) / 2).clamp(0, h as i64 - 1);
+
+        // Background reference: same row, far right of the short "- a" line's
+        // own width — still inside the writing column, never the margin.
+        let bg_x = (bullet_x + 300).min(w as i64 - 1);
+        let bg = pixels[(y_mid * w as i64 + bg_x) as usize];
+
+        let x0 = bullet_x.max(0);
+        let x1 = (bullet_x + 120).min(w as i64);
+        let bands = pixeldiff::ink_column_bands(&pixels, w as i64, x0, x1, y0, y1, bg, 18);
+        let ink_bands: Vec<_> = bands.iter().filter(|b| b.ink).collect();
+        assert!(
+            ink_bands.len() >= 2,
+            "{}: expected the depth-2 bullet glyph and the following text to read as TWO \
+             separate ink bands in x[{x0},{x1}) y[{y0},{y1}), got {bands:?} over bg {bg:?}",
+            t.name,
+        );
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}
+
+/// ITEM 15's PER-LEVEL INDENT half: `Theme::list_indent_scale` widens a nested
+/// list line's leading-space RUN before layout (`render::spans::
+/// add_list_indent_span`) — DATA-DRIVEN, not hardcoded, and DISTINCT per world
+/// tier. Compares each world's OWN geometry against its OWN NATURAL (unwidened)
+/// space advance — shaped fresh on a plain, non-list paragraph line of the SAME
+/// world/font, so this never compares across worlds' unrelated font metrics.
+/// Spaces never kern with themselves, so the natural 4-space width is exactly
+/// `2 ×` the natural 2-space width — the ground truth `add_list_indent_span`
+/// scales BOTH by the SAME per-world factor.
+///
+/// Tawny (PLAIN tier, `list_indent_scale == 1.0`) lands its depth-1/2 bullets
+/// EXACTLY at the natural 2-/4-space x — byte-identical to the pre-item-15
+/// renderer (the early-out in `add_list_indent_span` never even adds a span at
+/// this tier). Bilby (WIDE tier, `1.5`) lands each 1.5× farther right. Both:
+/// depth 0 sits at column 0 (nothing to widen at zero indent), and the
+/// depth-0→1 STEP equals the depth-1→2 step — proving the growth is LINEAR in
+/// depth, a free consequence of scaling the whole run by one constant factor
+/// rather than a per-depth special case.
+#[test]
+fn list_indent_widens_only_on_wide_tier_worlds_and_grows_linearly_with_depth() {
+    let _t = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!(
+            "skipping list_indent_widens_only_on_wide_tier_worlds_and_grows_linearly_with_depth: \
+             no wgpu adapter"
+        );
+        return;
+    };
+    // Three nested bullets (depth 0/1/2, 0/2/4-space indent); caret off every
+    // list line (line 3).
+    let list_text = "- a\n  - a\n    - a\n\nb\n";
+    // A plain (non-list) paragraph with a 2-space leading run — well under
+    // CommonMark's 4-space indented-code-block threshold, so it stays plain
+    // prose and shapes in the world's ordinary body font, the same face the
+    // list line's own leading spaces shape in.
+    let plain_text = "  b\n";
+
+    for world in ["Tawny", "Bilby"] {
+        theme::set_active_by_name(world).unwrap();
+        let scale = theme::active().list_indent_scale;
+
+        let mut pv = view(plain_text, 0, 0);
+        pv.is_markdown = true;
+        p.set_view(&pv);
+        let natural_2sp = p.line_glyph_xs(0)[2];
+        let natural_4sp = 2.0 * natural_2sp; // spaces never kern with themselves
+
+        let mut lv = view(list_text, 3, 0);
+        lv.is_markdown = true;
+        p.set_view(&lv);
+        let marks = p.bullet_marks();
+        assert_eq!(marks.len(), 3, "{world}: three nested bullets place: {marks:?}");
+        let text_left = p.text_left();
+        let depth0_x = marks[0].1 - text_left;
+        let depth1_x = marks[1].1 - text_left;
+        let depth2_x = marks[2].1 - text_left;
+
+        assert_eq!(depth0_x, 0.0, "{world}: depth 0 sits at the marker column (nothing to widen)");
+        assert!(
+            (depth1_x - scale * natural_2sp).abs() < 1.0,
+            "{world}: depth-1 bullet ({depth1_x}) must land at scale({scale}) × its natural \
+             2-space x ({natural_2sp}) = {}",
+            scale * natural_2sp
+        );
+        assert!(
+            (depth2_x - scale * natural_4sp).abs() < 1.0,
+            "{world}: depth-2 bullet ({depth2_x}) must land at scale({scale}) × its natural \
+             4-space x ({natural_4sp}) = {}",
+            scale * natural_4sp
+        );
+
+        // LINEAR IN DEPTH: the depth-0→1 step equals the depth-1→2 step (each
+        // level adds exactly the same two more space characters).
+        let step1 = depth1_x - depth0_x;
+        let step2 = depth2_x - depth1_x;
+        assert!(
+            (step1 - step2).abs() < 1.0,
+            "{world}: the per-level step must stay constant (linear growth): step1={step1} step2={step2}"
+        );
+    }
+
     theme::set_active(theme::DEFAULT_THEME);
     p.sync_theme();
 }

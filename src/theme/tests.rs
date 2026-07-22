@@ -1198,17 +1198,18 @@ fn every_world_has_an_ornament_scale() {
     set_active(DEFAULT_THEME);
 }
 
-/// NEVER-DRIFT law (per-world LIST BULLETS): every world ships a two-glyph
-/// [`Theme::bullets`] pair whose two levels are DISTINCT, and a
-/// [`Theme::bullet_scale`] that is exactly one of the two named tier constants
-/// (no stray literal). The font-DB half — that each glyph actually resolves in
-/// the world's [`Theme::ornament_face`] — is `render::tests::markdown::
-/// bullet_glyphs_resolve_in_each_worlds_assigned_face`. Also pins the geometric
-/// worlds to the plain byte-identical [`BULLETS_PLAIN`]/[`BULLET_SCALE_PLAIN`]
-/// (restraint) and the manicule showpiece (Bombora's level-1 ☞).
+/// NEVER-DRIFT law (per-world LIST BULLETS): every world ships a three-glyph
+/// [`Theme::bullets`] triple (item 15's per-level rotation) whose three levels
+/// are PAIRWISE DISTINCT, and a [`Theme::bullet_scale`] that is exactly one of
+/// the two named tier constants (no stray literal). The font-DB half — that
+/// each glyph actually resolves in the world's [`Theme::ornament_face`] — is
+/// `render::tests::markdown::bullet_glyphs_resolve_in_each_worlds_assigned_face`.
+/// Also pins the geometric worlds to the plain byte-identical
+/// [`BULLETS_PLAIN`]/[`BULLET_SCALE_PLAIN`] (restraint) and the manicule
+/// showpiece (Bombora's level-1 ☞, exclusive to that one level).
 #[test]
 fn every_world_has_a_bullet_pair() {
-    assert_eq!(BULLETS_PLAIN, ('•', '◦'), "the plain bullet pair is • / ◦");
+    assert_eq!(BULLETS_PLAIN, ('•', '◦', '▪'), "the plain bullet triple is • / ◦ / ▪");
     assert_eq!(BULLET_SCALE_PLAIN, 1.0, "plain bullets keep body size");
     assert!(
         BULLET_SCALE_ORNAMENT > 0.0 && BULLET_SCALE_ORNAMENT < BULLET_SCALE_PLAIN,
@@ -1217,7 +1218,17 @@ fn every_world_has_a_bullet_pair() {
     for t in THEMES.iter() {
         assert_ne!(
             t.bullets.0, t.bullets.1,
-            "{}: the two bullet levels must be distinct glyphs, got {:?}",
+            "{}: levels 1/2 must be distinct glyphs, got {:?}",
+            t.name, t.bullets
+        );
+        assert_ne!(
+            t.bullets.1, t.bullets.2,
+            "{}: levels 2/3 must be distinct glyphs, got {:?}",
+            t.name, t.bullets
+        );
+        assert_ne!(
+            t.bullets.0, t.bullets.2,
+            "{}: levels 1/3 must be distinct glyphs, got {:?}",
             t.name, t.bullets
         );
         // OFF-TIER EXCEPTIONS (theme-QA padding round, EXACTLY two, pinned by
@@ -1268,20 +1279,67 @@ fn every_world_has_a_bullet_pair() {
             );
         }
     }
-    // The PAIR CYCLES every two levels (even → level 1, odd → level 2).
+    // The TRIPLE CYCLES every THREE levels (item 15's per-level rotation) —
+    // depth 0/1 land exactly where the pre-item-15 two-level cycle put them,
+    // depth 2 is the new third rung, and depth 3 wraps back to level 1.
     assert_eq!(TAWNY.bullet_for_depth(0), '•');
     assert_eq!(TAWNY.bullet_for_depth(1), '◦');
-    assert_eq!(TAWNY.bullet_for_depth(2), '•');
-    assert_eq!(TAWNY.bullet_for_depth(3), '◦');
+    assert_eq!(TAWNY.bullet_for_depth(2), '▪');
+    assert_eq!(TAWNY.bullet_for_depth(3), '•');
+    assert_eq!(TAWNY.bullet_for_depth(4), '◦');
+    assert_eq!(TAWNY.bullet_for_depth(5), '▪');
     assert_eq!(BOMBORA.bullet_for_depth(0), '☞');
     assert_eq!(BOMBORA.bullet_for_depth(1), '❧');
+    assert_eq!(BOMBORA.bullet_for_depth(2), '❦');
+    assert_eq!(BOMBORA.bullet_for_depth(3), '☞');
     // The manicule showpiece: Bombora alone rides the antique pointing hand,
-    // at its top level (level 1).
+    // at its top level (level 1) — NEVER at level 3 either (the rotation
+    // composes with, never dilutes, item 7's "one world, one level" pick).
     assert_eq!(BOMBORA.bullets.0, '☞', "Bombora's level-1 bullet is the manicule");
     assert!(
-        THEMES.iter().filter(|t| t.bullets.0 == '☞' || t.bullets.1 == '☞').count() == 1,
-        "exactly one world uses the manicule bullet (a hand everywhere is loud)"
+        THEMES
+            .iter()
+            .filter(|t| t.bullets.0 == '☞' || t.bullets.1 == '☞' || t.bullets.2 == '☞')
+            .count()
+            == 1,
+        "exactly one world uses the manicule bullet, at exactly one level (a hand everywhere is loud)"
     );
+}
+
+/// NEVER-DRIFT law (item 15, per-world LIST-ITEM INDENT): every world's
+/// [`Theme::list_indent_scale`] is exactly one of the two named tier constants
+/// (no stray literal, mirroring [`every_world_has_a_bullet_pair`]'s
+/// `bullet_scale` sweep) and — since the shared tier IS the shared bullet-scale
+/// tier's own roster — agrees with the world's own bullet PAIR: a plain `•`/
+/// `◦`/`▪` world stays at the byte-identical [`LIST_INDENT_SCALE_PLAIN`], an
+/// antique/literary-serif world (hedera/fleuron/manicule) steps up to
+/// [`LIST_INDENT_SCALE_WIDE`]. `>= 1.0` on every world: item 15 only ever
+/// WIDENS the typed indent, never narrows it below what the raw spaces alone
+/// already give.
+#[test]
+fn every_world_has_a_list_indent_scale() {
+    assert_eq!(LIST_INDENT_SCALE_PLAIN, 1.0, "the plain tier is byte-identical");
+    assert!(
+        LIST_INDENT_SCALE_WIDE > LIST_INDENT_SCALE_PLAIN,
+        "the wide tier must actually widen the indent"
+    );
+    for t in THEMES.iter() {
+        assert!(
+            t.list_indent_scale == LIST_INDENT_SCALE_PLAIN
+                || t.list_indent_scale == LIST_INDENT_SCALE_WIDE,
+            "{}: off-tier list_indent_scale {}",
+            t.name,
+            t.list_indent_scale
+        );
+        assert!(t.list_indent_scale >= 1.0, "{}: indent scale must never shrink the typed indent", t.name);
+        let plain_pair = t.bullets == BULLETS_PLAIN;
+        assert_eq!(
+            t.list_indent_scale == LIST_INDENT_SCALE_PLAIN,
+            plain_pair,
+            "{}: plain-pair and plain-indent-scale must agree",
+            t.name
+        );
+    }
 }
 
 /// `Theme::candidates` for `Latin` is always exactly the world's own
