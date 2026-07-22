@@ -702,17 +702,24 @@ impl TextPipeline {
     /// with the IDENTICAL geometry `prepare_images` draws at (centered in the
     /// writing column, reserved tall row). The app loops these through the pure
     /// `geometry::image_handle_hit` to decide an edge/corner grab — no parallel
-    /// geometry. Reads the last reshape's `image_report`; empty when the feature is
-    /// off / no drawn images.
+    /// geometry. Reads through [`Self::images_report`] (NOT the stored
+    /// `image_report` directly) so `im.revealed` is the ALWAYS-FRESH override, not
+    /// the last reshape's stored flag — otherwise a pure caret/selection move onto
+    /// an off-cursor MIXED image line (no reshape, so `compute_image_layout` never
+    /// re-runs) would leave a stale `revealed: false`, and the skip below would arm
+    /// a handle for a line that no longer reserves a draw position (item 27).
+    /// Empty when the feature is off / no drawn images.
     ///
-    /// REVEALED images ARM TOO (no `im.revealed` exclusion): the caption model
-    /// (`df773ba`) draws the image on EVERY line now — caret-on-line only floats
-    /// the raw source text as a caption overlay, it no longer hides the drawn
-    /// image — so the resize handles at its edges/corners stay live regardless of
-    /// caret position. The caption text sits CENTERED mid-image while the handles
-    /// live at the edges/corners, so the two affordances never overlap.
+    /// REVEALED images ARM TOO (no blanket `im.revealed` exclusion): the caption
+    /// model (`df773ba`) draws the image on EVERY line now — caret-on-line only
+    /// floats the raw source text as a caption overlay, it no longer hides the
+    /// drawn BARE image — so the resize handles at its edges/corners stay live
+    /// regardless of caret position. The caption text sits CENTERED mid-image while
+    /// the handles live at the edges/corners, so the two affordances never overlap.
+    /// A REVEALED MIXED line is the one exception (it reserves nothing this frame —
+    /// see the skip below), so its handle correctly drops out.
     pub fn image_hit_rects(&self) -> Vec<((usize, usize), [f32; 4])> {
-        let report = self.image_report.borrow();
+        let report = self.images_report();
         let text_left = self.text_left();
         let wrap = self.text_wrap_width();
         let mut out = Vec::new();

@@ -275,6 +275,80 @@ fn revealed_images_still_arm_resize_handles() {
     crate::markdown::set_inline_images_on(prev);
 }
 
+/// ITEM 27 REGRESSION: `image_hit_rects` reads the reveal flag through the
+/// always-fresh `images_report()` override, NOT the stored `image_report`'s
+/// stale field. A pure CARET move onto an off-cursor MIXED image line (caption
+/// text before the image on the same line) runs `refresh_rule_conceal`, which
+/// flips that line's reservation (`image_force`/`image_heights` → `None`)
+/// WITHOUT re-running `compute_image_layout` — so the STORED `image_report`
+/// still holds frame-1's `revealed: false`. Under that stale flag the skip in
+/// `image_hit_rects` (`revealed && !reserved`) read `false && true == false` and
+/// armed a resize handle at a now-undefined position for the parked line. Read
+/// through the FRESH override (`revealed == true` on the caret line) the skip
+/// fires (`true && true`) and the handle correctly drops. Zero selection — this
+/// is orthogonal to the selection-reveal path, a pure caret move. MUTATION
+/// CHECK: reverting `image_hit_rects` to `self.image_report.borrow()` re-arms the
+/// stale handle and this fails (`rects_on.len()` reverts to 1). Fixture:
+/// `samples/tiny.png`.
+#[test]
+fn image_hit_rects_use_fresh_reveal_on_pure_caret_move_onto_mixed_line() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    let prev = crate::markdown::inline_images_on();
+    let prevw = crate::markdown::wysiwyg_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let restore = || {
+        crate::markdown::set_inline_images_on(prev);
+        crate::markdown::set_wysiwyg_on(prevw);
+    };
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!(
+            "skipping image_hit_rects_use_fresh_reveal_on_pure_caret_move_onto_mixed_line: no wgpu adapter"
+        );
+        restore();
+        return;
+    };
+    // A MIXED image line: caption text precedes the image on the SAME line, so a
+    // reveal collapses the reservation entirely (unlike a BARE image line, which
+    // stays drawn + reserved under its floating caption and keeps arming).
+    let text = "a caption before the pic ![pic](samples/tiny.png)\nprose here\n";
+
+    // Frame 1: caret on line 1 (OFF the image line) — the mixed line is
+    // off-cursor, reserves its forced trailing row, and arms exactly one handle.
+    let mut v_off = view(text, 1, 0);
+    v_off.is_markdown = true;
+    p.set_view(&v_off);
+    assert!(!p.images_report()[0].revealed, "sanity: off-cursor, not revealed");
+    let rects_off = p.image_hit_rects();
+    assert_eq!(rects_off.len(), 1, "off-cursor mixed line arms one handle: {rects_off:?}");
+
+    // Frame 2: caret MOVES onto line 0 (the mixed image line), ZERO selection. A
+    // pure caret move — no reshape — so the STORED report still holds frame-1's
+    // `revealed: false`, while `refresh_rule_conceal` has already un-reserved the
+    // row. The FRESH override reports `revealed: true`.
+    let reshape_before = p.reshape_count;
+    let mut v_on = view(text, 0, 0);
+    v_on.is_markdown = true;
+    p.set_view(&v_on);
+    assert_eq!(
+        p.reshape_count, reshape_before,
+        "sanity: a pure caret move on unchanged text does not reshape"
+    );
+    assert!(
+        p.images_report()[0].revealed,
+        "caret on the mixed line: the fresh override reveals it"
+    );
+    // THE FIX: with the fresh reveal, the parked mixed line arms NO handle. Under
+    // the stale-flag bug this returned 1 (a handle at an undefined position).
+    let rects_on = p.image_hit_rects();
+    assert!(
+        rects_on.is_empty(),
+        "FRESH reveal parks the mixed line: no resize handle armed (the stale flag armed one): {rects_on:?}"
+    );
+    restore();
+}
+
 /// IMAGES OFF: the `![alt](path)` line keeps a NORMAL-height row, emits no
 /// image report, and its source renders as plain full-width text — byte-
 /// identical to the pre-feature editor.
@@ -663,18 +737,15 @@ fn mixed_list_image_draws_off_cursor_and_parks_when_revealed() {
 /// back to `li == cursor_line` alone re-forces the row and fails this test
 /// (instance count reverts to 1). Fixture: `samples/photo.png`.
 ///
-/// PRE-EXISTING GAP NOTED, NOT FIXED HERE (found probing this exact scenario,
-/// confirmed unrelated to this round — it reproduces identically with a pure
-/// CARET move onto this same off-cursor mixed line, zero selection involved):
-/// `image_hit_rects` (drag-resize handle arming, live pointer-only) reads the
-/// STORED `image_report`'s `revealed` field directly, never through
-/// `images_report()`'s always-fresh override, so on THIS pure-selection (or a
-/// pure caret) tick — no reshape, so `compute_image_layout` never re-runs — it
-/// still holds frame 1's stale `revealed: false` and arms a handle at a
-/// garbage position for the now-parked line. Out of scope for this focused
-/// regression fix (a real bug, but pre-existing and orthogonal to the
-/// draw/reveal double-render this round closes); flagged for a follow-up
-/// queue item rather than asserted here.
+/// GAP CLOSED BY ITEM 27 (found probing this exact scenario, then fixed): the
+/// same reveal-staleness reaches `image_hit_rects` (drag-resize handle arming,
+/// live pointer-only). It once read the STORED `image_report`'s `revealed`
+/// field directly, so on a pure-selection (or a pure CARET) tick — no reshape,
+/// so `compute_image_layout` never re-runs — it held frame 1's stale
+/// `revealed: false` and armed a handle at a garbage position for the
+/// now-parked line. It now reads through `images_report()`'s always-fresh
+/// override; the dedicated regression is
+/// `image_hit_rects_use_fresh_reveal_on_pure_caret_move_onto_mixed_line`.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn mixed_list_image_parks_under_a_pure_selection_change_no_reshape() {
