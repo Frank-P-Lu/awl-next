@@ -20,7 +20,7 @@ human collaborator all read and update the same files here.
 
 The board only prevents double-work if claims are visible BEFORE work starts. Any tool (Codex, Claude Code, human) picking up an item:
 
-1. **Claim first, work second.** Edit the item's status line in `queue.md` to `🟡 IN PROGRESS — <owner> (codex|claude|frank), <date>, branch <name>` and COMMIT that board edit to main before writing any code. An uncommitted claim is invisible to the other tool.
+1. **Claim first, work second.** Edit the item's status line in `queue.md` to `🟡 IN PROGRESS — <owner> (codex|claude|human), <date>, branch <name>` and COMMIT that board edit to main before writing any code. An uncommitted claim is invisible to the other tool.
 2. **Work in a worktree, never the main tree.** Branch off local `main`, name the branch on the claim line. The main working tree belongs to merge gates and the human's live session.
 3. **Re-read the board before firing.** A claim may have landed since you last looked. `git pull`-equivalent for us is just re-reading `queue.md` at HEAD.
 4. **Land = suite-gated merge to local main** (full `cargo test`, both conventions for keymap-adjacent work) + flip the board line to `✅ LANDED @ <sha>` in the same session. Push per the push policy (public repo — push after green trains).
@@ -68,5 +68,6 @@ How a brainstorm/interview session ("awl design"-type) turns talk into work:
    would re-litigate ("no locale sniffing") gets ONE line in CLAUDE.md's
    "Open decisions & known divergences". Taste/product-level decisions amend
    PHILOSOPHY/DESIGN/SCOPE/THEMES in the landing round.
-5. **`~/notes/` is the user's space.** Agents READ questionnaires and notes
-   there; they NEVER write there. The machine-side record lives in this repo.
+5. **The user's notes (private, outside the repo) are the user's space.**
+   Agents READ questionnaires and notes there when directed; they NEVER write
+   there. The machine-side record lives in this repo.
