@@ -241,8 +241,8 @@ impl TextPipeline {
         self.panel_card.draw(pass);
         // DESIGNER PIXEL-PASS FIX (2026-07-16): under `Bars` the placard watermark
         // must sit BEHIND the bar quads (the row surfaces are the figure; the
-        // wordmark is the wall of the room). Its dedicated pass draws HERE — over
-        // the room veil (`panel_card`), under the bars. Parked empty under `Pane`
+        // wordmark stays part of the live backdrop). Its dedicated pass draws HERE —
+        // over the page and bounded scrims, under the bars. Parked empty under `Pane`
         // (byte-identical there — the placard rides `panel_renderer` below). The
         // stipple placard likewise slots behind the bars in this mode.
         let bars = matches!(

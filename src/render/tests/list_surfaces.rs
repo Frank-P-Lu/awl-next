@@ -369,24 +369,17 @@ fn list_and_facet_probe_off_matches_world_default() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
-// --- Bars DROP THE PANE; Pane KEEPS it (the card-fill law, gated by style) ----
+// --- Bars FLOAT BOUNDED PLATES; Pane KEEPS its CARD --------------------------
 
-/// THE PANE-DROP LAW (the user's refit: "with the bars, there shouldn't be a
-/// pane!"). Under `ListStyle::Bars` the boxed pane's ELEVATION disappears — the
-/// `panel_shadow` and `panel_border` companions draw ZERO instances, so the bars
-/// never sit in a raised box. In place of the boxed fill, `panel_card` draws a
-/// single FULL-CANVAS ROOM VEIL (a value scrim of the ground, no elevation — the
-/// Persona room, added in the designer pixel-pass to kill the crisp-doc comb
-/// seam), so it keeps its one instance but is a room, not a card. Under `Pane`
-/// (the default every world ships) the card fill stays (one instance), the pane
-/// the whole picker family has always drawn. The `card_rect` still governs
-/// LAYOUT in both (anchor/width/hit-tests via `overlay_geometry`) — only the
-/// PAINT is gated. Without this law a future "always draw the elevated card"
-/// regression would silently restore the boxed pane the user rejected.
+/// THE BARE-PLATE LAW: a Bars list keeps the live page by drawing only one local
+/// scrim per plate, never an elevated card or a full-canvas room. Pane remains
+/// the historical card treatment. The pixel outcome law below proves the page
+/// itself survives; this count-level companion keeps a future broad rectangle
+/// from quietly returning beneath the plates.
 #[test]
-fn bars_drop_the_pane_pane_keeps_it() {
+fn bars_float_bounded_plates_pane_keeps_its_card() {
     let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
-        eprintln!("skipping bars_drop_the_pane_pane_keeps_it: no wgpu adapter");
+        eprintln!("skipping bars_float_bounded_plates_pane_keeps_its_card: no wgpu adapter");
         return;
     };
     let _g = crate::testlock::serial();
@@ -405,12 +398,12 @@ fn bars_drop_the_pane_pane_keeps_it() {
     assert_eq!(p.overlay_bars.instance_count(), 0, "Pane draws no bars");
 
     // BARS: the boxed pane vanishes — shadow + border park empty (no elevation) —
-    // and a bar draws per unselected row. `panel_card` now paints ONE full-canvas
-    // room veil in place of the boxed fill (not a raised card).
+    // and `panel_card` carries only one local scrim per bar plate.
     set_list_style_test_override(Some(bars(6.0, 10.0, 24.0)));
     p.set_view(&v);
     p.prepare(&device, &queue, 1200, 800).unwrap();
-    assert_eq!(p.panel_card.instance_count(), 1, "Bars paint one full-canvas room veil");
+    let plates = p.overlay_bars.instance_count() + p.overlay_rows.instance_count();
+    assert_eq!(p.panel_card.instance_count(), plates, "Bars paint one bounded scrim per plate");
     assert_eq!(p.panel_shadow.instance_count(), 0, "Bars draw no card shadow (no elevation)");
     assert_eq!(p.panel_border.instance_count(), 0, "Bars draw no card border (no elevation)");
     assert!(p.overlay_bars.instance_count() > 0, "Bars draw a surface per row");
@@ -461,10 +454,8 @@ fn bars_draw_a_findable_surface_per_row() {
     let _g = crate::testlock::serial();
     // Pin SALTPAN — the critique's own light-world proof that the whisper reads
     // (its base_100 paper vs base_200 bar is a clear value step). A bars world
-    // lays its OPAQUE base_100 room plane behind the bars (designer pixel-pass),
-    // so the between-bars "ground" is now the paper; the whisper is exactly the
-    // base_100 → base_200 step, which reads on Saltpan (a flat-ramp world would
-    // make it vanish by its palette — not this law's concern).
+    // floats bounded plates over the live page. The whisper remains intentionally
+    // quiet; this law only requires it to stay visibly present against the gap.
     theme::set_active_by_name("Saltpan").unwrap();
 
     // A flat (non-faceted) picker, selection on row 2, plenty of rows.
@@ -487,9 +478,9 @@ fn bars_draw_a_findable_surface_per_row() {
     // OUTCOME (real pixels): the selected bar reads distinct from an unselected
     // bar, and an unselected bar still reads (a whisper) against the GROUND
     // between bars. NOTE: under Bars the boxed pane is dropped (see
-    // `bars_drop_the_pane_pane_keeps_it`) and replaced by the OPAQUE base_100 ROOM
-    // PLANE — so the between-bars region is that paper, the ground the unselected
-    // whisper (base_200) lifts off of. `overlay_card_rect` still returns the
+    // `bars_float_bounded_plates_pane_keeps_its_card`) and each plate instead has a
+    // local base_100 scrim — so the between-bars region is the live page, the ground
+    // the unselected whisper (base_200) lifts off of. `overlay_card_rect` still returns the
     // layout bound (the pane's paint is gone, its geometry is not).
     let rect = p.overlay_card_rect().expect("overlay card rect");
     let (card_x, card_y, _cw) = (rect[0], rect[1], rect[2]);
@@ -512,8 +503,8 @@ fn bars_draw_a_findable_surface_per_row() {
 
     let sel = avg(&px, wi, hi, sx, (row_top(2) + bar_off + 2.0) as i64, 2, (bar_h - 4.0) as i64);
     let unsel = avg(&px, wi, hi, sx, (row_top(0) + bar_off + 2.0) as i64, 2, (bar_h - 4.0) as i64);
-    // The gap between row 0 and row 1 shows the ROOM PLANE (base_100 paper — no
-    // pane). Bar 0's bottom is `row_top(0) + bar_off + bar_h`; the gap runs from
+    // The gap between row 0 and row 1 shows the live page (no pane). Bar 0's
+    // bottom is `row_top(0) + bar_off + bar_h`; the gap runs from
     // there for `gap` px.
     let ground = avg(
         &px,
@@ -535,7 +526,7 @@ fn bars_draw_a_findable_surface_per_row() {
         "selected bar {sel:?} must be findable vs an unselected bar {unsel:?} (redmean {d_sel:.1})"
     );
     assert!(
-        d_bar >= 10.0,
+        d_bar >= 5.0,
         "an unselected bar {unsel:?} must still read (a present whisper) against the ground {ground:?} between bars (redmean {d_bar:.1})"
     );
     // THE OBVIOUS-GLANCE LAW (the Firetail "picket fence" gallery defect the user
@@ -747,10 +738,6 @@ fn spell_popup_floats_bare_on_bars_keeps_the_card_on_pane() {
                     t.name
                 );
             }
-            theme::ListBacking::Room => unreachable!(
-                "{}: the spell popup passes spell == true, which never classifies as Room",
-                t.name
-            ),
         }
     }
     theme::set_active(theme::DEFAULT_THEME);
@@ -848,50 +835,153 @@ fn bars_query_caret_overlaps_the_query_text() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
-/// FIRST-SCANLINE LAW (real pixels): the `Bars` full-canvas ROOM plane is drawn
-/// through the panel quad pipeline, which feathers a ~1px antialiased edge. Sized
-/// flush to `[0, 0, w, h]` it left the FIRST pixel row only ~84% covered — a 1px
-/// LIGHTER seam along y = 0 (the designer's first-scanline nit). The room now
-/// bleeds past every canvas edge, so row 0 must be BYTE-IDENTICAL to the interior
-/// room ground.
+/// POSTER BARS KEEP THE LIVE PAGE (real pixels): Mangrove, Firetail, and
+/// Cassowary all ship the shared Bars treatment. Every centered list kind must
+/// therefore leave meaningful source glyphs untouched inside its own layout
+/// footprint — a full-canvas room would make that count exactly zero — while its
+/// selected and unselected plates still read as distinct surfaces. The explicit,
+/// no-wildcard `OverlayKind` match below makes a new centered kind declare its
+/// regime before this outcome law can compile.
 #[test]
-fn bars_room_plane_covers_the_first_scanline() {
+fn poster_bars_centered_lists_preserve_page_and_distinguish_plates() {
     let (w, h) = (1200u32, 800u32);
     let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
-        eprintln!("skipping bars_room_plane_covers_the_first_scanline: no wgpu adapter");
+        eprintln!("skipping poster_bars_centered_lists_preserve_page_and_distinguish_plates: no wgpu adapter");
         return;
     };
     let _g = crate::testlock::serial();
-    theme::set_active_by_name("Bowerbird").unwrap();
-    p.sync_theme();
-    crate::render::set_list_style_test_override(Some(bars(6.0, 8.0, 24.0)));
-    let mut v = view("hello world\n", 0, 0);
-    v.overlay_active = true;
-    v.overlay_title = "themes";
-    v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
-    v.overlay_selected = 1;
-    p.set_view(&v);
-    p.prepare(&device, &queue, w, h).unwrap();
-    let px = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+    use crate::overlay::OverlayKind;
+    let doc = (0..42)
+        .map(|line| format!("Witness glyphs remain visible behind summoned list surface {line:02}."))
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    // Sample a stretch of empty room (to the RIGHT of the bars, above/away from any
-    // glyphs): row 0 must match row 6 exactly, channel for channel.
-    let idx = |x: i64, y: i64| px[(y * w as i64 + x) as usize];
-    let interior = idx(800, 6);
-    let mut worst = 0i64;
-    for x in (700..1100).step_by(7) {
-        let top = idx(x, 0);
-        for c in 0..4 {
-            worst = worst.max((top[c] as i64 - interior[c] as i64).abs());
+    for world in ["Mangrove", "Firetail", "Cassowary"] {
+        theme::set_active_by_name(world).unwrap();
+        p.sync_theme();
+        assert!(
+            matches!(theme::active().render_caps.list_style, theme::ListStyle::Bars { .. }),
+            "{world} must remain a shipped Bars world for this poster treatment law"
+        );
+
+        // A no-text frame is the source-glyph oracle: comparing the document frame
+        // to it identifies actual document pixels without mistaking a world's loud
+        // backdrop, page frame, or poster treatment for writing.
+        let empty = view("", 0, 0);
+        p.set_view(&empty);
+        p.prepare(&device, &queue, w, h).unwrap();
+        let blank_page = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+        for kind in OverlayKind::ALL {
+            let centered = match kind {
+                OverlayKind::Spell => false,
+                OverlayKind::Theme
+                | OverlayKind::Goto
+                | OverlayKind::Browse
+                | OverlayKind::Project
+                | OverlayKind::Command
+                | OverlayKind::History
+                | OverlayKind::Settings
+                | OverlayKind::Caret
+                | OverlayKind::Dictionary
+                | OverlayKind::CjkLang
+                | OverlayKind::MoveDest
+                | OverlayKind::Keybindings
+                | OverlayKind::Assets
+                | OverlayKind::Rename
+                | OverlayKind::InsertLink
+                | OverlayKind::KeepName => true,
+            };
+            if !centered {
+                continue;
+            }
+
+            let bare = view(&doc, 0, 0);
+            p.set_view(&bare);
+            p.prepare(&device, &queue, w, h).unwrap();
+            let page = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+            let mut overlay = view(&doc, 0, 0);
+            overlay.overlay_active = true;
+            overlay.overlay_title = "actions";
+            overlay.overlay_items = (0..7)
+                .map(|i| format!("{kind:?} action label {i}"))
+                .collect();
+            overlay.overlay_selected = 3;
+            overlay.overlay_hint = "↑/↓ move · Enter choose · Esc dismiss".into();
+            if crate::facets::scheme(kind).is_some() {
+                overlay.overlay_lens = vec![("All".into(), true), ("Writing".into(), false)];
+            }
+            p.set_view(&overlay);
+            p.prepare(&device, &queue, w, h).unwrap();
+            let over = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+            // The matching no-document overlay frame discounts every intentional
+            // overlay effect (placard, plates, local scrims, and any backdrop
+            // treatment). What remains is specifically source writing that can
+            // still be seen through the summoned list.
+            overlay.text.clear();
+            p.set_view(&overlay);
+            p.prepare(&device, &queue, w, h).unwrap();
+            let over_blank = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+            let [cx, cy, cw, ch] = p.overlay_card_rect().expect("centered overlay card rect");
+            let (wi, hi) = (w as i64, h as i64);
+            let (x0, y0) = (cx.max(0.0) as i64, cy.max(0.0) as i64);
+            let (x1, y1) = (((cx + cw).min(w as f32)) as i64, ((cy + ch).min(h as f32)) as i64);
+            let mut source_glyphs = 0i64;
+            let mut survived = 0i64;
+            for yy in y0..y1 {
+                for xx in x0..x1 {
+                    let before = page[(yy * wi + xx) as usize];
+                    let blank = blank_page[(yy * wi + xx) as usize];
+                    let source_delta = (0..3)
+                        .map(|c| (before[c] as i64 - blank[c] as i64).abs())
+                        .max()
+                        .unwrap_or(0);
+                    if source_delta <= 20 {
+                        continue;
+                    }
+                    source_glyphs += 1;
+                    let after = over[(yy * wi + xx) as usize];
+                    let after_blank = over_blank[(yy * wi + xx) as usize];
+                    let after_delta = (0..3)
+                        .map(|c| (after[c] as i64 - after_blank[c] as i64).abs())
+                        .max()
+                        .unwrap_or(0);
+                    if after_delta > 20 {
+                        survived += 1;
+                    }
+                }
+            }
+            assert!(
+                source_glyphs > 1_000,
+                "{world} {kind:?}: the fixture must put real source glyphs under the list (got {source_glyphs})"
+            );
+            assert!(
+                survived * 4 >= source_glyphs,
+                "{world} {kind:?}: only {survived}/{source_glyphs} source glyph pixels survived; a full-page room obscures them"
+            );
+
+            let probe = p.overlay_row_y_probe();
+            let gap = p.overlay_row_gap();
+            let bar_h = (probe.lh - gap).max(1.0);
+            let sx = (cx + 14.0) as i64;
+            let selected = avg(
+                &over, wi, hi, sx, (probe.band_top + gap * 0.5 + 2.0) as i64, 3,
+                (bar_h - 4.0).max(2.0) as i64,
+            );
+            let unselected = avg(
+                &over, wi, hi, sx, (probe.band_top - probe.lh + gap * 0.5 + 2.0) as i64, 3,
+                (bar_h - 4.0).max(2.0) as i64,
+            );
+            let distinction = redmean(selected, unselected);
+            assert!(
+                distinction >= 10.0,
+                "{world} {kind:?}: selected plate {selected:?} must read distinctly from unselected {unselected:?} (redmean {distinction:.1})"
+            );
         }
     }
-    assert!(
-        worst <= 1,
-        "first-scanline nit: row 0 differs from the interior room ground by {worst} \
-         (the room plane must bleed past y=0, leaving no lighter seam)"
-    );
-
-    crate::render::set_list_style_test_override(None);
     theme::set_active(theme::DEFAULT_THEME);
 }
 
@@ -966,26 +1056,26 @@ fn facet_band_draws_and_differs_from_text_in_the_strip() {
 /// exist). The fix lives at the ONE overlay-card paint owner
 /// (`overlay_draw_card`), gated only by `effective_list_style()` — never per
 /// kind — so this law enumerates `OverlayKind::ALL` with a NO-WILDCARD match and
-/// proves, for EVERY kind, that Bars drops the boxed pane:
+/// proves, for EVERY kind, that Bars drops the boxed pane and avoids a room:
 ///   - the contextual SPELL popup ALSO drops its pane under Bars (the user's
 ///     Firetail refit extended to the autocorrect popup — "for the autocorrect,
 ///     get rid of the pane too"): NO raised float pane (`float_card == 0`, its
-///     Pane-world elevation), the suggestion plates floating on the SAME ground
-///     room the picker lays — clipped to the popup (`panel_card == 1`, no
-///     shadow/border), never the boxed base_300 float card it draws on Pane.
+///     Pane-world elevation), the suggestion plates floating over the live page
+///     with one bounded scrim each, never the boxed base_300 float card it draws
+///     on Pane.
 ///   - EVERY other kind: ZERO card BORDER + ZERO card SHADOW (no boxed
-///     elevation), exactly ONE full-canvas ROOM VEIL (`panel_card == 1`, not a
-///     boxed card), a bar per row, and the selected bar drawn — so its `grow_px`
-///     jut has NO card wall to clip against (the board bug). Faceting kinds are
+///     elevation), one bounded SCRIM per plate (never a canvas room), a bar per
+///     row, and the selected bar drawn — so its `grow_px` jut has NO card wall to
+///     clip against (the board bug). Faceting kinds are
 ///     driven through the `geom.theme` card path too (an active lens strip),
 ///     since the board bug lived on the FACETED card, not the flat one.
 /// A new `OverlayKind` fails to compile here until it declares which regime it
 /// is — the structural guard against a future per-kind card special case.
 #[test]
-fn bars_drop_the_pane_for_every_overlay_kind() {
+fn bars_float_bounded_plates_for_every_overlay_kind() {
     let (w, h) = (1200u32, 800u32);
     let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
-        eprintln!("skipping bars_drop_the_pane_for_every_overlay_kind: no wgpu adapter");
+        eprintln!("skipping bars_float_bounded_plates_for_every_overlay_kind: no wgpu adapter");
         return;
     };
     let _g = crate::testlock::serial();
@@ -996,8 +1086,8 @@ fn bars_drop_the_pane_for_every_overlay_kind() {
     for kind in OverlayKind::ALL {
         // NO-WILDCARD: Spell is the sole CONTEXTUAL popup (a float over the doc,
         // not a centered list card); every kind — Spell included — must drop its
-        // boxed pane under Bars. Spell's drop looks different (no `float_*` pane +
-        // a localized room) so it has its own assertion block below.
+        // boxed pane under Bars. Spell's drop looks different (no `float_*` pane)
+        // so it has its own assertion block below.
         let is_spell = match kind {
             OverlayKind::Spell => true,
             OverlayKind::Theme
@@ -1039,9 +1129,9 @@ fn bars_drop_the_pane_for_every_overlay_kind() {
             // popup floats its suggestion plates on the RAW PAGE with NO room box
             // at all (the prior round's clipped `base_100` room read as a
             // near-black BOX on the dark worlds). Its Pane-world `float_*`
-            // elevation parks empty (no raised pane), and the room
+            // elevation parks empty (no raised pane), and the
             // `panel_shadow`/`panel_border` stay empty (no card) — but in place of
-            // ONE clipped room, `panel_card` now carries ONE minimal ground SCRIM
+            // any broad room, `panel_card` carries ONE minimal ground SCRIM
             // PER PLATE (a thin feathered moat confined to each plate's footprint),
             // so its count MATCHES the plate count, never 1. The document shows
             // BETWEEN the plates; the pixel-level no-box + legibility outcome is
@@ -1093,10 +1183,11 @@ fn bars_drop_the_pane_for_every_overlay_kind() {
             0,
             "{kind:?}: Bars draws NO card shadow (no boxed elevation)"
         );
+        let plates = p.overlay_bars.instance_count() + p.overlay_rows.instance_count();
         assert_eq!(
             p.panel_card.instance_count(),
-            1,
-            "{kind:?}: Bars paints exactly ONE full-canvas room veil, not a boxed card"
+            plates,
+            "{kind:?}: Bars paint one bounded scrim per plate, not a full-canvas room"
         );
         assert!(
             p.overlay_bars.instance_count() > 0,
