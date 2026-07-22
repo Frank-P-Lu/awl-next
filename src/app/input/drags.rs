@@ -61,6 +61,18 @@ impl App {
         }
         self.page_resizing = true;
         self.page_resize_edge = Some(edge);
+        // STABLE REFERENCE: snapshot the OPPOSITE edge's position ONCE, now, and hold it
+        // for the whole drag. The grabbed edge tracks the pointer against this fixed
+        // anchor (`geometry::page_resize_measure_anchored`), so the measure stays
+        // monotone. Reading the current adaptively-shifted edge each frame instead fed
+        // the rail-hide shift back into the measure and oscillated it across the boundary.
+        self.page_resize_anchor = self.gpu.as_ref().map(|g| {
+            let left = g.pipeline.column_left();
+            match edge {
+                crate::render::ResizeEdge::Right => left,
+                crate::render::ResizeEdge::Left => left + g.pipeline.column_width(),
+            }
+        });
         // The context flipped to "dragging the edge" WITHOUT any mouse motion: recompute
         // the cursor shape right now (`dragging_edge` outranks everything), not just on
         // the next `CursorMoved`.
@@ -83,10 +95,11 @@ impl App {
     /// redraw. Shared by the initial press + every drag move. Re-wrap mirrors the
     /// `PageWider`/`PageNarrower` command path (`set_size` reshapes at the new width).
     fn apply_page_resize(&mut self) {
-        let target = self.page_resize_edge.and_then(|edge| {
+        let anchor = self.page_resize_anchor;
+        let target = self.page_resize_edge.zip(anchor).and_then(|(edge, anchor_x)| {
             self.gpu
                 .as_ref()
-                .map(|g| g.pipeline.page_resize_measure_at(self.cursor_px.0, edge))
+                .map(|g| g.pipeline.page_resize_measure_at(self.cursor_px.0, edge, anchor_x))
         });
         if let Some(target) = target {
             if target != crate::page::measure() {
@@ -113,6 +126,7 @@ impl App {
     pub(in crate::app) fn end_page_resize(&mut self) {
         self.page_resizing = false;
         self.page_resize_edge = None;
+        self.page_resize_anchor = None;
         self.persist_page_width();
         if let Some(gpu) = self.gpu.as_mut() {
             // Drop the drag readout — gone the instant the edge is released.

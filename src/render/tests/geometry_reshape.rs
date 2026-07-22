@@ -145,7 +145,10 @@ fn collapsed_page_still_arms_the_resize_affordance() {
     );
     assert!(p.page_resize_hover(left), "hover must report the collapsed edge too");
     // And a drag inward from the collapsed right edge narrows the measure below MAX.
-    let narrowed = p.page_resize_measure_at(left + width - 200.0, ResizeEdge::Right);
+    // The gesture anchors the OPPOSITE (left) edge at press time, exactly like the live
+    // `begin_page_resize_if_hovering`; dragging the right edge 200px inward of its press
+    // position must shrink the width, hence the measure.
+    let narrowed = p.page_resize_measure_at(left + width - 200.0, ResizeEdge::Right, left);
     assert!(
         narrowed < crate::page::MAX_MEASURE,
         "dragging the collapsed edge inward must narrow the measure (got {narrowed})",

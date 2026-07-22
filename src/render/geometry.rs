@@ -537,7 +537,7 @@ pub fn page_boundary_hit(
 /// that earlier taste guard (`left <= PAGE_MIN_PAD + 1.0 → None`) locked the user out
 /// of dragging a widened-past-capacity column back inward (bug, 2026-07-15). A
 /// collapsed column pins both edges at the [`PAGE_MIN_PAD`] margins, and those edges
-/// stay grabbable so the width can be pulled back down ([`page_resize_measure_for_edge`]
+/// stay grabbable so the width can be pulled back down ([`page_resize_measure_anchored`]
 /// clamps the drag result to the settable band regardless).
 pub fn page_resize_edge_hit(
     page_on: bool,
@@ -562,74 +562,50 @@ pub fn in_writing_column(pointer_x: f32, column_left: f32, column_width: f32) ->
     pointer_x >= column_left && pointer_x <= column_left + column_width
 }
 
-/// The page MEASURE (chars) implied by dragging a column edge to `pointer_x`. The
-/// column is CENTERED, so the grabbed edge's distance from the window center is HALF
-/// the column width; the full width is twice that, and dividing by the ZOOM-STRIPPED
-/// `advance` (see [`page_column_advance`]) converts px back to chars. ABSOLUTE /
-/// direct-manipulation: the edge tracks the pointer (dragging OUT widens, IN narrows),
-/// symmetric on both sides. Clamped to the settable band [`crate::page::MIN_MEASURE`]
-/// ..= [`crate::page::MAX_MEASURE`] so a drag can never exceed the width the keyboard
-/// commands reach. Zoom-independent because `advance` already has the zoom divided out.
-pub fn page_resize_measure(window_w: f32, advance: f32, pointer_x: f32) -> usize {
-    let center = window_w * 0.5;
-    let half = (pointer_x - center).abs();
-    let width = (2.0 * half).max(1.0);
-    let measure = if advance > 0.0 { (width / advance).round() } else { 0.0 };
-    (measure.max(0.0) as usize).clamp(crate::page::MIN_MEASURE, crate::page::MAX_MEASURE)
-}
-
-/// The page MEASURE implied by a dragged edge, using the SAME adaptive placement
-/// geometry that draws that edge. The ordinary centered regime keeps the historic
-/// symmetric mapping. When the outline pins the column's left edge, however, the
-/// RIGHT edge is `adaptive_left + width`; matching the pointer against that rendered
-/// edge makes a one-pixel pointer move produce a one-pixel width response instead of
-/// incorrectly doubling it about the window center.
+/// THE stable-reference pointer→measure mapping for a live page-width drag — the ONE
+/// owner every drag frame ([`TextPipeline::page_resize_measure_at`]) routes through.
+/// The grabbed edge tracks the pointer 1:1 against the OPPOSITE edge's PRESS-TIME
+/// position (`anchor_x`, physical px), captured once when the drag arms and HELD for
+/// the whole gesture: the width is the pointer's signed distance from that fixed
+/// anchor and the measure is `width / advance` (the ZOOM-STRIPPED [`page_column_advance`],
+/// so px→char is identical at any zoom). Because `anchor_x` never moves during the
+/// drag, the measure is a MONOTONE affine function of the pointer — dragging the RIGHT
+/// edge right (or the LEFT edge left) can only ever GROW the measure, never shrink or
+/// oscillate. Clamped to the settable band [`crate::page::MIN_MEASURE`] ..=
+/// [`crate::page::MAX_MEASURE`] so a drag can never exceed the keyboard-command reach;
+/// a degenerate zero advance floors safely to the minimum (never divides).
 ///
-/// The left-edge path deliberately retains the centered mapping: a pinned left edge
-/// is the outline rail's fixed anchor and therefore cannot itself track a width drag.
-/// The live gesture records which edge armed at press time, so the right-edge solver
-/// remains stable after the pointer leaves the hover tolerance.
-#[allow(clippy::too_many_arguments)]
-pub fn page_resize_measure_for_edge(
-    window_w: f32,
+/// **Why an anchor, and NOT the rendered edge (the drag-snap oscillation fix,
+/// 2026-07-22 — user-reported).** The earlier inverse searched the settable band for
+/// the measure whose ADAPTIVELY-shifted right edge (`adaptive_column_left + width`) sat
+/// closest to the pointer. That rendered edge is NON-MONOTONIC in the measure: as the
+/// measure crosses the outline rail-hide boundary the column re-centers and its right
+/// edge JUMPS LEFT (e.g. at a ~1800px window it plateaus near 1784px for measures
+/// 107..116 then cliffs to ~1749px at 118), so TWO different measures shared one
+/// pointer x and the argmin flipped between them — snapping the measure 105↔119 as the
+/// pointer crept a single pixel. Anchoring to a FIXED press-time reference kills that
+/// feedback at its source: the measure no longer reads the rail shift it would itself
+/// cause. The adaptive placement still DRAWS the column (the rail appears/hides exactly
+/// as before) — only the MEASURE is decoupled from it, which is what makes the drag
+/// monotonic. The 1:1 response the old rendered-edge inverse was built to give is
+/// preserved (one glyph advance of pointer travel = one char of measure).
+pub fn page_resize_measure_anchored(
     advance: f32,
     pointer_x: f32,
+    anchor_x: f32,
     edge: ResizeEdge,
-    page_on: bool,
-    outline_wants: bool,
-    outline_pref_px: f32,
-    outline_min_px: f32,
-    gap: f32,
-    left_pad: f32,
 ) -> usize {
-    if edge == ResizeEdge::Left || advance <= 0.0 {
-        return page_resize_measure(window_w, advance, pointer_x);
-    }
-
-    // The settable band is only 121 entries. Searching it directly keeps this
-    // inverse exactly coupled to the forward geometry (including its rail ramp,
-    // whole-pixel snap, responsive cap, and future policy changes) instead of
-    // growing a second hand-derived inverse that can drift.
-    (crate::page::MIN_MEASURE..=crate::page::MAX_MEASURE)
-        .min_by(|&a, &b| {
-            let right = |measure| {
-                adaptive_column_left(
-                    window_w,
-                    advance,
-                    page_on,
-                    measure,
-                    outline_wants,
-                    outline_pref_px,
-                    outline_min_px,
-                    gap,
-                    left_pad,
-                ) + column_width_for(window_w, advance, page_on, measure)
-            };
-            (right(a) - pointer_x)
-                .abs()
-                .total_cmp(&(right(b) - pointer_x).abs())
-        })
-        .unwrap_or(crate::page::MIN_MEASURE)
+    // The grabbed edge tracks the pointer; the OPPOSITE edge is the fixed anchor. A
+    // right-edge drag widens as the pointer moves right OF the anchored left; a
+    // left-edge drag widens as it moves left OF the anchored right — signed so both
+    // are the same "distance from the held edge" mapping.
+    let width = match edge {
+        ResizeEdge::Right => pointer_x - anchor_x,
+        ResizeEdge::Left => anchor_x - pointer_x,
+    };
+    let width = width.max(1.0);
+    let measure = if advance > 0.0 { (width / advance).round() } else { 0.0 };
+    (measure.max(0.0) as usize).clamp(crate::page::MIN_MEASURE, crate::page::MAX_MEASURE)
 }
 
 /// INLINE-IMAGE drag-resize: how close (px) the pointer must come to an image's
@@ -1135,7 +1111,7 @@ impl TextPipeline {
     /// retain the edge for the whole drag so adaptive reflow cannot switch sides.
     /// Arms on proximity to a DRAWN edge in page mode — no "real margin room"
     /// precondition, so a collapsed column still offers its edges to drag back inward
-    /// ([`page_resize_measure_for_edge`] clamps the resulting measure to the settable
+    /// ([`page_resize_measure_anchored`] clamps the resulting measure to the settable
     /// band regardless of the collapsed geometry).
     pub fn page_resize_edge_at(&self, pointer_x: f32) -> Option<ResizeEdge> {
         page_resize_edge_hit(
@@ -1163,24 +1139,15 @@ impl TextPipeline {
     }
 
     /// DIRECT-MANIPULATION resize — the page MEASURE (chars) implied by dragging a
-    /// column edge to `pointer_x` (physical px), inverted from the same adaptive
-    /// geometry that draws it and clamped to the settable band. Driven by the
-    /// ZOOM-INDEPENDENT [`Self::page_advance`] (like the column width itself), so a
-    /// drag maps px→chars the same at any zoom. See [`page_resize_measure_for_edge`].
-    pub fn page_resize_measure_at(&self, pointer_x: f32, edge: ResizeEdge) -> usize {
-        let label = crate::markdown::type_scale::LABEL;
-        page_resize_measure_for_edge(
-            self.window_w,
-            self.page_advance(),
-            pointer_x,
-            edge,
-            crate::page::page_on(),
-            self.outline_wants_rail(),
-            rowlayout::OUTLINE_PREFERRED_CHARS as f32 * self.metrics.char_width * label,
-            rowlayout::OUTLINE_MIN_CHARS as f32 * self.metrics.char_width * label,
-            self.metrics.char_width * crate::render::chrome::MARGIN_COLUMN_GAP_CHARS,
-            crate::render::TEXT_LEFT,
-        )
+    /// column edge to `pointer_x` (physical px). `anchor_x` is the OPPOSITE edge's
+    /// PRESS-TIME position (captured by the live gesture when the drag armed, from
+    /// [`Self::column_left`] / [`Self::column_width`]); the grabbed edge tracks the
+    /// pointer 1:1 against it, so the mapping is monotone and the drag can never
+    /// oscillate across the outline rail-hide boundary. Driven by the ZOOM-INDEPENDENT
+    /// [`Self::page_advance`] (like the column width itself), so a drag maps px→chars
+    /// the same at any zoom. See [`page_resize_measure_anchored`] for the full rationale.
+    pub fn page_resize_measure_at(&self, pointer_x: f32, edge: ResizeEdge, anchor_x: f32) -> usize {
+        page_resize_measure_anchored(self.page_advance(), pointer_x, anchor_x, edge)
     }
 
     /// INLINE-IMAGE DRAG-RESIZE (v2) — the DISPLAY WIDTH (px) an image gets from
@@ -2592,126 +2559,152 @@ mod tests {
     }
 
     #[test]
-    fn drag_math_is_symmetric_about_center_and_zoom_independent() {
-        // Dragging either edge to the SAME distance from center yields the SAME measure
-        // (the column is centered), and the px->char mapping uses the zoom-stripped
-        // advance, so the mapping is identical at any zoom.
-        let window = 1200.0;
-        let center = window * 0.5; // 600
+    fn page_drag_measure_is_monotonic_across_the_rail_hide_boundary() {
+        // USER-REPORTED LIVE BUG (drag-snap oscillation, 2026-07-22): dragging the
+        // RIGHT edge rightward jumped the measure 105 -> 119 (the outline rail hides,
+        // the column re-centers — expected) but a single further pixel SNAPPED it BACK
+        // to 106, then 120, re-snapping across the boundary. Root cause: the old inverse
+        // matched the pointer against the ADAPTIVELY-shifted rendered right edge
+        // (`adaptive_column_left + width`), which is NON-MONOTONIC in the measure — as
+        // the rail hides the rendered edge cliffs LEFT, so two different measures share
+        // one pointer x and the argmin flipped between them. The anchored owner computes
+        // the measure from a FIXED press-time reference, so a monotone rightward drag
+        // yields a monotone (non-decreasing) measure.
+        let window = 1800.0;
+        let pref = outline_pref_px();
+        let min = outline_min_px();
+        let gap = margin_gap();
+
+        // WITNESS that this fixture is genuinely oscillation-prone: the rendered right
+        // edge the OLD inverse matched against actually DECREASES somewhere in the band
+        // (the rail-hide cliff) — exactly what let the argmin flip between two measures.
+        let rendered_right = |m: usize| {
+            adaptive_column_left(window, CW, true, m, true, pref, min, gap, ADAPTIVE_LEFT_PAD)
+                + column_width_for(window, CW, true, m)
+        };
+        let cliffs = (crate::page::MIN_MEASURE + 1..=crate::page::MAX_MEASURE)
+            .any(|m| rendered_right(m) < rendered_right(m - 1));
+        assert!(cliffs, "fixture must span the rail-hide cliff or it can't reproduce the bug");
+
+        // Press on the right edge in the rail-granted regime; anchor the LEFT edge once,
+        // exactly as the live gesture does at press time.
+        let start = 100usize;
+        let anchor =
+            adaptive_column_left(window, CW, true, start, true, pref, min, gap, ADAPTIVE_LEFT_PAD);
+
+        // Sweep the pointer rightward, one physical pixel at a time, straight through the
+        // pointer band where the old code oscillated, and assert the measure never drops.
+        let mut prev = page_resize_measure_anchored(CW, 1700.0, anchor, ResizeEdge::Right);
+        let first = prev;
+        for px in 1700..=1799 {
+            let m = page_resize_measure_anchored(CW, px as f32, anchor, ResizeEdge::Right);
+            assert!(
+                m >= prev,
+                "rightward drag must never shrink the measure: at pointer {px} got {m} after {prev}",
+            );
+            prev = m;
+        }
+        // ...and the sweep exercised a REAL climb, not a flat clamp (else "monotone" is
+        // vacuous). Also probe the LEFT edge: dragging it leftward off a fixed RIGHT
+        // anchor is monotone too.
+        assert!(prev > first, "the sweep must climb, not sit pinned (got {first}..{prev})");
+        let right_anchor = 2000.0;
+        let mut lprev = page_resize_measure_anchored(CW, 1900.0, right_anchor, ResizeEdge::Left);
+        for px in (1400..=1900).rev() {
+            let m = page_resize_measure_anchored(CW, px as f32, right_anchor, ResizeEdge::Left);
+            assert!(m >= lprev, "leftward drag of the left edge must never shrink the measure");
+            lprev = m;
+        }
+    }
+
+    #[test]
+    fn page_drag_maps_one_advance_to_one_measure_not_two() {
+        // The grabbed edge tracks the pointer 1:1 against the fixed anchor: one glyph
+        // advance of pointer travel is exactly ONE char of measure (never the two the
+        // former center-distance inverse doubled to). Pressing AT the rendered edge
+        // (anchor + start*advance) reproduces the start measure — no snap.
+        let start = 40usize;
+        let left_anchor = 100.0;
+        let at_press = left_anchor + start as f32 * CW; // the rendered right edge for `start`
+        assert_eq!(
+            page_resize_measure_anchored(CW, at_press, left_anchor, ResizeEdge::Right),
+            start,
+            "pressing the rendered edge must not snap the measure",
+        );
+        assert_eq!(
+            page_resize_measure_anchored(CW, at_press + CW, left_anchor, ResizeEdge::Right),
+            start + 1,
+            "one advance of pointer travel is exactly one char",
+        );
+        // The LEFT edge mirrors it: one advance FURTHER from a fixed RIGHT anchor also
+        // grows the measure by exactly one.
+        let right_anchor = 2000.0;
+        let left_press = right_anchor - start as f32 * CW;
+        assert_eq!(
+            page_resize_measure_anchored(CW, left_press, right_anchor, ResizeEdge::Left),
+            start,
+        );
+        assert_eq!(
+            page_resize_measure_anchored(CW, left_press - CW, right_anchor, ResizeEdge::Left),
+            start + 1,
+            "the left edge tracks 1:1 too (widen by dragging further from the anchor)",
+        );
+    }
+
+    #[test]
+    fn page_drag_is_symmetric_and_zoom_independent() {
+        // Dragging either edge the SAME distance from its anchor yields the SAME
+        // measure, and the px->char mapping uses the ZOOM-STRIPPED advance
+        // ([`page_column_advance`] returns CW at every zoom), so it is identical at any
+        // zoom: bigger glyphs reshape INSIDE the fixed column, they don't move it.
         for &zoom in &[0.5_f32, 1.0, 2.0] {
             let adv = page_column_advance(CW * zoom, zoom); // == CW at dpi 1.0
-            // Right edge at 888 (half-width 288 -> width 576 -> 40 chars).
-            let m_right = page_resize_measure(window, adv, 888.0);
-            // Left edge mirrored at 312 (same 288 from center) -> same measure.
-            let m_left = page_resize_measure(window, adv, 312.0);
-            assert_eq!(m_right, 40, "zoom={zoom}: 288px from center -> 40 chars");
-            assert_eq!(m_left, m_right, "zoom={zoom}: left/right mirror to same measure");
-            // Dragging OUT (farther from center) widens; IN narrows.
-            let wider = page_resize_measure(window, adv, center + 350.0);
-            let narrower = page_resize_measure(window, adv, center + 200.0);
+            let left_anchor = 100.0;
+            let right_anchor = 2000.0;
+            let dist = 40.0 * CW; // 40 chars of travel from the anchor
+            let m_right =
+                page_resize_measure_anchored(adv, left_anchor + dist, left_anchor, ResizeEdge::Right);
+            let m_left =
+                page_resize_measure_anchored(adv, right_anchor - dist, right_anchor, ResizeEdge::Left);
+            assert_eq!(m_right, 40, "zoom={zoom}: 40 chars of travel -> 40 chars");
+            assert_eq!(m_left, m_right, "zoom={zoom}: left/right mirror to the same measure");
+            // Farther from the anchor widens; closer narrows.
+            let wider = page_resize_measure_anchored(
+                adv, left_anchor + dist + 200.0, left_anchor, ResizeEdge::Right,
+            );
+            let narrower = page_resize_measure_anchored(
+                adv, left_anchor + dist - 200.0, left_anchor, ResizeEdge::Right,
+            );
             assert!(wider > m_right && narrower < m_right, "zoom={zoom}: out widens, in narrows");
         }
     }
 
     #[test]
-    fn adaptive_right_edge_drag_maps_one_advance_to_one_measure_not_two() {
-        // USER-REPORTED LIVE BUG: at this ordinary narrow/outline fixture the
-        // adaptive policy pins LEFT to the rail while RIGHT alone grows. The old
-        // center-distance inverse nevertheless doubled every pointer delta: moving
-        // right by one glyph advance requested TWO chars. Inverting the actually
-        // rendered right edge makes one advance request exactly one char (equivalently
-        // one physical px of pointer travel is one physical px of page-width travel).
-        let window = 900.0;
-        let start = 40usize;
-        let pref = outline_pref_px();
-        let min = outline_min_px();
-        let gap = margin_gap();
-        let left = adaptive_column_left(
-            window, CW, true, start, true, pref, min, gap, ADAPTIVE_LEFT_PAD,
-        );
-        let symmetric = column_left_for(window, CW, true, start);
-        assert!(left > symmetric, "fixture must be in the pinned-left rail regime");
-        let right = left + column_width_for(window, CW, true, start);
-
+    fn page_drag_clamps_to_the_settable_band() {
+        // A drag can never push the measure past the keyboard-command band [20,140]:
+        // pulling the edge far out tops out at MAX_MEASURE; pushing it to (or past) the
+        // anchor bottoms out at MIN_MEASURE. Same band the C-x } / { commands honour.
+        let anchor = 100.0;
         assert_eq!(
-            page_resize_measure_for_edge(
-                window,
-                CW,
-                right,
-                ResizeEdge::Right,
-                true,
-                true,
-                pref,
-                min,
-                gap,
-                ADAPTIVE_LEFT_PAD,
-            ),
-            start,
-            "pressing the already-rendered edge must not snap the measure",
+            page_resize_measure_anchored(CW, 100_000.0, anchor, ResizeEdge::Right),
+            crate::page::MAX_MEASURE,
         );
+        // Pointer AT the anchor -> zero (min 1px) width -> the MIN floor.
         assert_eq!(
-            page_resize_measure_for_edge(
-                window,
-                CW,
-                right + CW,
-                ResizeEdge::Right,
-                true,
-                true,
-                pref,
-                min,
-                gap,
-                ADAPTIVE_LEFT_PAD,
-            ),
-            start + 1,
+            page_resize_measure_anchored(CW, anchor, anchor, ResizeEdge::Right),
+            crate::page::MIN_MEASURE,
         );
-        let old_at_press = page_resize_measure(window, CW, right);
-        let old_after_one = page_resize_measure(window, CW, right + CW);
+        // Pointer PAST the anchor (inverted / negative width) still clamps up, never
+        // underflows or panics.
         assert_eq!(
-            old_after_one,
-            old_at_press + 2,
-            "self-check: the former center-derived inverse advances 2 chars per one-char pointer delta",
+            page_resize_measure_anchored(CW, anchor - 500.0, anchor, ResizeEdge::Right),
+            crate::page::MIN_MEASURE,
         );
-    }
-
-    #[test]
-    fn rendered_edge_inverse_preserves_centered_and_dpi_regimes() {
-        // Outside the adaptive rail regime the rendered-edge inverse is the same
-        // centered geometry as before. Physical-pixel DPI scales both the advance
-        // and fixture, so the resulting measure is unchanged.
-        for dpi in [1.0_f32, 2.0] {
-            let window = 1200.0 * dpi;
-            let advance = CW * dpi;
-            let start = 40usize;
-            let right = column_left_for(window, advance, true, start)
-                + column_width_for(window, advance, true, start);
-            let target = page_resize_measure_for_edge(
-                window,
-                advance,
-                right + advance,
-                ResizeEdge::Right,
-                true,
-                false,
-                0.0,
-                0.0,
-                0.0,
-                TEXT_LEFT * dpi,
-            );
-            assert_eq!(target, start + 2, "dpi={dpi}: centered drag keeps symmetric response");
-        }
-    }
-
-    #[test]
-    fn drag_math_clamps_to_the_settable_band() {
-        // A drag can never push the measure past the keyboard-command band: pulling the
-        // edge out to the window rim tops out at MAX_MEASURE; jamming it toward center
-        // bottoms out at MIN_MEASURE. Same [20,140] band the C-x } / { commands honour.
-        let window = 4000.0; // wide enough that MAX would otherwise be exceeded
-        let adv = CW;
-        assert_eq!(page_resize_measure(window, adv, 3999.0), crate::page::MAX_MEASURE);
-        // Pointer at the exact center -> zero width -> clamps UP to the floor.
-        assert_eq!(page_resize_measure(window, adv, window * 0.5), crate::page::MIN_MEASURE);
-        // A degenerate zero advance can't divide; it floors safely, never panics.
-        assert_eq!(page_resize_measure(window, 0.0, 3999.0), crate::page::MIN_MEASURE);
+        // A degenerate zero advance can't divide; it floors safely to the minimum.
+        assert_eq!(
+            page_resize_measure_anchored(0.0, 100_000.0, anchor, ResizeEdge::Right),
+            crate::page::MIN_MEASURE,
+        );
     }
 
     #[test]

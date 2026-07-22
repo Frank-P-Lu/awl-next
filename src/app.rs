@@ -598,6 +598,13 @@ pub struct App {
     /// The page edge that armed the active width drag. Captured at press time so
     /// adaptive outline-rail reflow cannot switch the gesture's geometry mid-drag.
     page_resize_edge: Option<crate::render::ResizeEdge>,
+    /// The OPPOSITE column edge's position (physical px) at the moment the width drag
+    /// armed — the STABLE reference the live measure is computed against for the whole
+    /// gesture. Held fixed so the grabbed edge tracks the pointer 1:1 and the measure
+    /// stays monotone: reading the CURRENT (adaptively-shifted) edge each frame fed the
+    /// rail-hide shift back into the measure and snapped it 105↔119 across the boundary
+    /// (the drag-snap oscillation bug). See `geometry::page_resize_measure_anchored`.
+    page_resize_anchor: Option<f32>,
     /// INLINE-IMAGE DRAG-RESIZE (v2, live app only): `Some` while a press that landed
     /// on an image's bottom-right resize handle is being dragged — the pointer's
     /// distance past the image's left edge drives its DISPLAY WIDTH live (a pipeline
@@ -1239,6 +1246,7 @@ impl App {
             drag_armed: false,
             page_resizing: false,
             page_resize_edge: None,
+            page_resize_anchor: None,
             image_resizing: None,
             cursor_icon: CursorIcon::Default,
             drag_granularity: DragGranularity::Char,
