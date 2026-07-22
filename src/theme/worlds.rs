@@ -697,23 +697,38 @@ pub const CURRAWONG: Theme = Theme {
     // TWINKLING STARS (2026-07-18, the user's morning verdict): Currawong stays,
     // differentiated by ambient TWINKLING STARS — the "aliveness ≠ loudness"
     // pole (maximally quiet, unmistakably alive; the Pied Currawong's voice is
-    // the quiet dark). Tiny cool starlight points (#9DB0CF, ~217° — a night-sky
-    // steel-blue, ~170° clear of the gold caret) scattered sparsely through the
-    // page margins, each breathing its brightness on its own slow seconds-scale
-    // cycle between a `faint`-adjacent whisper (floor 0.12) and a sub-`muted`
-    // glint (peak 0.55 — the quiet-band law holds the composited peak under the
-    // world's own muted rung). All numbers are TASTE TUNABLE — flagged for the
-    // user's gallery pick (this round ships BUILD + GALLERY + HOLD).
+    // the quiet dark). Tiny starlight points scattered sparsely through the page
+    // margins, each on its own slow seconds-scale LIFECYCLE (2026-07-23): a dark
+    // dwell at true zero -> rise -> brief shine -> fade, so the visible sky
+    // genuinely changes (stars appear and die). Per-star tint from a low-sat
+    // real-star palette (cool blue-white #9DB0CF dominant, ~217°/~170° clear of
+    // the gold caret; plus a neutral white and a subtle champagne — the amber
+    // guard holds by low saturation, `crate::stars::star_palette`). A star's
+    // shine may now rise ABOVE the muted whisper cap (a user-blessed relaxation
+    // of the quiet-band law) but stays well under the text ink. All numbers are
+    // TASTE TUNABLE — the twinkle FEEL and shine ceiling are live human-confirm.
     render_caps: RenderCaps {
         elevation: Elevation::Bordered,
         card_anchor: CardAnchor::TopLeft,
         ambient: AmbientStyle::Stars {
             tint: Srgb::rgb(0x9D, 0xB0, 0xCF),
             cell_px: 34.0,
-            density: 0.16,
+            // Denser candidate field than the old always-on breath (0.16): the
+            // LIFECYCLE round leaves ~half the field dark-dwelling at any moment,
+            // so the AUTHORED density is raised to keep the VISIBLE population
+            // healthy as stars appear and die.
+            density: 0.30,
             size_px: 2.6,
-            peak: 0.55,
-            floor: 0.12,
+            // THE VISIBILITY BAND [floor, peak] is now the per-star SHINE-peak
+            // range (each star glints to its own level here, then dies to true
+            // zero — not a breath's floor). `peak` is the calm CEILING (a glint
+            // may now rise ABOVE the muted whisper cap — the user-blessed
+            // relaxation of the ambient quiet-band law — but stays well under the
+            // text ink); `floor` is a real visible floor (the dimmest lit star is
+            // still seeable). TASTE TUNABLE — the shine ceiling's FEEL is a live
+            // human-confirm.
+            peak: 0.5,
+            floor: 0.18,
         },
         ..RenderCaps::DEFAULT
     },

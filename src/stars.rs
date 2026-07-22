@@ -40,6 +40,7 @@
 //!   (the proto-cache shape: layout built once per size/params, culled +
 //!   tinted per frame).
 
+use crate::theme::Srgb;
 use std::sync::OnceLock;
 
 /// Breathing room (px) between the writing column's edge and the nearest star:
@@ -60,6 +61,29 @@ pub const TWINKLE_RATE_MIN: u32 = 3;
 /// How many integer rate steps above [`TWINKLE_RATE_MIN`] a star may sit
 /// (rates span `TWINKLE_RATE_MIN ..= TWINKLE_RATE_MIN + TWINKLE_RATE_STEPS - 1`).
 pub const TWINKLE_RATE_STEPS: u32 = 6;
+
+/// THE LIFECYCLE round (2026-07-23): the fraction of a star's own cycle it is
+/// LIT at all — the rest is a DARK DWELL at TRUE zero (the star is gone). A star
+/// that spends half its cycle absent is what makes the visible population
+/// genuinely CHANGE (stars appear, shine, and die), the point the old
+/// never-vanishing breath (floor 0.12) missed. TASTE TUNABLE — the twinkle FEEL
+/// over real seconds is a live human-confirm.
+pub const STAR_ACTIVE_FRAC: f32 = 0.5;
+
+/// The per-star LOW-SATURATION tint palette — real-star colors: a cool
+/// blue-white (the world's own ambient `tint`, the dominant), a neutral bright
+/// WHITE, and a subtle warm CHAMPAGNE. All three sit inside the ambient
+/// amber-guard (blue-white/white clear the caret's hue by >150°; champagne is
+/// low-sat enough — HSL sat < 0.15 — to be exempt outright), so no star ever
+/// reads as a second warm accent. The palette is the ONE owner both the
+/// renderer (`prepare_stars_layer`) and the amber-guard law
+/// (`theme::tests::ambient_stars_laws_hold_for_every_world`) iterate, so the
+/// drawn tints and the law-checked tints can never drift.
+pub const STAR_TINT_WHITE: Srgb = Srgb::rgb(0xE9, 0xEC, 0xF2);
+/// The warm champagne pole — deliberately kept near white (HSL sat ~0.13) so it
+/// stays clear of the ambient amber guard despite its warm hue sitting near the
+/// gold caret; a real champagne saturation would read as a second accent.
+pub const STAR_TINT_CHAMPAGNE: Srgb = Srgb::rgb(0xEF, 0xEE, 0xEA);
 
 /// One scattered star: a jittered position (px, top-left origin) plus its own
 /// hash seed in `[0, 1)` — the seed derives the star's individual twinkle rate
@@ -139,24 +163,88 @@ pub fn layout(w: f32, h: f32, cell_px: f32, density: f32) -> Vec<Star> {
 
 // --- Twinkle (the per-frame phase arithmetic) ---------------------------------
 
-/// This star's brightness at ambient `phase` (in cycles, wrapping at
-/// [`crate::lava::LAVA_LOOP_CYCLES`]): a slow sine breath, individually rated
-/// and offset by the star's own `seed`, eased quadratically so a star spends
-/// most of its cycle near its dim `floor` and BRIEFLY glints toward `peak` —
-/// the twinkle read, not a uniform pulse. Returns the tint alpha in
-/// `[floor, peak]`. The rate is an INTEGER cycle count per ambient loop, so the
-/// breath meets its own endpoint exactly at the phase wrap (no seam). Pure —
-/// a function of (seed, phase, band), never a clock.
+/// This star's brightness (tint alpha) at ambient `phase` (in cycles, wrapping
+/// at [`crate::lava::LAVA_LOOP_CYCLES`]) — THE LIFECYCLE round's envelope,
+/// replacing the old never-vanishing sine breath. A star spends a long DARK
+/// DWELL at TRUE zero (absent), then RISES, briefly SHINES near its own peak,
+/// and gently FADES back to zero — so the visible population genuinely CHANGES
+/// (stars appear and die), the aliveness the old floor-0.12 breath lacked.
+///
+/// Two decorrelated rolls off the star's `seed`:
+/// * its **cycle position** `u` in `[0, 1)` — an INTEGER rate per ambient loop
+///   (so the envelope meets its own endpoint at the phase wrap, no seam —
+///   `twinkle_is_seamless_across_the_ambient_loop_wrap`) plus a phase offset,
+///   so no two stars are lit in unison; and
+/// * its own **shine peak** somewhere in the visibility band `[floor, peak]` —
+///   most stars barely kindle (near `floor`), a few blaze (near `peak`) — the
+///   band whose ceiling the (relaxed, user-blessed) quiet-band law bounds.
+///
+/// Returns `0.0` throughout the dwell, rising to at most the star's own shine
+/// peak (`<= peak`). Pure — a function of (seed, phase, band), never a clock.
 pub fn brightness(seed: f32, phase: f32, floor: f32, peak: f32) -> f32 {
-    let tau = std::f32::consts::TAU;
     let steps = TWINKLE_RATE_STEPS.max(1) as f32;
     let rate = TWINKLE_RATE_MIN as f32 + (seed * steps).floor().min(steps - 1.0);
-    // A second decorrelated roll off the same seed: the golden-ratio fold
-    // decorrelates the phase offset from the rate pick above.
+    // A decorrelated roll off the same seed: the golden-ratio fold decorrelates
+    // the phase offset from the rate pick above.
     let offset = (seed * 61.803_4).fract();
-    let t = 0.5 + 0.5 * (tau * (rate * phase / crate::lava::LAVA_LOOP_CYCLES + offset)).sin();
-    // Quadratic ease: dim-biased dwell, brief glints.
-    floor + (peak - floor) * (t * t)
+    let u = (rate * phase / crate::lava::LAVA_LOOP_CYCLES + offset).fract();
+    // A THIRD decorrelated roll: this star's own shine peak within the band.
+    let shine = floor + (peak - floor) * (seed * 17.13).fract();
+    shine * lifecycle_env(u)
+}
+
+/// The per-cycle lifecycle SHAPE in `[0, 1]` at cycle position `u` in `[0, 1)`:
+/// a DARK DWELL at zero for the `1 - STAR_ACTIVE_FRAC` inactive tail, then
+/// within the lit window a smoothstep RISE (0→1), a brief SHINE plateau (1), and
+/// a longer, gentler smoothstep FADE (1→0). Continuous and `0.0` at both ends of
+/// the lit window (and everywhere in the dwell), so the envelope is seamless
+/// across the `u` wrap — combined with the integer per-loop rate, `brightness`
+/// meets its own endpoint at the ambient-loop wrap. Pure.
+fn lifecycle_env(u: f32) -> f32 {
+    let active = STAR_ACTIVE_FRAC.clamp(0.05, 1.0);
+    if u >= active {
+        return 0.0; // the dark dwell — the star is gone
+    }
+    let v = u / active; // [0, 1) across the lit window
+    fn smoothstep(t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+    // rise 0.00..0.30 -> shine plateau 0.30..0.50 -> fade 0.50..1.00 (the fade
+    // is longer than the rise, so a star kindles a touch quicker than it dies).
+    if v < 0.30 {
+        smoothstep(v / 0.30)
+    } else if v < 0.50 {
+        1.0
+    } else {
+        1.0 - smoothstep((v - 0.50) / 0.50)
+    }
+}
+
+/// This star's tint, picked from the [low-saturation real-star palette](STAR_TINT_WHITE)
+/// by a decorrelated roll off its `seed`: mostly the world's own cool blue-white
+/// `base` (the night-sky dominant), sometimes a neutral bright WHITE, rarely a
+/// warm CHAMPAGNE. The ONE owner both the renderer and the amber-guard law read,
+/// so the drawn and law-checked tints can never drift. Pure + deterministic.
+pub fn star_tint(base: Srgb, seed: f32) -> Srgb {
+    let [blue_white, white, champagne] = star_palette(base);
+    // Decorrelated from the rate/offset/shine folds (a different prime multiplier).
+    let r = (seed * 7.19).fract();
+    if r < 0.62 {
+        blue_white
+    } else if r < 0.85 {
+        white
+    } else {
+        champagne
+    }
+}
+
+/// The full star-tint palette for a world whose ambient `base` tint is given —
+/// `[base, white, champagne]`. The ONE owner both the renderer (via
+/// [`star_tint`]) and the amber-guard/visibility-band law iterate, so a tint the
+/// law never checks can never be drawn.
+pub fn star_palette(base: Srgb) -> [Srgb; 3] {
+    [base, STAR_TINT_WHITE, STAR_TINT_CHAMPAGNE]
 }
 
 // --- The margin gate (THE placement law, one owner) ---------------------------
@@ -295,32 +383,82 @@ mod tests {
         }
     }
 
+    /// THE LIFECYCLE ENVELOPE (2026-07-23): over a full loop each star (a) DWELLS
+    /// at TRUE zero for a real stretch — it goes fully absent, not merely dim —
+    /// and (b) LIGHTS UP to its own shine peak, which lands inside the visibility
+    /// band `[floor, peak]` and never exceeds `peak`. The old never-vanishing
+    /// breath (which stayed `>= floor` forever) fails arm (a).
     #[test]
-    fn twinkle_stays_inside_its_band_and_actually_breathes() {
+    fn lifecycle_dwells_dark_then_shines_within_its_band() {
         let (_, _, peak, floor) = currawong_stars();
-        let stars = layout(1200.0, 800.0, 34.0, 0.16);
+        let stars = layout(1200.0, 800.0, 34.0, 0.30);
         for s in stars.iter().take(64) {
             let mut lo = f32::MAX;
             let mut hi = f32::MIN;
-            for i in 0..200 {
-                let phase = LAVA_LOOP_CYCLES * (i as f32 / 200.0);
+            for i in 0..400 {
+                let phase = LAVA_LOOP_CYCLES * (i as f32 / 400.0);
                 let b = brightness(s.seed, phase, floor, peak);
                 assert!(
-                    (floor - 1e-4..=peak + 1e-4).contains(&b),
-                    "brightness {b} escaped the authored [{floor}, {peak}] band"
+                    b <= peak + 1e-4,
+                    "brightness {b} exceeded the band ceiling {peak}"
                 );
+                assert!(b >= -1e-4, "brightness {b} went negative");
                 lo = lo.min(b);
                 hi = hi.max(b);
             }
-            // The breath is REAL: over a full loop each star sweeps most of its
-            // band (a flat star would be present but dead — the round's whole
-            // point is alive).
+            // (a) DARK DWELL at true zero — the star genuinely disappears.
             assert!(
-                hi - lo > 0.7 * (peak - floor),
-                "star seed {} barely breathes ({lo}..{hi})",
+                lo < 0.01,
+                "star seed {} never reaches its dark dwell (min {lo}) — it must fully vanish",
+                s.seed
+            );
+            // (b) SHINES to at least the band floor (a real, seeable glint), and
+            // no higher than the ceiling. Its own shine peak lives in [floor, peak].
+            assert!(
+                (floor - 1e-3..=peak + 1e-3).contains(&hi),
+                "star seed {}'s shine peak {hi} fell outside the band [{floor}, {peak}]",
                 s.seed
             );
         }
+    }
+
+    /// THE POPULATION CHANGES between phases — the round's headline: stars appear
+    /// and die, so the set of LIT stars (brightness above a visible threshold)
+    /// differs from one phase to another, and each phase's lit-count is
+    /// DETERMINISTIC (a pure function of the phase — the capture oracle relies on
+    /// it). A never-vanishing breath would keep the SAME (full) population lit at
+    /// every phase and fail the "differs" arm.
+    #[test]
+    fn lifecycle_population_changes_between_phases_and_is_deterministic() {
+        let (_, _, peak, floor) = currawong_stars();
+        let stars = layout(1200.0, 800.0, 34.0, 0.30);
+        // A star is "lit" when its envelope clears a hair off zero (the same
+        // sense the renderer's `alpha == 0` cull uses).
+        let lit_at = |phase: f32| -> Vec<bool> {
+            stars
+                .iter()
+                .map(|s| brightness(s.seed, phase, floor, peak) > 0.01)
+                .collect()
+        };
+        let a = lit_at(0.0);
+        let b = lit_at(3.1);
+        // Deterministic: recomputing the same phase yields the identical set.
+        assert_eq!(a, lit_at(0.0), "the lit population must be a pure function of the phase");
+        let count_a = a.iter().filter(|&&l| l).count();
+        let count_b = b.iter().filter(|&&l| l).count();
+        assert!(
+            count_a > 0 && count_a < a.len(),
+            "at a given phase SOME stars are lit and some are dark-dwelling (lit {count_a}/{})",
+            a.len()
+        );
+        // The population genuinely turns over: many stars flip lit<->dark.
+        let flips = a.iter().zip(b.iter()).filter(|(x, y)| x != y).count();
+        assert!(
+            flips > a.len() / 10,
+            "the visible sky must change between phases — only {flips} of {} stars flipped \
+             (lit {count_a} -> {count_b})",
+            a.len()
+        );
     }
 
     #[test]
@@ -341,10 +479,11 @@ mod tests {
     #[test]
     fn stars_are_individually_phased_never_in_unison() {
         let (_, _, peak, floor) = currawong_stars();
-        let stars = layout(1200.0, 800.0, 34.0, 0.16);
+        let stars = layout(1200.0, 800.0, 34.0, 0.30);
         // At one fixed mid phase, the population's brightnesses SPREAD — the
-        // "individually phased breathing" contract (a shared phase would put
-        // every star at the same value; that's a pulse, not a sky).
+        // "individually phased" contract (a shared phase would put every star at
+        // the same value; that's a pulse, not a sky). With the lifecycle the
+        // spread is starker still: some dark-dwelling at zero, some mid-shine.
         let phase = 0.37;
         let values: Vec<f32> = stars
             .iter()
@@ -356,6 +495,38 @@ mod tests {
         assert!(
             hi - lo > 0.5 * (peak - floor),
             "at a fixed phase the sky must show a real brightness spread ({lo}..{hi})"
+        );
+    }
+
+    /// THE PER-STAR TINT PALETTE (2026-07-23): every star's tint is one of the
+    /// three low-sat real-star palette entries (`star_palette`), the pick is a
+    /// pure + deterministic function of the seed, and across a spread of seeds
+    /// ALL THREE colors actually appear (the sky is not monochrome — blue-white
+    /// dominant, with white and champagne glints).
+    #[test]
+    fn star_tint_is_a_deterministic_pick_from_the_low_sat_palette() {
+        let base = Srgb::rgb(0x9D, 0xB0, 0xCF); // Currawong's ambient tint
+        let palette = star_palette(base);
+        let mut seen = [0usize; 3];
+        for i in 0..1000 {
+            let seed = i as f32 / 1000.0;
+            let tint = star_tint(base, seed);
+            // Deterministic.
+            assert_eq!(tint, star_tint(base, seed), "star_tint must be pure");
+            // A palette member, never an off-palette color.
+            let idx = palette.iter().position(|p| *p == tint).unwrap_or_else(|| {
+                panic!("star_tint returned {tint:?}, not a member of {palette:?}")
+            });
+            seen[idx] += 1;
+        }
+        for (i, &c) in seen.iter().enumerate() {
+            assert!(c > 0, "palette color {i} ({:?}) never got picked", palette[i]);
+        }
+        // The world's own blue-white base dominates (a cool night sky), the
+        // whites are the rarer glints.
+        assert!(
+            seen[0] > seen[1] && seen[0] > seen[2],
+            "the world's blue-white base must dominate the sky (counts {seen:?})"
         );
     }
 

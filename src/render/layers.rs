@@ -320,9 +320,20 @@ impl TextPipeline {
             }
             let a = crate::stars::brightness(s.seed, phase, floor, peak);
             let alpha = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+            // LIFECYCLE cull: a star in its dark dwell (envelope at true zero)
+            // draws NOTHING — it is gone this frame, not a zero-alpha ghost. So
+            // the DRAWN instance count IS the live population (the sidecar oracle
+            // + the per-phase population laws read it), and it changes with the
+            // phase as stars appear and die.
+            if alpha == 0 {
+                continue;
+            }
+            // Per-star tint from the low-sat real-star palette (blue-white /
+            // white / champagne — the amber guard holds by low saturation).
+            let st = crate::stars::star_tint(tint, s.seed);
             quads.push((
                 [s.x - half, s.y - half, size_px, size_px],
-                [tint.r, tint.g, tint.b, alpha],
+                [st.r, st.g, st.b, alpha],
             ));
         }
         // Fully-rounded corners turn each tiny quad into a soft dot (the SDF

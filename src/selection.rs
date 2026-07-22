@@ -41,10 +41,18 @@ struct Globals {
     /// pills; the V6 bar-fill `Outline` axis that also used it was dropped in the
     /// V7 taste-gate).
     stroke: f32,
+    /// DITHER CELL (CHUNK round) — see `shaders/selection.wgsl`'s `Globals`:
+    /// the edge, in PHYSICAL pixels, of ONE Bayer cell the dither branch snaps
+    /// to before its lookup. `1.0` (the construction default) is the exact
+    /// pre-chunk per-pixel stipple — byte-identical for every consumer that
+    /// never raises it (the placard stipple, the always-on page frame). THE
+    /// ONE WAGTAIL HIGHLIGHT TEXTURE's three consumers raise it to ~2 logical
+    /// px via [`Self::set_dither_cell`]. Unused by an `fs_invert` pipeline.
+    cell: f32,
     /// Std140 tail padding so the uniform struct size is a 16-byte multiple
-    /// (viewport 8 + corner 4 + dither 4 + stroke 4 + pad 12 = 32). MUST match
-    /// the `_pad: vec2<f32>` in the WGSL `Globals`.
-    _pad: [f32; 3],
+    /// (viewport 8 + corner 4 + dither 4 + stroke 4 + cell 4 + pad 8 = 32).
+    /// MUST match the trailing `_pad: f32` in the WGSL `Globals`.
+    _pad: [f32; 2],
 }
 
 /// The selection render pipeline: an instanced quad draw, BEFORE the caret +
@@ -81,6 +89,15 @@ pub struct SelectionPipeline {
     /// Outline` bars and the `FacetStyle::Chips` ghost pills, turning the quad
     /// into a hairline ring. Meaningless on an `fs_invert` pipeline.
     stroke: f32,
+    /// DITHER CELL edge (PHYSICAL px) uploaded into `Globals::cell` each
+    /// `prepare` — the CHUNK round's Bayer-quantization block size. `1.0` (the
+    /// construction default) is the pre-chunk per-pixel stipple, byte-identical
+    /// for every consumer that never calls [`Self::set_dither_cell`]. THE ONE
+    /// WAGTAIL HIGHLIGHT TEXTURE's three consumers raise it to ~2 logical px
+    /// (`render::spans::wagtail_stipple_cell_px`, Retina-aware) so the stipple
+    /// reads as deliberate dithered pixels rather than fine noise. Meaningless
+    /// on an `fs_invert` pipeline.
+    dither_cell: f32,
 }
 
 /// The ORIGINAL straight-alpha over-blend (`fs_main`'s non-dither path and
@@ -280,6 +297,7 @@ impl SelectionPipeline {
             dither: 0.0,
             corner,
             stroke: 0.0,
+            dither_cell: 1.0,
         }
     }
 
@@ -295,6 +313,28 @@ impl SelectionPipeline {
     /// world must reset this back to `0.0`, not merely leave it stale).
     pub fn set_dither(&mut self, density: f32) {
         self.dither = density;
+    }
+
+    /// Set the DITHER CELL edge (PHYSICAL px) the NEXT `prepare` uploads into
+    /// `Globals::cell` (CHUNK round). `1.0` restores the pre-chunk per-pixel
+    /// stipple (byte-identical to a pipeline that never calls this); `> 1.0`
+    /// coarsens the Bayer stipple into `cell`x`cell`-px blocks so it reads as
+    /// deliberate dithered pixels. Clamped to `>= 1.0` so a stray sub-pixel
+    /// value can never divide-by-zero in the shader. Fed from
+    /// `render::spans::wagtail_stipple_cell_px` at THE ONE WAGTAIL HIGHLIGHT
+    /// TEXTURE's three consumers (construction + every re-tint + a DPI change);
+    /// meaningless (never called) on the placard/page-frame dither consumers,
+    /// which keep the fine per-pixel stipple.
+    pub fn set_dither_cell(&mut self, cell: f32) {
+        self.dither_cell = cell.max(1.0);
+    }
+
+    /// The current DITHER CELL edge (`1.0` = the fine per-pixel stipple). A
+    /// cheap headless assertion hook, mirroring [`Self::dither`] (used by the
+    /// render tests; no non-test caller in the shipping binary).
+    #[allow(dead_code)]
+    pub fn dither_cell(&self) -> f32 {
+        self.dither_cell
     }
 
     /// Override the rounded-rect corner radius (px) the NEXT `prepare` call
@@ -408,7 +448,8 @@ impl SelectionPipeline {
             corner: self.corner,
             dither: self.dither,
             stroke: self.stroke,
-            _pad: [0.0; 3],
+            cell: self.dither_cell,
+            _pad: [0.0; 2],
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
 
@@ -448,7 +489,8 @@ impl SelectionPipeline {
             corner: self.corner,
             dither: self.dither,
             stroke: self.stroke,
-            _pad: [0.0; 3],
+            cell: self.dither_cell,
+            _pad: [0.0; 2],
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
 

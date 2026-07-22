@@ -264,7 +264,12 @@ fn real_gradient_dither_stays_within_one_lsb_of_the_naive_value_and_is_actually_
 /// TextPipeline) — a rect covering the whole canvas, dither density 0.25,
 /// color pure white, over a pure black clear. Every resulting pixel MUST be
 /// exactly pure black or pure white — never a third value — and roughly a
-/// quarter of them should be "on" (the density, loosely checked).
+/// quarter of them should be "on" (the density, loosely checked). The CHUNK
+/// round adds the cell to this same seam: driven at the production cell
+/// ([`dither::WAGTAIL_HIGHLIGHT_STIPPLE_CELL_LOGICAL`], the DPI-1 capture cell),
+/// the density still holds (an ordered dither's coverage fraction is invariant
+/// under block quantization) AND every `cell`x`cell` block is UNIFORM (the
+/// chunk this round lands) — proven at the real GPU-rendered pixel level.
 #[test]
 fn dither_mode_paints_only_pure_values_at_roughly_the_configured_density() {
     let Some((device, queue)) = headless_dq() else {
@@ -273,8 +278,15 @@ fn dither_mode_paints_only_pure_values_at_roughly_the_configured_density() {
     };
     let _g = crate::testlock::serial();
 
+    // The production capture cell: the logical taste tunable × DPI 1.0, rounded
+    // — a whole number of physical px, and a divisor of the 64-px canvas so one
+    // full Bayer period tiles it exactly (keeps the density fraction exact).
+    let cell = crate::render::dither::WAGTAIL_HIGHLIGHT_STIPPLE_CELL_LOGICAL.round() as u32;
+    assert!(cell >= 1 && 64 % (8 * cell) == 0, "test canvas must tile whole Bayer periods at cell {cell}");
+
     let mut sel = crate::selection::SelectionPipeline::new(&device, FMT, [255, 255, 255, 255]);
     sel.set_dither(0.25);
+    sel.set_dither_cell(cell as f32);
     let (w, h) = (64u32, 64u32);
     sel.prepare(&device, &queue, w, h, &[[0.0, 0.0, w as f32, h as f32]]);
 
@@ -317,9 +329,59 @@ fn dither_mode_paints_only_pure_values_at_roughly_the_configured_density() {
     let frac = on as f32 / pixels.len() as f32;
     assert!(
         (0.15..0.35).contains(&frac),
-        "density 0.25 should light roughly a quarter of the pixels, got {frac:.3} ({on}/{})",
+        "density 0.25 at cell {cell} should still light roughly a quarter of the pixels \
+         (block quantization preserves the coverage fraction), got {frac:.3} ({on}/{})",
         pixels.len()
     );
+
+    // THE CHUNK: every `cell`x`cell` block of physical pixels shares ONE value.
+    // This is what makes the stipple read as deliberate dithered pixels rather
+    // than fine noise; at cell 1 it is trivially true, so the assertion only has
+    // teeth (and can only fail on a broken shader) for cell > 1. The rect's
+    // OWN rounded corners (`CORNER_RADIUS`, ~3 px) hard-discard across the block
+    // grid at the canvas edge, so scan only whole blocks in the safe interior —
+    // a MARGIN wider than that radius, still hundreds of blocks. Count on/off
+    // among that same interior for the (already-cheap) non-vacuous guard.
+    const MARGIN: u32 = 6;
+    // Block-aligned start >= MARGIN (a multiple of `cell`, so it lines up with
+    // the shader's own `floor(px/cell)` block grid, which starts at pixel 0).
+    let start = MARGIN.div_ceil(cell) * cell;
+    let mut int_on = 0usize;
+    let mut int_total = 0usize;
+    let mut by = start;
+    while by + cell <= h - MARGIN {
+        let mut bx = start;
+        while bx + cell <= w - MARGIN {
+            let anchor = pixels[(by * w + bx) as usize];
+            for dy in 0..cell {
+                for dx in 0..cell {
+                    let p = pixels[((by + dy) * w + (bx + dx)) as usize];
+                    assert_eq!(
+                        p, anchor,
+                        "block at ({bx},{by}) is not uniform: pixel ({},{}) = {p:?} vs anchor {anchor:?} \
+                         — the CHUNK cell {cell} must paint solid blocks",
+                        bx + dx,
+                        by + dy
+                    );
+                }
+            }
+            int_total += 1;
+            if anchor == [255, 255, 255, 255] {
+                int_on += 1;
+            }
+            bx += cell;
+        }
+        by += cell;
+    }
+    // Non-vacuous at cell > 1: the block-uniformity above is only a real
+    // constraint if BOTH on- and off-blocks exist in the scanned interior
+    // (all-on or all-off would satisfy it trivially).
+    if cell > 1 {
+        assert!(
+            int_on > 0 && int_on < int_total,
+            "chunk block-uniformity is vacuous without a mix of on/off blocks (on {int_on}/{int_total})"
+        );
+    }
 }
 
 /// TRUE INVERSE-VIDEO, at the pixel level: a `new_invert` pipeline drawn over

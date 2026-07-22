@@ -57,6 +57,11 @@ impl TextPipeline {
         // every re-tint.
         self.match_pipeline.set_color(search_match_rgba_bytes());
         self.match_pipeline.set_dither(wagtail_dither_density());
+        // CHUNK round: THE ONE WAGTAIL HIGHLIGHT TEXTURE's Bayer-cell block size
+        // (physical px, Retina-aware — paired with the density above; a no-op
+        // `1.0` off a one-bit world, so this resets cleanly on a switch AWAY).
+        self.match_pipeline
+            .set_dither_cell(wagtail_stipple_cell_px(self.dpi));
         // SYNTAX WASHES: re-tint from THE role style provider so the theme
         // picker's instant color preview recolors the bands for free (wash
         // GEOMETRY depends only on the text, so no reshape is needed).
@@ -71,6 +76,8 @@ impl TextPipeline {
             .set_color(highlight_wash_rgba_bytes());
         self.wash_highlight_pipeline
             .set_dither(wagtail_dither_density());
+        self.wash_highlight_pipeline
+            .set_dither_cell(wagtail_stipple_cell_px(self.dpi));
         // WYSIWYG value-step panel/pill: re-tint from `base_200` (O(1) — geometry
         // is theme-independent, so a theme switch re-tints without rebuilding).
         self.fence_panel_pipeline
@@ -123,6 +130,8 @@ impl TextPipeline {
         // `S`'s line from THE strike ink.
         self.popover_hl_wash.set_color(highlight_wash_rgba_bytes());
         self.popover_hl_wash.set_dither(wagtail_dither_density());
+        self.popover_hl_wash
+            .set_dither_cell(wagtail_stipple_cell_px(self.dpi));
         self.popover_strike.set_color(strike_srgba_bytes());
         // WEB/LINUX MENU BAR: re-tint from the world's own tokens (O(1) — the bar/
         // dropdown GEOMETRY is theme-independent, so the theme-picker preview re-tints
@@ -547,6 +556,15 @@ impl TextPipeline {
             return;
         }
         self.dpi = dpi;
+        // CHUNK round: the Wagtail highlight stipple's cell is PHYSICAL px, so a
+        // display-scale change must re-push it (the density/color don't move on
+        // a DPI change, so `sync_theme_colors` isn't otherwise called here) —
+        // else the stipple would keep the OLD monitor's block size after a
+        // monitor move. A no-op `1.0` off a one-bit world.
+        let stipple_cell = wagtail_stipple_cell_px(dpi);
+        self.match_pipeline.set_dither_cell(stipple_cell);
+        self.wash_highlight_pipeline.set_dither_cell(stipple_cell);
+        self.popover_hl_wash.set_dither_cell(stipple_cell);
         // Rebuild the metrics from the SAME user zoom (already clamped in the stored
         // metrics) with the new scale, then re-shape exactly like a zoom change.
         self.metrics = Metrics::with_dpi(self.metrics.zoom, dpi);
