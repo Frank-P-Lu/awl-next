@@ -6,7 +6,7 @@
 
 10. **Minibuffer word-MOTION (⌥←/⌥→) — follow-up split off item 3(b), 2026-07-22.** Word-DELETE already landed; MOTION was correctly deferred: every overlay input (palette query + Rename/Link/Keep/Settings-value) is an append-to-end / pop-from-end field with NO in-query caret, and Left/Right are already bound to list-nav (lens-cycle / descend / ascend / selection move). Bringing ⌥←/⌥→ needs a real in-query caret MODEL across all 5 inputs + its render + resolving the Left/Right conflict — a design round, not a focused fix. Not started; needs a design pass before build.
 
-Items 18 and 20 are the surviving 2026-07-22 interview outcomes (the rest of 11–21 landed — see reports/). Every decision is the user's word; each item embeds it.
+Items 18 and 20 are the surviving 2026-07-22 interview outcomes (the rest of 11–21 landed — git history has them, e.g. `git log -p .orchestrator/queue.md`). Every decision is the user's word; each item embeds it.
 
 18. **Overengineering audit round (bounded).** Produce a hit-list of over-defensive/speculative code (the malformed-timestamp-validation class), the USER APPROVES THE LIST, then cut each entry with tests. Editing correctness (graphemes, wrap, undo, CRLF, motion at boundaries) is sacred — cut machinery, never editing correctness.
 20. **Pre-tag taste-pass bundle.** Fold the taste pass into the standing pre-tag journey sweep: ONE screenshot export across worlds + ONE fable judging session per tag (hard cap — fable usage is the scarce resource). Judges: per-world bullet glyphs (item 15), squiggle size/baseline incl. Bilby (item 6), dash padding + Saltpan font outcomes (item 7). Fires at the next pre-tag sweep, not before.
@@ -56,7 +56,7 @@ Items 30–44 are the 2026-07-23 designer-session outcomes (fable designer + use
 - **Export save-dialog platform scope — DECIDED 2026-07-20 (user's word):** both macOS and Linux. One cross-platform seam, live-App-only and capture-gated (headless export takes an explicit path, no dialog). Codex may proceed on resume.
 - **Per-world living-band choreography.** The mechanism is data-driven; audition distinct motion voices such as TwoShape, Slam, and Soft against the uniform Morph baseline. Live feel is the oracle.
 - **Site deployment.** Deploy only on the user's explicit word.
-- **Collapse sections + Wagtail chunky stipple — RESOLVED 2026-07-23 (interview round 2), graduated to ready items 44 and 43.** Kept here only as the pointer; every decision is embedded in the items.
+- **Per-world copy-pulse differentiation.** Flagged by the user as a possible future tweak (2026-07-22 live pass; motion is universal by design today). Unqueued; needs a design conversation first.
 
 ## Release blockers and reminders
 
@@ -67,7 +67,6 @@ Items 30–44 are the 2026-07-23 designer-session outcomes (fable designer + use
 
 ## Live confirmation still useful
 
-- **The anticipated suggestions list WAS discussed — 2026-07-23 designer session; the pre-build hold is LIFTED.** Outcomes queued as items 30–44 (collapse sections → 44, Wagtail chunky stipple → 43): i-beam nuance → item 33; settings-row clarity → item 36; theme-switch lag → item 37. Per-world copy-pulse differentiation was NOT covered — it stays a future tweak, still unqueued.
 - **Still OPEN (not yet confirmed):** Currawong star breathing + Retina density; Dawn/Bilby world feel. Writer-diff panel/Tab flow + zoom readout feel. **Gutter frost (item 2) — user "doesn't notice the frost" on a recompile; verify it's at least FAINTLY visible on a lava world in page mode (possible visibility concern, not just Retina taste).**
 - GPU memory: no action unless the 6 GB symptom recurs; then probe the live surface path with the window foregrounded.
 
