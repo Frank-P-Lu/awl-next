@@ -633,6 +633,15 @@ impl TextPipeline {
                         let (x, w) = span_of(k);
                         unsel.push([x, top + bar_off, w, bar_h]);
                     }
+                    // ITEM 46 — the lens-strip TAB plates. Each drawn tab label gets a
+                    // QUIET plate (recorded during shaping into `overlay_strip_tab_plates`,
+                    // gated on Bars, using the SAME `pill_px` geometry the facet marks
+                    // read) so no tab floats bare over the backdrop. The active-lens mark
+                    // (underline / band / bracket / chip fill) draws in a LATER pass
+                    // (`overlay_facet_ghost` / `overlay_lens_underline`), ON TOP of these,
+                    // so the active tab still reads while every inactive tab sits on the
+                    // quiet plate.
+                    unsel.extend(self.overlay_strip_tab_plates.iter().copied());
                 }
                 // The SELECTED bar: its natural span (full or hugged), grown
                 // `grow_px` toward the open margin — RIGHT by default, mirrored

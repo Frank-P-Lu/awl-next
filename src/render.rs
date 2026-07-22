@@ -3305,6 +3305,14 @@ pub struct TextPipeline {
     /// into `overlay_facet_ghost`. EMPTY under `Text`/`Band` and off the theme
     /// picker, so they render byte-identically.
     overlay_theme_facet_ghosts: Vec<[f32; 4]>,
+    /// ITEM 46 — the lens-strip TAB plate rects `[x, y, w, h]`, one per DRAWN tab
+    /// label, recorded during theme-strip shaping ONLY on a [`theme::ListStyle::Bars`]
+    /// world (from the SAME shaped glyph spans the active/ghost facet pills read, so
+    /// plate and mark can't disagree). Consumed by `overlay_draw_card` into the quiet
+    /// `overlay_bars` so no tab floats BARE over the blurred backdrop — the wave-2
+    /// "floating commands" class, strip edition (item 35 plated the chords). EMPTY on
+    /// a `Pane` world and off the theme picker, so they render byte-identically.
+    overlay_strip_tab_plates: Vec<[f32; 4]>,
     /// Whether the LAST overlay shaping granted the dim right column (chords /
     /// descriptions / times / diffs). Written by `overlay_shape_text` from the
     /// [`rowlayout`] verdict — `false` when the column YIELDED to keep the names
