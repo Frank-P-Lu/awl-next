@@ -32,7 +32,7 @@ mod apply;
 mod model;
 mod write;
 
-pub use model::{caret_mode_name, config_path, dictionary_name, Config};
+pub use model::{caret_mode_name, config_path, dictionary_name, dictionary_path, Config};
 #[allow(unused_imports)] // parse_caret_mode/parse_dictionary: public API surface
 // (the inverse of caret_mode_name/dictionary_name), reached in-crate via
 // `config::model::` directly (apply.rs, tests.rs) rather than this re-export

@@ -1410,6 +1410,12 @@ impl App {
             let dir = crate::crashlog::crashes_dir();
             app.pending_crash = crate::crashlog::pending_notice(&dir);
         }
+        // USER (personal) DICTIONARY: fold the on-disk word list ("Add to
+        // dictionary" words) into the checker so an added word stays un-squiggled
+        // ACROSS RESTARTS. Absent file = empty (no error). ZERO-NETWORK — a file,
+        // never a fetch. Runs AFTER the spell field is built (the struct literal
+        // above) so `self.spell` is `Some` when the words load.
+        app.load_user_dictionary();
         app
     }
 

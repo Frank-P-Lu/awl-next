@@ -571,6 +571,7 @@ fn right_click_word_summons_spell_suggestions() {
             t.misspelling.start_col,
             t.misspelling.end_col,
         ),
+        t.word.clone(),
     );
     assert_eq!(ov.kind, crate::overlay::OverlayKind::Spell);
     // A right-click on a CORRECTLY-spelled word ("Please") is a calm no-op.

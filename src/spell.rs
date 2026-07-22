@@ -243,8 +243,21 @@ pub fn visible(cache: &[SpellVerdict], text: &str) -> Vec<Misspelling> {
 
 /// Loaded-once spell checker. Holds the parsed Hunspell dictionary; `check` is a
 /// pure lookup. Construction is the only fallible part (dictionary parse).
+///
+/// The USER (personal) DICTIONARY — the words "Add to dictionary" (Cmd-`;`)
+/// accepts — rides alongside as a lowercased [`std::collections::HashSet`]: a
+/// second, always-correct predicate on top of the bundled Hunspell lookup. It is
+/// loaded from a plain-text word list beside `config.toml` (one word per line,
+/// hand-editable) at launch — ZERO-NETWORK, a file, never a fetch — and grows in
+/// memory + on disk when the user adds a word (`crate::app::App::add_to_dictionary`
+/// owns the file write; this struct owns only the in-memory set).
 pub struct SpellChecker {
     dict: spellbook::Dictionary,
+    /// The user's personal-dictionary words, LOWERCASED for case-insensitive
+    /// matching (mirroring the all-lowercase fallback [`Self::check`] already
+    /// applies to the bundled dictionary). Empty until [`Self::set_user_words`]
+    /// loads the file.
+    user_words: std::collections::HashSet<String>,
 }
 
 impl SpellChecker {
@@ -252,12 +265,13 @@ impl SpellChecker {
     /// string if the real-world dictionary fails to parse (so the caller can
     /// REPORT it rather than silently disabling spell-check). This is the ONE
     /// real per-switch cost the dictionary picker pays (see `spell::tests`'s
-    /// timed parse test) — never called on a mere navigation move.
+    /// timed parse test) — never called on a mere navigation move. The user
+    /// dictionary starts EMPTY; the caller loads it via [`Self::set_user_words`].
     pub fn new(variant: DictVariant) -> Result<Self, String> {
         let (aff, dic) = variant.files();
         let dict = spellbook::Dictionary::new(aff, dic)
             .map_err(|e| format!("failed to parse bundled {} dictionary: {e}", variant.label()))?;
-        Ok(Self { dict })
+        Ok(Self { dict, user_words: std::collections::HashSet::new() })
     }
 
     /// True if `word` is spelled correctly. Hunspell's `check` is already case
@@ -265,7 +279,9 @@ impl SpellChecker {
     /// dictionary's own proper-noun entries), so we pass the raw word; if the
     /// exact-case form is rejected we additionally accept an all-lowercase match
     /// so a sentence-initial capital of a lowercase-only stem (e.g. "Definately"
-    /// vs "definitely") is judged on the stem, not the capitalization.
+    /// vs "definitely") is judged on the stem, not the capitalization. FINALLY the
+    /// USER dictionary is consulted (case-insensitively) — a word the user added
+    /// via "Add to dictionary" is correct in every casing, forever, across runs.
     pub fn check(&self, word: &str) -> bool {
         if self.dict.check(word) {
             return true;
@@ -274,7 +290,42 @@ impl SpellChecker {
         if lower != word && self.dict.check(&lower) {
             return true;
         }
+        if self.user_words.contains(&lower) {
+            return true;
+        }
         false
+    }
+
+    /// REPLACE the user (personal) dictionary with `words` — the launch-time load
+    /// from the on-disk word list (and the re-load after a dictionary-variant
+    /// switch reconstructs the checker). Each word is trimmed + lowercased +
+    /// blanks dropped, so a hand-edited file with stray casing / whitespace still
+    /// matches. The one owner of the in-memory set's population.
+    pub fn set_user_words<I: IntoIterator<Item = String>>(&mut self, words: I) {
+        self.user_words = words
+            .into_iter()
+            .map(|w| w.trim().to_lowercase())
+            .filter(|w| !w.is_empty())
+            .collect();
+    }
+
+    /// ADD one word to the in-memory user dictionary ("Add to dictionary"), so the
+    /// squiggle clears THIS frame. Returns `true` when the word was newly added
+    /// (`false` = already known — the caller then skips the disk append, keeping
+    /// the file free of duplicates). Trimmed + lowercased like [`Self::set_user_words`].
+    pub fn add_user_word(&mut self, word: &str) -> bool {
+        let w = word.trim().to_lowercase();
+        if w.is_empty() {
+            return false;
+        }
+        self.user_words.insert(w)
+    }
+
+    /// The number of user-dictionary words currently loaded — a cheap test hook
+    /// (no non-test caller in the shipping binary).
+    #[cfg(test)]
+    pub fn user_word_count(&self) -> usize {
+        self.user_words.len()
     }
 
     /// Detect all misspelled words in `text`. Thin wrapper over the pure
@@ -406,6 +457,20 @@ pub struct SuggestionTarget {
     #[allow(dead_code)]
     pub word: String,
     pub suggestions: Vec<String>,
+}
+
+/// Parse the USER (personal) DICTIONARY file text into a word list: one word per
+/// line, each TRIMMED, with blank lines and `#`-prefixed comment lines dropped.
+/// Pure (no I/O) so the format is unit-testable; the App reads the file through
+/// the [`crate::fs`] seam and feeds the text here (then [`SpellChecker::set_user_words`]
+/// lowercases each for matching). Whitespace-only and comment lines are ignored so
+/// a hand-edited file can carry a header comment without adding a bogus "word".
+pub fn parse_dictionary(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.to_string())
+        .collect()
 }
 
 /// The misspelled word the cursor at `(line, col)` is ON or ADJACENT to, if any.
@@ -821,6 +886,59 @@ mod tests {
         let none = stub(&["go", "to"]);
         let ms = misspelled_spans("go to www.bad-spelll.com", &none);
         assert!(ms.is_empty(), "www. URL must be skipped");
+    }
+
+    // --- USER (personal) dictionary (item 39: "Add to dictionary"). ---------
+
+    #[test]
+    fn parse_dictionary_takes_one_word_per_line_dropping_blanks_and_comments() {
+        // Hand-editable file shape: trimmed words, blank + `#`-comment lines out.
+        let text = "# my words\nwrold\n\n  spacey  \n# another comment\nzorp\n";
+        assert_eq!(parse_dictionary(text), vec!["wrold", "spacey", "zorp"]);
+        assert!(parse_dictionary("").is_empty(), "an empty file is an empty list");
+        assert!(parse_dictionary("# only a comment\n\n").is_empty());
+    }
+
+    #[test]
+    fn user_dictionary_word_is_never_flagged_case_insensitively() {
+        let mut sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        // A word the bundled dictionary rejects (a made-up name/anagram).
+        assert!(!sc.check("wrold"), "precondition: 'wrold' is misspelled by the base dict");
+        // Loading it via the on-disk-shaped list clears it — in EVERY casing.
+        sc.set_user_words(parse_dictionary("wrold\n"));
+        assert_eq!(sc.user_word_count(), 1);
+        for w in ["wrold", "Wrold", "WROLD"] {
+            assert!(sc.check(w), "{w:?} is correct once added (case-insensitive)");
+        }
+        // A DIFFERENT misspelling is still flagged — the add is scoped to the word.
+        assert!(!sc.check("teh"), "an unrelated typo still flags");
+    }
+
+    #[test]
+    fn add_user_word_reports_novelty_and_normalizes() {
+        let mut sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        assert!(sc.add_user_word("  Zorp  "), "a new word is newly added (trimmed)");
+        assert!(!sc.add_user_word("zorp"), "the same word (any casing) is NOT re-added");
+        assert!(!sc.add_user_word("   "), "a blank word is never added");
+        assert_eq!(sc.user_word_count(), 1);
+        assert!(sc.check("zorp") && sc.check("ZORP"));
+    }
+
+    #[test]
+    fn misspellings_for_honors_the_user_dictionary() {
+        // The ONE spell-scope owner must respect the user dictionary too, so the
+        // DRAWN squiggle disappears — not just the `check` primitive.
+        let mut sc = SpellChecker::new(DictVariant::EnUs).unwrap();
+        let text = "wrold peace\n";
+        assert!(
+            sc.misspellings_for(text, None).iter().any(|m| m.start_col == 0),
+            "precondition: 'wrold' squiggles before it is added"
+        );
+        sc.add_user_word("wrold");
+        assert!(
+            !sc.misspellings_for(text, None).iter().any(|m| m.start_col == 0),
+            "after Add to dictionary, 'wrold' no longer squiggles"
+        );
     }
 
     // --- Real dictionary smoke tests (parse + known good/bad words). --------

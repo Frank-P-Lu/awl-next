@@ -698,15 +698,27 @@ fn goto_headings_lens_fuzzy_filters_and_jumps_by_line() {
 fn spell_picker_lists_suggestions_and_carries_target() {
     // Three corrections for a word flagged at line 2, cols 6..13.
     let sugg = vec!["receive".to_string(), "relieve".to_string(), "reprieve".to_string()];
-    let ov = OverlayState::new_spell(sugg.clone(), (2, 6, 13));
+    let ov = OverlayState::new_spell(sugg.clone(), (2, 6, 13), "recieve".to_string());
     assert_eq!(ov.kind.as_str(), "spell");
-    // Rows are the suggestions in order (best first); the top is selected.
-    assert_eq!(ov.item_strings(), sugg);
+    // Rows are the suggestions in order (best first), then ONE appended "Add
+    // '<word>' to dictionary" row; the top suggestion is selected.
+    let rows = ov.item_strings();
+    assert_eq!(&rows[..sugg.len()], &sugg[..], "the suggestions lead, in order");
+    assert_eq!(
+        rows.last().map(String::as_str),
+        Some(super::state::add_to_dictionary_label("recieve").as_str()),
+        "the LAST row is the Add-to-dictionary affordance"
+    );
     assert_eq!(ov.selected_value(), Some("receive"));
     // The target span is carried so the accept can replace the word.
     assert_eq!(ov.spell_target, Some((2, 6, 13)));
     // No git / dir markers on the suggestion rows.
     assert!(ov.item_strings().iter().all(|s| !s.contains('•') && !s.ends_with('/')));
+    // The add row is flagged (only it) and carries the word for the accept effect.
+    assert!(!ov.selected_is_add_to_dictionary(), "a suggestion row is not the add row");
+    assert_eq!(ov.add_word.as_deref(), Some("recieve"));
+    let last = ov.items.len() - 1;
+    assert!(ov.spell_add[ov.items[last]], "the last corpus row is the add row");
     // The hint names the ↵ action (replace) after the universal jump lead, flat
     // picker (no descend).
     assert_eq!(

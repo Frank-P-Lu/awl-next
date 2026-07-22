@@ -177,6 +177,10 @@ pub fn classify(effect: &Effect) -> Classified {
             "keep_version",
             unsupported("pinning (and naming) writes the local-history store, gated off the capture path"),
         ),
+        Effect::AddToDictionary(_) => c(
+            "add_to_dictionary",
+            unsupported("silencing the word + appending it to the personal-dictionary file are live-App-only; the squiggle would not clear"),
+        ),
         Effect::RebindCommit { .. } => c(
             "rebind_commit",
             unsupported("the config write + live keymap reload are live-App-only; the binding would not take effect"),

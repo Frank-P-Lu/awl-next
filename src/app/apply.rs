@@ -487,7 +487,7 @@ impl App {
         // below, and ONLY when the spell binding actually fired (suggestion
         // generation isn't free). `None` when spell-check is off or the cursor isn't
         // on a flagged word, so the summon becomes a calm no-op.
-        let spell_target: Option<(Vec<String>, (usize, usize, usize))> =
+        let spell_target: Option<(Vec<String>, (usize, usize, usize), String)> =
             if matches!(action, Action::OpenSpellSuggest) {
                 self.spell.as_ref().and_then(|sc| {
                     let (line, col) = self.buffer.cursor_line_col();
@@ -495,6 +495,7 @@ impl App {
                         (
                             t.suggestions,
                             (t.misspelling.line, t.misspelling.start_col, t.misspelling.end_col),
+                            t.word,
                         )
                     })
                 })
@@ -807,6 +808,9 @@ impl App {
             // Go-to's HEADINGS lens accepted (the retired Outline picker): move the
             // cursor to the chosen heading's document line.
             actions::Effect::JumpToLine(line) => self.jump_to_line(&line.to_string()),
+            // Cmd-`;` "Add '<word>' to dictionary": silence the word in the live
+            // checker + append it to the on-disk personal dictionary, then rescan.
+            actions::Effect::AddToDictionary(word) => self.add_to_dictionary(&word),
             // REBIND MENU: persist the captured binding (after a conflict gate) /
             // reset to default, then live-reload + refresh the open menu.
             actions::Effect::RebindCommit { slug, binding, confirmed } => {

@@ -680,3 +680,143 @@ fn spell_squiggle_paints_real_pixels_across_a_world_sample() {
     theme::set_active(theme::DEFAULT_THEME);
     p.sync_theme();
 }
+
+/// OFF-CURSOR IMAGE CONCEAL — no stray spell/nit underline in the placeholder
+/// card (queue item 25). An inline-image line's `![alt](path)` source conceals
+/// to a ~ZERO-width run off the caret's line, but the raw spell/nit scan still
+/// flags words / mechanical typos INSIDE that source (an alt word, a double
+/// space in the alt). Pre-fix each collapsed to a 1px stray tick — a faint
+/// muted dash (nit) + a warm-red tick (squiggle) — floating inside the tall
+/// placeholder card. Both proto builders now drop a span whose advance collapses
+/// on an image line (`line_is_inline_image` + the min-advance guard), so an
+/// off-cursor image line emits ZERO underline geometry over its source. The
+/// `line_is_inline_image` gate is load-bearing: a trailing-whitespace nit on an
+/// ORDINARY line ALSO shapes to ~0 advance and keeps its deliberate faint tick
+/// (asserted by `nit_underlines_flag_mechanical_typos_...`), so this guard must
+/// never fire there.
+#[test]
+fn off_cursor_image_conceal_emits_no_spell_or_nit_underline() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    let prev_img = crate::markdown::inline_images_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    crate::nits::set_nits_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping off_cursor_image_conceal_emits_no_spell_or_nit_underline: no wgpu adapter");
+        crate::markdown::set_inline_images_on(prev_img);
+        return;
+    };
+    // The alt text carries BOTH a (flagged) misspelled word — "wrold" at cols
+    // 2..7 — and a mechanical double space at cols 7..9 (a nit): `![wrold  x]`.
+    // The caret is parked on line 2 (prose), OFF the image's own line, so the
+    // `![alt](path)` source conceals to ~0 width and the placeholder card shows.
+    let text = "![wrold  x](samples/tiny.png)\n\nprose here\n";
+    let mut v = view(text, 2, 0);
+    v.is_markdown = true;
+    v.misspelled = vec![crate::spell::Misspelling { line: 0, start_col: 2, end_col: 7 }];
+    p.set_view(&v);
+
+    // Sanity: the fixture really IS an off-cursor concealed image line — the row
+    // reserves the tall image height and the source collapsed to ~0 width (so a
+    // pre-fix builder WOULD have placed a stray tick here).
+    assert!(p.line_is_inline_image(0), "line 0 is an inline-image line");
+    let rows0 = p.visual_rows(0);
+    let xs = &rows0[0].xs;
+    let total = xs.last().copied().unwrap_or(0.0) - xs.first().copied().unwrap_or(0.0);
+    assert!(total < 2.0, "off-cursor the image source is concealed to ~0 width: {total}");
+
+    // THE FIX: neither underline layer emits geometry over the concealed source.
+    assert!(
+        p.spell_squiggles().is_empty(),
+        "no spell squiggle over an off-cursor concealed image source (stray red tick)"
+    );
+    assert!(
+        p.nit_underlines().is_empty(),
+        "no nit underline over an off-cursor concealed image source (stray muted dash)"
+    );
+
+    crate::markdown::set_inline_images_on(prev_img);
+    crate::nits::set_nits_on(true);
+}
+
+/// SQUIGGLE PHASE (item 38): the wave BEGINS AT ITS TOP (crest) under the word's
+/// FIRST glyph — a cosine start (`-cos`), not the old sine zero-crossing that
+/// dived DOWN first. This is a shader-level fact (the `wave_y` phase in
+/// `spellunderline.wgsl`), so it can only be pinned in real pixels: render a
+/// flagged word and diff it against the UNflagged frame (identical text, so the
+/// squiggle ink is the ONLY difference), then measure the ink's vertical CENTROID
+/// over the first quarter-period after the word's left edge. With the crest-start
+/// phase the ink rides clearly ABOVE the band's vertical center (toward the
+/// glyphs); the retired sine phase put it clearly BELOW — so the `< center` margin
+/// below is exactly the phase-pinning assertion, and it FAILS on the old shader.
+#[test]
+fn spell_squiggle_wave_begins_at_its_crest_under_the_first_glyph() {
+    let _g = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping spell_squiggle_wave_begins_at_its_crest_under_the_first_glyph: no wgpu adapter");
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+    // Caret parked off the word's own line so reveal-on-cursor never suppresses it.
+    let text = "wrold\n\nprose\n";
+    let mis = vec![crate::spell::Misspelling { line: 0, start_col: 0, end_col: 5 }];
+
+    let mut clean = view(text, 2, 0);
+    clean.misspelled = Vec::new();
+    p.set_view(&clean);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let a = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    let mut flagged = view(text, 2, 0);
+    flagged.misspelled = mis;
+    p.set_view(&flagged);
+    let squiggles = p.spell_squiggles();
+    assert_eq!(squiggles.len(), 1, "one squiggle proto");
+    let s = squiggles[0];
+    p.prepare(&device, &queue, w, h).unwrap();
+    let b = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    // The wave band's vertical center, and a horizontal window covering the FIRST
+    // QUARTER-period after the word's left edge (x0 == s.x): where a crest-start
+    // (`-cos`) wave rides the TOP half and a sine-start wave the BOTTOM half.
+    let cy = (s.y + s.h * 0.5) as f64;
+    let x_lo = s.x.round() as i64;
+    let x_hi = (s.x + s.period * 0.25).round() as i64;
+    let y_lo = (s.y - 2.0).max(0.0) as i64;
+    let y_hi = (s.y + s.h + 2.0) as i64;
+
+    // Centroid (y) of the squiggle INK — the pixels that differ between the two
+    // frames (identical text ⇒ only the squiggle changed) — over that window.
+    let mut sum_y = 0f64;
+    let mut n = 0f64;
+    for y in y_lo..y_hi {
+        for x in x_lo..x_hi {
+            if x < 0 || x >= w as i64 || y < 0 || y >= h as i64 {
+                continue;
+            }
+            let i = (y * w as i64 + x) as usize;
+            if (0..4).any(|c| a[i][c] != b[i][c]) {
+                sum_y += y as f64;
+                n += 1.0;
+            }
+        }
+    }
+    assert!(n > 5.0, "the squiggle paints ink under the first glyph: only {n} px");
+    let centroid_y = sum_y / n;
+    // CREST-START: the ink's centroid sits ABOVE the band center by a clear
+    // fraction of the amplitude. The old sine phase put it the SAME fraction
+    // BELOW center — this margin is what fails on the retired shader.
+    assert!(
+        centroid_y < cy - s.amp as f64 * 0.2,
+        "the wave begins at its TOP (crest) under the first glyph: \
+         ink centroid_y={centroid_y:.1} must be above band center={cy:.1} (amp={})",
+        s.amp,
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}

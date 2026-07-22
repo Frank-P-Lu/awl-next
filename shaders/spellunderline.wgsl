@@ -1,10 +1,16 @@
 // Spell-check squiggle shader: draws each misspelled word's underline as a
-// wavy (sine) red line inside a band quad. The vertex stage expands a unit quad
+// wavy (cosine) red line inside a band quad. The vertex stage expands a unit quad
 // to the band + a small margin so the antialiased stroke is not clipped. The
-// fragment stage evaluates the distance from the pixel to the sine curve
-//   y = amp * sin(x * 2*pi / period)
+// fragment stage evaluates the distance from the pixel to the wave curve
+//   y = -amp * cos(x * 2*pi / period)
 // (taken about the band's vertical center) and shades a soft, ~`thickness`-wide
 // antialiased stroke. Drawn UNDER the text so glyphs stay crisp on top.
+//
+// PHASE (item 38): the wave BEGINS AT ITS TOP under the word's first glyph. `x0`
+// is the band's left edge (the first glyph), so at `px.x == x0` the phase is 0 and
+// `-cos(0) == -1` puts the curve at `center.y - amp` — the crest (top, since y is
+// screen-DOWN). A plain `sin` would start at the vertical center (a zero-crossing)
+// and dive DOWN first; the cosine start lands a crest right under the first letter.
 //
 // Coordinates are in PIXELS (top-left origin). `viewport` maps pixel space to
 // clip space ([-1,1], y-up) in the vertex stage, identical to selection.wgsl.
@@ -93,15 +99,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let left = in.center.x - in.hsize.x;
     let right = in.center.x + in.hsize.x;
     let phase = (in.px.x - in.x0) * (2.0 * PI / in.period);
-    // Curve height about the band's vertical center.
-    let wave_y = in.center.y + in.amp * sin(phase);
+    // Curve height about the band's vertical center. `-cos` so the wave BEGINS at
+    // its TOP (crest) under the first glyph (phase 0 → center.y - amp); see the
+    // header note (item 38).
+    let wave_y = in.center.y - in.amp * cos(phase);
 
     // Distance from this fragment to the curve. We approximate the true
     // perpendicular distance by dividing the vertical gap by the local slope
     // magnitude sqrt(1 + dy/dx^2), which keeps the stroke an even width even
-    // on the steep parts of the sine (a plain vertical |dy| would fatten the
-    // flats and thin the slopes).
-    let dydx = in.amp * (2.0 * PI / in.period) * cos(phase);
+    // on the steep parts of the wave (a plain vertical |dy| would fatten the
+    // flats and thin the slopes). Slope of `-amp*cos(phase)` is `+amp*(…)*sin(phase)`.
+    let dydx = in.amp * (2.0 * PI / in.period) * sin(phase);
     let dist = abs(in.px.y - wave_y) / sqrt(1.0 + dydx * dydx);
 
     // Antialiased stroke of half-width thickness/2 with a ~1px feather.

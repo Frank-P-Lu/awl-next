@@ -425,6 +425,17 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             {
                 let ov = ctx.overlay.as_ref().unwrap();
                 if ov.kind == crate::overlay::OverlayKind::Spell {
+                    // "Add '<word>' to dictionary" row: SIGNAL the add (the live App
+                    // silences the word + appends it to the on-disk personal
+                    // dictionary) and close — NEVER a buffer edit. The word rides
+                    // `add_word`, so this stays decoupled from the buffer span.
+                    if ov.selected_is_add_to_dictionary() {
+                        let word = ov.add_word.clone();
+                        dispose_after_accept(ctx);
+                        return word.map(Effect::AddToDictionary).unwrap_or(Effect::None);
+                    }
+                    // Otherwise a SUGGESTION row: replace the targeted misspelled word
+                    // with the chosen suggestion as ONE undoable edit, then close.
                     let pick = ov.selected_value().map(|s| s.to_string());
                     let target = ov.spell_target;
                     if let (Some(word), Some((line, start, end))) = (pick, target) {
