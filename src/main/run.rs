@@ -722,7 +722,13 @@ impl<'a> ReplaySession<'a> {
             // `fs` backend); the daemon-notify + buffer-swap are live-App-only (no
             // daemon, no 2-deep buffer history, in a one-shot replay) — a no-op here,
             // exactly like `LastBuffer`.
+            // NOTES FLIP: the remembered pre-flip root is App-only 2-deep history
+            // (mirrors `LastBuffer` exactly, one level up — projects, not buffers),
+            // and the root-switch itself is App-only (see `Effect::NewNote`'s own
+            // note above) — a no-op here; the pure toggle-target resolution is
+            // unit-tested directly (`app::files::notes_flip_target`).
             actions::Effect::LastBuffer
+            | actions::Effect::NotesFlip
             | actions::Effect::Quit
             | actions::Effect::Recoil(_)
             | actions::Effect::TypeImpact

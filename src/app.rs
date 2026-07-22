@@ -755,6 +755,12 @@ pub struct App {
     /// (a tiny 2-deep history: the current `file` + this one). `None` until a
     /// second file has been opened. Toggling swaps `file` <-> `prev_file`.
     prev_file: Option<PathBuf>,
+    /// The PROJECT ROOT to return to on the NEXT "Notes" flip — the `root`
+    /// sibling of `prev_file`, one level up (a tiny 2-deep history: the active
+    /// `root` + this one). `None` until a flip INTO `notes_root` has happened
+    /// (or after a flip BACK has consumed it — a third invocation flips fresh).
+    /// See [`crate::app::files::notes_flip_target`] for the pure toggle logic.
+    prev_project_root: Option<PathBuf>,
     /// The SUMMONED navigation overlay (go-to / switch-project). `None` when not
     /// showing. Lives here AND is threaded through `apply_core` so `--keys` can
     /// drive it identically.
@@ -1297,6 +1303,7 @@ impl App {
             recent_projects,
             recent_files,
             prev_file: None,
+            prev_project_root: None,
             overlay: None,
             notes_root,
             autosave_dirty_at: None,

@@ -177,6 +177,11 @@ pub enum Effect {
     /// C-x b: flip to the previously-opened file. The 2-deep history lives on the
     /// caller; the core just signals the toggle.
     LastBuffer,
+    /// "Notes": flip the active project between wherever it is now and
+    /// `notes_root`, round-tripping back on a second invocation. The remembered
+    /// pre-flip root + the actual root switch live on the caller (the core never
+    /// touches the filesystem) — the project-level sibling of [`LastBuffer`].
+    NotesFlip,
     /// C-x n: jump to the notes project and swap in a fresh empty note buffer. The
     /// root-switch + buffer-swap are caller-level (the core never touches the
     /// filesystem/window).
@@ -1045,6 +1050,12 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         // C-x b: signal the last-buffer toggle; the caller owns the 2-deep history.
         Action::LastBuffer => {
             effect = Effect::LastBuffer;
+        }
+        // "Notes": signal the notes-root project flip; the caller owns the
+        // remembered pre-flip root + the actual root switch (filesystem/window
+        // are caller-level, exactly like LastBuffer's 2-deep history).
+        Action::NotesFlip => {
+            effect = Effect::NotesFlip;
         }
         // C-x n: signal a new quick note; the caller jumps to the notes project and
         // swaps in a fresh empty note buffer (filesystem/window are caller-level).

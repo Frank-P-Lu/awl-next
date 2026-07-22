@@ -163,6 +163,12 @@ pub fn classify(effect: &Effect) -> Classified {
             "last_buffer",
             unsupported("the 2-deep buffer history is live-App-only; the buffer switch would not happen"),
         ),
+        Effect::NotesFlip => c(
+            "notes_flip",
+            unsupported(
+                "the remembered pre-flip root (2-deep, like LastBuffer) and the actual root switch are live-App-only; the project would not change",
+            ),
+        ),
         Effect::FinishBuffer => c(
             "finish_buffer",
             unsupported("the daemon notify + switch-away are live-App-only (the save itself already ran)"),
@@ -309,6 +315,7 @@ mod tests {
             Effect::None,
             Effect::Quit,
             Effect::LastBuffer,
+            Effect::NotesFlip,
             Effect::NewNote,
             Effect::OpenSettings,
             Effect::OpenCredits,
@@ -357,7 +364,7 @@ mod tests {
             "trash_asset",
         ];
         let unsupported = [
-            "quit", "last_buffer", "finish_buffer", "keep_version", "rebind_commit",
+            "quit", "last_buffer", "notes_flip", "finish_buffer", "keep_version", "rebind_commit",
             "rebind_reset", "setting_toggle", "setting_value_commit", "setting_path_pick",
             "rename_note_commit", "duplicate_note",
         ];

@@ -711,6 +711,9 @@ impl App {
             }
             // C-x b last-buffer toggle (history lives here).
             actions::Effect::LastBuffer => self.last_buffer_toggle(),
+            // "Notes": flip the active project to notes_root and back (2-deep
+            // history lives here, exactly like LastBuffer, one level up).
+            actions::Effect::NotesFlip => self.notes_flip(),
             // C-x n new quick note (the jump + buffer swap + notes-root config here).
             actions::Effect::NewNote => self.new_note(),
             // Settings: open the config file into the buffer (create the default

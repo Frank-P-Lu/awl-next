@@ -627,6 +627,45 @@ impl App {
         self.push_recent_project(new_root);
     }
 
+    /// "Notes" (`Action::NotesFlip`, palette-only, user-decided 2026-07-22):
+    /// flip the active project to `notes_root` and back — the pure toggle
+    /// DECISION lives in [`notes_flip_target`] (unit-tested standalone, no
+    /// `App` needed); this is just its impure APPLY, mirroring `window_title`'s
+    /// own pure/impure split one function down.
+    ///
+    /// Deliberately calls [`Self::set_root`] directly rather than
+    /// [`Self::switch_project`] — like the C-x n jump, a Notes flip is a
+    /// transient VISIT, not "this is my project now": it neither persists the
+    /// STICKY project root (a bare relaunch after visiting Notes still reopens
+    /// whatever was genuinely active — see `resolve_root`) nor pushes the
+    /// recent-projects MRU (Notes is not a "recent project" you switched to).
+    /// A cancelled MAS grant panel means the flip never happened (mirrors
+    /// `switch_project`/`new_note`): the remembered root only updates once
+    /// `set_root` reports success.
+    pub(super) fn notes_flip(&mut self) {
+        match notes_flip_target(&self.root, &self.notes_root, self.prev_project_root.as_deref()) {
+            // Nothing to flip to (no usable notes_root) or nothing to flip
+            // BACK to (already home, nothing remembered) — a quiet no-op,
+            // exactly like `last_buffer_toggle`'s own "nothing opened before".
+            NotesFlipTarget::Inert | NotesFlipTarget::AlreadyHome => {}
+            NotesFlipTarget::Enter { target, remember } => {
+                // The notes root may not exist yet on a fresh machine — create
+                // it lazily, exactly like `new_note` does before its own jump.
+                let _ = crate::fs::active().create_dir_all(&target);
+                if self.set_root(target) {
+                    self.prev_project_root = Some(remember);
+                }
+            }
+            NotesFlipTarget::Back { target } => {
+                if self.set_root(target) {
+                    // Consumed: a THIRD invocation (now back at the original
+                    // project) re-enters notes_root fresh, remembering anew.
+                    self.prev_project_root = None;
+                }
+            }
+        }
+    }
+
     /// Push `root` to the FRONT of the persisted RECENT PROJECT ROOTS (deduped +
     /// capped, [`crate::recents::push`]) and save the list ATOMICALLY. A save
     /// error is reported and swallowed (a lost MRU entry is never worth crashing
@@ -1969,6 +2008,56 @@ pub(super) fn window_title(file: Option<&Path>, is_note: bool, theme_name: &str,
     format!("awl - {mark}{name} [{theme_name}]")
 }
 
+/// THE "NOTES" FLIP — pure toggle-target resolution for the "Notes" command
+/// (`Action::NotesFlip`), unit-testable without a live `App` (mirrors
+/// `window_title`'s own pure/impure split just above). Given the ACTIVE
+/// project `current`, the (normally always-resolved) `notes_root`, and
+/// whatever pre-flip root is currently REMEMBERED (`previous`), decide where
+/// the flip lands — the exact same 2-deep-history SHAPE `last_buffer_toggle`
+/// uses for buffers, one level up: projects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum NotesFlipTarget {
+    /// No usable `notes_root`: the command is a quiet no-op. `App::notes_root`
+    /// always resolves to a real default (`~/notes`, see
+    /// `main/args.rs::resolve_notes_root`) — this arm exists so the command
+    /// degrades gracefully rather than crashing if that ever changes, and so
+    /// the "missing notes_root" case is exercised by a pure unit test.
+    Inert,
+    /// Already IN `notes_root` with nothing remembered (e.g. a bare launch
+    /// landed here directly, having never flipped): nowhere to go BACK to.
+    AlreadyHome,
+    /// Not currently in `notes_root`: flip there, remembering `remember` (the
+    /// root being left) so the NEXT flip returns to it exactly.
+    Enter { target: PathBuf, remember: PathBuf },
+    /// Already in `notes_root` with a remembered previous root: flip BACK to
+    /// it (consuming the memory — a THIRD flip enters fresh).
+    Back { target: PathBuf },
+}
+
+/// `notes_root` is modeled as a `Path` that may be EMPTY (`Path::new("")`) —
+/// the same "no usable folder" sentinel [`App::persist_page_reset`] already
+/// uses for an unresolvable config path — rather than an `Option`, so a
+/// caller with nothing to flip TO degrades to [`NotesFlipTarget::Inert`]
+/// without ever needing to unwrap. Compares `current`/`notes_root` by plain
+/// `PathBuf` equality, exactly like `switch_project`'s own root bookkeeping.
+pub(super) fn notes_flip_target(
+    current: &Path,
+    notes_root: &Path,
+    previous: Option<&Path>,
+) -> NotesFlipTarget {
+    if notes_root.as_os_str().is_empty() {
+        return NotesFlipTarget::Inert;
+    }
+    if current == notes_root {
+        match previous {
+            Some(p) => NotesFlipTarget::Back { target: p.to_path_buf() },
+            None => NotesFlipTarget::AlreadyHome,
+        }
+    } else {
+        NotesFlipTarget::Enter { target: notes_root.to_path_buf(), remember: current.to_path_buf() }
+    }
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
@@ -2000,6 +2089,87 @@ mod tests {
             window_title(None, true, "Tawny", false),
             window_title(None, false, "Tawny", false)
         );
+    }
+
+    // --- NOTES FLIP round (2026-07-22): the pure toggle-target resolution ---
+
+    #[test]
+    fn notes_flip_target_enters_notes_root_and_remembers_the_leaving_project() {
+        let current = Path::new("/w/proj-a");
+        let notes = Path::new("/home/me/notes");
+        assert_eq!(
+            notes_flip_target(current, notes, None),
+            NotesFlipTarget::Enter { target: notes.to_path_buf(), remember: current.to_path_buf() },
+            "not in notes_root yet: flip there, remembering the project being left"
+        );
+        // A previously-remembered root is IGNORED while entering (only consulted
+        // once we are actually standing IN notes_root) — a stray leftover from an
+        // unrelated earlier flip never leaks into a fresh Enter's target.
+        assert_eq!(
+            notes_flip_target(current, notes, Some(Path::new("/w/stale"))),
+            NotesFlipTarget::Enter { target: notes.to_path_buf(), remember: current.to_path_buf() }
+        );
+    }
+
+    #[test]
+    fn notes_flip_target_round_trips_back_to_the_remembered_project() {
+        let notes = Path::new("/home/me/notes");
+        let prev = Path::new("/w/proj-a");
+        // Standing IN notes_root with a remembered previous root: flip BACK.
+        assert_eq!(
+            notes_flip_target(notes, notes, Some(prev)),
+            NotesFlipTarget::Back { target: prev.to_path_buf() }
+        );
+    }
+
+    #[test]
+    fn notes_flip_target_already_home_with_nothing_remembered_is_inert() {
+        // Standing IN notes_root but NOTHING was remembered (e.g. a bare launch
+        // landed here directly, never having flipped) — no "back" to go to.
+        let notes = Path::new("/home/me/notes");
+        assert_eq!(notes_flip_target(notes, notes, None), NotesFlipTarget::AlreadyHome);
+    }
+
+    #[test]
+    fn notes_flip_target_missing_notes_root_is_inert() {
+        // The empty-path sentinel (mirrors `persist_page_reset`'s own "no usable
+        // config path" idiom): a caller with nowhere to flip TO never touches
+        // the filesystem, whether or not a previous root happens to be remembered.
+        let current = Path::new("/w/proj-a");
+        let empty = Path::new("");
+        assert_eq!(notes_flip_target(current, empty, None), NotesFlipTarget::Inert);
+        assert_eq!(notes_flip_target(current, empty, Some(Path::new("/w/proj-b"))), NotesFlipTarget::Inert);
+        // Even standing "in" the empty path itself, still inert (never a Back).
+        assert_eq!(notes_flip_target(empty, empty, Some(current)), NotesFlipTarget::Inert);
+    }
+
+    #[test]
+    fn notes_flip_round_trips_the_live_app_project_root() {
+        // The impure APPLY half, exercised end-to-end against a fake fs (mirrors
+        // `switch_project_pushes_and_persists_the_recent_root`'s own shape).
+        let fake = Arc::new(
+            crate::fs::InMemoryFs::new().with_dir("/w/proj-a").with_dir("/home/me/notes"),
+        );
+        crate::fs::with_fs(fake, || {
+            let mut app = App::new(None, PathBuf::from("/w/proj-a"), None, None, Config::empty());
+            app.notes_root = PathBuf::from("/home/me/notes");
+
+            // FIRST invocation: enters notes_root, remembering proj-a.
+            app.notes_flip();
+            assert_eq!(app.root, PathBuf::from("/home/me/notes"));
+            assert_eq!(app.prev_project_root, Some(PathBuf::from("/w/proj-a")));
+
+            // SECOND invocation: flips straight back, consuming the memory.
+            app.notes_flip();
+            assert_eq!(app.root, PathBuf::from("/w/proj-a"));
+            assert_eq!(app.prev_project_root, None);
+
+            // A Notes flip is a VISIT, not a switch: it never touches the sticky
+            // project_root pref nor the recent-projects MRU (both stay exactly
+            // as a fresh launch left them — mirrors `new_note`'s own C-x n jump).
+            assert_eq!(app.config.project_root, None, "the flip never persists a sticky root");
+            assert!(app.recent_projects.is_empty(), "the flip never counts as a recent project");
+        });
     }
 
     // --- SAVE-FEEDBACK round: the dirty edited-marker, dirty × scratch/note/file ---

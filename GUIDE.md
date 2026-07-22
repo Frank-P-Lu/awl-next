@@ -128,6 +128,7 @@ markers below, byte for byte).
 | Clean unused assets… |  |  |
 | Keep version… |  |  |
 | Last file | ⌃Tab | Ctrl+Tab |
+| Notes |  |  |
 | New note | ⌘N | Ctrl+N |
 | Move note… |  |  |
 | Rename note… |  |  |
