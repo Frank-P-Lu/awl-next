@@ -580,6 +580,65 @@ fn overlay_click_regions_select_inside_row_and_dismiss_outside() {
     assert!(!p.over_overlay_query(out_x, out_y), "off the card → no query field");
 }
 
+/// THE INPUT-GAP LAW (overlay/chrome polish round, pasted-8): the calm divider
+/// between the query INPUT line and the first RESULT row must read as MORE
+/// than a bare row of space — a full row (`OVERLAY_QUERY_BEAT == 1.0`) still
+/// shipped as "too tight" on a fresh report, so the shipped ratio widened past
+/// `1.0`. Locks the OUTCOME (`header_gap > lh`), not the exact dial value, so
+/// a future taste tweak can move the number without un-writing this law —
+/// only a regression back to "one row or less" fails it. Swept over BOTH
+/// picker families (flat: `header_rows == 1`, no strip; faceted: the Cmd-P
+/// palette's own lens-strip layout) through the ONE shared owner
+/// `overlay_header_gap`, so neither family can silently starve the beat the
+/// other keeps — and cross-checked against the actual shaped row-Y
+/// (`overlay_row_top`) so the law can never drift from what the pixels draw.
+#[test]
+fn query_input_beat_reads_as_more_than_a_full_row_flat_and_faceted() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping query_input_beat_reads_as_more_than_a_full_row_flat_and_faceted: no wgpu adapter");
+        return;
+    };
+
+    // FLAT picker (no lens strip): header_rows == 1, the query line alone.
+    let mut flat = view("hello\n", 0, 0);
+    flat.overlay_active = true;
+    flat.overlay_items = vec!["Alpha".into(), "Beta".into()];
+    flat.overlay_selected = 0;
+    p.set_view(&flat);
+    let lh = p.overlay_lh();
+    let gap = p.overlay_header_gap();
+    assert!(
+        gap > lh,
+        "the beat must read as MORE than a full row of space (gap {gap} vs row {lh})"
+    );
+    // Cross-check against the real shaped geometry: row 0's top sits a full
+    // header line (`lh`) PLUS the gap below the card's text origin.
+    let [_, cy, ..] = p.overlay_card_rect().expect("the flat overlay has a card");
+    let text_top = cy + 12.0; // centered-overlay inner padding (overlay_geometry)
+    let row0_top = chrome::overlay_row_top(text_top, 1, gap, 0, lh);
+    assert!(
+        (row0_top - (text_top + lh + gap)).abs() < 0.01,
+        "row 0's shaped top folds in the widened gap exactly once"
+    );
+
+    // FACETED picker (the Cmd-P palette / Settings / Browse shape): a lens
+    // strip occupies its own display line ABOVE the candidate list, and the
+    // SAME gap owner still separates it from row 0.
+    let mut faceted = view("hello\n", 0, 0);
+    faceted.overlay_active = true;
+    faceted.overlay_items = vec!["Alpha".into(), "Beta".into()];
+    faceted.overlay_selected = 0;
+    faceted.overlay_lens = vec![("All".into(), true), ("File".into(), false)];
+    p.set_view(&faceted);
+    let lh_f = p.overlay_lh();
+    let gap_f = p.overlay_header_gap();
+    assert!(
+        gap_f > lh_f,
+        "the faceted picker shares the SAME widened beat (gap {gap_f} vs row {lh_f})"
+    );
+    assert_eq!(gap, gap_f, "one owner: flat and faceted read the identical gap");
+}
+
 /// CLICKABLE LENS STRIP: `overlay_lens_at` is the pure x/y → facet-STRIP-INDEX
 /// hit-test `overlay_click` (input.rs) and the cursor-shape hover flag both ride
 /// (one owner — the same geometry the strip SHAPER laid out, read back from the

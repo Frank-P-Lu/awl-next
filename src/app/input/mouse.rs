@@ -628,6 +628,7 @@ impl App {
         let over_popover_button = self.popover_open && gpu.pipeline.popover_hit(px, py).is_some();
         let ctx = crate::cursor_shape::CursorContext {
             dragging_edge: self.page_resizing,
+            dragging_text: self.dragging,
             overlay_open,
             over_edge: gpu.pipeline.page_resize_hover(px),
             over_text: gpu.pipeline.over_writing_column(px),
@@ -872,6 +873,12 @@ impl App {
                         self.on_press(shift, over_writing_column);
                         if over_writing_column {
                             self.sync_view(true);
+                            // The context flipped to "drag-selecting text" WITHOUT
+                            // any mouse motion (`on_press` just set `self.dragging`):
+                            // recompute the cursor shape now (pins the I-beam for the
+                            // gesture), not just on the next `CursorMoved`. Mirrors
+                            // `begin_page_resize_if_hovering` / `begin_image_resize_if_hovering`.
+                            self.sync_cursor_icon();
                         }
                     }
                 }
@@ -888,6 +895,13 @@ impl App {
             ElementState::Released => {
                 self.dragging = false;
                 self.drag_armed = false;
+                // The context flipped OFF "drag-selecting text" WITHOUT any mouse
+                // motion: recompute the cursor shape now (usually resumes the
+                // plain I-beam over text, or the arrow/hand off it) rather than
+                // waiting for the next `CursorMoved`. Mirrors `end_page_resize` /
+                // `end_image_resize`. Placed here (before the `has_selection`
+                // branch below) since it depends only on the flag just cleared.
+                self.sync_cursor_icon();
                 // A plain click (press + release with no drag) leaves the
                 // press-time anchor lingering at the cursor. Collapse it so
                 // a subsequent bare motion (C-p, C-n, …) just moves the

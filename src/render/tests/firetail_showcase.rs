@@ -393,6 +393,75 @@ fn band_slide_snaps_by_default_slides_when_asked_and_folds_under_reduce_motion()
     set_motion_test_override(None);
 }
 
+/// THE SELECTION-DESYNC REGRESSION (2026-07-22 user report): the living-band
+/// choreography (`living_band_phase`, shipped ON by default — see
+/// `render/livingband.rs`) used to point its "from" anchor at the STALE
+/// previous TARGET on every re-target, instead of the band's true in-flight
+/// position — `Self::retarget_band`'s doc names the bug in full. A held-down
+/// or fast-repeat Down (arrow-key auto-repeat easily outruns the ~110ms
+/// slide) then popped the visual band to each stale intermediate target
+/// instead of chasing continuously, which is exactly what reads as "the
+/// highlighted row doesn't match what Enter would run" — the row a screenshot
+/// catches mid-glide can visibly lag or jump relative to the instantly-updated
+/// logical selection. This proves the SAME chase formula
+/// `overlay_band_drawn` has always used now drives `living_band_phase` too.
+#[test]
+fn living_band_phase_chains_from_the_actual_drawn_position_not_the_stale_target() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!(
+            "skipping living_band_phase_chains_from_the_actual_drawn_position_not_the_stale_target: no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let saved_reduced = crate::motion::reduced();
+    crate::motion::set_reduced(false);
+    p.arm_live_juice();
+
+    let force = crate::render::livingband::MotionForce {
+        choreo: crate::render::livingband::Choreo::Morph,
+        phase: None,
+    };
+    let lh = 24.0f32;
+
+    // A fresh overlay settles exactly on its first row.
+    assert_eq!(p.living_band_phase(force, 0.0, lh), (0.0, 0.0, 1.0));
+
+    // Row 0 -> row 1: the first frame of the ease starts exactly at the old
+    // (settled) target, t = 0.
+    let (from1, to1, t1) = p.living_band_phase(force, lh, lh);
+    assert_eq!((from1, to1, t1), (0.0, lh, 0.0));
+
+    // Advance PART way through the ~110ms slide — NOT settled (a held-down /
+    // fast-repeat Down outrunning the ease, the real-world trigger).
+    let dt = 0.022; // ~20% of the 110ms slide
+    p.advance(dt);
+    let expected_t = (dt * 1000.0 / crate::render::OVERLAY_BAND_SLIDE_MS).min(1.0);
+    assert!(expected_t > 0.0 && expected_t < 1.0, "the probe must land mid-flight");
+
+    // A SECOND re-target arrives before the first settled. THE BUG: the old
+    // code jumped `overlay_band_from` straight to the stale previous TARGET
+    // (`lh`) here, discarding the in-flight interpolation — a visible pop.
+    let (from2, to2, t2) = p.living_band_phase(force, 2.0 * lh, lh);
+    assert_eq!(to2, 2.0 * lh, "the travel always targets the freshest selection");
+    assert_eq!(t2, 0.0, "a genuine re-target restarts the ease from t=0");
+
+    // The new anchor must be the band's TRUE in-flight position — the exact
+    // same eased formula `overlay_band_drawn` (the sibling seam) has always
+    // used — never the raw stale target.
+    let expected_from2 = (lh - 0.0) * crate::ease::out_back(expected_t);
+    assert!(
+        (from2 - expected_from2).abs() < 0.01,
+        "the new anchor must be the actual eased in-flight position ({expected_from2}), not the stale target ({lh}); got {from2}"
+    );
+    assert!(
+        (from2 - lh).abs() > 0.5,
+        "regression guard: the old bug set the anchor to EXACTLY the stale target ({lh}); got {from2}"
+    );
+
+    crate::motion::set_reduced(saved_reduced);
+}
+
 // --- dial 5: the wild-menu slant probe ---------------------------------------
 
 #[test]

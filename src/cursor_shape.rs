@@ -9,6 +9,11 @@
 //! priority highest-first:
 //! 1. over the draggable PAGE-COLUMN EDGE, or while actively dragging it ->
 //!    `ColResize` (↔).
+//! 1b. while actively drag-SELECTING text (the primary button is down inside the
+//!    writing column) -> `Text` (I-beam), pinned for the WHOLE gesture — even a
+//!    moment where the pointer strays outside the exact column bounds (past the
+//!    last line, into a margin) mid-drag, so the icon never flickers to the
+//!    arrow/hand and back while one continuous selection is in progress.
 //! 2. over ANY summoned overlay's clickable ROWS (Command-P / go-to / browse /
 //!    theme / history / keybindings / spell / … — every faceting/list picker) OR
 //!    a clickable LENS-STRIP facet label (Time/Register/… — every FACETING
@@ -50,6 +55,17 @@ pub struct CursorContext {
     /// A page-column-edge WIDTH DRAG is in progress right now (button held on
     /// the divider, tracking the pointer).
     pub dragging_edge: bool,
+    /// A TEXT-SELECTION drag is in progress right now (the primary button went
+    /// down inside the writing column and hasn't released yet — `App::dragging`).
+    /// Pins the I-BEAM for the WHOLE gesture, not just while the pointer sits
+    /// precisely over a glyph: `over_text` alone is a pure x/y hit-test against
+    /// the column bounds, so dragging past the last line, below the document, or
+    /// out over a margin/outline row mid-selection used to fall through to
+    /// whatever THAT position would show at rest (`Default`, or — worse — the
+    /// outline's pointing HAND) even though the user is still actively selecting
+    /// text. The gesture in progress always wins, exactly like `dragging_edge` /
+    /// `image_drag`.
+    pub dragging_text: bool,
     /// A summoned overlay (palette / picker / the spell-suggest panel) is
     /// open — its scrim covers the document, so the pointer is never "over
     /// text" while this is set, regardless of where it geometrically sits.
@@ -150,6 +166,12 @@ pub fn image_handle_icon(handle: ImageHandle) -> CursorIcon {
 ///    ([`image_handle_icon`]: ↔ side, ↕ top/bottom, ⤡/⤢ corner) tracks that gesture
 ///    (the two active drags are mutually exclusive; the page-edge drag is arbitrarily
 ///    ordered first);
+/// 2b. an ACTIVE text-SELECTION drag wins next — the I-beam is pinned for the
+///    whole gesture (mutually exclusive with the other two active drags: a
+///    page-edge or image drag can't start while a text selection is being
+///    dragged, and vice versa), so it never flickers to the arrow/hand and
+///    back if the pointer strays outside the exact writing-column bounds
+///    mid-drag;
 /// 3. hovering a clickable menu-bar TITLE / dropdown ITEM gets the pointing HAND —
 ///    the awl-rendered web/Linux menu bar's clickable-affordance signal, ranked with
 ///    the other hands (the menu + a summoned overlay are mutually exclusive, so the
@@ -185,6 +207,8 @@ pub fn cursor_icon_for(ctx: CursorContext) -> CursorIcon {
         CursorIcon::ColResize
     } else if let Some(handle) = ctx.image_drag {
         image_handle_icon(handle)
+    } else if ctx.dragging_text {
+        CursorIcon::Text
     } else if ctx.over_popover_button {
         // The format popover's button — the pointing HAND (a clickable affordance),
         // ranked with the other hands (it never coexists with an overlay/menu, so
@@ -245,6 +269,7 @@ mod tests {
     fn ctx(dragging_edge: bool, overlay_open: bool, over_edge: bool, over_text: bool) -> CursorContext {
         CursorContext {
             dragging_edge,
+            dragging_text: false,
             overlay_open,
             over_edge,
             over_text,
@@ -266,6 +291,7 @@ mod tests {
     fn ctx_image_drag(handle: ImageHandle, dragging_edge: bool, overlay_open: bool, over_text: bool) -> CursorContext {
         CursorContext {
             dragging_edge,
+            dragging_text: false,
             overlay_open,
             over_edge: false,
             over_text,
@@ -287,6 +313,7 @@ mod tests {
     fn ctx_image_handle(handle: ImageHandle, overlay_open: bool, over_edge: bool, over_text: bool) -> CursorContext {
         CursorContext {
             dragging_edge: false,
+            dragging_text: false,
             overlay_open,
             over_edge,
             over_text,
@@ -308,6 +335,7 @@ mod tests {
     fn ctx_outline(dragging_edge: bool, over_edge: bool, over_text: bool) -> CursorContext {
         CursorContext {
             dragging_edge,
+            dragging_text: false,
             overlay_open: false,
             over_edge,
             over_text,
@@ -329,6 +357,7 @@ mod tests {
     fn ctx_row(dragging_edge: bool, over_edge: bool, over_text: bool) -> CursorContext {
         CursorContext {
             dragging_edge,
+            dragging_text: false,
             overlay_open: true,
             over_edge,
             over_text,
@@ -350,6 +379,7 @@ mod tests {
     fn ctx_lens(dragging_edge: bool, over_edge: bool, over_text: bool) -> CursorContext {
         CursorContext {
             dragging_edge,
+            dragging_text: false,
             overlay_open: true,
             over_edge,
             over_text,
@@ -371,6 +401,7 @@ mod tests {
     fn ctx_query(dragging_edge: bool, over_edge: bool, over_text: bool) -> CursorContext {
         CursorContext {
             dragging_edge,
+            dragging_text: false,
             overlay_open: true,
             over_edge,
             over_text,
@@ -412,6 +443,54 @@ mod tests {
     #[test]
     fn dragging_the_edge_alone_is_col_resize() {
         assert_eq!(cursor_icon_for(ctx(true, false, false, false)), CursorIcon::ColResize);
+    }
+
+    // --- a TEXT-SELECTION drag pins the I-beam for the whole gesture --------
+
+    #[test]
+    fn dragging_text_alone_is_the_i_beam() {
+        let mut c = ctx(false, false, false, false);
+        c.dragging_text = true;
+        assert_eq!(cursor_icon_for(c), CursorIcon::Text);
+    }
+
+    #[test]
+    fn dragging_text_beats_wandering_off_the_writing_column() {
+        // THE BUG THIS CLOSED: `over_text` alone is a pure x/y hit-test, so a
+        // drag that strays outside the column (past the last line, into a
+        // margin/outline row) used to fall through to whatever that spot
+        // shows at rest — here, the outline's pointing hand. An active text
+        // drag must win regardless.
+        let mut c = ctx(false, false, false, false);
+        c.dragging_text = true;
+        c.over_outline_row = true;
+        assert_eq!(cursor_icon_for(c), CursorIcon::Text);
+    }
+
+    #[test]
+    fn an_active_edge_drag_still_beats_dragging_text() {
+        // The two are mutually exclusive in practice (one gesture at a time),
+        // but the stated priority holds regardless: the resize glyph for the
+        // gesture literally in progress wins.
+        let mut c = ctx(true, false, false, false);
+        c.dragging_text = true;
+        assert_eq!(cursor_icon_for(c), CursorIcon::ColResize);
+    }
+
+    #[test]
+    fn an_active_image_drag_still_beats_dragging_text() {
+        let mut c = ctx(false, false, false, false);
+        c.dragging_text = true;
+        c.image_drag = Some(ImageHandle::Left);
+        assert_eq!(cursor_icon_for(c), CursorIcon::ColResize);
+    }
+
+    #[test]
+    fn dragging_text_beats_the_popover_hand_and_every_lower_tier() {
+        let mut c = ctx(false, false, false, false);
+        c.dragging_text = true;
+        c.over_popover_button = true;
+        assert_eq!(cursor_icon_for(c), CursorIcon::Text);
     }
 
     // --- the priority order, exhaustively (each stated relation + the ------
@@ -544,6 +623,7 @@ mod tests {
         // both) resolves to the hand -- neither out-ranks the other.
         let both = CursorContext {
             dragging_edge: false,
+            dragging_text: false,
             overlay_open: true,
             over_edge: false,
             over_text: false,
@@ -583,6 +663,7 @@ mod tests {
         // is stated regardless: a row (were both set) resolves to the hand.
         let both = CursorContext {
             dragging_edge: false,
+            dragging_text: false,
             overlay_open: true,
             over_edge: false,
             over_text: false,
@@ -632,6 +713,7 @@ mod tests {
     fn ctx_menu_hand(over_edge: bool, over_text: bool) -> CursorContext {
         CursorContext {
             dragging_edge: false,
+            dragging_text: false,
             overlay_open: false,
             over_edge,
             over_text,
@@ -653,6 +735,7 @@ mod tests {
     fn ctx_menu_bar(over_edge: bool, over_text: bool) -> CursorContext {
         CursorContext {
             dragging_edge: false,
+            dragging_text: false,
             overlay_open: false,
             over_edge,
             over_text,
@@ -700,6 +783,7 @@ mod tests {
     fn ctx_case_toggle(over_edge: bool, over_text: bool) -> CursorContext {
         CursorContext {
             dragging_edge: false,
+            dragging_text: false,
             overlay_open: false,
             over_edge,
             over_text,

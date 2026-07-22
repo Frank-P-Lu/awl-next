@@ -91,22 +91,30 @@ impl TextPipeline {
         -(1.0 - crate::ease::out_back(self.overlay_enter_t)) * OVERLAY_ENTRANCE_DROP_PX
     }
 
-    /// The selection BAND's drawn row-top for a target `row_top` this frame —
-    /// the [`theme::BandResponse::Slide`] seam, called only by
-    /// `overlay_draw_card`. Snap worlds (every world today), unarmed
-    /// pipelines (every capture), and Reduce Motion all return `target`
-    /// verbatim (byte-identical). A Slide world eases from the previous row's
-    /// top with the same gentle overshoot spring as the entrance. Purely
-    /// visual: the shaped rows and the hit-test never move.
-    pub(in crate::render) fn overlay_band_drawn(&mut self, target: f32) -> f32 {
-        let slide = self.juice_live
-            && !crate::motion::reduced()
-            && crate::render::effective_motion_juice().band == theme::BandResponse::Slide;
-        if !slide {
-            self.overlay_band_last = Some(target);
-            self.overlay_band_t = 1.0;
-            return target;
-        }
+    /// THE ONE band-RETARGET owner: point the shared chase state
+    /// (`overlay_band_from`/`overlay_band_last`/`overlay_band_t`) at a NEW
+    /// `target`, continuing smoothly from wherever the band is actually drawn
+    /// RIGHT NOW if a transition is still in flight. Shared by both animators
+    /// that chase the selected row — the ordinary [`Self::overlay_band_drawn`]
+    /// (`BandResponse::Slide`) and the living-band choreography
+    /// ([`Self::living_band_phase`]) — so a rapid re-target (arrow-key repeat
+    /// outrunning the ~110ms slide) can never teleport the visual anchor to
+    /// the STALE previous target instead of where the band visually sits.
+    ///
+    /// THE BUG THIS CLOSED: `living_band_phase` used to set
+    /// `overlay_band_from = last` (the previous call's TARGET) on every
+    /// re-target, discarding the in-flight interpolation. Held-down/fast
+    /// Down presses (each firing before the prior ~110ms ease settled) then
+    /// SNAPPED the drawn band to each stale intermediate target instead of
+    /// gliding continuously — a visible pop that reads as "the highlight
+    /// lags/jumps behind what Enter would actually run" (the selection-desync
+    /// report). `overlay_band_drawn` already computed the correct current
+    /// eased position (`cur`); this is that fix, promoted to the ONE shared
+    /// owner so the two seams can never diverge again.
+    ///
+    /// A fresh overlay (`overlay_band_last == None`) SETTLES rather than
+    /// easing — there is no meaningful previous row to glide from.
+    fn retarget_band(&mut self, target: f32) {
         match self.overlay_band_last {
             Some(last) if (last - target).abs() > 0.5 => {
                 // A selection move: start the slide FROM wherever the band is
@@ -123,11 +131,31 @@ impl TextPipeline {
             }
             None => {
                 // First frame of a fresh overlay: no previous row — settle.
+                self.overlay_band_from = target;
                 self.overlay_band_last = Some(target);
                 self.overlay_band_t = 1.0;
             }
             _ => {}
         }
+    }
+
+    /// The selection BAND's drawn row-top for a target `row_top` this frame —
+    /// the [`theme::BandResponse::Slide`] seam, called only by
+    /// `overlay_draw_card`. Snap worlds (every world today), unarmed
+    /// pipelines (every capture), and Reduce Motion all return `target`
+    /// verbatim (byte-identical). A Slide world eases from the previous row's
+    /// top with the same gentle overshoot spring as the entrance. Purely
+    /// visual: the shaped rows and the hit-test never move.
+    pub(in crate::render) fn overlay_band_drawn(&mut self, target: f32) -> f32 {
+        let slide = self.juice_live
+            && !crate::motion::reduced()
+            && crate::render::effective_motion_juice().band == theme::BandResponse::Slide;
+        if !slide {
+            self.overlay_band_last = Some(target);
+            self.overlay_band_t = 1.0;
+            return target;
+        }
+        self.retarget_band(target);
         if self.overlay_band_t >= 1.0 {
             return target;
         }
@@ -143,10 +171,13 @@ impl TextPipeline {
     ///   sliding up to it, held at the fixed phase. Deterministic (no clock), so
     ///   `--screenshot` dumps a byte-stable mid-flight frame.
     /// * LIVE (`force.phase` absent): reuses the SAME `overlay_band_from/last/t`
-    ///   tracking the ordinary slide uses (a fresh overlay settles; a selection
-    ///   move chains from the previous row). [`Self::step_overlay_juice`] advances
-    ///   `overlay_band_t`, and Reduce Motion folds it to `1.0` (settled) — so the
-    ///   whole choreography inherits the accessibility contract for free.
+    ///   tracking the ordinary slide uses, through the ONE shared retarget owner
+    ///   [`Self::retarget_band`] (a fresh overlay settles; a selection move
+    ///   chains smoothly from wherever the band is actually drawn right now, not
+    ///   the stale previous target — see that owner's doc for the bug this
+    ///   closed). [`Self::step_overlay_juice`] advances `overlay_band_t`, and
+    ///   Reduce Motion folds it to `1.0` (settled) — so the whole choreography
+    ///   inherits the accessibility contract for free.
     ///
     /// Called ONLY from `overlay_draw_card`'s Pane arm when the probe is set; the
     /// ordinary path never reaches it, so an unset-env run is byte-identical.
@@ -172,19 +203,7 @@ impl TextPipeline {
             self.overlay_band_t = 1.0;
             return (target, target, 1.0);
         }
-        match self.overlay_band_last {
-            Some(last) if (last - target).abs() > 0.5 => {
-                self.overlay_band_from = last;
-                self.overlay_band_last = Some(target);
-                self.overlay_band_t = 0.0;
-            }
-            None => {
-                self.overlay_band_from = target;
-                self.overlay_band_last = Some(target);
-                self.overlay_band_t = 1.0;
-            }
-            _ => {}
-        }
+        self.retarget_band(target);
         (self.overlay_band_from, self.overlay_band_last.unwrap_or(target), self.overlay_band_t)
     }
 

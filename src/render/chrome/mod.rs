@@ -370,10 +370,42 @@ impl TextPipeline {
     /// crisp raised BORDER edge, the opaque CARD), and crucially NO scrim — so it
     /// floats over the live document without dimming it, distinct from the full-width
     /// takeover overlay. `rect = Some([x, y, w, h])` summons it; `None` parks all three
-    /// elevation quads empty (nothing drawn). Reusable: its FIRST use is the caret-style
-    /// preview panel, and future summoned micro-panels (spell / thesaurus / which-key)
-    /// prepare their own content over this same helper. "Summoned, not furniture"
-    /// (DESIGN §5).
+    /// elevation quads empty (nothing drawn). `elevation` picks the dressing
+    /// ([`FloatElevation`]) — the caret-style preview panel and the spell popup both
+    /// want the full drop-SHADOW read ([`FloatElevation::Shadowed`]); the format
+    /// popover rides the RIMMED style instead (border + card, no shadow slab — see
+    /// [`Self::prepare_popover`]'s "fat chin" note).
+    ///
+    /// THE ONE FLOAT-SURFACE OWNER (overlay/chrome polish round): every summoned
+    /// micro-panel that wants this "small floating card, no scrim" language routes
+    /// through here — the caret-style preview panel, the search panel, the
+    /// contextual SPELL popup, AND the format popover — onto the SAME
+    /// `float_shadow`/`float_border`/`float_card` quads, never a per-feature
+    /// duplicate trio. `set_float_quads` (the underlying quad math) stays a
+    /// private fn of this module — this is its ONLY door (law-tested,
+    /// `float_surface_primitive_has_no_bypass_among_the_unified_family`), so a
+    /// future micro-panel in this family can't accidentally reinvent the call
+    /// inline (the popover used to).
+    ///
+    /// SAFE to share one buffer set because the four callers are STRUCTURALLY
+    /// mutually exclusive (`viewstate.rs` gates the popover on
+    /// `overlay.is_none() && search.is_none()`; the preview panel and the spell
+    /// popup are two different `OverlayKind`s; the search panel requires
+    /// `search_active`, itself exclusive with any overlay) — each call site
+    /// parks (`rect: None`) on every frame it isn't the active one. That alone
+    /// is NOT sufficient, though: with four INDEPENDENTLY gated calls each
+    /// unconditionally touching the buffer every frame, whichever call happens
+    /// to run LAST always wins — including a "closed" park call from a feature
+    /// that just isn't active this frame, which would erase a genuinely real
+    /// one prepared earlier (the bug a first draft of this round's popover
+    /// merge shipped, caught by
+    /// `caret_preview_panel_appears_below_picker_and_stops_on_close`). The fix
+    /// is NOT calling order — it's [`Self::prepare_popover`]'s own GUARD (see
+    /// its doc): it only ever touches these quads when `!overlay_active &&
+    /// !search_active`, i.e. only in the one frame-state where popover is
+    /// structurally allowed to be the real owner, so its park call can never
+    /// race the caret-preview panel / spell popup / search panel. "Summoned,
+    /// not furniture" (DESIGN §5).
     pub(super) fn prepare_float_panel(
         &mut self,
         device: &wgpu::Device,
@@ -381,6 +413,7 @@ impl TextPipeline {
         width: u32,
         height: u32,
         rect: Option<[f32; 4]>,
+        elevation: FloatElevation,
     ) {
         set_float_quads(
             &mut self.float_shadow,
@@ -391,7 +424,7 @@ impl TextPipeline {
             width,
             height,
             rect,
-            FloatElevation::Shadowed, // this primitive's every use wants full elevation
+            elevation,
         );
     }
 

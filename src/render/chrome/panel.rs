@@ -257,7 +257,7 @@ impl TextPipeline {
         // risen a step above the crisp document (DESIGN §5/§8) — clearer, more present
         // furniture than the old flat pill. The flat `panel_card` is left empty; the
         // search draw branch draws the float quads (parked whenever the panel is down).
-        self.prepare_float_panel(device, queue, width, height, Some(card_rect));
+        self.prepare_float_panel(device, queue, width, height, Some(card_rect), FloatElevation::Shadowed);
         self.panel_card.prepare(device, queue, width, height, &[]);
         self.panel_shadow.prepare(device, queue, width, height, &[]);
         self.panel_border.prepare(device, queue, width, height, &[]);

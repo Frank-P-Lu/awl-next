@@ -2314,7 +2314,9 @@ impl TextPipeline {
         // SPELL contextual panel (which reuses the SAME float quads for its own
         // elevation, see `prepare_overlay`) sets them LAST and isn't parked here — the
         // caret picker and the spell panel are mutually exclusive, so only one ever
-        // owns the float quads on a frame.
+        // owns the float quads on a frame. (THE FORMAT POPOVER shares these quads too,
+        // prepared later at the chrome tail — its own guard, not call order, is what
+        // keeps it from racing this one; see `prepare_popover`'s doc.)
         self.prepare_caret_preview_panel(device, queue, width, height)?;
 
         // The summoned navigation overlay takes priority over the search panel
@@ -2371,10 +2373,15 @@ impl TextPipeline {
         // prefix's follow-up keys. Drawn only while summoned (the App set its rows on a
         // prefix pause); parked off-screen otherwise, so a default capture is byte-identical.
         self.prepare_whichkey(device, queue, width, height)?;
-        // THE FORMAT POPOVER (reveal-on-select format toolbar): its own float
-        // elevation + active-button wash + labels, anchored over the selection.
+        // THE FORMAT POPOVER (reveal-on-select format toolbar): its active-button
+        // wash + labels + (shared) float elevation, anchored over the selection.
         // Parked (nothing drawn) unless a mouse selection summoned it (or the
-        // `AWL_POPOVER` capture probe forced it), so a default capture is byte-identical.
+        // `AWL_POPOVER` capture probe forced it), so a default capture is
+        // byte-identical. Its own `overlay_active`/`search_active` guard (see
+        // `prepare_popover`'s doc) — not call order — is what keeps a real spell
+        // popup / caret preview / search card safe from this call, so it can sit
+        // anywhere in this sequence; it stays here (last, before the menu bar)
+        // to minimize churn from its pre-existing position.
         self.prepare_popover(device, queue, width, height)?;
         // The WEB/LINUX MENU BAR (top strip + open dropdown). Parks everything
         // off-screen/empty when the bar is hidden (default off on macOS), so a default
