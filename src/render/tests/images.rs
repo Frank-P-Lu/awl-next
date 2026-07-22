@@ -275,6 +275,80 @@ fn revealed_images_still_arm_resize_handles() {
     crate::markdown::set_inline_images_on(prev);
 }
 
+/// ITEM 27 REGRESSION: `image_hit_rects` reads the reveal flag through the
+/// always-fresh `images_report()` override, NOT the stored `image_report`'s
+/// stale field. A pure CARET move onto an off-cursor MIXED image line (caption
+/// text before the image on the same line) runs `refresh_rule_conceal`, which
+/// flips that line's reservation (`image_force`/`image_heights` → `None`)
+/// WITHOUT re-running `compute_image_layout` — so the STORED `image_report`
+/// still holds frame-1's `revealed: false`. Under that stale flag the skip in
+/// `image_hit_rects` (`revealed && !reserved`) read `false && true == false` and
+/// armed a resize handle at a now-undefined position for the parked line. Read
+/// through the FRESH override (`revealed == true` on the caret line) the skip
+/// fires (`true && true`) and the handle correctly drops. Zero selection — this
+/// is orthogonal to the selection-reveal path, a pure caret move. MUTATION
+/// CHECK: reverting `image_hit_rects` to `self.image_report.borrow()` re-arms the
+/// stale handle and this fails (`rects_on.len()` reverts to 1). Fixture:
+/// `samples/tiny.png`.
+#[test]
+fn image_hit_rects_use_fresh_reveal_on_pure_caret_move_onto_mixed_line() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    let prev = crate::markdown::inline_images_on();
+    let prevw = crate::markdown::wysiwyg_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let restore = || {
+        crate::markdown::set_inline_images_on(prev);
+        crate::markdown::set_wysiwyg_on(prevw);
+    };
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!(
+            "skipping image_hit_rects_use_fresh_reveal_on_pure_caret_move_onto_mixed_line: no wgpu adapter"
+        );
+        restore();
+        return;
+    };
+    // A MIXED image line: caption text precedes the image on the SAME line, so a
+    // reveal collapses the reservation entirely (unlike a BARE image line, which
+    // stays drawn + reserved under its floating caption and keeps arming).
+    let text = "a caption before the pic ![pic](samples/tiny.png)\nprose here\n";
+
+    // Frame 1: caret on line 1 (OFF the image line) — the mixed line is
+    // off-cursor, reserves its forced trailing row, and arms exactly one handle.
+    let mut v_off = view(text, 1, 0);
+    v_off.is_markdown = true;
+    p.set_view(&v_off);
+    assert!(!p.images_report()[0].revealed, "sanity: off-cursor, not revealed");
+    let rects_off = p.image_hit_rects();
+    assert_eq!(rects_off.len(), 1, "off-cursor mixed line arms one handle: {rects_off:?}");
+
+    // Frame 2: caret MOVES onto line 0 (the mixed image line), ZERO selection. A
+    // pure caret move — no reshape — so the STORED report still holds frame-1's
+    // `revealed: false`, while `refresh_rule_conceal` has already un-reserved the
+    // row. The FRESH override reports `revealed: true`.
+    let reshape_before = p.reshape_count;
+    let mut v_on = view(text, 0, 0);
+    v_on.is_markdown = true;
+    p.set_view(&v_on);
+    assert_eq!(
+        p.reshape_count, reshape_before,
+        "sanity: a pure caret move on unchanged text does not reshape"
+    );
+    assert!(
+        p.images_report()[0].revealed,
+        "caret on the mixed line: the fresh override reveals it"
+    );
+    // THE FIX: with the fresh reveal, the parked mixed line arms NO handle. Under
+    // the stale-flag bug this returned 1 (a handle at an undefined position).
+    let rects_on = p.image_hit_rects();
+    assert!(
+        rects_on.is_empty(),
+        "FRESH reveal parks the mixed line: no resize handle armed (the stale flag armed one): {rects_on:?}"
+    );
+    restore();
+}
+
 /// IMAGES OFF: the `![alt](path)` line keeps a NORMAL-height row, emits no
 /// image report, and its source renders as plain full-width text — byte-
 /// identical to the pre-feature editor.
@@ -663,18 +737,15 @@ fn mixed_list_image_draws_off_cursor_and_parks_when_revealed() {
 /// back to `li == cursor_line` alone re-forces the row and fails this test
 /// (instance count reverts to 1). Fixture: `samples/photo.png`.
 ///
-/// PRE-EXISTING GAP NOTED, NOT FIXED HERE (found probing this exact scenario,
-/// confirmed unrelated to this round — it reproduces identically with a pure
-/// CARET move onto this same off-cursor mixed line, zero selection involved):
-/// `image_hit_rects` (drag-resize handle arming, live pointer-only) reads the
-/// STORED `image_report`'s `revealed` field directly, never through
-/// `images_report()`'s always-fresh override, so on THIS pure-selection (or a
-/// pure caret) tick — no reshape, so `compute_image_layout` never re-runs — it
-/// still holds frame 1's stale `revealed: false` and arms a handle at a
-/// garbage position for the now-parked line. Out of scope for this focused
-/// regression fix (a real bug, but pre-existing and orthogonal to the
-/// draw/reveal double-render this round closes); flagged for a follow-up
-/// queue item rather than asserted here.
+/// GAP CLOSED BY ITEM 27 (found probing this exact scenario, then fixed): the
+/// same reveal-staleness reaches `image_hit_rects` (drag-resize handle arming,
+/// live pointer-only). It once read the STORED `image_report`'s `revealed`
+/// field directly, so on a pure-selection (or a pure CARET) tick — no reshape,
+/// so `compute_image_layout` never re-runs — it held frame 1's stale
+/// `revealed: false` and armed a handle at a garbage position for the
+/// now-parked line. It now reads through `images_report()`'s always-fresh
+/// override; the dedicated regression is
+/// `image_hit_rects_use_fresh_reveal_on_pure_caret_move_onto_mixed_line`.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn mixed_list_image_parks_under_a_pure_selection_change_no_reshape() {
@@ -1339,4 +1410,124 @@ fn theme_switch_never_redecodes_a_cached_image() {
 
     crate::theme::set_active_by_name(prev_theme);
     crate::markdown::set_inline_images_on(prev_images);
+}
+
+/// ITEM 42 REGRESSION — IMAGE ROWS RESERVE THEIR REAL HEIGHT DOC-WIDE (the
+/// scroll-UP jump). `full_shape_height` budgets the buffer height cosmic-text
+/// shapes into; it used a UNIFORM `rows * line_height` estimate that ignored the
+/// tall rows inline images reserve. An image-DENSE document therefore exceeded
+/// the budget before its end, so `shape_until_scroll` stopped and the TAIL rows
+/// never shaped — falling back to the ESTIMATED line height in `RowGeom` and
+/// mis-placing every scroll / hit-test / image-draw-top derived from them. That
+/// is the "rows above the viewport carry estimated text-height geometry until
+/// visited" jump: scroll to the bottom and back UP through a tail image and the
+/// page lurched. The item-5b landed test only checked the row BELOW an image in
+/// a TINY (never-truncated) doc — the wrong direction, and a doc small enough
+/// that the bug could not fire.
+///
+/// This builds a doc dense enough with viewport-capped images to blow the old
+/// uniform budget, then asserts (a) EVERY tall row shaped — the LAST image line
+/// holds its REAL display height, not the ~line-height estimate; (b) the
+/// cumulative geometry is exact end-to-end (total height == summed row heights,
+/// the tail image sits near the document bottom, not clamped to a low row); and
+/// (c) the DIRECTION-sensitive no-jump property: scrolling UP one row so a tail
+/// image enters the viewport top pushes the content below it down by the image's
+/// REAL height. MUTATION CHECK: reverting `full_shape_height` to the uniform
+/// estimate truncates the tail and (a) reads ~line_height (32) not ~520. Fixture:
+/// `samples/photo.png` (420x280), upscaled past the column so it caps at the
+/// viewport fraction.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn image_dense_doc_shapes_every_tall_row_doc_wide_no_scroll_jump() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    if std::fs::metadata("samples/photo.png").is_err() {
+        eprintln!("skipping image_dense_doc_shapes_every_tall_row: samples/photo.png absent");
+        return;
+    }
+    let prev = crate::markdown::inline_images_on();
+    let prevw = crate::markdown::wysiwyg_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let restore = || {
+        crate::markdown::set_inline_images_on(prev);
+        crate::markdown::set_wysiwyg_on(prevw);
+    };
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping image_dense_doc_shapes_every_tall_row: no wgpu adapter");
+        restore();
+        return;
+    };
+    // 30 viewport-capped image lines (the `|1200` hint upsizes past the column, so
+    // each caps at IMAGE_MAX_VIEWPORT_FRAC of the 800px window ≈ 520px), each
+    // preceded by a short prose line. Real height (~16.6k px) exceeds the OLD
+    // uniform budget (~15.7k px), so the tail used to truncate. Caret on line 1
+    // (prose), well away from every image line so none are revealed.
+    let mut s = String::new();
+    for i in 0..30 {
+        s.push_str(&format!("para {i}\n"));
+        s.push_str("![pic|1200](samples/photo.png)\n");
+    }
+    let mut v = view(&s, 1, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+
+    let logical = p.buffer.lines.len();
+    let real_dh = p.images_report()[0].display_h;
+    assert!(
+        real_dh > 400.0,
+        "sanity: the upscaled image caps tall (viewport fraction), got {real_dh}"
+    );
+
+    // (a) EVERY tall row shaped doc-wide: one visual row per (short, non-wrapping)
+    // logical line, and the LAST image line holds its REAL display height — not
+    // the ~line-height estimate the unshaped fallback returns. This is the exact
+    // assertion the old uniform budget failed (tail read ~32, not ~520).
+    let last_img_line = logical - 2; // trailing empty logical line is `logical-1`
+    assert!(
+        p.line_is_inline_image(last_img_line),
+        "sanity: line {last_img_line} is the last image line"
+    );
+    assert_eq!(
+        p.total_visual_rows(),
+        logical,
+        "every logical line shaped into its own row — no truncated tail"
+    );
+    let tail_row_h = p.visual_rows(last_img_line)[0].line_height;
+    assert!(
+        (tail_row_h - real_dh).abs() < 2.0,
+        "the TAIL image row holds its REAL height ({real_dh}), not the ~line-height estimate: {tail_row_h}"
+    );
+
+    // (b) Cumulative geometry exact end-to-end: total doc height == summed row
+    // heights, and the tail image genuinely sits near the document BOTTOM (the old
+    // bug clamped its `visual_row_of` to a low, near-top row).
+    let total_rows = p.total_visual_rows();
+    let summed: f32 = (0..total_rows).map(|r| p.row_height_px(r)).sum();
+    let doc_h = p.total_doc_height();
+    assert!(
+        (doc_h - summed).abs() < 1.0,
+        "total_doc_height matches the real cumulative row geometry: {doc_h} vs {summed}"
+    );
+    let tail_img_row = p.visual_row_of(last_img_line, 0);
+    assert!(
+        p.row_top_px(tail_img_row) > doc_h - 3.0 * real_dh,
+        "the tail image sits near the document bottom (not clamped near the top): row_top {} of doc_h {doc_h}",
+        p.row_top_px(tail_img_row)
+    );
+
+    // (c) DIRECTION-SENSITIVE no-jump: with the tail image row ABOVE the viewport
+    // (scroll one row below it), scrolling UP so it enters the viewport top must
+    // push the line BELOW it down by the image's REAL height — a lurch of the
+    // estimated line height instead is exactly the reported jump. `char_screen_top`
+    // is the one owner of a char's on-screen row top at a given scroll.
+    let below_line = last_img_line + 1; // the prose after the last image
+    let top_above = p.char_screen_top(below_line, 0, tail_img_row + 1);
+    let top_entering = p.char_screen_top(below_line, 0, tail_img_row);
+    let pushed_down = top_entering - top_above;
+    assert!(
+        (pushed_down - real_dh).abs() < 2.0,
+        "scrolling UP so the tail image enters the top pushes content below it down by the REAL image height ({real_dh}), no jump: {pushed_down}"
+    );
+    restore();
 }
