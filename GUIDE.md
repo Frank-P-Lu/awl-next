@@ -38,7 +38,7 @@ ladder: everything from the last ~15 minutes, then one per writing
 session, then one per day, then one per week — never a flat FIFO
 cutoff. {{key:version_history}} opens the timeline for the current
 file; Enter on any entry restores it as one ordinary undoable edit.
-"Keep version…" ({{key:command_palette}}) pins a snapshot the retention
+"{{cmd:keep_version}}" ({{key:command_palette}}) pins a snapshot the retention
 ladder will never prune, and prompts for an optional name — Enter with
 text keeps a named point (the timeline shows the name), a blank Enter
 keeps it unnamed. A file under git skips awl's own history
@@ -63,10 +63,10 @@ name on purpose.
 
 Three verbs live in the palette once a note exists:
 
-- **Rename note…** — pick a new name, breaking the
+- **{{cmd:rename_note}}** — pick a new name, breaking the
   first-line-tracks-filename link.
-- **Duplicate note** — an immediate copy, no dialog.
-- **Move note…** — file it elsewhere under (or out of) your notes
+- **{{cmd:duplicate_note}}** — an immediate copy, no dialog.
+- **{{cmd:move_note}}** — file it elsewhere under (or out of) your notes
   tree.
 
 None carry a default chord — {{key:command_palette}}, type "rename", Enter.
@@ -100,7 +100,7 @@ forward_word  = ["M-Right", "M-f"]
 backward_word = ["M-Left", "M-b"]
 ```
 
-Or capture the key directly: {{key:command_palette}} → "Keybindings…"
+Or capture the key directly: {{key:command_palette}} → "{{cmd:keybindings}}"
 opens a picker over every command; Enter starts a capture, and the
 next key or chord becomes the new binding, written into your config.
 
@@ -112,7 +112,11 @@ Generated from the live command catalog — never hand-edited (see the
 law test `guide::tests::generated_keys_reference_matches_catalog`;
 regenerate with `cargo test --bin awl guide::tests::print_generated_keys_reference
 -- --ignored --nocapture` and paste the printed table between the
-markers below, byte for byte).
+markers below, byte for byte). Every chord or command name cited
+elsewhere on this page renders from a chord/command-name token (see
+`src/keytoken.rs`), substituted at open time and checked against the
+live catalog by `cargo test` — a renamed or retired command can't
+drift into this page silently.
 
 <!-- GENERATED:keys-reference:BEGIN -->
 | Command | macOS | Linux |
@@ -220,8 +224,8 @@ black, white, and nothing between.
 **Two page widths, one for prose, one for code.** The writing column
 measures 70 characters by default for prose and 100 for code
 (rustfmt's own convention) — independent settings; widening one never
-touches the other. Drag the column's edge, or use "Widen page" /
-"Narrow page" / "Reset page width" in the palette.
+touches the other. Drag the column's edge, or use "{{cmd:widen_page}}" /
+"{{cmd:narrow_page}}" / "{{cmd:reset_page_width}}" in the palette.
 
 **WYSIWYG, reveal-on-caret.** Markdown markup — a heading's `#`,
 `**bold**`, `` `code` ``, `==highlight==`, `~~strikethrough~~`, a
@@ -240,7 +244,7 @@ no reliable cross-desktop signal yet.
 ## The config file
 
 Settings live in a plain text file, edited inside awl:
-{{key:command_palette}} → "Settings" opens `config.toml` into the
+{{key:command_palette}} → "{{cmd:settings}}" opens `config.toml` into the
 buffer (writing the commented starter template first, if none exists).
 Edit it like any other document, then save — the keymap, folders, and
 every sticky preference re-apply live, no restart. A config with a
@@ -262,11 +266,11 @@ running in a `<canvas>` with no native filesystem underneath it.
 | Preferences, `[keys]` | `~/.config/awl/config.toml` | A `config.toml` over `localStorage`, same format, persists across reloads |
 | Copy | To the OS clipboard | Mirrors out to the OS clipboard (best-effort, async) |
 | Paste | From the OS clipboard | From awl's own kill ring only — an external copy doesn't appear until you've copied something from awl at least once |
-| Getting a file out | Already on disk | "Download file" ({{key:command_palette}}) — saves the active buffer as a plain-text download |
+| Getting a file out | Already on disk | "{{cmd:download_file}}" ({{key:command_palette}}) — saves the active buffer as a plain-text download |
 
-**Hidden on web:** Recent projects…, Version history…, Compare with
-version…, Clean unused assets…, Keep version…, Finish file, Lifetime stats,
-Writing streaks, Quit, Check for Updates — daemon, session-restore, and
+**Hidden on web:** {{cmd:recent_projects}}, {{cmd:version_history}}, {{cmd:compare_with_version}},
+{{cmd:clean_unused_assets}}, {{cmd:keep_version}}, {{cmd:finish_file}}, {{cmd:lifetime_stats}},
+{{cmd:writing_streaks}}, {{cmd:quit}}, {{cmd:check_for_updates}} — daemon, session-restore, and
 local-version-history machinery with nothing to attach to in a browser tab.
 
 **A couple of native chords belong to the browser itself** (new tab,

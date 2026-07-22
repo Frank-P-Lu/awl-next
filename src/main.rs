@@ -53,6 +53,7 @@ mod cursor_shape;
 mod daemon;
 mod dateformat;
 mod debug;
+mod docs_catalog_law;
 mod durable;
 mod ease;
 mod embedded_docs;

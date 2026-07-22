@@ -9,7 +9,7 @@ lands on a line, so the markup is one keystroke away.
 - {{key:switch_theme}}   switch theme — fifteen worlds, each its own type
 - {{key:settings}}   settings — the config, as a text file you edit here
 
-({{key:command_palette}} → "Guide" opens the full user guide as a page, any time.)
+({{key:command_palette}} → "{{cmd:guide}}" opens the full user guide as a page, any time.)
 
 ## Write
 Type to insert. {{key:undo}} undo, {{key:cut}} / {{key:copy}} / {{key:paste}} cut, copy, paste.
@@ -30,7 +30,7 @@ formatting toggles (lists, highlight, blockquote…) live in the palette.
 | Preferences, `[keys]` | A `config.toml` over `localStorage`, persists across reloads | `~/.config/awl/config.toml` |
 | Copy | Mirrors out to the OS clipboard | To the OS clipboard |
 | Paste | From awl's own kill ring only | From the OS clipboard |
-| Getting a file out | "Download file" ({{key:command_palette}}) | Already on disk |
+| Getting a file out | "{{cmd:download_file}}" ({{key:command_palette}}) | Already on disk |
 
 A couple of native chords belong to the browser itself (new tab, new
 window, and similar) — {{key:new_note}} and {{key:switch_theme}}

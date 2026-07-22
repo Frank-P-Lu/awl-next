@@ -53,3 +53,11 @@ pub const FONT_LICENSES_MD: &str = include_str!("../assets/fonts/LICENSES.md");
 /// `assets/fonts/OFL.txt` — the SIL Open Font License text the inventory cites.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub const FONT_OFL_TXT: &str = include_str!("../assets/fonts/OFL.txt");
+
+/// `site/guide.html` — the hand-mirrored marketing-site copy of `GUIDE.md`
+/// (see that file's own header comment: an accepted, LOGGED drift risk against
+/// the real doc). Test-only: verified against the live catalog by
+/// `docs_catalog_law.rs`, never read at runtime (the site is served as a
+/// static file, not by the binary).
+#[cfg(test)]
+pub const SITE_GUIDE_HTML: &str = include_str!("../site/guide.html");

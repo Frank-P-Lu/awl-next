@@ -1,5 +1,7 @@
-//! CHORD TOKENS — the CONVENTION-TRUTHFUL SURFACES round's write side for the
-//! starting docs (`samples/welcome.md`, `samples/tour.md`, `GUIDE.md`).
+//! CHORD + COMMAND-NAME TOKENS — the CONVENTION-TRUTHFUL SURFACES round's write
+//! side for the starting docs (`samples/welcome.md`, `samples/tour.md`,
+//! `GUIDE.md`), extended (docs-vs-catalog law round) to cover cited command
+//! NAMES the same way.
 //!
 //! A literal chord glyph baked into a doc (`⌘P`) is a LIE the instant it's read
 //! under a different convention or platform — a Linux visitor sees a mac glyph
@@ -13,18 +15,39 @@
 //! can never show a chord that doesn't actually fire.
 //!
 //! `slug` is a catalog command's own config slug (`commands::slug`) for the vast
-//! majority of tokens; [`SYNTHETIC`] covers the two chords that are real,
-//! fixed, non-rebindable presses with NO catalog row at all (the command
-//! palette's own dedicated Cmd-P, the held stats HUD's Option-Cmd-I) — both are
-//! the most-taught chords in the onboarding docs, so they still need a token
-//! even though `commands::COMMANDS` has no entry to hang it on.
+//! majority of `{{key:slug}}` tokens; [`SYNTHETIC`] covers the two chords that
+//! are real, fixed, non-rebindable presses with NO catalog row at all (the
+//! command palette's own dedicated Cmd-P, the held stats HUD's Option-Cmd-I) —
+//! both are the most-taught chords in the onboarding docs, so they still need a
+//! token even though `commands::COMMANDS` has no entry to hang it on.
+//!
+//! **`{{cmd:slug}}`** is the sibling convention for a CITED COMMAND NAME — text
+//! like `"Widen page"` or `"Keep version…"` that names a palette command by
+//! itself, not by its chord. A renamed or retired command leaves a literal
+//! mention silently stale (the same "doc taught something that no longer
+//! fires" failure mode the welcome-doc incident named, one axis over: a name
+//! instead of a chord). `{{cmd:slug}}` substitutes the catalog's own current
+//! display NAME for `slug` (convention/platform-independent — a command's name
+//! doesn't vary by platform, unlike its chord), through the SAME render seam
+//! as `{{key:}}`, so a doc author writes `{{cmd:widen_page}}` once and it
+//! always reads exactly what the live palette calls that command. DOCS
+//! CONVENTION: any specific command-name citation in `samples/welcome.md` /
+//! `samples/tour.md` / `GUIDE.md` prose (outside the generated keys-reference
+//! table, which is already whole-table catalog-verified — see `guide.rs`)
+//! should be a `{{cmd:slug}}` token, not literal text — the law test
+//! [`tests::every_key_token_in_the_starting_docs_resolves`] is what actually
+//! enforces it (an unknown slug renders a loud `[[unknown-cmd:slug]]` marker
+//! rather than vanishing, and fails that test).
 
 use crate::commands::{self, Platform};
 use crate::convention::Convention;
 
-/// The token delimiters: `{{key:` ... `}}`.
-const OPEN: &str = "{{key:";
+/// The token delimiters: `{{` ... `}}`, with the token KIND named by its
+/// prefix immediately inside (`key:` a chord, `cmd:` a command name).
+const OPEN: &str = "{{";
 const CLOSE: &str = "}}";
+const KEY_PREFIX: &str = "key:";
+const CMD_PREFIX: &str = "cmd:";
 
 /// Non-catalog synthetic slugs: `(slug, mac spec, linux spec)`, each spec in
 /// the same terse form [`crate::keyspec::parse_chord`] accepts. See the module
@@ -56,14 +79,38 @@ pub fn key_token_label(slug_want: &str, convention: Convention, platform: Platfo
     })
 }
 
-/// Replace every `{{key:slug}}` token in `text` with [`key_token_label`]'s
-/// resolved chord for `convention`+`platform`. An UNKNOWN slug is left as a
-/// visible `[[unknown-key:slug]]` marker — never panics, never silently
-/// vanishes — so a typo'd token is obvious in the rendered doc even outside
-/// the build-time law test (`tests::every_key_token_in_the_starting_docs_resolves`)
-/// that actually guards against one ever shipping. An unterminated `{{key:`
-/// (missing `}}`) is likewise left verbatim rather than eating the rest of the
-/// document.
+/// Every [`SYNTHETIC`] chord's Mac-glyph LABEL (`"⌘P"`, `"⌘⌥I"`) — the
+/// non-catalog half of "every valid Mac chord label", for a consumer (the
+/// docs-vs-catalog law's HTML-surface check, `docs_catalog_law.rs`) that
+/// needs the WHOLE valid set without duplicating [`SYNTHETIC`]'s two
+/// hardcoded specs. Test-only: its one consumer is itself `cfg(test)`.
+#[cfg(test)]
+pub(crate) fn synthetic_mac_glyphs() -> Vec<String> {
+    SYNTHETIC.iter().map(|(_, mac, _)| crate::keyspec::mac_glyph_chord(mac)).collect()
+}
+
+/// Resolve `slug_want`'s command DISPLAY NAME straight from the live catalog
+/// (`commands::COMMANDS`, keyed the same way `[keys]` rebinding is — via
+/// [`commands::slug`]), for a `{{cmd:slug}}` token. `None` for an unknown slug
+/// (a typo, or a command renamed/retired since the doc was written). Unlike
+/// [`key_token_label`] this carries no convention/platform parameter — a
+/// command's NAME doesn't vary by platform, only its chord does.
+pub fn cmd_token_label(slug_want: &str) -> Option<String> {
+    commands::COMMANDS.iter().find(|c| commands::slug(c.name) == slug_want).map(|c| c.name.to_string())
+}
+
+/// Replace every `{{key:slug}}` / `{{cmd:slug}}` token in `text` with
+/// [`key_token_label`] / [`cmd_token_label`]'s resolved text for
+/// `convention`+`platform`. An UNKNOWN slug is left as a visible
+/// `[[unknown-key:slug]]` / `[[unknown-cmd:slug]]` marker — never panics,
+/// never silently vanishes — so a typo'd token is obvious in the rendered doc
+/// even outside the build-time law test
+/// (`tests::every_key_token_in_the_starting_docs_resolves`) that actually
+/// guards against one ever shipping. An unterminated `{{...` (missing `}}`)
+/// is likewise left verbatim rather than eating the rest of the document, and
+/// a `{{...}}` span whose inner text carries neither recognized prefix is left
+/// as `[[unknown-token:...]]` (there is no third kind today, but a stray
+/// unrecognized brace pair should still be loud, not silent).
 pub fn render_key_tokens(text: &str, convention: Convention, platform: Platform) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -72,10 +119,19 @@ pub fn render_key_tokens(text: &str, convention: Convention, platform: Platform)
         let after = &rest[start + OPEN.len()..];
         match after.find(CLOSE) {
             Some(end) => {
-                let slug_want = &after[..end];
-                match key_token_label(slug_want, convention, platform) {
-                    Some(label) => out.push_str(&label),
-                    None => out.push_str(&format!("[[unknown-key:{slug_want}]]")),
+                let inner = &after[..end];
+                if let Some(slug_want) = inner.strip_prefix(KEY_PREFIX) {
+                    match key_token_label(slug_want, convention, platform) {
+                        Some(label) => out.push_str(&label),
+                        None => out.push_str(&format!("[[unknown-key:{slug_want}]]")),
+                    }
+                } else if let Some(slug_want) = inner.strip_prefix(CMD_PREFIX) {
+                    match cmd_token_label(slug_want) {
+                        Some(label) => out.push_str(&label),
+                        None => out.push_str(&format!("[[unknown-cmd:{slug_want}]]")),
+                    }
+                } else {
+                    out.push_str(&format!("[[unknown-token:{inner}]]"));
                 }
                 rest = &after[end + CLOSE.len()..];
             }
@@ -98,14 +154,32 @@ mod tests {
     const TOUR: &str = crate::embedded_docs::TOUR_MD;
     const GUIDE: &str = crate::embedded_docs::GUIDE_MD;
 
+    /// Every `{{key:slug}}` slug used in `text`, in order.
     fn extract_token_slugs(text: &str) -> Vec<String> {
+        extract_tagged_slugs(text, KEY_PREFIX)
+    }
+
+    /// Every `{{cmd:slug}}` slug used in `text`, in order.
+    fn extract_cmd_slugs(text: &str) -> Vec<String> {
+        extract_tagged_slugs(text, CMD_PREFIX)
+    }
+
+    /// Shared token-body scanner: every `{{<prefix><slug>}}` occurrence in
+    /// `text`, `<slug>` extracted in order. A `{{...}}` span carrying a
+    /// DIFFERENT prefix (or none) is simply not this scan's business — the
+    /// unified render-side law tests below drive `render_key_tokens` itself,
+    /// which is what actually enforces "every token kind resolves or is loud."
+    fn extract_tagged_slugs(text: &str, prefix: &str) -> Vec<String> {
         let mut out = Vec::new();
         let mut rest = text;
         while let Some(start) = rest.find(OPEN) {
             let after = &rest[start + OPEN.len()..];
             match after.find(CLOSE) {
                 Some(end) => {
-                    out.push(after[..end].to_string());
+                    let inner = &after[..end];
+                    if let Some(slug_want) = inner.strip_prefix(prefix) {
+                        out.push(slug_want.to_string());
+                    }
                     rest = &after[end + CLOSE.len()..];
                 }
                 None => break,
@@ -142,6 +216,27 @@ mod tests {
     }
 
     #[test]
+    fn render_key_tokens_substitutes_a_known_cmd_slug() {
+        let out = render_key_tokens("open {{cmd:widen_page}} from the palette", Convention::Mac, Platform::Native);
+        assert_eq!(out, "open Widen page from the palette");
+        // Convention/platform-independent, unlike a chord token.
+        let out_linux = render_key_tokens("{{cmd:widen_page}}", Convention::Linux, Platform::Web);
+        assert_eq!(out_linux, "Widen page");
+    }
+
+    #[test]
+    fn render_key_tokens_flags_an_unknown_cmd_slug_rather_than_vanishing() {
+        let out = render_key_tokens("{{cmd:nope}}", Convention::Mac, Platform::Native);
+        assert_eq!(out, "[[unknown-cmd:nope]]");
+    }
+
+    #[test]
+    fn render_key_tokens_flags_an_unrecognized_token_kind() {
+        let out = render_key_tokens("{{bogus:widen_page}}", Convention::Mac, Platform::Native);
+        assert_eq!(out, "[[unknown-token:bogus:widen_page]]");
+    }
+
+    #[test]
     fn synthetic_tokens_resolve_on_both_conventions() {
         assert_eq!(key_token_label("command_palette", Convention::Mac, Platform::Native).as_deref(), Some("\u{2318}P"));
         assert_eq!(key_token_label("command_palette", Convention::Linux, Platform::Native).as_deref(), Some("Ctrl+P"));
@@ -149,9 +244,13 @@ mod tests {
         assert!(key_token_label("stats_hud", Convention::Linux, Platform::Native).is_some());
     }
 
-    /// THE ONE LAW that guards `render_key_tokens`'s unknown-slug fallback from
-    /// ever actually shipping: every `{{key:slug}}` token used in the STARTING
-    /// docs must resolve, on every convention x platform combination.
+    /// THE DOCS-VS-CATALOG LAW (chord half): guards `render_key_tokens`'s
+    /// unknown-slug fallback from ever actually shipping — every
+    /// `{{key:slug}}` token used in the STARTING docs must resolve, on every
+    /// convention x platform combination. This is the harvest-and-resolve law
+    /// the "welcome-doc taught a retired chord" incident asked for: a retired
+    /// or renamed chord slug fails `cargo test` here, before it ever reaches a
+    /// reader.
     #[test]
     fn every_key_token_in_the_starting_docs_resolves() {
         for (name, doc) in [("welcome.md", WELCOME), ("tour.md", TOUR), ("GUIDE.md", GUIDE)] {
@@ -168,6 +267,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// THE DOCS-VS-CATALOG LAW (command-name half): every `{{cmd:slug}}`
+    /// token used in the STARTING docs must resolve against the live catalog
+    /// (`commands::action_for_name`'s own slug space — see `cmd_token_label`).
+    /// A command renamed or retired since a doc cited it by name fails here.
+    /// Not every doc need cite a bare command name (`tour.md` today doesn't —
+    /// it only teaches chords), so an empty slug list per-doc is fine; the
+    /// requirement is just that whichever slugs ARE used resolve.
+    #[test]
+    fn every_cmd_token_in_the_starting_docs_resolves() {
+        let mut total = 0usize;
+        for (name, doc) in [("welcome.md", WELCOME), ("tour.md", TOUR), ("GUIDE.md", GUIDE)] {
+            for slug_want in extract_cmd_slugs(doc) {
+                total += 1;
+                assert!(
+                    cmd_token_label(&slug_want).is_some(),
+                    "{name}: unknown cmd token slug {slug_want:?} (renamed or retired command?)"
+                );
+            }
+        }
+        assert!(total > 0, "expected at least one {{{{cmd:..}}}} token across the starting docs");
     }
 
     /// THE GREP-LAW: no literal chord glyph survives in the STARTING docs'
