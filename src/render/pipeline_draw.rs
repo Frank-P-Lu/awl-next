@@ -305,14 +305,11 @@ impl TextPipeline {
         let wk_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
         let wk_buffer = GlyphBuffer::new(&mut font_system, metrics.glyph_metrics());
-        // FORMAT POPOVER: its own float-panel elevation (shadow -> raised border ->
-        // base_300 card) + an active-button value-step wash + a button-label text
-        // renderer, kept separate from every shared float/panel quad. Empty/off
-        // until a mouse selection summons it (or the `AWL_POPOVER` capture probe).
-        let popover_shadow = SelectionPipeline::new(device, format, float_shadow_srgba());
-        let popover_border =
-            SelectionPipeline::new(device, format, theme::surface_selected().rgba_bytes());
-        let popover_card = SelectionPipeline::new(device, format, theme::base_300().rgba_bytes());
+        // FORMAT POPOVER: an active-button value-step wash + a button-label text
+        // renderer. Its float-panel ELEVATION rides the shared `float_shadow`/
+        // `float_border`/`float_card` quads (`prepare_float_panel`) — no dedicated
+        // trio of its own; see `render.rs`'s field doc. Empty/off until a mouse
+        // selection summons it (or the `AWL_POPOVER` capture probe).
         let popover_wash = SelectionPipeline::new(device, format, theme::base_200().rgba_bytes());
         // SELF-DEMONSTRATING buttons: the `A` highlight pill (the doc wash's own
         // derivation + one-bit dither) and the `S` strike line (THE strike ink).
@@ -510,9 +507,6 @@ impl TextPipeline {
             wk_card,
             wk_renderer,
             wk_buffer,
-            popover_shadow,
-            popover_border,
-            popover_card,
             popover_wash,
             popover_hl_wash,
             popover_strike,

@@ -49,17 +49,28 @@ pub(in crate::render) const CARD_MAX_W_FACETED: f32 = 600.0;
 /// exactly this; the y-agreement law holds), so this is a pure taste dial with
 /// no alignment risk. LIVE-ONLY: whether the fuller beat reads right needs an eye.
 ///
-/// THE ROUND'S ONE SHIPPED VISUAL CHANGE. This `0.72 -> 1.0` widening is a
-/// user-directed taste change that moves EVERY summoned picker's query line (and
-/// the whole candidate stack below it) down a fraction vs the `main` base — so
-/// byte-identity-vs-`main` is by design IMPOSSIBLE for any query-line surface,
-/// and the Persona-list inert guarantee is scoped to self-consistency + the
-/// model-level inert law instead (see `render/tests/list_surfaces.rs`'s module
-/// doc). NOTE the caret's y is NOT derived from this constant: it reads the
-/// query line's real shaped `line_height` (`overlay_place_caret`), so it tracks
-/// the glyphs through cosmic-text's half-leading whatever this dial is set to
-/// (the full-bleed caret bug this refit closed).
-const OVERLAY_QUERY_BEAT: f32 = 1.0;
+/// The `0.72 -> 1.0` widening was a user-directed taste change that moves
+/// EVERY summoned picker's query line (and the whole candidate stack below
+/// it) down a fraction vs the `main` base — so byte-identity-vs-`main` is by
+/// design IMPOSSIBLE for any query-line surface, and the Persona-list inert
+/// guarantee is scoped to self-consistency + the model-level inert law instead
+/// (see `render/tests/list_surfaces.rs`'s module doc). NOTE the caret's y is
+/// NOT derived from this constant: it reads the query line's real shaped
+/// `line_height` (`overlay_place_caret`), so it tracks the glyphs through
+/// cosmic-text's half-leading whatever this dial is set to (the full-bleed
+/// caret bug that refit closed).
+///
+/// REFIT (overlay/chrome polish round, pasted-8): a full row (`1.0`) STILL
+/// read cramped under the command palette's input on a fresh report — a full
+/// row of air apparently isn't visually "full" once the strip/lens header rows
+/// (theme_overlay_geometry's own inflated line) sit right above it, crowding
+/// the eye's read of the gap. Widened again, `1.0 -> 1.3`, so the beat reads
+/// unambiguously as its own deliberate divider rather than "a slightly loose
+/// row". Same no-risk taste dial as the 2026-07-16 refit (the shaper inflates
+/// the real header line's metrics by exactly this, so the band/glyphs/caret
+/// all move together — no alignment class to regress). LIVE-ONLY: whether
+/// `1.3` finally reads right needs a human eye.
+const OVERLAY_QUERY_BEAT: f32 = 1.3;
 
 /// The foot HINT row height (item 5), as a fraction of the overlay row height —
 /// a compact footer that hugs the card's bottom edge instead of floating a full

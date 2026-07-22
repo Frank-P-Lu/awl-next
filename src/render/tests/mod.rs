@@ -20,6 +20,7 @@ mod chrome_panels;
 mod cjk;
 mod dither;
 mod firetail_showcase;
+mod float_surface_law;
 mod frost;
 mod geometry;
 mod geometry_reshape;

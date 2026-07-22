@@ -111,13 +111,11 @@ impl TextPipeline {
         self.wk_shadow.set_color(float_shadow_srgba());
         self.wk_border.set_color(theme::surface_selected().rgba_bytes());
         self.wk_card.set_color(theme::base_300().rgba_bytes());
-        // FORMAT POPOVER elevation + active-button wash re-tint with the world
-        // (same float tokens as which-key; the wash is a `base_200` value step,
-        // never amber). O(1); geometry is theme-independent.
-        self.popover_shadow.set_color(float_shadow_srgba());
-        self.popover_border
-            .set_color(theme::surface_selected().rgba_bytes());
-        self.popover_card.set_color(theme::base_300().rgba_bytes());
+        // FORMAT POPOVER's active-button wash re-tints with the world (a `base_200`
+        // value step, never amber). O(1); geometry is theme-independent. The
+        // popover's ELEVATION trio is the shared `float_*` pipelines (re-tinted
+        // below, alongside the caret-preview panel / spell popup / search panel
+        // that already ride them) — no dedicated popover elevation tokens anymore.
         self.popover_wash.set_color(theme::base_200().rgba_bytes());
         // SELF-DEMONSTRATING buttons: `A`'s pill re-tints from the doc highlight
         // wash's own derivation (+ the one-bit dither density — a switch AWAY

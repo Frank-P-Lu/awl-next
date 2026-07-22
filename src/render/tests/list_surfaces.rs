@@ -9,14 +9,15 @@
 //! pixels (the Wagtail invisible-row lesson — assert the OUTCOME, not the
 //! mechanism).
 //!
-//! THE INERT GUARANTEE — re-scoped (2026-07-16). The gate is NO LONGER
-//! "byte-identical to the `main` base": this refit round ships ONE deliberate
-//! visual change — the QUERY-INPUT BEAT widened from `0.72` to `1.0` of a row
-//! (`OVERLAY_QUERY_BEAT`, a user-directed taste dial), so EVERY summoned
-//! picker's query line and everything below it moves down a fraction vs `main`
-//! by design. Byte-identity-vs-`main` is therefore impossible for any
-//! query-line surface and must not be claimed. What the inert guarantee DOES
-//! assert, two ways:
+//! THE INERT GUARANTEE — re-scoped (2026-07-16, widened again in the
+//! overlay/chrome polish round). The gate is NO LONGER "byte-identical to the
+//! `main` base": ONE deliberate visual change rides every summoned picker —
+//! the QUERY-INPUT BEAT, widened `0.72 -> 1.0 -> 1.3` of a row across the two
+//! rounds (`OVERLAY_QUERY_BEAT`, a user-directed taste dial) — so EVERY
+//! summoned picker's query line and everything below it moves down a fraction
+//! vs `main` by design. Byte-identity-vs-`main` is therefore impossible for
+//! any query-line surface and must not be claimed. What the inert guarantee
+//! DOES assert, two ways:
 //!   1. SELF-CONSISTENCY (`list_and_facet_probe_off_matches_world_default`):
 //!      forcing a probe to its OFF value (`AWL_OVERLAY_LIST_FORCE=pane` /
 //!      `AWL_FACET_STYLE_FORCE=text`) renders BYTE-IDENTICAL to the world's own

@@ -66,42 +66,34 @@ pub fn toggle() -> bool {
 /// rate (headless, an unknown display, wasm): one 60 Hz vsync.
 pub const FALLBACK_REFRESH_MILLIHERTZ: u32 = 60_000;
 
-/// One vsync's worth of milliseconds for the CURRENT monitor — the frame
-/// budget, ADAPTIVE per display so the line reads `budget 16.6` on a 60 Hz
-/// panel and `budget 8.3` at 120 Hz. Pure: takes winit's
+/// One vsync's worth of milliseconds for the CURRENT monitor — the adaptive
+/// frame budget the sidecar's machine-readable `budget_ms` field reports
+/// (`DebugPerfReport`/`debug_json`), so the agent can triage a frame's cost
+/// against it without parsing prose. Pure: takes winit's
 /// `refresh_rate_millihertz()` (`None` → the 60 Hz fallback), so it is
 /// unit-testable without a window.
+///
+/// DROPPED FROM THE DRAWN LINE (overlay/chrome polish round): the panel's
+/// `frame …` line used to suffix `· budget 16.6` / `· over` — a second number
+/// competing with the frame cost it was meant to contextualize hurt
+/// readability more than it helped triage. The raw budget stays reachable in
+/// the sidecar for anyone who wants the comparison.
 pub fn budget_ms(refresh_millihertz: Option<u32>) -> f32 {
     1_000_000.0 / refresh_millihertz.unwrap_or(FALLBACK_REFRESH_MILLIHERTZ).max(1) as f32
 }
 
-/// Format a millisecond figure TRUNCATED (not rounded) to one decimal — the
-/// budget is a ceiling, so `16.66̅` reads as the honest floor `16.6`, never the
-/// flattering round-up `16.7` (and 120 Hz's `8.33̅` reads `8.3`).
-fn fmt_ms_floor(ms: f32) -> String {
-    format!("{:.1}", (ms * 10.0).floor() / 10.0)
-}
-
 /// The FRAME-COST line for the debug panel: the PREVIOUS completed frame's cost
 /// (one-frame lag — you cannot know this frame's cost until it presents) plus
-/// the worst of the last [`COST_WINDOW`] drawn frames and the monitor's budget.
+/// the worst of the last [`COST_WINDOW`] drawn frames.
 ///
 /// Pure (so it is unit-testable without a window):
-/// * `Some((last, worst))` + interacting → `"frame 1.4 ms · worst 3.2 · budget 16.6"`,
-///   with the budget suffix replaced by the textual flag `"· over"` when the
-///   shown cost exceeds the budget (value-based voice — no color machinery,
-///   never amber).
+/// * `Some((last, worst))` + interacting → `"frame 1.4 ms · worst 3.2"`.
 /// * `Some` + `still` → `"still · frame 1.4 ms · worst 3.2"` — the settled win
-///   state named in words, the budget suffix dropped (a settled editor is not
-///   spending budget).
+///   state named in words.
 /// * `None` (no live clock — the headless capture, or the instant after
 ///   toggle-on before a frame has been measured; both settled truths) → the
 ///   FIXED, numberless placeholder `"still · frame — ms · worst —"`.
-///
-/// `budget_ms` is `None` only where no monitor was ever queried (the capture);
-/// it folds to the 60 Hz fallback, though the still/placeholder forms never
-/// show it.
-pub fn frame_readout(cost: Option<(f32, f32)>, budget_ms: Option<f32>, still: bool) -> String {
+pub fn frame_readout(cost: Option<(f32, f32)>, still: bool) -> String {
     let Some((last, worst)) = cost else {
         // No measured frame: the capture path has no clock, so a numberless
         // placeholder in the settled form keeps the line present but
@@ -111,13 +103,7 @@ pub fn frame_readout(cost: Option<(f32, f32)>, budget_ms: Option<f32>, still: bo
     if still {
         return format!("still · frame {last:.1} ms · worst {worst:.1}");
     }
-    let budget = budget_ms.unwrap_or_else(|| self::budget_ms(None));
-    let suffix = if last > budget {
-        "over".to_string()
-    } else {
-        format!("budget {}", fmt_ms_floor(budget))
-    };
-    format!("frame {last:.1} ms · worst {worst:.1} · {suffix}")
+    format!("frame {last:.1} ms · worst {worst:.1}")
 }
 
 /// The KEY→PIXEL latency line: the felt metric — `Instant` stamped when the
@@ -354,49 +340,24 @@ mod tests {
         // No measured frame (the headless capture path, or just after toggle-on)
         // => a fixed, numberless string in the SETTLED form, so a clockless
         // render stays byte-deterministic. The still flag cannot change it.
-        assert_eq!(frame_readout(None, None, true), "still · frame — ms · worst —");
-        assert_eq!(frame_readout(None, Some(16.6), false), "still · frame — ms · worst —");
+        assert_eq!(frame_readout(None, true), "still · frame — ms · worst —");
+        assert_eq!(frame_readout(None, false), "still · frame — ms · worst —");
     }
 
     #[test]
-    fn frame_readout_interacting_shows_cost_worst_budget() {
-        // Within budget: the previous frame's cost, the rolling worst, and the
-        // monitor's budget (truncated to one decimal — 60 Hz reads 16.6).
-        assert_eq!(
-            frame_readout(Some((1.4, 3.2)), Some(budget_ms(Some(60_000))), false),
-            "frame 1.4 ms · worst 3.2 · budget 16.6"
-        );
-        // A 120 Hz monitor budgets one of ITS vsyncs: 8.3.
-        assert_eq!(
-            frame_readout(Some((1.4, 3.2)), Some(budget_ms(Some(120_000))), false),
-            "frame 1.4 ms · worst 3.2 · budget 8.3"
-        );
-        // No budget fed (never happens live) folds to the 60 Hz fallback.
-        assert_eq!(
-            frame_readout(Some((1.4, 3.2)), None, false),
-            "frame 1.4 ms · worst 3.2 · budget 16.6"
-        );
+    fn frame_readout_interacting_shows_cost_and_worst_only() {
+        // No budget suffix, no `over` flag — just the previous frame's cost and
+        // the rolling worst (the readability round dropped the budget line;
+        // the raw number still rides the sidecar's `budget_ms` field).
+        assert_eq!(frame_readout(Some((1.4, 3.2)), false), "frame 1.4 ms · worst 3.2");
+        assert_eq!(frame_readout(Some((21.3, 21.3)), false), "frame 21.3 ms · worst 21.3");
     }
 
     #[test]
-    fn frame_readout_over_budget_is_a_textual_flag() {
-        // Past the budget the suffix becomes the word `over` — value-based
-        // voice, no color machinery, never amber.
+    fn frame_readout_still_names_the_win_state() {
+        // The settled form: prefixed `still ·`, same ink, words only.
         assert_eq!(
-            frame_readout(Some((21.3, 21.3)), Some(budget_ms(Some(60_000))), false),
-            "frame 21.3 ms · worst 21.3 · over"
-        );
-        // Exactly AT budget is not over (the flag is `cost > budget`).
-        let b = budget_ms(Some(60_000));
-        assert_eq!(frame_readout(Some((b, b)), Some(b), false), format!("frame {b:.1} ms · worst {b:.1} · budget 16.6"));
-    }
-
-    #[test]
-    fn frame_readout_still_names_the_win_state_and_drops_the_budget() {
-        // The settled form: prefixed `still ·`, budget suffix gone (a settled
-        // editor is not spending budget) — same ink, words only.
-        assert_eq!(
-            frame_readout(Some((1.4, 3.2)), Some(16.6), true),
+            frame_readout(Some((1.4, 3.2)), true),
             "still · frame 1.4 ms · worst 3.2"
         );
     }

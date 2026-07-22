@@ -3357,15 +3357,19 @@ pub struct TextPipeline {
     /// down. Set by [`Self::set_whichkey`]; a settled/idle frame leaves it `None`, so a
     /// default capture is byte-identical.
     whichkey_rows: Option<Vec<(String, String)>>,
-    /// THE FORMAT POPOVER (`crate::popover`) — its OWN float-elevation trio +
-    /// active-button wash + button-label text renderer, drawn in `draw_chrome_tail`
-    /// (over the document, like the which-key panel) so it never races the shared
-    /// `float_*`/`panel_*` quads the overlay + caret-preview + search panels own.
-    /// Parked (nothing drawn) unless [`Self::popover_model`] is `Some` — set from
+    /// THE FORMAT POPOVER (`crate::popover`) — active-button wash + button-label
+    /// text renderer, drawn in `draw_chrome_tail` (over the document, like the
+    /// which-key panel). Its float-ELEVATION trio is no longer its own: the
+    /// overlay/chrome polish round moved it onto the SAME shared
+    /// `float_shadow`/`float_border`/`float_card` quads the caret-preview panel
+    /// and the spell popup already rode (`TextPipeline::prepare_float_panel`,
+    /// `chrome/popover.rs`'s module doc) — the popover, the preview panel, the
+    /// search panel, and the spell popup are structurally mutually exclusive
+    /// (`ViewState::popover`'s own gate requires no overlay AND no search), so one
+    /// buffer trio safely serves all four instead of the popover carrying a
+    /// redundant one that only ever drew ONE thing at a time. Parked (nothing
+    /// drawn) unless [`Self::popover_model`] is `Some` — set from
     /// [`ViewState::popover`], so a popover-down frame is byte-identical.
-    pub popover_shadow: SelectionPipeline,
-    pub popover_border: SelectionPipeline,
-    pub popover_card: SelectionPipeline,
     /// The value-step wash quad behind each LIT (active-toggle) button — a
     /// `base_content` value ladder step, NEVER amber (DESIGN §3; the caret keeps
     /// the one accent). ALSO carries the `C` button's ALWAYS-ON inline-code demo

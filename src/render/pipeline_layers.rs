@@ -368,12 +368,27 @@ impl TextPipeline {
             .render(&self.atlas, &self.viewport, pass)
             .map_err(|e| anyhow::anyhow!("glyphon menu-drop chord render failed: {e:?}"))?;
         // THE FORMAT POPOVER, drawn LAST so it floats over the document (like the
-        // which-key panel): float elevation (shadow -> raised border -> card) ->
-        // active-button value-step wash -> button labels. ALL parked off-screen/empty
-        // when the popover is down, so a default render is byte-identical.
-        self.popover_shadow.draw(pass);
-        self.popover_border.draw(pass);
-        self.popover_card.draw(pass);
+        // which-key panel): float elevation -> active-button value-step wash ->
+        // button labels. ALL parked off-screen/empty when the popover is down, so
+        // a default render is byte-identical.
+        //
+        // THE SHARED FLOAT-SURFACE QUADS (overlay/chrome polish round): the
+        // popover's elevation trio is `float_shadow`/`float_border`/`float_card` —
+        // the SAME quads the caret-preview panel / spell popup (`draw_overlay_card`,
+        // gated on `overlay_active`) and the search panel (`render`'s
+        // `search_active` branch) already draw. Those two call sites already cover
+        // every frame where an overlay OR the search panel is up (and `prepare_float_panel`'s
+        // call-order guarantees whichever of the three PREPARED real content this
+        // frame is the one those buffers hold — see that fn's doc); this ONE extra
+        // draw call covers the remaining case (no overlay, no search — exactly when
+        // the popover CAN be the real summoner). Drawing it a second time whenever
+        // overlay/search already drew it would double-blend the translucent shadow,
+        // so it's gated to fire only in the case those two draw sites DON'T cover.
+        if !self.overlay_active && !self.search_active {
+            self.float_shadow.draw(pass);
+            self.float_border.draw(pass);
+            self.float_card.draw(pass);
+        }
         self.popover_wash.draw(pass);
         // SELF-DEMONSTRATING quads: `A`'s highlight pill over the value-step
         // washes, `S`'s strike line — both UNDER the labels (the doc's own

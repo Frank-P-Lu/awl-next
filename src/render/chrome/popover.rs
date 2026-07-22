@@ -1,5 +1,6 @@
-//! THE FORMAT POPOVER chrome — the reveal-on-select floating button row. Given a
-//! [`crate::popover::PopoverModel`] (from [`ViewState::popover`]) + the live
+//! THE FORMAT POPOVER chrome — the reveal-on-select floating button row (the
+//! "mouse-highlight popover": it rides the selection a mouse-drag makes). Given
+//! a [`crate::popover::PopoverModel`] (from [`ViewState::popover`]) + the live
 //! selection, this shapes the button labels, measures their real glyph spans,
 //! lays out a small elevated card ANCHORED just above (or below) the selection's
 //! first endpoint, and uploads: the RIMMED float elevation (raised border →
@@ -7,6 +8,19 @@
 //! chin" cure), a `base_200` value-step wash behind each LIT button, and the
 //! button labels themselves. Parked (nothing drawn) when the model is `None`, so a
 //! popover-down frame is byte-identical.
+//!
+//! THE ONE SHARED FLOAT-SURFACE PRIMITIVE (overlay/chrome polish round): the
+//! elevation trio rides [`TextPipeline::prepare_float_panel`] — the SAME quads
+//! (`float_shadow`/`float_border`/`float_card`) the contextual SPELL popup, the
+//! caret-style preview panel, and the search panel already share, never a
+//! popover-only duplicate. Safe because [`ViewState::popover`]'s own gate
+//! (`app/viewstate.rs`) requires `overlay.is_none() && search.is_none()` — the
+//! popover can NEVER be the summoned surface at the same time as any of the
+//! other three, so at most one ever supplies real content on a given frame —
+//! this fn's own GUARD below (not call order) is what makes that safe. See
+//! `prepare_float_panel`'s doc + the
+//! `float_surface_primitive_has_no_bypass_among_the_unified_family` law that
+//! bans a second direct `set_float_quads` call from ever creeping back in.
 //!
 //! The laid-out geometry is stashed in `popover_geom` so the pure `&self`
 //! [`TextPipeline::popover_hit`] (click + cursor-shape) and the sidecar read the
@@ -88,26 +102,50 @@ impl TextPipeline {
         width: u32,
         height: u32,
     ) -> anyhow::Result<()> {
+        // GUARD (the shared-quad ownership seam): the float-panel quads are
+        // touched here ONLY when NEITHER an overlay NOR the search panel is
+        // active — i.e., only when `self` is structurally allowed to be the
+        // real owner this frame (mirrors `ViewState::popover`'s own gate,
+        // `app/viewstate.rs`, which already nulls `popover_model` under either
+        // condition). Without this, a frame where an overlay/search genuinely
+        // owns `float_*` (a real spell popup, caret preview, or search card)
+        // would have its content ERASED by popover's own "closed" park call —
+        // regardless of which of the two independently-gated `prepare_*`
+        // methods happened to run last this frame (the bug a first draft of
+        // this merge shipped, caught by
+        // `caret_preview_panel_appears_below_picker_and_stops_on_close`). The
+        // OTHER popover pipelines below (wash/hl_wash/strike/text) are NOT
+        // shared with anything else, so they always update normally — no
+        // stale button ghosts when an overlay opens over a popover.
+        let touch_float = !self.overlay_active && !self.search_active;
         let geom = self.popover_layout(width, height);
         match geom {
             Some(geom) => {
-                // Float elevation via the SAME primitive every summoned micro-panel
-                // rides — but RIMMED (border + card, no shadow): the drop-shadow quad
-                // hung a hard-edged ~9px slab below this two-line-height card's rim,
-                // out-massing its own 7px pad — the LIVE "fat chin" that survived the
-                // card-hug fix, at every scale (the card rect measured tight while
-                // the slab painted OUTSIDE it). See [`FloatElevation::Rimmed`].
-                set_float_quads(
-                    &mut self.popover_shadow,
-                    &mut self.popover_border,
-                    &mut self.popover_card,
-                    device,
-                    queue,
-                    width,
-                    height,
-                    Some(geom.card),
-                    FloatElevation::Rimmed,
-                );
+                // Float elevation via THE ONE SHARED SURFACE PRIMITIVE every summoned
+                // micro-panel rides (`prepare_float_panel` — the caret-style preview
+                // panel, the search panel, and the contextual SPELL popup all share
+                // it too, onto the SAME `float_shadow`/`float_border`/`float_card`
+                // quads; see that owner's doc for why sharing one buffer trio across
+                // structurally-mutually-exclusive summoners is safe) — but RIMMED
+                // (border + card, no shadow): the drop-shadow quad hung a hard-edged
+                // ~9px slab below this two-line-height card's rim, out-massing its
+                // own 7px pad — the LIVE "fat chin" that survived the card-hug fix,
+                // at every scale (the card rect measured tight while the slab
+                // painted OUTSIDE it). See [`FloatElevation::Rimmed`]. `geom` is
+                // `Some` only when `touch_float` is already true (the SAME
+                // `overlay.is_none() && search.is_none()` gate `popover_model`
+                // itself requires), so this call is never actually skipped here —
+                // the guard's real job is the `None` arm below.
+                if touch_float {
+                    self.prepare_float_panel(
+                        device,
+                        queue,
+                        width,
+                        height,
+                        Some(geom.card),
+                        FloatElevation::Rimmed,
+                    );
+                }
                 // A value-step wash behind each LIT button (never amber) — a pill
                 // hugging the glyph ink band with a small halo (the card hugs the same
                 // band, so the wash never floats in dead space).
@@ -174,17 +212,13 @@ impl TextPipeline {
                 Ok(())
             }
             None => {
-                set_float_quads(
-                    &mut self.popover_shadow,
-                    &mut self.popover_border,
-                    &mut self.popover_card,
-                    device,
-                    queue,
-                    width,
-                    height,
-                    None,
-                    FloatElevation::Rimmed,
-                );
+                // THE GUARD'S REAL JOB: an overlay or the search panel may
+                // genuinely own `float_*` this frame (a real spell popup /
+                // caret preview / search card) — never clear it out from
+                // under them just because POPOVER has nothing to show.
+                if touch_float {
+                    self.prepare_float_panel(device, queue, width, height, None, FloatElevation::Rimmed);
+                }
                 self.popover_wash.prepare(device, queue, width, height, &[]);
                 self.popover_hl_wash.prepare(device, queue, width, height, &[]);
                 self.popover_strike.prepare(device, queue, width, height, &[]);

@@ -91,13 +91,17 @@ impl TextPipeline {
     /// The DEBUG panel TEXT for the top-left corner: a small STACKED dev readout, one
     /// diagnostic per line. EMPTY when the panel is off (parks it off-screen, so a
     /// default capture stays byte-identical). The first THREE lines are the honest
-    /// perf triad — frame cost vs the monitor's budget (`"frame 1.4 ms · worst 3.2
-    /// · budget 16.6"`, still-prefixed once settled), key→px latency, and the
-    /// frozen-while-idle redraw count — live numbers in the window, fixed clockless
-    /// still-form placeholders in a capture. Every middle line is a PURE function of
-    /// the deterministic view state, so a `--debug` capture is reproducible; the
-    /// LAST line (autosave) is a fourth clock-bearing one, fed by the live loop like
-    /// the perf triad. Exposed so the sidecar can report it verbatim.
+    /// perf triad — frame cost (`"frame 1.4 ms · worst 3.2"`, still-prefixed once
+    /// settled — the overlay/chrome polish round DROPPED the `· budget 16.6` / `·
+    /// over` suffix from this line: a second number racing the frame cost it was
+    /// meant to contextualize hurt readability more than it helped triage; the raw
+    /// figure still rides the sidecar's `budget_ms` field for anyone who wants the
+    /// comparison), key→px latency, and the frozen-while-idle redraw count — live
+    /// numbers in the window, fixed clockless still-form placeholders in a capture.
+    /// Every middle line is a PURE function of the deterministic view state, so a
+    /// `--debug` capture is reproducible; the LAST line (autosave) is a fourth
+    /// clock-bearing one, fed by the live loop like the perf triad. Exposed so the
+    /// sidecar can report it verbatim.
     ///
     /// Lines: frame cost · key→px · redraws · zoom · viewport WxH @dpi · cursor
     /// ln:col · theme·caret·page-mode · md:yes/no·syn:lang · gpu N MB · autosave
@@ -115,8 +119,7 @@ impl TextPipeline {
         let m = self.metrics;
         // Lines 1-3 (clock-bearing): the only non-deterministic lines — fixed
         // still-form placeholders in a capture, live numbers in the window.
-        let frame =
-            crate::debug::frame_readout(self.debug_frame_cost, self.debug_budget_ms, self.debug_still);
+        let frame = crate::debug::frame_readout(self.debug_frame_cost, self.debug_still);
         let latency = crate::debug::latency_readout(self.debug_latency_ms);
         let redraws = crate::debug::activity_readout(self.debug_redraws);
         let zoom = format!("zoom {}%", (m.zoom * 100.0).round() as i64);
