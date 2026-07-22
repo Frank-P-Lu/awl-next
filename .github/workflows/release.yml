@@ -67,11 +67,13 @@ jobs:
         with:
           key: release-mac
 
+      # with-remap.sh strips the runner's $HOME/registry paths from the shipped
+      # release binary (rustc bakes compile-time source locations otherwise).
       - name: cargo build --release (aarch64-apple-darwin)
-        run: cargo build --release --target aarch64-apple-darwin
+        run: scripts/with-remap.sh cargo build --release --target aarch64-apple-darwin
 
       - name: cargo build --release (x86_64-apple-darwin)
-        run: cargo build --release --target x86_64-apple-darwin
+        run: scripts/with-remap.sh cargo build --release --target x86_64-apple-darwin
 
       - name: lipo into a universal binary
         run: |
@@ -226,8 +228,10 @@ jobs:
         with:
           key: release-linux
 
+      # with-remap.sh strips the runner's $HOME/registry paths from the shipped
+      # release binary (rustc bakes compile-time source locations otherwise).
       - name: cargo build --release
-        run: cargo build --release
+        run: scripts/with-remap.sh cargo build --release
 
       - name: Package tar.gz
         run: |
@@ -266,8 +270,10 @@ jobs:
           cargo install wasm-bindgen-cli --version 0.2.121 --locked
           cargo install trunk --locked
 
+      # with-remap.sh strips the builder's $HOME/registry paths from the wasm
+      # (rustc bakes compile-time source locations); this bundle is released.
       - name: trunk build --release
-        run: trunk build --release
+        run: scripts/with-remap.sh trunk build --release
 
       - name: Zip dist/
         run: |

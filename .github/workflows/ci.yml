@@ -90,8 +90,11 @@ jobs:
       - name: scripts/web-smoke.sh (L1 + L2)
         run: scripts/web-smoke.sh
 
+      # with-remap.sh strips the builder's $HOME/registry paths from the wasm
+      # (rustc bakes compile-time source locations); the uploaded artifact is
+      # public, so it must carry no builder path.
       - name: trunk build --release
-        run: trunk build --release
+        run: scripts/with-remap.sh trunk build --release
 
       - uses: actions/upload-artifact@v7
         with:

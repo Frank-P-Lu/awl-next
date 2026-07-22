@@ -61,11 +61,15 @@ Rebuild it (from the worktree/repo root — NOT `trunk serve`, per `WEB.md`):
 
 ```sh
 export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
-trunk build --release --public-url /editor/   # emits dist/ with /editor/-rooted paths
+scripts/with-remap.sh trunk build --release --public-url /editor/   # emits dist/ with /editor/-rooted paths
 rm -rf site/editor && cp -R dist site/editor  # mount it at the sub-path
 ```
 
-The `--public-url /editor/` flag is what makes the generated `index.html`
+`scripts/with-remap.sh` is required, not optional: a bare `trunk build` bakes the
+builder's `$HOME` into the wasm (rustc embeds compile-time source paths), and a
+committed `site/editor/` is public. The wrapper reads `$HOME` at build time and
+maps it out (`--remap-path-prefix`), so no personal path ships. The
+`--public-url /editor/` flag is what makes the generated `index.html`
 reference its wasm/js under `/editor/` instead of the root `/`. The wasm is
 ~27 MB (release, no `wasm-opt`; the bundled Latin + CJK font faces dominate) —
 acceptable for a demo, not yet size-optimized.
