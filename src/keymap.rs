@@ -374,6 +374,15 @@ pub enum Action {
     /// native last-file door (the emacs `C-x b` default is retired). A no-op when
     /// nothing was opened before.
     LastBuffer,
+    /// NOTES FLIP (palette "Notes", user-decided 2026-07-22): flip the ACTIVE
+    /// PROJECT between wherever it is now and `notes_root` — a project-level
+    /// sibling of [`LastBuffer`](Action::LastBuffer)'s buffer toggle. Invoke once
+    /// to jump into `notes_root` (remembering the project just left); invoke again
+    /// (or "Back") to flip straight back to it. A no-op with nothing to flip to
+    /// (already home, nothing remembered) or with no usable `notes_root`.
+    /// Palette-only, no default chord — see `app/files.rs::notes_flip` + its pure
+    /// `notes_flip_target`.
+    NotesFlip,
     /// Cmd-N: NEW QUICK NOTE in ONE gesture — jump to the notes project AND open a
     /// fresh empty note buffer (the emacs `C-x n` default is retired). The user just
     /// starts typing; the first non-empty line names the file (slugified), and it
@@ -1659,6 +1668,7 @@ compare_with_version|||
 clean_unused_assets|||
 keep_version|||
 last_file|C-Tab|C-Tab|
+notes|||
 new_note|Cmd-N|C-n|
 move_note|||
 rename_note|||

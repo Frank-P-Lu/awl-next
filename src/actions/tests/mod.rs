@@ -507,6 +507,7 @@ pub(super) fn delete_flinch_fixture(
         | Action::OpenRecentProjects
         | Action::OpenBrowse
         | Action::LastBuffer
+        | Action::NotesFlip
         | Action::NewNote
         | Action::MoveNote
         | Action::OpenRenameNote
@@ -707,6 +708,7 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::OpenRecentProjects
             | Action::OpenBrowse
             | Action::LastBuffer
+            | Action::NotesFlip
             | Action::NewNote
             | Action::MoveNote
             | Action::OpenRenameNote
@@ -814,6 +816,7 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::OpenRecentProjects,
         Action::OpenBrowse,
         Action::LastBuffer,
+        Action::NotesFlip,
         Action::NewNote,
         Action::MoveNote,
         Action::OpenRenameNote,
@@ -923,6 +926,7 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         // Deferred effects (the pure core signals; the live App performs).
         Action::Quit
         | Action::LastBuffer
+        | Action::NotesFlip
         | Action::NewNote
         | Action::OpenCredits
         | Action::OpenGuide

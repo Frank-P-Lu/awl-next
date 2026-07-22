@@ -90,8 +90,13 @@ fn real_fs_app_new_calls_are_all_accounted_for() {
         // `InMemoryFs` handle — they exist specifically to prove what
         // `App::reload_config` reads back from `config.path` on disk (and,
         // for the absent-key case, that it must NOT force a default), same
-        // CONTROL + INSPECT need `new_hermetic` hides.
-        ("app/files.rs", 9),
+        // CONTROL + INSPECT need `new_hermetic` hides. Plus 1 NOTES FLIP round
+        // test (`notes_flip_round_trips_the_live_app_project_root`), inside its
+        // own `fs::with_fs(fake, ..)` closure with an `InMemoryFs` handle — it
+        // exists specifically to prove `App::notes_flip` never writes the
+        // sticky `project_root` config key nor the recent-projects store, so it
+        // needs the same CONTROL + INSPECT access `new_hermetic` hides.
+        ("app/files.rs", 10),
         // 9 LIFETIME STATS + USAGE LEDGER + DISCOVERABILITY tests, each inside its own
         // `fs::with_fs(fake, ..)` closure seeded with an `InMemoryFs` — they exist
         // specifically to prove what the tracking hooks / the ledger's

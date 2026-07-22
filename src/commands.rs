@@ -172,6 +172,12 @@ static COMMAND_SEED: &[Command] = &[
     // rebindable via `[keys] keep_version`.
     Command { name: "Keep version…",     action: Action::KeepVersion,     native: "",        emacs: ""        , native_only: true, web_only: false },
     Command { name: "Last file",         action: Action::LastBuffer,      native: "",   emacs: ""        , native_only: false, web_only: false },
+    // NOTES FLIP (user-decided 2026-07-22): flip the active project to
+    // `notes_root` and back — the project-level sibling of "Last file", one row
+    // up. Palette-only, no default chord (rebindable via `[keys] notes`); same
+    // availability everywhere "Switch project…" is (native_only: false — the
+    // web build persists `notes_root`/`workspace` too, see WEB.md).
+    Command { name: "Notes",             action: Action::NotesFlip,       native: "",   emacs: ""        , native_only: false, web_only: false },
     Command { name: "New note",          action: Action::NewNote,         native: "",   emacs: ""        , native_only: false, web_only: false },
     Command { name: "Move note…",        action: Action::MoveNote,        native: "",        emacs: ""        , native_only: false, web_only: false },
     // NOTES VERBS round: familiar Save-As-shaped jobs as calm notes-native verbs.
@@ -1358,6 +1364,9 @@ mod tests {
             "Download file",
             "Check for Updates",
             "Recent projects…",
+            // NOTES FLIP round (2026-07-22): no default chord, like Move note…
+            // just above — summoned by name, rebindable via [keys] notes.
+            "Notes",
             "Go to heading…",
             "Toggle typewriter scroll",
             "Toggle menu bar",
@@ -1519,6 +1528,26 @@ mod tests {
         assert_eq!(action_for_name("Stats HUD"), None);
         assert_eq!(action_for_name("stats_hud"), None);
         assert_eq!(action_for_name("nope"), None);
+    }
+
+    /// NOTES FLIP round (user-decided 2026-07-22): "Notes" is a real, findable,
+    /// rebindable catalog command — the presence + binding half of the round's
+    /// test contract (the actual toggle-target logic is unit-tested pure in
+    /// `app::files::tests`). Mirrors `action_for_name_matches_label_and_slug`'s
+    /// own shape for one command.
+    #[test]
+    fn notes_command_exists_is_findable_and_rebindable() {
+        assert!(
+            COMMANDS.iter().any(|c| c.action == Action::NotesFlip),
+            "the catalog carries a command wired to Action::NotesFlip"
+        );
+        assert_eq!(action_for_name("Notes"), Some(Action::NotesFlip));
+        assert_eq!(action_for_name("notes"), Some(Action::NotesFlip), "the [keys] rebind slug");
+        assert_eq!(slug_for_action(&Action::NotesFlip).as_deref(), Some("notes"));
+        // Available everywhere "Switch project…" is (both native and web build
+        // notes_root/workspace) — not a native-only row.
+        let row = COMMANDS.iter().find(|c| c.action == Action::NotesFlip).unwrap();
+        assert!(!row.native_only && !row.web_only, "Notes is available on every platform");
     }
 
     #[test]
