@@ -235,8 +235,9 @@ impl TextPipeline {
         }
         // No scrim: while shown, the document recedes behind the shared FROSTED-BLUR
         // backdrop (the `render` blur branch), so the card draws only itself + its
-        // content. The card rect (shadow -> raised border -> card) is uploaded once the
-        // block extent is measured (shown branch); hidden, park all three so nothing draws.
+        // content. The card rect (raised border -> card, no drop shadow) is uploaded
+        // once the block extent is measured (shown branch); hidden, park both so
+        // nothing draws.
         if !showing {
             set_float_quads(
                 &mut self.hud_shadow,
@@ -247,7 +248,7 @@ impl TextPipeline {
                 width,
                 height,
                 None,
-                FloatElevation::Shadowed,
+                FloatElevation::Rimmed,
             );
         }
 
@@ -473,7 +474,7 @@ impl TextPipeline {
         let top = ((height as f32 - block_h) * 0.5).max(TEXT_TOP);
         // The calm card behind the stats: the block + generous padding, centered, risen
         // a value step over the dimmed doc so the figures read on a clean ground — on the
-        // same float-panel elevation (shadow -> raised border -> card) as which-key.
+        // same float-panel elevation (raised border -> card, no drop shadow) as which-key.
         let pad_x = m.char_width * 3.0;
         let pad_y = m.line_height * 0.9;
         let card_w = block_w + pad_x * 2.0;
@@ -489,7 +490,7 @@ impl TextPipeline {
             width,
             height,
             Some([card_x, card_y, card_w, card_h]),
-            FloatElevation::Shadowed,
+            FloatElevation::Rimmed,
         );
         let area = TextArea {
             buffer: &self.hud_buffer,
@@ -700,7 +701,7 @@ impl TextPipeline {
         self.streak_cells
             .prepare_multicolor(device, queue, width, height, &quads);
 
-        // ── The raised card behind everything (shadow → border → base_300 card) ──
+        // ── The raised card behind everything (border → base_300 card, no drop shadow) ──
         set_float_quads(
             &mut self.hud_shadow,
             &mut self.hud_border,
@@ -710,7 +711,7 @@ impl TextPipeline {
             width,
             height,
             Some([card_x, card_y, card_w, card_h]),
-            FloatElevation::Shadowed,
+            FloatElevation::Rimmed,
         );
 
         // ── The stats text below the grid ──

@@ -693,9 +693,12 @@ fn caret_preview_panel_appears_below_picker_and_stops_on_close() {
         rect[1] > 52.0 + 3.0 * p.metrics.line_height,
         "the panel floats below the picker card: {rect:?}"
     );
-    // The panel primitive's three elevation quads + the demo caret are all drawn.
+    // The panel primitive's elevation quads + the demo caret are all drawn. NO
+    // drop shadow (dark-depth Option C, 2026-07-22): the shadow quad is
+    // retired outright, on every world — the border's own muted surface-step
+    // rim + the card's value step carry the depth (DESIGN §5).
     assert_eq!(p.float_card.instance_count(), 1, "the float card is summoned");
-    assert_eq!(p.float_shadow.instance_count(), 1, "with a drop shadow");
+    assert_eq!(p.float_shadow.instance_count(), 0, "no drop shadow — retired (dark-depth Option C)");
     assert_eq!(p.float_border.instance_count(), 1, "and a crisp raised edge");
     assert!(p.caret_preview_pipeline.is_drawn(), "the demo caret rides the sample line");
 

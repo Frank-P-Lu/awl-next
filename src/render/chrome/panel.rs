@@ -252,12 +252,13 @@ impl TextPipeline {
             )
             .map_err(|e| anyhow::anyhow!("glyphon panel prepare failed: {e:?}"))?;
 
-        // ELEVATE the card on the reusable floating-panel primitive (drop shadow +
-        // raised border + base_300 card), so the summoned find/replace panel reads as
-        // risen a step above the crisp document (DESIGN §5/§8) — clearer, more present
-        // furniture than the old flat pill. The flat `panel_card` is left empty; the
-        // search draw branch draws the float quads (parked whenever the panel is down).
-        self.prepare_float_panel(device, queue, width, height, Some(card_rect), FloatElevation::Shadowed);
+        // ELEVATE the card on the reusable floating-panel primitive (raised
+        // border + base_300 card, no drop shadow — dark-depth Option C), so the
+        // summoned find/replace panel reads as risen a step above the crisp
+        // document (DESIGN §5) — clearer, more present furniture than the old
+        // flat pill. The flat `panel_card` is left empty; the search draw
+        // branch draws the float quads (parked whenever the panel is down).
+        self.prepare_float_panel(device, queue, width, height, Some(card_rect), FloatElevation::Rimmed);
         self.panel_card.prepare(device, queue, width, height, &[]);
         self.panel_shadow.prepare(device, queue, width, height, &[]);
         self.panel_border.prepare(device, queue, width, height, &[]);

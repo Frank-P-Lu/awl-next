@@ -215,10 +215,10 @@ impl TextPipeline {
         Ok(())
     }
 
-    /// Shape + upload one open dropdown: the float card (shadow -> border -> `base_300`
-    /// card), the item LABELS (left, `base_content`), the native CHORDS (right, MUTED
-    /// secondary column), and the separator hairlines. Records `menu_drop_rect` /
-    /// `menu_drop_rows` / `menu_drop_menu` for the click hit-test.
+    /// Shape + upload one open dropdown: the float card (raised border -> `base_300`
+    /// card, no drop shadow — dark-depth Option C), the item LABELS (left, `base_content`),
+    /// the native CHORDS (right, MUTED secondary column), and the separator hairlines.
+    /// Records `menu_drop_rect` / `menu_drop_rows` / `menu_drop_menu` for the click hit-test.
     #[allow(clippy::too_many_arguments)]
     fn prepare_menu_dropdown(
         &mut self,
@@ -293,7 +293,7 @@ impl TextPipeline {
         self.menu_drop_rows = rows.clone();
         self.menu_drop_menu = Some(menu_i);
 
-        // Card elevation (shadow -> raised border -> opaque card) — unconditional
+        // Card elevation (raised border -> opaque card, no drop shadow) — unconditional
         // (this dropdown has no scrim/blur backdrop of its own to lean on instead).
         super::set_float_quads(
             &mut self.menu_drop_shadow,
@@ -304,7 +304,7 @@ impl TextPipeline {
             width,
             height,
             Some(rect),
-            super::FloatElevation::Shadowed,
+            super::FloatElevation::Rimmed,
         );
 
         // Separator hairlines (one thin quad centered in each separator row).
@@ -403,7 +403,7 @@ impl TextPipeline {
             width,
             height,
             None,
-            super::FloatElevation::Shadowed,
+            super::FloatElevation::Rimmed,
         );
         self.menu_drop_sep.prepare(device, queue, width, height, &[]);
         for buf in [&mut self.menu_drop_buffer, &mut self.menu_chord_buffer] {

@@ -65,10 +65,11 @@ fn spell_panel_floats_at_the_word_not_center_screen() {
     assert!(w <= 360.0, "the panel is a small popup, not a wide takeover: w={w}");
     assert!(x + w < 500.0, "the panel stays over the word, not centered: x={x} w={w}");
     assert!(y > p.metrics.line_height, "the panel hangs below the word's row: y={y}");
-    // It rides the FLOAT primitive (shadow + border + card), and the flat centered
-    // card + the amber query caret are BOTH parked.
+    // It rides the FLOAT primitive (border + card, no drop shadow — dark-depth
+    // Option C, 2026-07-22: the shadow quad is retired outright, on every
+    // world), and the flat centered card + the amber query caret are BOTH parked.
     assert_eq!(p.float_card.instance_count(), 1, "the spell panel is a floating card");
-    assert_eq!(p.float_shadow.instance_count(), 1, "with a drop shadow");
+    assert_eq!(p.float_shadow.instance_count(), 0, "no drop shadow — retired (dark-depth Option C)");
     assert_eq!(p.float_border.instance_count(), 1, "and a raised border edge");
     assert_eq!(p.panel_card.instance_count(), 0, "no flat centered card for the spell panel");
     assert!(!p.panel_caret.is_drawn(), "no amber query caret on the spell panel");
