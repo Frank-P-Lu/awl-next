@@ -2393,13 +2393,26 @@ impl TextPipeline {
         Ok(())
     }
 
+    /// SELECTION REVEAL (regression fix, item 16 follow-up): `revealed` is true
+    /// when the CURRENT caret line OR the active selection touches the image's
+    /// own span — the SAME [`selection_touches`] overlap test
+    /// [`super::spans::wysiwyg_reveals`] uses for the raw markup, never
+    /// re-derived — so a selected image line PARKS (dims + scrims, or for a
+    /// mixed caption line, skips the draw) exactly like a caret-revealed one,
+    /// instead of drawing full-brightness under revealed source text.
     pub fn images_report(&self) -> Vec<crate::render::ImageReport> {
+        let selection_touch = selection_touch_bytes(
+            self.selection,
+            |i| self.line_doc_byte_start(i),
+            |i| self.buffer.lines.get(i).map(|l| l.text().len()).unwrap_or(0),
+        );
         self.image_report
             .borrow()
             .iter()
             .cloned()
             .map(|mut r| {
-                r.revealed = r.line == self.cursor_line;
+                r.revealed = r.line == self.cursor_line
+                    || selection_touches(selection_touch.as_ref(), &(r.range.0..r.range.1));
                 r
             })
             .collect()

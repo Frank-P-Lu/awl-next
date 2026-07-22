@@ -628,6 +628,23 @@ pub(super) fn selection_touch_bytes(
     Some(line_start(l0)..(line_start(l1) + line_len(l1)))
 }
 
+/// True when the active selection's touched-line byte extent
+/// (`selection_touch`, see [`selection_touch_bytes`]) overlaps `range` at
+/// all — a plain half-open-interval overlap test. THE single "does the
+/// selection reveal this span" predicate: [`wysiwyg_reveals`] uses it for its
+/// own `selected` decision, and — SELECTION REVEAL regression fix, item 16
+/// follow-up — [`super::TextPipeline::compute_image_layout`]'s `revealed_now`
+/// and [`super::TextPipeline::images_report`]'s `revealed` reuse the SAME
+/// call rather than re-deriving the overlap arithmetic a second (or third)
+/// time, so an inline-image line's LAYOUT/DRAW reveal state can never
+/// disagree with its markdown-markup reveal state.
+pub(super) fn selection_touches(
+    selection_touch: Option<&std::ops::Range<usize>>,
+    range: &std::ops::Range<usize>,
+) -> bool {
+    selection_touch.is_some_and(|st| st.start < range.end && range.start < st.end)
+}
+
 /// THE reveal decision for ONE `ConcealMarkup` span — the single rule shared by
 /// [`add_wysiwyg_conceal_spans`] (the renderer) and
 /// [`super::TextPipeline::wysiwyg_report`] (the capture sidecar), so the two can
@@ -656,7 +673,7 @@ pub(super) fn wysiwyg_reveals(
     selection_touch: Option<&std::ops::Range<usize>>,
 ) -> bool {
     use crate::markdown::ConcealKind;
-    let selected = selection_touch.is_some_and(|st| st.start < range.end && range.start < st.end);
+    let selected = selection_touches(selection_touch, range);
     match ck {
         // BLOCK-scoped: reveal iff the caret's line sits anywhere in the block,
         // OR the selection touches ANY line inside it. A frontmatter block
