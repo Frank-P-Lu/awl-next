@@ -49,3 +49,24 @@ translates those into board edits:
   merge train.
 - Worker briefs must therefore NOT include "edit the board / flip the claim"
   steps; they report shas + outcomes instead.
+
+## Design sessions → decisions → the board (added 2026-07-22, user rule)
+
+How a brainstorm/interview session ("awl design"-type) turns talk into work:
+
+1. **Brainstorm read-only.** During discussion the orchestrator changes nothing.
+2. **Decisions land as queue items.** Each crystallized decision becomes a
+   self-contained item (or a `DECIDED <date>` line folded into an existing
+   item) — a worker must receive the decided thing, never the open question.
+3. **The commit message is the session record.** Board-decision edits are
+   committed to main with a subject starting `orchestrator: decisions` —
+   `git log --grep=decisions` replays every design session in order. There is
+   deliberately NO decisions log file: append-only logs rot into noise, and
+   git already keeps the full history (the CLAUDE.md philosophy).
+4. **Retention tiers (existing law, restated):** build decisions live in queue
+   items → git history when archived. A standing constraint a future agent
+   would re-litigate ("no locale sniffing") gets ONE line in CLAUDE.md's
+   "Open decisions & known divergences". Taste/product-level decisions amend
+   PHILOSOPHY/DESIGN/SCOPE/THEMES in the landing round.
+5. **`~/notes/` is the user's space.** Agents READ questionnaires and notes
+   there; they NEVER write there. The machine-side record lives in this repo.
