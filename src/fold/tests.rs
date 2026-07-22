@@ -94,6 +94,18 @@ fn fold_tails_suppresses_a_heading_hidden_by_a_folded_parent() {
 }
 
 #[test]
+fn chevron_reveals_only_on_the_caret_or_hovered_heading() {
+    // The caret ON the heading's row reveals its chevron; a different caret row does not.
+    assert!(chevron_revealed(2, 2, None));
+    assert!(!chevron_revealed(2, 5, None));
+    // HOVER (live only) reveals it; hovering a different row does not.
+    assert!(chevron_revealed(2, 5, Some(2)));
+    assert!(!chevron_revealed(2, 5, Some(3)));
+    // Either arm alone suffices.
+    assert!(chevron_revealed(2, 2, Some(9)));
+}
+
+#[test]
 fn enclosing_heading_reads_the_innermost_section() {
     let levels = heading_levels(OUTLINE, true);
     assert_eq!(enclosing_heading(&levels, 0), Some(0)); // on # A itself

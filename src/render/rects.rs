@@ -629,6 +629,32 @@ impl TextPipeline {
             .collect()
     }
 
+    /// The expand CHEVRON for the collapsed headings whose chevron is REVEALED (caret
+    /// on the heading OR pointer hovering it — [`crate::fold::chevron_revealed`]):
+    /// `(top-y, left-x, filtered line)`, the left in the reserved slot just before the
+    /// tail (so chevron + tail can't collide). Empty in a headless capture unless the
+    /// caret sits on a collapsed heading (no pointer → no hover). One quiet marker,
+    /// never amber (DESIGN §3).
+    pub(super) fn fold_chevron_marks(&self) -> Vec<(f32, f32, usize)> {
+        if self.fold_tails.is_empty() {
+            return Vec::new();
+        }
+        self.fold_tails
+            .iter()
+            .filter(|t| {
+                crate::fold::chevron_revealed(t.line, self.cursor_line, self.hover_line)
+                    && self.line_ornament_visible(t.line)
+            })
+            .map(|t| {
+                (
+                    self.line_ornament_top(t.line),
+                    self.fold_affordance_base_x(t.line),
+                    t.line,
+                )
+            })
+            .collect()
+    }
+
     /// The bullet GLYPHS the renderer would draw, in document order — the char half of
     /// [`Self::bullet_marks`]. A test accessor for the depth-cycle + reveal-on-cursor
     /// assertions (which care about WHICH glyph, not its pixel placement).

@@ -115,6 +115,16 @@ pub fn fold_tails(levels: &[u8], folds: &BTreeSet<usize>) -> Vec<(usize, usize)>
         .collect()
 }
 
+/// Whether a collapsed heading on FILTERED row `line` should reveal its small expand
+/// CHEVRON: only when the caret is ON that heading (`cursor_line`) OR the pointer is
+/// hovering it (`hover_line`). The "… N lines" TAIL is always shown; the chevron is
+/// the quiet, SUMMONED affordance (DESIGN.md — summoned over persistent chrome). In a
+/// headless capture `hover_line` is `None` (no pointer), so only the caret-on-heading
+/// arm fires there — the reachable, tested path; the hover arm is live-only.
+pub fn chevron_revealed(line: usize, cursor_line: usize, hover_line: Option<usize>) -> bool {
+    line == cursor_line || hover_line == Some(line)
+}
+
 /// The innermost heading whose SECTION contains `line` — i.e. the nearest heading
 /// at or before `line` that `line` sits under. When `line` IS a heading line, that
 /// heading is returned (a caret on a heading toggles that heading). `None` when

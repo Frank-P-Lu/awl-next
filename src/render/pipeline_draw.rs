@@ -420,6 +420,7 @@ impl TextPipeline {
             window_h: crate::capture::CANVAS_HEIGHT as f32,
             selection: None,
             fold_tails: Vec::new(),
+            hover_line: None,
             preedit: String::new(),
             misspelled: Vec::new(),
             spell_gen: 0,

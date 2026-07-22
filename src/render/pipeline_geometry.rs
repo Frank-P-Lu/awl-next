@@ -453,6 +453,18 @@ impl TextPipeline {
         self.set_caret_target(view.is_edit_move, view.held);
     }
 
+    /// Set the FILTERED document row the pointer is hovering (LIVE only — the app
+    /// derives it from the pointer; the headless capture never calls this, so hover
+    /// stays `None` there). Returns whether it CHANGED, so the caller can schedule a
+    /// redraw only when a collapsed heading's chevron reveal actually flips.
+    pub fn set_hover_line(&mut self, line: Option<usize>) -> bool {
+        if self.hover_line == line {
+            return false;
+        }
+        self.hover_line = line;
+        true
+    }
+
     /// Copy the plain (non-metric, non-caret-latch) editor view fields — scroll,
     /// selection/preedit, spell, search, overlay, and project status — into the
     /// renderer's mirror of the view snapshot.

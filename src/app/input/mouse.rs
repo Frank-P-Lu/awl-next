@@ -725,11 +725,39 @@ impl App {
                 }
             }
         }
+        // FOLD CHEVRON HOVER (item 47b, LIVE only): reveal a collapsed heading's
+        // expand chevron while the pointer rests on its row. Cheap no-op unless
+        // something is folded; only redraws when the hovered row actually changes.
+        self.update_fold_hover();
         // CONTEXT-AWARE CURSOR SHAPE: recompute on every move regardless of which
         // branch above fired (a text-selection drag still reads as "over text",
         // an overlay hover still reads as the plain arrow, …) — one decision, not
         // a per-branch special case. See `cursor_shape.rs`.
         self.sync_cursor_icon();
+    }
+
+    /// Mirror the FILTERED document row under the pointer into the pipeline so the
+    /// fold-tail CHEVRON reveals on hover (LIVE only — the headless capture has no
+    /// pointer, so this never runs there and only the caret-on-heading reveal fires).
+    /// A no-op unless a section is folded; requests a redraw only when the hovered row
+    /// changes (so a chevron flip repaints without a per-move redraw storm). The row
+    /// is the pointer's hit-test line when over the writing column, else `None` (so a
+    /// chevron never lingers when the pointer leaves the text). See
+    /// [`crate::fold::chevron_revealed`].
+    pub(in crate::app) fn update_fold_hover(&mut self) {
+        let folded = self.buffer.has_folds();
+        let over_col = folded && self.pointer_over_writing_column();
+        let (px, py) = self.cursor_px;
+        let scroll = self.scroll_lines;
+        let Some(gpu) = self.gpu.as_mut() else { return };
+        let line = if over_col {
+            Some(gpu.pipeline.hit_test(px, py, scroll).0)
+        } else {
+            None
+        };
+        if gpu.pipeline.set_hover_line(line) {
+            gpu.window.request_redraw();
+        }
     }
 
     /// `WindowEvent::MouseInput`: the left/right press+release surface — input
