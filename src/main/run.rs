@@ -469,7 +469,15 @@ impl<'a> ReplaySession<'a> {
             // SETTINGS MENU value cells: gathered from the replay's config + active
             // root + zoom, so a `--keys "Settings"` capture reports each setting's
             // real value (deterministic — config is loaded from --config or defaults).
-            settings_values: crate::settings::SettingsValues::gather(self.config, self.root, self.zoom),
+            // `today_ymd` is the FIXED headless placeholder (no clock in a capture —
+            // see `dateformat::CAPTURE_PLACEHOLDER_YMD`'s doc), so the "Date format"
+            // row's preview is byte-stable.
+            settings_values: crate::settings::SettingsValues::gather(
+                self.config,
+                self.root,
+                self.zoom,
+                crate::dateformat::CAPTURE_PLACEHOLDER_YMD,
+            ),
             assets,
         };
         let mut make_overlay =
@@ -600,6 +608,16 @@ impl<'a> ReplaySession<'a> {
                     crate::convention::Convention::current(),
                     crate::commands::Platform::current(),
                 ));
+            }
+            // INSERT DATE: the SAME insert `App::insert_date` performs live, against
+            // the FIXED placeholder date instead of the real clock (the determinism
+            // gate — see `dateformat::CAPTURE_PLACEHOLDER_YMD`'s doc), reading the
+            // SAME active-format process-global (seeded from `--config`/defaults by
+            // `apply_sticky_globals`, exactly like `caret_mode`/`dictionary`).
+            actions::Effect::InsertDate => {
+                let (y, m, d) = crate::dateformat::CAPTURE_PLACEHOLDER_YMD;
+                let text = crate::dateformat::active_format().format(y, m, d);
+                self.buffer.insert_text(&text);
             }
             // An overlay accepted (Goto file / Project / MoveDest / Theme): remember
             // the chosen value for the caller to load before capturing. Persists

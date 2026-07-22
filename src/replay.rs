@@ -115,6 +115,11 @@ pub fn classify(effect: &Effect) -> Classified {
         Effect::OverlayAccept(kind, _) => c("overlay_accept", accept_class(*kind)),
         Effect::JumpToLine(_) => c("jump_to_line", applied),
         Effect::ConvertScratchAndSave => c("convert_scratch_and_save", applied),
+        // INSERT DATE: the headless replay performs the SAME insert live does
+        // (against the fixed placeholder date instead of the real clock — see
+        // `dateformat::CAPTURE_PLACEHOLDER_YMD`), so this is honestly Applied,
+        // not a divergence.
+        Effect::InsertDate => c("insert_date", applied),
         // The save already ran inside `apply_core` (`Buffer::save`, through the
         // active fs backend); only the live bottom-center NOTICE is skipped —
         // chrome, not session state.
@@ -334,6 +339,7 @@ mod tests {
             Effect::SaveDone { ok: true, message: "saved".into() },
             Effect::RenameNoteCommit { new_name: "new.md".into() },
             Effect::DuplicateNote,
+            Effect::InsertDate,
         ]
     }
 
@@ -344,7 +350,7 @@ mod tests {
         let applied = [
             "none", "new_note", "open_settings", "open_credits", "open_guide", "run_action",
             "overlay_accept", "jump_to_line", "convert_scratch_and_save", "save_done", "recoil",
-            "type_impact", "delete_squash", "gulp", "line_land", "copy_pulse",
+            "type_impact", "delete_squash", "gulp", "line_land", "copy_pulse", "insert_date",
         ];
         let intercepted = [
             "follow_link", "report_problem", "download_file", "export", "check_for_updates",

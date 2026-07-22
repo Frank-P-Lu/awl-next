@@ -238,6 +238,66 @@
     }
 
     #[test]
+    fn insert_text_lands_the_literal_string_at_the_cursor() {
+        let mut buf = b("hello world");
+        for _ in 0..5 {
+            buf.forward_char(); // caret after "hello"
+        }
+        buf.insert_text(", 22/07/26,");
+        assert_eq!(buf.text(), "hello, 22/07/26, world");
+    }
+
+    #[test]
+    fn insert_text_replaces_an_active_selection() {
+        let mut buf = b("hello world");
+        buf.select_range(0, 5); // "hello"
+        buf.insert_text("goodbye");
+        assert_eq!(buf.text(), "goodbye world");
+        assert!(!buf.has_selection(), "the selection is consumed by the insert");
+    }
+
+    /// "ONE undoable edit": Insert Date's whole contract. A single Cmd-Z
+    /// removes the ENTIRE inserted string in one step, regardless of length.
+    #[test]
+    fn insert_text_is_a_single_undo() {
+        let mut buf = b("x");
+        buf.buffer_end();
+        buf.insert_text("2026-07-22");
+        assert_eq!(buf.text(), "x2026-07-22");
+        buf.undo();
+        assert_eq!(buf.text(), "x");
+    }
+
+    /// The sealing discipline: `insert_text` never coalesces with adjacent
+    /// typing on EITHER side — undoing after typing more text still removes
+    /// ONLY the date, and typing right before it doesn't merge into its
+    /// group either (an earlier bug class `apply_format`'s own sealing
+    /// avoids — see its doc).
+    #[test]
+    fn insert_text_never_coalesces_with_adjacent_typing() {
+        let mut buf = b("");
+        buf.insert_char('a'); // ordinary typing, opens an Insert group
+        buf.insert_text("2026-07-22"); // the discrete date insert
+        buf.insert_char('b'); // ordinary typing resumes right after
+        assert_eq!(buf.text(), "a2026-07-22b");
+        buf.undo(); // removes ONLY "b"
+        assert_eq!(buf.text(), "a2026-07-22");
+        buf.undo(); // removes ONLY the date
+        assert_eq!(buf.text(), "a");
+        buf.undo(); // removes ONLY "a"
+        assert_eq!(buf.text(), "");
+    }
+
+    #[test]
+    fn insert_text_empty_string_is_a_no_op() {
+        let mut buf = b("hello");
+        let before = buf.version();
+        buf.insert_text("");
+        assert_eq!(buf.text(), "hello");
+        assert_eq!(buf.version(), before, "an empty insert records no edit");
+    }
+
+    #[test]
     fn kill_line_to_eol() {
         let mut buf = b("hello world\nsecond");
         for _ in 0..6 {

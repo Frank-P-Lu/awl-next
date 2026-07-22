@@ -268,6 +268,13 @@ static COMMAND_SEED: &[Command] = &[
     // alignment, never a drawn grid). No default chord — the palette IS its entry
     // point (like Settings/About); a real `Action`, independently rebindable.
     Command { name: "Align table",       action: Action::AlignTable,      native: "",        emacs: ""        , native_only: false, web_only: false },
+    // INSERT DATE: insert TODAY'S date at the caret, formatted per the Settings
+    // menu's "Date format" cycling row (default DD/MM/YY). No default chord —
+    // the palette IS its entry point (like Settings/About/Align table); a real
+    // `Action`, independently rebindable via `[keys] insert_date`. Available on
+    // every buffer kind (not markdown-gated) — a plain text insert. See
+    // `dateformat.rs`.
+    Command { name: "Insert Date",       action: Action::InsertDate,      native: "",        emacs: ""        , native_only: false, web_only: false },
     // REPORT A PROBLEM: compose a mailto: link to the maintainer, with the
     // newest local crash log's path attached-by-name if one exists (never its
     // content — the crash-visibility privacy law). No default chord — the
@@ -1346,6 +1353,7 @@ mod tests {
             "Writing streaks",
             "Line endings…",
             "Align table",
+            "Insert Date",
             "Report a Problem",
             "Download file",
             "Check for Updates",

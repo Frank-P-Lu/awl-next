@@ -73,7 +73,7 @@ pub struct SettingRow {
     pub kind: SettingKind,
 }
 
-/// The 28-setting corpus, in stable display order (grouped by category). The ONE
+/// The 29-setting corpus, in stable display order (grouped by category). The ONE
 /// owner — the FacetScheme bucket + the value readout both key off this table.
 pub static SETTINGS: &[SettingRow] = &[
     // Editor —
@@ -84,6 +84,11 @@ pub static SETTINGS: &[SettingRow] = &[
     SettingRow { name: "Page width (prose)", category: "Editor",     kind: SettingKind::Value },
     SettingRow { name: "Page width (code)",  category: "Editor",     kind: SettingKind::Value },
     SettingRow { name: "Zoom",              category: "Editor",      kind: SettingKind::Value },
+    // DATE FORMAT: a 5-way CYCLE (not a bool), riding the SAME `SettingKind::Toggle`
+    // Enter-to-flip mechanism the "Keymap" row's own non-bool cycle uses — see
+    // `toggle_key`/`App::cycle_date_format`. Value cell = TODAY rendered in the
+    // active format ("what you see is what inserts").
+    SettingRow { name: "Date format",       category: "Editor",      kind: SettingKind::Toggle },
     // Appearance —
     SettingRow { name: "Theme",             category: "Appearance",  kind: SettingKind::Picker },
     SettingRow { name: "WYSIWYG",           category: "Appearance",  kind: SettingKind::Toggle },
@@ -172,15 +177,32 @@ pub struct SettingsValues {
     /// `Config` alone, with no process-global mirror — mirrors `autosave`/
     /// `history`/`session_restore` above.
     pub keymap: String,
+    /// TODAY as a UTC civil `(year, month, day)`, for the "Date format" row's
+    /// live preview ("what you see is what inserts") — gathered like
+    /// `history_now`/`history_session_start` (`overlay::BuildCtx`), because
+    /// [`value_for`] can't tell live from headless capture itself: the live
+    /// caller passes [`crate::dateformat::today_from_system_clock`]'s real
+    /// result, the headless capture/replay path the FIXED
+    /// [`crate::dateformat::CAPTURE_PLACEHOLDER_YMD`] — the determinism gate
+    /// that keeps a `--keys "Cmd-,"` Settings capture byte-stable.
+    pub today_ymd: (i32, u32, u32),
 }
 
 impl SettingsValues {
     /// Gather the config/project-derived value inputs from the caller's `config`,
-    /// the active `project_root`, and the current `zoom`. Everything else is read
-    /// live from the process-globals inside [`value_for`] — INCLUDING the
-    /// "Ambiguous CJK reads as" row now (`crate::frontmatter::cjk_priority()`,
-    /// like Theme/Dictionary), so it carries no field here.
-    pub fn gather(config: &crate::config::Config, project_root: &Path, zoom: f32) -> Self {
+    /// the active `project_root`, the current `zoom`, and the caller's OWN
+    /// `today_ymd` (real live clock, or the fixed headless placeholder — see the
+    /// field doc). Everything else is read live from the process-globals inside
+    /// [`value_for`] — INCLUDING the "Ambiguous CJK reads as" row now
+    /// (`crate::frontmatter::cjk_priority()`, like Theme/Dictionary) and "Date
+    /// format" itself (`crate::dateformat::active_format()`), so neither carries
+    /// a field here.
+    pub fn gather(
+        config: &crate::config::Config,
+        project_root: &Path,
+        zoom: f32,
+        today_ymd: (i32, u32, u32),
+    ) -> Self {
         let path_or_dash = |p: &Option<std::path::PathBuf>| {
             p.as_ref()
                 .map(|p| p.display().to_string())
@@ -197,6 +219,7 @@ impl SettingsValues {
             history: config.history_on(),
             session_restore: config.session_restore_on(),
             keymap: config.keymap_flavor().config_name().to_string(),
+            today_ymd,
         }
     }
 }
@@ -225,6 +248,14 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
         "Page width (prose)" => values.page_width_prose.to_string(),
         "Page width (code)" => values.page_width_code.to_string(),
         "Zoom" => format!("{:.0}%", values.zoom * 100.0),
+        // DATE FORMAT: the active process-global format, rendered against the
+        // caller-gathered TODAY (real live clock / the fixed headless
+        // placeholder — see `SettingsValues::today_ymd`'s doc) — "what you see
+        // is what inserts".
+        "Date format" => {
+            let (y, m, d) = values.today_ymd;
+            crate::dateformat::active_format().format(y, m, d)
+        }
         // Appearance —
         "Theme" => crate::theme::active().name.to_string(),
         "WYSIWYG" => on_off(crate::markdown::wysiwyg_on()).to_string(),
@@ -281,6 +312,9 @@ pub fn toggle_key(name: &str) -> Option<&'static str> {
         "Page mode" => "page_mode",
         "Typewriter scroll" => "typewriter_scroll",
         "Reduce motion" => "reduce_motion",
+        // DATE FORMAT — NOT a plain bool (a 5-way cycle), so `App::setting_toggle`
+        // special-cases it (see `App::cycle_date_format`), mirroring "Keymap" below.
+        "Date format" => "date_format",
         // Appearance —
         "WYSIWYG" => "wysiwyg",
         "Format popover" => "popover",
@@ -540,8 +574,8 @@ pub fn visible_value_cells(values: &SettingsValues) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// The table has the audited 27 rows (including the Keybindings sub-menu and
-    /// the two Advanced actions), and
+    /// The table has the audited 28 rows (including the Keybindings sub-menu and
+    /// the two Advanced actions) PLUS "Date format", and
     /// every display name is UNIQUE (it is both the fuzzy corpus and the
     /// value-readout key). The exact count is asserted below so an added/removed
     /// row must touch this comment deliberately rather than drift silently.
@@ -554,7 +588,7 @@ mod tests {
         assert_eq!(SETTINGS.len(), seen.len());
         assert_eq!(
             SETTINGS.len(),
-            28,
+            29,
             "corpus size changed — update this count deliberately (and the doc comments \
              at the top of settings.rs) rather than let it drift"
         );
@@ -622,6 +656,7 @@ mod tests {
             history: true,
             session_restore: true,
             keymap: "native".to_string(),
+            today_ymd: crate::dateformat::CAPTURE_PLACEHOLDER_YMD,
         };
         for r in SETTINGS {
             let v = value_for(r, &values);
@@ -750,6 +785,33 @@ mod tests {
             value_for(&find("Theme"), &values),
             crate::theme::active().name
         );
+    }
+
+    /// "Date format" is a `Toggle`-kind row that CYCLES (like "Keymap"), and
+    /// its value cell combines the ACTIVE process-global format with the
+    /// caller-gathered `today_ymd` — "what you see is what inserts". Both
+    /// halves are exercised: changing the format changes the cell (same
+    /// `today_ymd`), and the row is wired into `toggle_key` so Enter can
+    /// reach `App::cycle_date_format`.
+    #[test]
+    fn date_format_row_cycles_and_previews_today() {
+        let _g = crate::testlock::serial();
+        let row = *SETTINGS.iter().find(|r| r.name == "Date format").unwrap();
+        assert_eq!(row.kind, SettingKind::Toggle);
+        assert_eq!(toggle_key(row.name), Some("date_format"));
+
+        let saved = crate::dateformat::active_format();
+        let values = SettingsValues {
+            today_ymd: (2009, 3, 7),
+            ..Default::default()
+        };
+        crate::dateformat::set_active_format(crate::dateformat::DateFormat::DdMmYy);
+        assert_eq!(value_for(&row, &values), "07/03/09");
+        crate::dateformat::set_active_format(crate::dateformat::DateFormat::Iso);
+        assert_eq!(value_for(&row, &values), "2009-03-07");
+        crate::dateformat::set_active_format(crate::dateformat::DateFormat::DMonthYyyy);
+        assert_eq!(value_for(&row, &values), "7 March 2009");
+        crate::dateformat::set_active_format(saved); // restore, no leak to another test
     }
 
     /// The "Ambiguous CJK reads as" row is a Picker (opening

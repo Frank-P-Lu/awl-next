@@ -202,6 +202,13 @@ pub struct Config {
     /// accessor. No CLI flag — a sticky Settings-menu toggle row ("Keymap")
     /// flips + persists it, mirroring `reduce_motion`.
     pub keymap: Option<String>,
+    /// `date_format` — the "Insert Date" / Settings-menu "Date format" row's
+    /// chosen format, stored as the raw persisted SLUG (mirrors `caret_mode`/
+    /// `dictionary`/`keymap` — `crate::dateformat::DateFormat::config_name`);
+    /// `None`/an unrecognized value = the built-in default (`DD/MM/YY`,
+    /// `crate::dateformat::DateFormat::default`). No CLI flag — a sticky
+    /// Settings-menu cycling row flips + persists it, mirroring `keymap`.
+    pub date_format: Option<String>,
     /// The `[keys]` table as (action-name, chords) pairs, in file order. Each value
     /// is a LIST of up to 2 chords — conceptually slot 1 = NATIVE (macOS), slot 2 =
     /// EMACS — and the keymap parses each chord and OVERRIDES that named action's
@@ -257,6 +264,7 @@ impl Config {
             reduce_motion: None,
             ambient_motion: None,
             keymap: None,
+            date_format: None,
             keys: Vec::new(),
             linux_keep_emacs: Vec::new(),
             path: PathBuf::new(),
@@ -441,6 +449,7 @@ impl Config {
             reduce_motion: None,
             ambient_motion: None,
             keymap: None,
+            date_format: None,
             keys: Vec::new(),
             linux_keep_emacs: Vec::new(),
             path,
@@ -582,6 +591,14 @@ impl Config {
         // accessor — never a parse error, never a crash.
         if let Some(s) = table.get("keymap").and_then(|v| v.as_str()) {
             cfg.keymap = Some(s.to_string());
+        }
+        // `date_format` — "Insert Date" / the Settings row's chosen format,
+        // stored as the raw slug (mirrors `keymap`/`caret_mode`/`dictionary`);
+        // an unrecognized value is kept verbatim here and simply reads as
+        // "unset" through `DateFormat::from_config_name`'s lenient parse —
+        // never a parse error, never a crash.
+        if let Some(s) = table.get("date_format").and_then(|v| v.as_str()) {
+            cfg.date_format = Some(s.to_string());
         }
         // `linux_keep_emacs` — THE EMACS-HANDS-ON-LINUX per-chord door: a TOML
         // array of chord strings. Every non-string entry is skipped (lenient,

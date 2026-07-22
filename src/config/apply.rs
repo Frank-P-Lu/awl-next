@@ -87,6 +87,17 @@ impl Config {
         if let Some(v) = self.dictionary.as_deref().and_then(parse_dictionary) {
             crate::spell::set_active_variant(v);
         }
+        // DATE FORMAT has no CLI flag either (like dictionary): the remembered
+        // format applies unconditionally when present + recognized; absent/
+        // unknown leaves `dateformat::ACTIVE_FORMAT` at its built-in default
+        // (DD/MM/YY), so a plain launch — and a default `--screenshot` — stays
+        // byte-identical. Applied on BOTH the live App and the headless
+        // capture path (this fn runs on both), so a `--config` with
+        // `date_format = "iso"` produces the same effective format with no
+        // flags at all.
+        if let Some(f) = self.date_format.as_deref().and_then(crate::dateformat::DateFormat::from_config_name) {
+            crate::dateformat::set_active_format(f);
+        }
         // WYSIWYG has no CLI flag either (like writing_nits/spellcheck): the
         // remembered on/off applies unconditionally when present; absent = the
         // built-in default (ON), which `markdown::WYSIWYG_ON` already carries.
