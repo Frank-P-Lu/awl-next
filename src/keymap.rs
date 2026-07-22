@@ -187,6 +187,17 @@ pub enum Action {
     /// Render-only (no buffer change). Jump-to-heading is now a GO-TO lens ("Go to
     /// heading…", `OpenOutline`), not a standalone picker. See `outline.rs`.
     ToggleOutline,
+    /// "Fold section" (Cmd-Shift-E / C-c C-f): TOGGLE the collapse of the markdown SECTION
+    /// enclosing the caret — the heading plus its body + nested subheadings hide to a
+    /// quiet one-line summary; toggling again re-expands. VIEW state only (the rope is
+    /// untouched, never on the undo timeline); a no-op off a heading / on a
+    /// non-markdown buffer. See `fold.rs` + `buffer::toggle_fold_at_cursor`.
+    ToggleFold,
+    /// "Collapse other sections" (Cmd-Shift-M / C-c C-t): fold EVERY heading except
+    /// the caret's own section and its enclosing chain — the daily-notes gesture that
+    /// leaves only today's entry open. VIEW state only. See
+    /// `buffer::collapse_other_sections`.
+    CollapseOtherSections,
     /// Palette "Toggle menu bar": TOGGLE the awl-RENDERED menu bar — the slim strip of
     /// menu titles across the top of the canvas, shown by default on web/Linux (where
     /// the OS gives no chrome) and absent on macOS (the native NSMenu bar is the door).
@@ -1688,6 +1699,8 @@ narrow_page|||
 reset_page_width|||
 toggle_debug|||
 toggle_outline|Cmd-S-o|C-S-o|
+fold_section|Cmd-S-e|C-S-e|C-c C-f
+collapse_other_sections|Cmd-S-m|C-S-m|C-c C-t
 toggle_typewriter_scroll|||
 toggle_menu_bar|||
 about|||

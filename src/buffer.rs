@@ -291,6 +291,15 @@ pub struct Buffer {
     undo_group_open: bool,
     /// The direction of the last recorded edit, for coalescing decisions.
     last_edit_kind: Option<EditKind>,
+    /// COLLAPSED SECTIONS (view state, never file content): the set of ATX heading
+    /// LOGICAL LINES whose sections are folded. Pure in-memory render state for the
+    /// app run — it survives a buffer switch (the whole `Buffer` parks in the
+    /// registry) but is NOT serialized to disk / session and is NOT on the undo
+    /// timeline (undo replays rope `Edit`s, never this field). Empty for the
+    /// overwhelming common case, so every fold read short-circuits to a no-op. The
+    /// section extent + auto-expand rules live in [`crate::fold`]; this buffer owns
+    /// only the set + the caret-relative gestures over it.
+    folds: std::collections::BTreeSet<usize>,
 }
 
 impl Buffer {
@@ -343,6 +352,7 @@ impl Buffer {
             redo_stack: Vec::new(),
             undo_group_open: false,
             last_edit_kind: None,
+            folds: std::collections::BTreeSet::new(),
         }
     }
 
@@ -539,6 +549,93 @@ impl Buffer {
         let line = self.rope.char_to_line(self.cursor);
         let line_start = self.rope.line_to_char(line);
         (line, self.cursor - line_start)
+    }
+
+    // --- Folds (collapsed sections; view state — see the `folds` field + `fold`) -
+
+    /// The set of folded heading LOGICAL LINES (read-only). Empty when nothing is
+    /// collapsed.
+    #[allow(dead_code)] // read by the render increment (ViewState folds) + tests
+    pub fn folds(&self) -> &std::collections::BTreeSet<usize> {
+        &self.folds
+    }
+
+    /// True when there is at least one collapsed section. The cheap short-circuit
+    /// every render / reveal path checks first so an unfolded document pays nothing.
+    #[allow(dead_code)] // read by the render increment + tests
+    pub fn has_folds(&self) -> bool {
+        !self.folds.is_empty()
+    }
+
+    /// This buffer's per-logical-line heading levels ([`crate::fold::heading_levels`]
+    /// over the current text, gated by markdown-ness) — the one input the fold logic
+    /// reads. Recomputed per gesture (fold ops are rare, not a hot path).
+    fn heading_levels(&self) -> Vec<u8> {
+        crate::fold::heading_levels(&self.text(), self.is_markdown())
+    }
+
+    /// Toggle the fold on the heading enclosing the caret (fold ⇄ unfold). No-op on
+    /// a non-markdown buffer or a caret with no enclosing heading. Returns the
+    /// toggled heading line, or `None` when nothing was toggled. On a FOLD (not an
+    /// unfold), the caret is parked on the heading line so it is not left inside the
+    /// section it just collapsed (which the auto-expand would immediately reveal) —
+    /// the standard fold gesture leaves you on the collapsed heading.
+    pub fn toggle_fold_at_cursor(&mut self) -> Option<usize> {
+        let levels = self.heading_levels();
+        let (line, _) = self.cursor_line_col();
+        let h = crate::fold::toggle_at(&levels, &mut self.folds, line)?;
+        if self.folds.contains(&h) {
+            self.set_cursor(self.line_start(h));
+        }
+        Some(h)
+    }
+
+    /// "Collapse other sections": fold every heading except the caret's section and
+    /// its enclosing chain (the daily-notes gesture). No-op on a non-markdown buffer.
+    pub fn collapse_other_sections(&mut self) {
+        if !self.is_markdown() {
+            return;
+        }
+        let levels = self.heading_levels();
+        let (line, _) = self.cursor_line_col();
+        self.folds = crate::fold::collapse_others(&levels, line);
+    }
+
+    /// Unfold everything.
+    #[allow(dead_code)] // used by the render increment + palette "Unfold all"
+    pub fn unfold_all(&mut self) {
+        self.folds.clear();
+    }
+
+    /// AUTO-EXPAND: reveal any fold that hides the caret line (and prune stale
+    /// entries whose heading was edited away). Cheap no-op when nothing is folded,
+    /// so it is safe to call after every action. Returns true when the fold set
+    /// changed. See [`crate::fold::expand_containing`].
+    pub fn reveal_cursor(&mut self) -> bool {
+        if self.folds.is_empty() {
+            return false;
+        }
+        let levels = self.heading_levels();
+        let mut changed = crate::fold::prune_stale(&levels, &mut self.folds);
+        let (line, _) = self.cursor_line_col();
+        changed |= crate::fold::expand_containing(&levels, &mut self.folds, line);
+        changed
+    }
+
+    /// AUTO-EXPAND: reveal any fold the active selection would span INVISIBLY, so a
+    /// selection never crosses hidden lines. No-op when nothing is folded or there
+    /// is no selection. See [`crate::fold::expand_range`].
+    pub fn reveal_selection(&mut self) -> bool {
+        if self.folds.is_empty() {
+            return false;
+        }
+        let Some((start, end)) = self.selection_range() else {
+            return false;
+        };
+        let lo = self.rope.char_to_line(start);
+        let hi = self.rope.char_to_line(end);
+        let levels = self.heading_levels();
+        crate::fold::expand_range(&levels, &mut self.folds, lo, hi)
     }
 
     #[allow(dead_code)]

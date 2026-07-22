@@ -229,6 +229,12 @@ static COMMAND_SEED: &[Command] = &[
     // flipped 2026-07-09). The Cmd-Shift-O chord (formerly the summoned heading-jump
     // picker's) now toggles it; rebindable via config `[keys] toggle_outline`.
     Command { name: "Toggle outline",    action: Action::ToggleOutline,   native: "", emacs: ""        , native_only: false, web_only: false },
+    // FOLD SECTION: collapse/expand the markdown section under the caret (view state,
+    // never file content). Default Cmd-. / C-c C-f; rebindable via config `[keys]`.
+    Command { name: "Fold section",      action: Action::ToggleFold,      native: "", emacs: ""        , native_only: false, web_only: false },
+    // COLLAPSE OTHER SECTIONS: fold everything but the caret's section (the
+    // daily-notes gesture). Default Cmd-Shift-, / C-c C-t.
+    Command { name: "Collapse other sections", action: Action::CollapseOtherSections, native: "", emacs: "" , native_only: false, web_only: false },
     // TOGGLE TYPEWRITER SCROLL: pin the caret's line centered so the doc scrolls under
     // it (OFF by default). No default chord — palette-only, like About/Settings; a
     // real `Action`, independently rebindable via config `[keys] toggle_typewriter_scroll`.

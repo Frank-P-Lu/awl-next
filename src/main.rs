@@ -60,6 +60,7 @@ mod embedded_docs;
 mod embedded_docs_law;
 mod export;
 mod facets;
+mod fold;
 mod frontmatter;
 mod fs;
 mod fuzzy;
