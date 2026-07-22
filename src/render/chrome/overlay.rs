@@ -227,7 +227,14 @@ impl TextPipeline {
     /// own canvas-corner anchor is untouched; the contextual spell popup does
     /// NOT call this (it anchors at its word).
     pub(in crate::render) fn overlay_card_box(&self, width: u32, desired_w: f32) -> (f32, f32) {
-        overlay_card_box_policy(crate::render::effective_card_anchor(), width as f32, desired_w)
+        // ITEM 45: the anchor is the one FROZEN at summon (`self.overlay_align`),
+        // resolved through the ONE owner — never a live world read — so a
+        // theme-preview crossing can't relocate the open card (the HARD RULE).
+        overlay_card_box_policy(
+            crate::render::resolve_overlay_anchor(self.overlay_align),
+            width as f32,
+            desired_w,
+        )
     }
 
     /// The pixel scale the overlay CHROME shapes at this frame — the same

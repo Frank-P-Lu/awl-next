@@ -495,6 +495,10 @@ impl TextPipeline {
         let overlay_opened = view.overlay_active && !self.overlay_active;
         let overlay_closed = !view.overlay_active && self.overlay_active;
         self.overlay_active = view.overlay_active;
+        // ITEM 45 — the alignment FROZEN at summon rides through verbatim (`Some`
+        // while open, `None` closed): the render-path anchor readers resolve it via
+        // `resolve_overlay_anchor`, so an open card never relocates on a preview cross.
+        self.overlay_align = view.overlay_align;
         if overlay_opened
             && self.juice_live
             && !crate::motion::reduced()

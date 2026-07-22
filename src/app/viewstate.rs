@@ -218,6 +218,10 @@ impl App {
             search_replacement,
             search_editing_replacement,
             overlay_active: self.overlay.is_some(),
+            // ITEM 45: carry the alignment FROZEN at summon (`OverlayState::align`)
+            // straight through — read verbatim every frame, so a live theme-preview
+            // crossing never recomputes it and the open card holds its placement.
+            overlay_align: self.overlay.as_ref().map(|o| o.align),
             // CRISP-BACKDROP exception: the THEME / CARET-STYLE / HISTORY pickers keep
             // the doc crisp behind them (live theme colours / caret preview / the
             // history version preview — the document IS the preview); every other

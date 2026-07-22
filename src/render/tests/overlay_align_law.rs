@@ -1,0 +1,277 @@
+//! ITEM 45 — OVERLAY/PICKER ALIGNMENT AS PERSONALITY DATA.
+//!
+//! Three laws for the round's mechanism, mirroring the themes-as-data doctrine
+//! (`theme_caps_law` / `glide_anchor_law` scanner shape):
+//!
+//! 1. **alignment-is-data grep-law** — the overlay alignment is resolved through
+//!    ONE owner (`effective_card_anchor` → the frozen `ViewState::overlay_align`
+//!    via `resolve_overlay_anchor`). No render CONSUMER re-reads the live world
+//!    anchor: `effective_card_anchor(` and `render_caps.card_anchor` appear in the
+//!    render tree ONLY in `render.rs` (the resolver's own definition). A stray
+//!    live read in `chrome/` would relocate an open overlay on a preview cross —
+//!    exactly the HARD RULE this round forbids — so the scanner bans it.
+//! 2. **summon-time-only** — the frozen alignment WINS over the live anchor: a
+//!    theme-preview crossing that changes which world is active (simulated by
+//!    moving `set_card_anchor_test_override` under a held frozen value) does NOT
+//!    move the open card's x-extents. The `None`-frozen contrast proves the
+//!    mechanism is real (the live anchor WOULD have moved it).
+//! 3. **right-anchor** — `CardAnchor::TopRight` genuinely RIGHT-anchors: the row
+//!    column's x-extents hug the RIGHT window edge (one inset in), the mirror of
+//!    the left-anchored card hugging the LEFT edge.
+//!
+//! Plus a pure grammar test for the `AWL_OVERLAY_ALIGN` capture knob.
+
+use super::super::*;
+use super::{headless_pipeline, view};
+
+// ---------------------------------------------------------------------------
+// 1. ALIGNMENT-IS-DATA grep-law
+// ---------------------------------------------------------------------------
+
+/// The banned LIVE-anchor read patterns. A render CONSUMER must read the FROZEN
+/// `self.overlay_align` (through `resolve_overlay_anchor`), never these.
+const BANNED: &[&str] = &["effective_card_anchor(", "render_caps.card_anchor"];
+
+/// The ONE file allowed to carry them: `render.rs`, the resolver's own home.
+const OWNER: &str = "render.rs";
+
+/// True iff `line` (real code, not a comment) contains a banned live read.
+fn line_violates(line: &str) -> Option<&'static str> {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("//") {
+        return None; // doc / plain comment — prose, not code.
+    }
+    BANNED.iter().copied().find(|p| line.contains(p))
+}
+
+/// Walk `dir`, skipping any `tests` subdirectory (the exact exemption
+/// `theme_caps_law`/`glide_anchor_law` use — that's where the placement policy
+/// is legitimately driven through `set_card_anchor_test_override`), collecting
+/// `(basename, line_no, pattern)` violations.
+fn scan_dir(dir: &std::path::Path, out: &mut Vec<(String, usize, String)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.path());
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().and_then(|n| n.to_str()) == Some("tests") {
+                continue;
+            }
+            scan_dir(&path, out);
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        scan_file(&path, out);
+    }
+}
+
+fn scan_file(path: &std::path::Path, out: &mut Vec<(String, usize, String)>) {
+    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    for (i, line) in text.lines().enumerate() {
+        if let Some(p) = line_violates(line) {
+            out.push((name.clone(), i + 1, p.to_string()));
+        }
+    }
+}
+
+#[test]
+fn alignment_is_data_no_live_read_in_render_consumers() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut hits = Vec::new();
+    // The resolver's own home (`src/render.rs`, a FILE beside the `render/` dir)…
+    scan_file(&root.join("render.rs"), &mut hits);
+    // …plus every render CONSUMER (`src/render/**`, tests excluded).
+    scan_dir(&root.join("render"), &mut hits);
+
+    let stray: Vec<_> = hits.iter().filter(|(f, _, _)| f != OWNER).collect();
+    assert!(
+        stray.is_empty(),
+        "overlay alignment is DATA through ONE owner: only `{OWNER}` may read the \
+         live anchor (`effective_card_anchor(` / `render_caps.card_anchor`); every \
+         render consumer must read the FROZEN `self.overlay_align` via \
+         `resolve_overlay_anchor`, or an open overlay would relocate on a preview \
+         cross. offending lines:\n{}",
+        stray
+            .iter()
+            .map(|(f, l, p)| format!("  {f}:{l}  ({p})"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    // NON-VACUOUS: `render.rs` really is the resolver's home — the definition line
+    // (`effective_card_anchor(`) and the world-data fallback (`render_caps.card_anchor`).
+    // If either were ever deleted the count would drop and the law would go quiet.
+    let owner_hits = hits.iter().filter(|(f, _, _)| f == OWNER).count();
+    assert!(
+        owner_hits >= 2,
+        "expected the resolver definition + the world-data fallback in `{OWNER}`; found {owner_hits}"
+    );
+}
+
+#[test]
+fn line_violates_catches_reads_and_skips_comments() {
+    assert!(line_violates("    overlay_card_box_policy(crate::render::effective_card_anchor(), w, d)").is_some());
+    assert!(line_violates("        None => theme::active().render_caps.card_anchor,").is_some());
+    assert!(line_violates("/// falls through to the world's own `render_caps.card_anchor`").is_none());
+    assert!(line_violates("// mentions effective_card_anchor( in prose").is_none());
+    // The frozen path is NOT a live read.
+    assert!(line_violates("resolve_overlay_anchor(self.overlay_align)").is_none());
+}
+
+// ---------------------------------------------------------------------------
+// 2. AWL_OVERLAY_ALIGN capture-knob grammar (pure)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn awl_overlay_align_knob_parses_left_center_right() {
+    use theme::CardAnchor::*;
+    assert_eq!(parse_overlay_align("left"), Some(TopLeft));
+    assert_eq!(parse_overlay_align("LEFT"), Some(TopLeft));
+    assert_eq!(parse_overlay_align(" left "), Some(TopLeft));
+    assert_eq!(parse_overlay_align("center"), Some(TopCenter));
+    assert_eq!(parse_overlay_align("centre"), Some(TopCenter));
+    assert_eq!(parse_overlay_align("right"), Some(TopRight));
+    assert_eq!(parse_overlay_align("Right"), Some(TopRight));
+    // Malformed → None (falls through to the world's own data).
+    assert_eq!(parse_overlay_align("middle"), None);
+    assert_eq!(parse_overlay_align(""), None);
+    // `right` carries the growth mirror (right-anchor is more than placement).
+    assert!(parse_overlay_align("right").unwrap().mirrors_growth());
+    assert!(!parse_overlay_align("left").unwrap().mirrors_growth());
+}
+
+// ---------------------------------------------------------------------------
+// 3. RIGHT-ANCHOR — the row column's x-extents hug the column edge (pure policy)
+// ---------------------------------------------------------------------------
+
+/// A right-aligned card genuinely RIGHT-anchors: at a comfortable window its
+/// right edge hugs the window's right margin (one full `CARD_EDGE_INSET` in),
+/// the mirror of a left-aligned card hugging the LEFT edge — so the row column
+/// (`card_x + card_w`, one `hpad` shy of the card's right edge) reads flush to
+/// the right rail. Center sits, well, centered between the two.
+#[test]
+fn right_anchor_hugs_the_right_edge_left_hugs_the_left() {
+    let ww = 1200.0_f32;
+    let desired = chrome::CARD_MAX_W; // comfortable — no fill regime
+    let inset = chrome::CARD_EDGE_INSET;
+
+    let (lx, lw) = chrome::overlay_card_box_policy(theme::CardAnchor::TopLeft, ww, desired);
+    let (cx, cw) = chrome::overlay_card_box_policy(theme::CardAnchor::TopCenter, ww, desired);
+    let (rx, rw) = chrome::overlay_card_box_policy(theme::CardAnchor::TopRight, ww, desired);
+
+    // Same width in every regime — alignment moves the card, never resizes it.
+    assert!((lw - rw).abs() < 0.5 && (cw - rw).abs() < 0.5, "alignment must not resize the card");
+
+    // LEFT: the card's LEFT extent hugs the left window margin (one inset in).
+    assert!((lx - inset).abs() < 0.5, "left-anchored card hugs the left edge: x={lx}");
+
+    // RIGHT: the card's RIGHT extent hugs the right window margin (one inset in).
+    let right_extent = rx + rw;
+    assert!(
+        (right_extent - (ww - inset)).abs() < 0.5,
+        "right-anchored row column must hug the right edge: card_x+card_w={right_extent}, want {}",
+        ww - inset
+    );
+
+    // Genuinely three distinct rails, monotonic left→center→right.
+    assert!(lx < cx && cx < rx, "left({lx}) < center({cx}) < right({rx})");
+    // And the right card sits fully in the right HALF (its whole body past centre).
+    assert!(rx > ww * 0.5, "the right-anchored card body sits in the right half: x={rx}");
+}
+
+// ---------------------------------------------------------------------------
+// 2. SUMMON-TIME-ONLY (rendered geometry) — the frozen alignment holds an open
+//    card in place when a theme-preview crossing changes the live anchor.
+// ---------------------------------------------------------------------------
+
+/// Read the currently-set overlay's card rect from a pipeline that has ingested
+/// `v`, at 1200×800.
+fn card_x_after(p: &mut TextPipeline, v: &ViewState) -> [f32; 4] {
+    p.set_size(1200.0, 800.0);
+    p.set_view(v);
+    p.overlay_card_rect().expect("an overlay card")
+}
+
+#[test]
+fn open_overlay_never_relocates_when_preview_crosses_worlds() {
+    let _g = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping open_overlay_never_relocates_when_preview_crosses_worlds: no wgpu adapter");
+        return;
+    };
+
+    // A summoned picker with a couple of rows, its alignment FROZEN CENTER at the
+    // moment it opened (as `OverlayState::align` would capture on a centered world).
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = vec!["Alpha".into(), "Beta".into()];
+    v.overlay_align = Some(theme::CardAnchor::TopCenter);
+
+    // Frame A — the world active at summon (its live anchor == the frozen one).
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopCenter));
+    let [ax, _, aw, _] = card_x_after(&mut p, &v);
+
+    // Frame B — the SAME open picker, but a theme-preview move crossed to a
+    // LEFT-anchored world (the live anchor now differs). The frozen value is
+    // unchanged, so the card must NOT move.
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+    let [bx, _, bw, _] = card_x_after(&mut p, &v);
+
+    assert!(
+        (ax - bx).abs() < 0.5 && (aw - bw).abs() < 0.5,
+        "an open overlay must hold its x-extents across a preview crossing: \
+         A=({ax},{aw}) B=({bx},{bw})"
+    );
+
+    // NON-VACUOUS CONTRAST — WITHOUT the freeze (`overlay_align = None`), the very
+    // same live crossing DOES relocate the card, proving the freeze is what holds it.
+    let mut vlive = view("hello\n", 0, 0);
+    vlive.overlay_active = true;
+    vlive.overlay_items = vec!["Alpha".into(), "Beta".into()];
+    vlive.overlay_align = None;
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopCenter));
+    let [cx, _, _, _] = card_x_after(&mut p, &vlive);
+    set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+    let [dx, _, _, _] = card_x_after(&mut p, &vlive);
+    assert!(
+        (cx - dx).abs() > 1.0,
+        "the live (unfrozen) card WOULD move on a crossing — the test's own control: \
+         center-x={cx}, left-x={dx}"
+    );
+
+    set_card_anchor_test_override(None);
+}
+
+/// The rendered mirror of the pure-policy right-anchor law: an overlay whose
+/// alignment froze RIGHT draws its card hugging the right window edge, while the
+/// LEFT-frozen twin hugs the left — read straight off the prepared geometry.
+#[test]
+fn frozen_right_alignment_renders_against_the_right_edge() {
+    let _g = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping frozen_right_alignment_renders_against_the_right_edge: no wgpu adapter");
+        return;
+    };
+    let ww = 1200.0_f32;
+    let inset = chrome::CARD_EDGE_INSET;
+    let mut v = view("hello\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = vec!["Alpha".into(), "Beta".into()];
+
+    v.overlay_align = Some(theme::CardAnchor::TopRight);
+    let [rx, _, rw, _] = card_x_after(&mut p, &v);
+    assert!(
+        ((rx + rw) - (ww - inset)).abs() < 0.5,
+        "the frozen-right card's row column hugs the right edge: card_x+card_w={}",
+        rx + rw
+    );
+
+    v.overlay_align = Some(theme::CardAnchor::TopLeft);
+    let [lx, _, _, _] = card_x_after(&mut p, &v);
+    assert!((lx - inset).abs() < 0.5, "the frozen-left card hugs the left edge: x={lx}");
+    assert!(rx > lx + 1.0, "right-frozen card ({rx}) sits well right of the left-frozen one ({lx})");
+}
