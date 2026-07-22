@@ -1404,13 +1404,40 @@ impl TextPipeline {
     /// logical line plus a floor, all at the (zoomed) line height. Generous on
     /// purpose; cosmic-text simply lays out all rows that fit and these documents
     /// are small.
+    ///
+    /// ITEM 42 — RESERVE TALL ROWS IN THE BUDGET DOC-WIDE: an inline IMAGE (or a
+    /// wrapped TABLE) reserves a row TALLER than a line of text — an image up to
+    /// [`super::spans::IMAGE_MAX_VIEWPORT_FRAC`] of the window height. The uniform
+    /// `rows * line_height` estimate alone UNDER-budgets an image-DENSE document,
+    /// so cosmic-text's `shape_until_scroll` fills the budget before the document
+    /// end and the TAIL never shapes — those rows then fall back to the ESTIMATED
+    /// line height (`RowGeom`'s unshaped default) and every scroll/hit-test/image
+    /// draw-top derived from their geometry is wrong until an edit re-shapes them.
+    /// That is the "rows carry estimated text-height geometry until visited" scroll
+    /// jump. Add every reserved tall-row height on TOP of the uniform base — the
+    /// bare/table `image_heights` display heights plus each mixed line's
+    /// `image_force` trailing `dh` — so the WHOLE document always shapes and every
+    /// image row holds its REAL height doc-wide (the browser model), regardless of
+    /// scroll position. Both tables are kept in sync with the current text by the
+    /// reshape/restyle that last touched it, so this is the same document the
+    /// caller is about to shape.
     pub(super) fn full_shape_height(&self) -> f32 {
         let logical = self.buffer.lines.len().max(1);
         // Allow up to ~8 wrapped rows per logical line before we'd undercount —
         // far more than realistic prose wrap — plus a fixed floor so a tiny doc
         // still shapes comfortably.
         let rows = (logical.saturating_mul(8)).max(64) as f32;
-        TEXT_TOP + rows * self.metrics.line_height + self.metrics.line_height
+        // The extra height reserved beyond plain text: bare/table image rows
+        // (`image_heights`) and mixed lines' forced trailing image row
+        // (`image_force`'s `dh`). Zero for a doc with no inline images/tables, so
+        // the budget stays byte-identical to the pre-item-42 uniform estimate there.
+        let reserved: f32 = self
+            .image_heights
+            .iter()
+            .filter_map(|h| *h)
+            .chain(self.image_force.iter().filter_map(|f| f.map(|(dh, _)| dh)))
+            .sum();
+        TEXT_TOP + rows * self.metrics.line_height + reserved + self.metrics.line_height
     }
 
     /// True when the buffer has at least one heading LINE (a leading-`#` run that

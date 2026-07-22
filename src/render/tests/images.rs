@@ -1411,3 +1411,123 @@ fn theme_switch_never_redecodes_a_cached_image() {
     crate::theme::set_active_by_name(prev_theme);
     crate::markdown::set_inline_images_on(prev_images);
 }
+
+/// ITEM 42 REGRESSION — IMAGE ROWS RESERVE THEIR REAL HEIGHT DOC-WIDE (the
+/// scroll-UP jump). `full_shape_height` budgets the buffer height cosmic-text
+/// shapes into; it used a UNIFORM `rows * line_height` estimate that ignored the
+/// tall rows inline images reserve. An image-DENSE document therefore exceeded
+/// the budget before its end, so `shape_until_scroll` stopped and the TAIL rows
+/// never shaped — falling back to the ESTIMATED line height in `RowGeom` and
+/// mis-placing every scroll / hit-test / image-draw-top derived from them. That
+/// is the "rows above the viewport carry estimated text-height geometry until
+/// visited" jump: scroll to the bottom and back UP through a tail image and the
+/// page lurched. The item-5b landed test only checked the row BELOW an image in
+/// a TINY (never-truncated) doc — the wrong direction, and a doc small enough
+/// that the bug could not fire.
+///
+/// This builds a doc dense enough with viewport-capped images to blow the old
+/// uniform budget, then asserts (a) EVERY tall row shaped — the LAST image line
+/// holds its REAL display height, not the ~line-height estimate; (b) the
+/// cumulative geometry is exact end-to-end (total height == summed row heights,
+/// the tail image sits near the document bottom, not clamped to a low row); and
+/// (c) the DIRECTION-sensitive no-jump property: scrolling UP one row so a tail
+/// image enters the viewport top pushes the content below it down by the image's
+/// REAL height. MUTATION CHECK: reverting `full_shape_height` to the uniform
+/// estimate truncates the tail and (a) reads ~line_height (32) not ~520. Fixture:
+/// `samples/photo.png` (420x280), upscaled past the column so it caps at the
+/// viewport fraction.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn image_dense_doc_shapes_every_tall_row_doc_wide_no_scroll_jump() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    if std::fs::metadata("samples/photo.png").is_err() {
+        eprintln!("skipping image_dense_doc_shapes_every_tall_row: samples/photo.png absent");
+        return;
+    }
+    let prev = crate::markdown::inline_images_on();
+    let prevw = crate::markdown::wysiwyg_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let restore = || {
+        crate::markdown::set_inline_images_on(prev);
+        crate::markdown::set_wysiwyg_on(prevw);
+    };
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping image_dense_doc_shapes_every_tall_row: no wgpu adapter");
+        restore();
+        return;
+    };
+    // 30 viewport-capped image lines (the `|1200` hint upsizes past the column, so
+    // each caps at IMAGE_MAX_VIEWPORT_FRAC of the 800px window ≈ 520px), each
+    // preceded by a short prose line. Real height (~16.6k px) exceeds the OLD
+    // uniform budget (~15.7k px), so the tail used to truncate. Caret on line 1
+    // (prose), well away from every image line so none are revealed.
+    let mut s = String::new();
+    for i in 0..30 {
+        s.push_str(&format!("para {i}\n"));
+        s.push_str("![pic|1200](samples/photo.png)\n");
+    }
+    let mut v = view(&s, 1, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+
+    let logical = p.buffer.lines.len();
+    let real_dh = p.images_report()[0].display_h;
+    assert!(
+        real_dh > 400.0,
+        "sanity: the upscaled image caps tall (viewport fraction), got {real_dh}"
+    );
+
+    // (a) EVERY tall row shaped doc-wide: one visual row per (short, non-wrapping)
+    // logical line, and the LAST image line holds its REAL display height — not
+    // the ~line-height estimate the unshaped fallback returns. This is the exact
+    // assertion the old uniform budget failed (tail read ~32, not ~520).
+    let last_img_line = logical - 2; // trailing empty logical line is `logical-1`
+    assert!(
+        p.line_is_inline_image(last_img_line),
+        "sanity: line {last_img_line} is the last image line"
+    );
+    assert_eq!(
+        p.total_visual_rows(),
+        logical,
+        "every logical line shaped into its own row — no truncated tail"
+    );
+    let tail_row_h = p.visual_rows(last_img_line)[0].line_height;
+    assert!(
+        (tail_row_h - real_dh).abs() < 2.0,
+        "the TAIL image row holds its REAL height ({real_dh}), not the ~line-height estimate: {tail_row_h}"
+    );
+
+    // (b) Cumulative geometry exact end-to-end: total doc height == summed row
+    // heights, and the tail image genuinely sits near the document BOTTOM (the old
+    // bug clamped its `visual_row_of` to a low, near-top row).
+    let total_rows = p.total_visual_rows();
+    let summed: f32 = (0..total_rows).map(|r| p.row_height_px(r)).sum();
+    let doc_h = p.total_doc_height();
+    assert!(
+        (doc_h - summed).abs() < 1.0,
+        "total_doc_height matches the real cumulative row geometry: {doc_h} vs {summed}"
+    );
+    let tail_img_row = p.visual_row_of(last_img_line, 0);
+    assert!(
+        p.row_top_px(tail_img_row) > doc_h - 3.0 * real_dh,
+        "the tail image sits near the document bottom (not clamped near the top): row_top {} of doc_h {doc_h}",
+        p.row_top_px(tail_img_row)
+    );
+
+    // (c) DIRECTION-SENSITIVE no-jump: with the tail image row ABOVE the viewport
+    // (scroll one row below it), scrolling UP so it enters the viewport top must
+    // push the line BELOW it down by the image's REAL height — a lurch of the
+    // estimated line height instead is exactly the reported jump. `char_screen_top`
+    // is the one owner of a char's on-screen row top at a given scroll.
+    let below_line = last_img_line + 1; // the prose after the last image
+    let top_above = p.char_screen_top(below_line, 0, tail_img_row + 1);
+    let top_entering = p.char_screen_top(below_line, 0, tail_img_row);
+    let pushed_down = top_entering - top_above;
+    assert!(
+        (pushed_down - real_dh).abs() < 2.0,
+        "scrolling UP so the tail image enters the top pushes content below it down by the REAL image height ({real_dh}), no jump: {pushed_down}"
+    );
+    restore();
+}
