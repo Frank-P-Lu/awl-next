@@ -551,6 +551,7 @@ impl TextPipeline {
             debug_gpu_bytes: None,
             debug_autosave: None,
             overlay_active: false,
+            overlay_align: None,
             overlay_crisp: false,
             overlay_query: String::new(),
             overlay_title: "",

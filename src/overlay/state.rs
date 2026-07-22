@@ -30,6 +30,16 @@ pub fn add_to_dictionary_label(word: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct OverlayState {
     pub kind: OverlayKind,
+    /// ITEM 45 (overlay ALIGNMENT as personality data) — the horizontal alignment
+    /// FROZEN the instant this overlay was constructed, captured from
+    /// [`crate::render::effective_card_anchor`] (the ONE resolver: the
+    /// `AWL_OVERLAY_ALIGN` capture knob, else the active world's own
+    /// `render_caps.card_anchor`). It is NEVER recomputed while the overlay lives, so
+    /// a theme-preview crossing that changes which world is active leaves this — and
+    /// therefore the drawn card's placement — exactly where it was at summon (the
+    /// HARD RULE: an open overlay never relocates). Threaded to the render path
+    /// through `ViewState::overlay_align` → `resolve_overlay_anchor`.
+    pub align: crate::theme::CardAnchor,
     pub query: String,
     /// The full unfiltered candidate corpus (stable order), RAW accept values.
     pub corpus: Vec<String>,
@@ -261,6 +271,12 @@ impl OverlayState {
     ) -> Self {
         let mut s = Self {
             kind,
+            // ITEM 45: freeze the alignment ONCE, here at summon — every constructor
+            // funnels through `new_marked`, so every overlay kind captures it in one
+            // place. `effective_card_anchor` honors the `AWL_OVERLAY_ALIGN` capture
+            // knob then the active world's data; the render path reads THIS frozen
+            // value thereafter, never the live world (so previewing holds the card).
+            align: crate::render::effective_card_anchor(),
             query: String::new(),
             corpus,
             git,

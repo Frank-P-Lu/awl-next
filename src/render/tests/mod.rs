@@ -35,6 +35,7 @@ mod distinguishability;
 mod one_bit;
 mod oracle;
 mod outline;
+mod overlay_align_law;
 mod overlay_personality;
 mod page_frame;
 mod folds;

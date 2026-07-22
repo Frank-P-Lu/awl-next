@@ -1687,6 +1687,38 @@ fn awl_overlay_anchor_force() -> &'static Option<theme::CardAnchor> {
     })
 }
 
+/// ITEM 45 (overlay ALIGNMENT as personality data) — the CLEAN capture knob for
+/// the round's three-value alignment AXIS: `AWL_OVERLAY_ALIGN=left|center|right`,
+/// mirroring the `AWL_STARS_PHASE` idiom (env override > world data, read once,
+/// memoized, no config key / CLI flag). It forces the EFFECTIVE overlay alignment
+/// for EVERY world so the audition gallery can shoot a right-aligned variant
+/// WITHOUT mutating any world's `render_caps.card_anchor`. Grammar (case-
+/// insensitive): `left`→[`theme::CardAnchor::TopLeft`], `center`/`centre`→
+/// [`theme::CardAnchor::TopCenter`], `right`→[`theme::CardAnchor::TopRight`]
+/// (right-anchor + mirrored bar growth); malformed → `None` (falls through). It is
+/// the alignment-axis-native sibling of the older `AWL_OVERLAY_ANCHOR_FORCE`
+/// (which also reaches `Inset`); this one speaks the round's own `left|center|right`
+/// vocabulary and takes precedence when both are set.
+fn parse_overlay_align(s: &str) -> Option<theme::CardAnchor> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "left" | "l" => Some(theme::CardAnchor::TopLeft),
+        "center" | "centre" | "c" => Some(theme::CardAnchor::TopCenter),
+        "right" | "r" => Some(theme::CardAnchor::TopRight),
+        _ => None,
+    }
+}
+
+/// The `AWL_OVERLAY_ALIGN` capture knob, read ONCE and memoized — same env-read
+/// hazard footing as [`awl_overlay_anchor_force`].
+fn awl_overlay_align_force() -> &'static Option<theme::CardAnchor> {
+    static ONCE: std::sync::OnceLock<Option<theme::CardAnchor>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::env::var("AWL_OVERLAY_ALIGN")
+            .ok()
+            .and_then(|s| parse_overlay_align(&s))
+    })
+}
+
 /// TEST-ONLY escape hatch: force the EFFECTIVE card anchor without touching the
 /// memoized env var (mirrors [`set_title_style_test_override`]). Guarded by
 /// [`crate::testlock::serial`] at the call site. `None` clears the override.
@@ -1699,10 +1731,16 @@ pub(crate) fn set_card_anchor_test_override(anchor: Option<theme::CardAnchor>) {
     *CARD_ANCHOR_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = anchor;
 }
 
-/// The EFFECTIVE [`theme::CardAnchor`] for this frame: a `cfg(test)` override if
-/// set, else the `AWL_OVERLAY_ANCHOR_FORCE` dev probe if set, else the active
-/// world's own `render_caps.card_anchor` (today `TopLeft` on every world — the
-/// round's global flip). The ONE owner [`TextPipeline::overlay_card_x`] reads it.
+/// The EFFECTIVE [`theme::CardAnchor`] the summon-time freeze RESOLVES against: a
+/// `cfg(test)` override if set, else the `AWL_OVERLAY_ALIGN` alignment knob (item
+/// 45), else the older `AWL_OVERLAY_ANCHOR_FORCE` dev probe, else the active
+/// world's own `render_caps.card_anchor`. ITEM 45 (overlay alignment as personality
+/// data): this is read ONCE, at overlay SUMMON, by [`crate::overlay::OverlayState`]
+/// (which freezes the result into its `align` field); the RENDER path never calls
+/// it directly — it reads the frozen value through [`resolve_overlay_anchor`], so an
+/// OPEN overlay never relocates when a theme-preview crossing changes which world
+/// is active. The alignment-is-data grep-law (`render::tests::overlay_align_law`)
+/// pins that: `effective_card_anchor(` / `render_caps.card_anchor` appear only here.
 pub(crate) fn effective_card_anchor() -> theme::CardAnchor {
     #[cfg(test)]
     {
@@ -1710,10 +1748,29 @@ pub(crate) fn effective_card_anchor() -> theme::CardAnchor {
             return a;
         }
     }
+    if let Some(anchor) = awl_overlay_align_force() {
+        return *anchor;
+    }
     match awl_overlay_anchor_force() {
         Some(anchor) => *anchor,
         None => theme::active().render_caps.card_anchor,
     }
+}
+
+/// ITEM 45 — THE ONE consumer-side owner of an open overlay's EFFECTIVE alignment:
+/// the value FROZEN at summon (`frozen`, threaded from
+/// [`crate::overlay::OverlayState::align`] through `ViewState::overlay_align`) when
+/// present, falling back to the live [`effective_card_anchor`] only when NO overlay
+/// froze one (a closed overlay — the geometry is inert then — or a legacy test that
+/// drives the placement policy through the `set_card_anchor_test_override` seam
+/// alone). Every render-path anchor reader (the card box, the selected-bar growth
+/// mirror, the placard-corner derivation) routes through THIS, so they compose ONE
+/// frozen alignment and none of them re-reads the live world mid-preview — the
+/// HARD RULE ("an open overlay never relocates"). Keeping the sole `effective_
+/// card_anchor` fallback in this module is what lets the grep-law ban a live read
+/// from every `chrome/` consumer.
+pub(crate) fn resolve_overlay_anchor(frozen: Option<theme::CardAnchor>) -> theme::CardAnchor {
+    frozen.unwrap_or_else(effective_card_anchor)
 }
 
 /// DEV-ONLY probe for the PALETTE-COMPOSITION round's CARD-EDGE A/B — lets the
@@ -3559,6 +3616,12 @@ pub struct TextPipeline {
     debug_autosave: Option<crate::debug::AutosaveState>,
     /// --- summoned navigation overlay view state (copied in set_view) ---
     overlay_active: bool,
+    /// ITEM 45 — mirror of [`ViewState::overlay_align`]: the overlay's alignment
+    /// FROZEN at summon (`Some` while an overlay is open, `None` when closed), read
+    /// through the ONE owner [`crate::render::resolve_overlay_anchor`] by every
+    /// render-path anchor reader. Held here so a theme-preview crossing that changes
+    /// the active world never relocates the open card (the HARD RULE).
+    overlay_align: Option<theme::CardAnchor>,
     /// Mirror of [`ViewState::overlay_crisp`]: the THEME / CARET pickers keep the doc
     /// crisp (no blur backdrop). Drives both the render path and [`Self::dims_doc`].
     overlay_crisp: bool,

@@ -72,6 +72,13 @@ pub struct ProjectInfo {
 pub struct OverlayInfo {
     pub active: bool,
     pub mode: &'static str,
+    /// ITEM 45 (overlay ALIGNMENT as personality data) — the alignment this overlay
+    /// FROZE at summon ([`crate::overlay::OverlayState::align`]), carried verbatim so
+    /// a single-frame `--keys` capture places the card at the SAME anchor the live
+    /// picker held (and a preview-crossing capture holds it, exactly like live). Fed
+    /// into `ViewState::overlay_align`; the `AWL_OVERLAY_ALIGN` capture knob is what
+    /// this reflects for the audition gallery's right-aligned shots.
+    pub align: crate::theme::CardAnchor,
     pub query: String,
     pub items: Vec<String>,
     /// EMPTY STATE: the shared calm message shown when NO rows match (empty corpus →
