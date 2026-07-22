@@ -5,7 +5,7 @@
 //! `kill_line_to`), and C-y yank. Carved out of `buffer.rs` verbatim — inherent
 //! methods on [`Buffer`].
 
-use super::{is_word_char, Buffer};
+use super::Buffer;
 
 /// URL-SHAPE test for the paste-URL-over-selection → markdown-link convention.
 /// Deliberately simple + conservative (documented shape, not a validator): the
@@ -330,12 +330,15 @@ impl Buffer {
         }
     }
 
-    /// M-d: delete the word AFTER the cursor (into the kill buffer, so C-y can
-    /// bring it back) — the forward mirror of [`Self::delete_word_backward`],
-    /// removing exactly what [`Self::forward_word`] (M-f) would move over: skip a
-    /// run of non-word chars, then the word. Char/grapheme-safe (indices are char
-    /// indices into the rope) and a clean NO-OP at end-of-buffer. With an active
-    /// selection, delete that instead.
+    /// ⌥+forward-Delete: delete the token AFTER the cursor (into the kill buffer,
+    /// so C-y can bring it back) — the exact forward mirror of
+    /// [`Self::delete_word_backward`] and its
+    /// [`word_delete_forward_boundary`](super::word_delete_forward_boundary): fold
+    /// any LEADING whitespace, then remove exactly ONE token class — a word run OR
+    /// a punctuation run, never both. So `⎸... abc` deletes only `...`, leaving
+    /// ` abc` (the word survives), mirroring `... abc⎸` ⌥⌫ deleting only `abc`.
+    /// Char/grapheme-safe (indices are char indices into the rope) and a clean
+    /// NO-OP at end-of-buffer. With an active selection, delete that instead.
     pub fn delete_word_forward(&mut self) {
         self.goal_col = None;
         if self.delete_selection() {
@@ -343,13 +346,7 @@ impl Buffer {
             return;
         }
         let len = self.rope.len_chars();
-        let mut j = self.cursor;
-        while j < len && !is_word_char(self.rope.char(j)) {
-            j += 1;
-        }
-        while j < len && is_word_char(self.rope.char(j)) {
-            j += 1;
-        }
+        let j = super::word_delete_forward_boundary(self.cursor, len, |k| self.rope.char(k));
         if j > self.cursor {
             let killed = self.rope.slice(self.cursor..j).to_string();
             // Consecutive word-kills ACCUMULATE into the kill ring (the same

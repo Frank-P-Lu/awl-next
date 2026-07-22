@@ -150,6 +150,51 @@ pub(crate) fn word_delete_backward_boundary(cursor: usize, char_at: impl Fn(usiz
     i
 }
 
+/// The ONE owner of the forward word-delete boundary (⌥+forward-Delete /
+/// DeleteWordForward): from char index `cursor`, first consume any LEADING
+/// WHITESPACE run to the RIGHT, then delete exactly ONE token — a run of WORD
+/// chars if a word char now sits at the caret, else a run of PUNCTUATION
+/// (non-word, non-whitespace) chars. Return the char index the deletion should
+/// stop at.
+///
+/// The exact forward mirror of [`word_delete_backward_boundary`]: ONE token
+/// class per stroke, so `⎸... abc` removes only the `...` run (the word `abc`
+/// survives, leaving ` abc`), exactly as `... abc⎸` ⌥⌫ removes only `abc`.
+/// Punctuation and a word are DISTINCT classes that never delete together; only
+/// the whitespace that INTRODUCES a token folds into it. The old rule
+/// (skip-nonword-then-word) over-deleted BOTH the punct run and the word after
+/// it in one stroke — the forward twin of the backward bug item 3(a) fixed.
+///
+/// `char_at(i)` yields the char at 0-based char index `i` (`cursor <= i < len`).
+pub(crate) fn word_delete_forward_boundary(
+    cursor: usize,
+    len: usize,
+    char_at: impl Fn(usize) -> char,
+) -> usize {
+    let mut j = cursor;
+    // 1. Fold any leading whitespace into the deletion (the token to the RIGHT
+    //    "owns" the space that introduced it, mirroring macOS word motion).
+    while j < len && char_at(j).is_whitespace() {
+        j += 1;
+    }
+    if j == len {
+        return len;
+    }
+    // 2. Delete exactly one token — the class of the char now at the caret.
+    if is_word_char(char_at(j)) {
+        while j < len && is_word_char(char_at(j)) {
+            j += 1;
+        }
+    } else {
+        // Punctuation: non-word AND non-whitespace (whitespace was consumed above
+        // and a word char ends the run), so this never crosses into an adjacent word.
+        while j < len && !is_word_char(char_at(j)) && !char_at(j).is_whitespace() {
+            j += 1;
+        }
+    }
+    j
+}
+
 /// One recorded edit, the unit of undo. We store the CHANGE (op-based history),
 /// not a whole-document snapshot, so memory is proportional to what was edited.
 /// At char index `start`, the text `removed` was replaced by the text `inserted`.
