@@ -185,6 +185,177 @@ pub(super) fn assert_identical(
     );
 }
 
+/// The single most-common "ink" pixel (any pixel differing from `bg` by more
+/// than `threshold` in any channel) over `region` — `None` if the region has
+/// no ink at all. A glyph's own anti-aliased edge pixels are a minority next
+/// to its solid fill, so the MODE (not the mean, which an edge's partial
+/// coverage would drag toward `bg`) is a robust stand-in for "what color is
+/// this text drawn in", usable to compare two DIFFERENT regions' text ink
+/// for an exact real-pixel match (e.g. "does a table cell's ink match
+/// ordinary body prose's ink") without needing to hand-pick a single glyph
+/// pixel. Threshold + region semantics mirror [`diff_region`].
+pub(super) fn dominant_ink_color(
+    pixels: &[[u8; 4]],
+    width: i64,
+    height: i64,
+    region: Region,
+    bg: [u8; 4],
+    threshold: u8,
+) -> Option<[u8; 4]> {
+    use std::collections::HashMap;
+    let x0 = region.x.max(0);
+    let y0 = region.y.max(0);
+    let x1 = (region.x + region.w).min(width);
+    let y1 = (region.y + region.h).min(height);
+    let mut counts: HashMap<[u8; 4], usize> = HashMap::new();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let p = pixels[(y * width + x) as usize];
+            let d = p[0].abs_diff(bg[0]).max(p[1].abs_diff(bg[1])).max(p[2].abs_diff(bg[2]));
+            if d > threshold {
+                *counts.entry(p).or_insert(0) += 1;
+            }
+        }
+    }
+    counts.into_iter().max_by_key(|(_, n)| *n).map(|(p, _)| p)
+}
+
+/// One horizontal INK/gap band in a single-row column scan — [`ink_column_bands`]'s
+/// output unit. `x0..=x1` is an inclusive canvas-column range (both ends real
+/// columns, matching the loop below).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ColBand {
+    pub ink: bool,
+    // Read via `{:?}` in a failing assertion's message (dead-code analysis
+    // ignores `Debug`-only field reads); also here for a future caller that
+    // wants a band's own width, not just its ink/gap classification.
+    #[allow(dead_code)]
+    pub x0: i64,
+    #[allow(dead_code)]
+    pub x1: i64,
+}
+
+/// Collapse the column range `[x0,x1)` of the row band `[y0,y1)` into
+/// alternating ink/gap [`ColBand`]s: a column counts as "ink" if ANY pixel in
+/// its `y0..y1` span differs from `bg` by more than `threshold` in any single
+/// channel. The theme-QA round's own bullet-padding probe (a hand-rolled
+/// Python script over the capture PNG) promoted here so a padding/touching
+/// law can assert "how many separate ink blobs sit in this strip" — a
+/// direct, appearance-level test of "does the bullet glyph touch the text
+/// that follows it" (a single merged band == touching; two bands with a real
+/// gap between them == not touching) — rather than inferring it from
+/// geometry. Real GPU pixels, the Wagtail lesson (CLAUDE.md's harness
+/// section): appearance is proven over bytes, never state.
+pub(super) fn ink_column_bands(
+    pixels: &[[u8; 4]],
+    width: i64,
+    x0: i64,
+    x1: i64,
+    y0: i64,
+    y1: i64,
+    bg: [u8; 4],
+    threshold: u8,
+) -> Vec<ColBand> {
+    let mut bands: Vec<ColBand> = Vec::new();
+    let mut cur: Option<bool> = None;
+    let mut start = x0;
+    let mut x = x0;
+    while x < x1 {
+        let mut ink = false;
+        for y in y0..y1 {
+            let idx = y * width + x;
+            if idx < 0 || idx as usize >= pixels.len() {
+                continue;
+            }
+            let p = pixels[idx as usize];
+            let d = p[0].abs_diff(bg[0]).max(p[1].abs_diff(bg[1])).max(p[2].abs_diff(bg[2]));
+            if d > threshold {
+                ink = true;
+                break;
+            }
+        }
+        match cur {
+            None => {
+                cur = Some(ink);
+                start = x;
+            }
+            Some(c) if c != ink => {
+                bands.push(ColBand { ink: c, x0: start, x1: x - 1 });
+                cur = Some(ink);
+                start = x;
+            }
+            _ => {}
+        }
+        x += 1;
+    }
+    if let Some(c) = cur {
+        bands.push(ColBand { ink: c, x0: start, x1: x1 - 1 });
+    }
+    bands
+}
+
+/// [`ink_column_bands`]'s ROW-axis mirror: collapse the row range `[y0,y1)`
+/// of the column band `[x0,x1)` into alternating ink/gap [`ColBand`]s (its
+/// `x0`/`x1` fields hold this scan's row range instead — the type is
+/// axis-neutral, an ink/gap band with a `lo..=hi` extent regardless of which
+/// axis produced it). A row counts as "ink" if ANY pixel in its `x0..x1` span
+/// differs from `bg` by more than `threshold` in any single channel. Where
+/// [`ink_column_bands`] answers "does this glyph touch that one" (a
+/// horizontal question), this answers "how tall is the BLANK GAP between two
+/// blocks" (a vertical one) — the theme-QA round's heading-spacing law: a
+/// no-bold world's gap AROUND a heading must read measurably taller than the
+/// gap between two ordinary body paragraphs, at real pixels.
+pub(super) fn ink_row_bands(
+    pixels: &[[u8; 4]],
+    width: i64,
+    height: i64,
+    x0: i64,
+    x1: i64,
+    y0: i64,
+    y1: i64,
+    bg: [u8; 4],
+    threshold: u8,
+) -> Vec<ColBand> {
+    let mut bands: Vec<ColBand> = Vec::new();
+    let mut cur: Option<bool> = None;
+    let mut start = y0;
+    let mut y = y0;
+    while y < y1 {
+        let mut ink = false;
+        if y >= 0 && y < height {
+            for x in x0..x1 {
+                let idx = y * width + x;
+                if idx < 0 || idx as usize >= pixels.len() {
+                    continue;
+                }
+                let p = pixels[idx as usize];
+                let d = p[0].abs_diff(bg[0]).max(p[1].abs_diff(bg[1])).max(p[2].abs_diff(bg[2]));
+                if d > threshold {
+                    ink = true;
+                    break;
+                }
+            }
+        }
+        match cur {
+            None => {
+                cur = Some(ink);
+                start = y;
+            }
+            Some(c) if c != ink => {
+                bands.push(ColBand { ink: c, x0: start, x1: y - 1 });
+                cur = Some(ink);
+                start = y;
+            }
+            _ => {}
+        }
+        y += 1;
+    }
+    if let Some(c) = cur {
+        bands.push(ColBand { ink: c, x0: start, x1: y1 - 1 });
+    }
+    bands
+}
+
 /// Render the pipeline's CURRENT prepared state (whatever the caller already
 /// set via `set_view`/`prepare`) to an offscreen `width`x`height` texture and
 /// read it back as a flat row-major `Vec<[u8;4]>` — the exact `dither`-module

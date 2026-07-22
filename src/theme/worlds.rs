@@ -370,7 +370,16 @@ pub const BOMBORA: Theme = Theme {
     // one world that gets the manicule — a pointing hand on every bullet is loud,
     // so it rides the top level alone. The showpiece pick; flagged for veto.
     bullets: ('☞', '❧'),
-    bullet_scale: BULLET_SCALE_ORNAMENT,
+    // PADDING FIX (theme-QA round): the manicule's own ink is unusually WIDE for
+    // a bullet glyph — at the shared [`BULLET_SCALE_ORNAMENT`] tier its right
+    // edge reached (and on some rows touched) the list text that follows, since
+    // EB Garamond's narrow `"- "` marker+space advance leaves it little room
+    // (measured: real-pixel glyph-to-text gap went negative — see
+    // `render::tests::markdown::bullet_glyph_never_touches_the_following_text_in_any_world`).
+    // A dedicated, smaller-than-the-shared-tier literal (rather than retuning
+    // [`BULLET_SCALE_ORNAMENT`] for every characterful world) keeps every other
+    // hedera/fleuron world's bullet byte-identical.
+    bullet_scale: 0.35,
     // Dark violet current → Night; EB Garamond classic serif → Refined / Literary; violet-blue hue → Cool.
     // Curated: shows under Night / Refined / Literary (the classical serif's home); opts OUT of Temperature (Cool crowded).
     tags: ThemeTags { time: Some("Night"), register: Some("Refined"), voice: Some("Literary"), temperature: None },
@@ -517,10 +526,22 @@ pub const MOPOKE: Theme = Theme {
     ornaments: Ornaments { dash: '\u{E670}', star: '\u{F011}', underscore: '\u{F014}' },
     ornament_face: ORNAMENT_JUNICODE,
     ornament_scale: ORNAMENT_SCALE_ORNATE,
-    // Utilitarian-and-soft charcoal room → the quiet ⁑ mark (least floral of the
-    // Junicode pool) + a soft heart, honouring "utilitarian" while staying in-face.
-    bullets: ('⁑', '❦'),
-    bullet_scale: BULLET_SCALE_ORNAMENT,
+    // GLYPH FIX (theme-QA round): the original `⁑` (TWO ASTERISK PUNCTUATION) read
+    // as a punctuation/footnote mark, not a bullet — the one characterful world
+    // whose level-1 glyph broke the "round/floral" register every other hedera
+    // world shares. Swapped to Mopoke's OWN damask rosette (the very glyph its
+    // `---` ornament already draws at ORNATE scale — "the ornament trio, one
+    // level down" made literal) for a mark that reads as a bullet AND stays
+    // in Mopoke's own established vocabulary.
+    bullets: ('\u{E670}', '❦'),
+    // PADDING FIX (theme-QA round): at the shared [`BULLET_SCALE_ORNAMENT`] tier
+    // the rosette's ink was too small for iA Writer Quattro S's wide duospaced
+    // `"- "` marker+space advance, leaving a canyon before the text (measured
+    // gap far past every other characterful world's — see
+    // `render::tests::markdown::bullet_glyph_never_touches_the_following_text_in_any_world`).
+    // A dedicated, larger-than-the-shared-tier literal closes it without
+    // touching any other world's bullet.
+    bullet_scale: 0.8,
     // Warm charcoal cosy dark → Dusk (warm dark); iA Writer Quattro utilitarian → Humble; sans-class writing face → Modern; warm hue → Warm.
     // Curated: shows under Dusk / Humble (its cosy utilitarian core); opts OUT of Voice (Modern crowded) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: None, temperature: None },

@@ -810,3 +810,50 @@ fn bundled_text_and_ornament_faces_register_under_their_family_names() {
         assert!(registered, "{expected:?} must be registered in the font DB");
     }
 }
+
+/// GUARD (theme-QA audit, reported cell "Saltpan body text reads as a DISPLAY
+/// face — possible regression"): INVESTIGATED, DID NOT REPRODUCE. `Theme::font`
+/// is `"Fraunces 9pt"` — the TEXT optical size, not a display cut — registered
+/// from the embedded `Fraunces9pt-Regular.ttf` (its `name` table ID 1 is
+/// literally `"Fraunces 9pt"`, confirmed with `fonttools`; the companion
+/// `Fraunces9pt-Bold.ttf`'s own `assets/fonts/LICENSES.md` provenance line
+/// independently pins the SAME `opsz=9` instancing used to build it). Fraunces
+/// at `opsz=9` is a genuinely characterful old-style serif by design (ball
+/// terminals, real stroke contrast) — that character is not, on its own,
+/// evidence of a wrong-face regression.
+///
+/// This pins the GOOD state so a future asset swap can't silently regress it
+/// into an actual bug: Saltpan's Latin ladder resolves to EXACTLY that family
+/// at weight 400 (Regular) — never the Bold file winning the "nearest 400"
+/// pick, and never a bare `"Fraunces"` (the un-suffixed family name a
+/// system-installed Fraunces variable font registers under on a machine that
+/// happens to have one — this developer's own did — which would be a SILENT
+/// wrong-face substitution if `Theme::font` ever lost its `" 9pt"` suffix).
+#[test]
+fn saltpan_body_face_is_the_text_optical_size_not_a_display_cut() {
+    let _t = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping saltpan_body_face_is_the_text_optical_size_not_a_display_cut: no wgpu adapter");
+        return;
+    };
+    assert_eq!(
+        theme::SALTPAN.font, "Fraunces 9pt",
+        "Saltpan's display face must stay the TEXT optical size, never a bare \"Fraunces\" display cut"
+    );
+    theme::set_active_by_name("Saltpan").unwrap();
+    p.sync_theme();
+    let (family, weight) = p
+        .resolve_font_id(theme::FontId::Latin)
+        .expect("Saltpan: Latin must resolve to its own embedded display face");
+    assert_eq!(
+        family, "Fraunces 9pt",
+        "Saltpan's Latin ladder resolved to {family:?}, not its own text-optical-size face"
+    );
+    assert_eq!(
+        weight,
+        glyphon::Weight(400),
+        "Saltpan's body face must resolve at Regular (400), not a heavier display-leaning weight"
+    );
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}

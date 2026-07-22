@@ -308,7 +308,7 @@ fn bullet_glyphs_swap_per_world() {
         ("Bombora", ('☞', '❧')),    // the manicule showpiece + hedera
         ("Gumtree", ('❧', '☙')),     // Junicode botanical hederas
         ("Bilby", ('❧', '❦')),       // Garamond Renaissance fleurons
-        ("Mopoke", ('⁑', '❦')),      // the quiet utilitarian Junicode mark
+        ("Mopoke", ('\u{E670}', '❦')), // its own damask rosette (theme-QA glyph fix)
     ];
     for (world, (g0, g1)) in cases {
         theme::set_active_by_name(world).unwrap();
@@ -374,6 +374,69 @@ fn bullet_glyphs_resolve_in_each_worlds_assigned_face() {
             );
         }
     }
+}
+
+/// THE OUTCOME half of the theme-QA round's bullet-PADDING audit: a bullet
+/// glyph's own ink must never TOUCH the text that follows it — asserted over
+/// REAL GPU PIXELS (`pixeldiff::ink_column_bands`), not the `bullet_marks()`
+/// geometry (the Wagtail lesson, CLAUDE.md's harness section: appearance is
+/// proven over bytes, never inferred from state — a mechanism can report the
+/// "right" x while the glyph visually merges into the text, exactly the shape
+/// of the reported Bombora bug). NO-WILDCARD sweep of `theme::THEMES`: every
+/// world — plain `•`/`◦` and every hedera/fleuron/manicule pair alike — gets
+/// the same real-pixel check, so a future world's bullet pick is enrolled
+/// automatically. A single un-indented bullet line keeps the geometry simple
+/// (marker at column 0) and short content ("a") keeps the row well clear of
+/// the wrap width, so the background-reference sample (taken far right on the
+/// same row) is never itself inside the writing column's text.
+#[test]
+fn bullet_glyph_never_touches_the_following_text_in_any_world() {
+    let _t = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping bullet_glyph_never_touches_the_following_text_in_any_world: no wgpu adapter");
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    // Line 0 is the bullet ("- a"); the caret parks on the blank line 1 so
+    // line 0's marker conceals + its ornament glyph draws (reveal-on-cursor).
+    let text = "- a\n\nb\n";
+    for t in theme::THEMES.iter() {
+        theme::set_active_by_name(t.name).unwrap();
+        p.sync_theme();
+        let mut v = view(text, 1, 0);
+        v.is_markdown = true;
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        let pixels = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+        let text_left = p.text_left() as i64;
+        let row_top = p.line_ornament_top(0) as i64;
+        let row_h = (p.metrics.line_height as i64).max(1);
+        let y0 = row_top.max(0);
+        let y1 = (row_top + row_h).min(h as i64);
+        let y_mid = ((y0 + y1) / 2).clamp(0, h as i64 - 1);
+
+        // Background reference: same row, far right of the short "- a" line's
+        // own width — still inside the writing column, never the margin.
+        let bg_x = (text_left + 300).min(w as i64 - 1);
+        let bg = pixels[(y_mid * w as i64 + bg_x) as usize];
+
+        let x0 = text_left.max(0);
+        let x1 = (text_left + 120).min(w as i64);
+        let bands = pixeldiff::ink_column_bands(&pixels, w as i64, x0, x1, y0, y1, bg, 18);
+        let ink_bands: Vec<_> = bands.iter().filter(|b| b.ink).collect();
+        assert!(
+            ink_bands.len() >= 2,
+            "{}: expected the bullet glyph and the following text to read as TWO \
+             separate ink bands in x[{x0},{x1}) y[{y0},{y1}), got {bands:?} over bg \
+             {bg:?} — a single merged band is exactly the Bombora manicule-touching-\
+             text bug this test guards",
+            t.name,
+        );
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
 }
 
 /// PERF O(visible): `bullet_marks` places each visible bullet's glyph WITHOUT the

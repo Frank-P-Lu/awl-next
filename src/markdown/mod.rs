@@ -105,7 +105,8 @@ mod tables;
 
 pub use conceal::ConcealKind;
 pub use headings::{
-    heading_scale, heading_weight_bold, headings, headings_from_spans, type_scale, Heading,
+    heading_row_lead, heading_scale, heading_weight_bold, headings, headings_from_spans,
+    type_scale, Heading,
 };
 #[allow(unused_imports)] // ImageRef: public API surface, no in-crate caller outside tests
 pub use refs::{
