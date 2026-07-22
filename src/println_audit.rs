@@ -70,8 +70,12 @@ const EXPECTED: &[(&str, usize)] = &[
     // keep the round's own diff focused on the reported bug (manual Save +
     // the toggle-chatter class it named explicitly). The USER GUIDE round
     // added ONE more (`open_guide`'s on-disk-refresh failure), mirroring
-    // `open_credits`'s existing one verbatim.
-    ("app/files.rs", 13),
+    // `open_credits`'s existing one verbatim. Item 39 (Add to dictionary) adds
+    // ONE more: `add_to_dictionary`'s rare personal-dictionary FILE-append
+    // failure (I/O error, unresolvable path) — non-fatal by design (the word is
+    // already silenced in memory that session), same best-effort-write class as
+    // the sticky-pref writes above; a future notice-routing candidate.
+    ("app/files.rs", 14),
     // GPU/render-pipeline errors (`prepare`/`render`) retain a stderr
     // diagnostic while App-owned recovery also paints the calm notice.
     ("app/gpu.rs", 2),

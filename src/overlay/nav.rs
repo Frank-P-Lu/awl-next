@@ -37,6 +37,18 @@ impl OverlayState {
                 .then_with(|| a.index.cmp(&b.index))
         });
         let mut ranked: Vec<usize> = scored.into_iter().map(|r| r.index).collect();
+        // SPELL "Add to dictionary" EXEMPTION: the add row acts on the TARGETED
+        // word, not the typed query, so a fuzzy filter that dropped it (its label
+        // didn't match what you typed) re-appends it at the END — it is always
+        // reachable while the spell picker is open. Inert for every other kind
+        // (`spell_add` empty).
+        if self.spell_add.iter().any(|&a| a) {
+            for (ci, &is_add) in self.spell_add.iter().enumerate() {
+                if is_add && !ranked.contains(&ci) {
+                    ranked.push(ci);
+                }
+            }
+        }
         // RUNTIME-GATED ROW FILTER (Command palette only, today): drop any corpus
         // entry marked `hidden` (e.g. "Finish file" with no daemon `--wait` client
         // actively waiting — see `commands::visible_hidden_mask`). `corpus` itself
@@ -292,6 +304,17 @@ impl OverlayState {
     pub fn selected_is_heading(&self) -> bool {
         self.selected_corpus_index()
             .map(|i| self.heading.get(i).copied().unwrap_or(false))
+            .unwrap_or(false)
+    }
+
+    /// True when the highlighted Spell row is the appended "Add '<word>' to
+    /// dictionary" affordance (`spell_add[i]`), so the accept ADDS the word to the
+    /// personal dictionary instead of replacing it with a suggestion. `false` for a
+    /// suggestion row and every non-Spell picker (empty `spell_add`). The word to
+    /// add is [`Self::add_word`].
+    pub fn selected_is_add_to_dictionary(&self) -> bool {
+        self.selected_corpus_index()
+            .map(|i| self.spell_add.get(i).copied().unwrap_or(false))
             .unwrap_or(false)
     }
 

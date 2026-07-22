@@ -8,7 +8,7 @@
 //! `config::write`; the launch-time process-global APPLY lives in
 //! `config::apply`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The loaded settings. Every field is OPTIONAL: `None`/empty means "absent",
 /// which the resolution paths read as "fall back to the built-in default", so a
@@ -700,6 +700,21 @@ pub fn config_path(explicit: Option<PathBuf>) -> PathBuf {
             .join("config.toml");
     }
     PathBuf::from("awl-config.toml")
+}
+
+/// The USER (personal) DICTIONARY path: `dictionary.txt` beside `config.toml` in
+/// the SAME config dir (GLOBAL across projects, hand-editable). Derived from the
+/// resolved config path so the two always sit together — one config dir, one word
+/// list. `None` when the config path has no parent (the `Config::empty`
+/// placeholder's blank path, or a bare relative fallback with no directory) —
+/// there is then nowhere durable to keep the list, so "Add to dictionary" stays
+/// an in-memory-only session add.
+pub fn dictionary_path(config_path: &Path) -> Option<PathBuf> {
+    let parent = config_path.parent()?;
+    if parent.as_os_str().is_empty() {
+        return None;
+    }
+    Some(parent.join("dictionary.txt"))
 }
 
 /// Read a TOML number as `f32`, accepting either a float (`0.8`) or an integer

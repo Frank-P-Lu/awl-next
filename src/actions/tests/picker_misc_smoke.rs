@@ -574,7 +574,7 @@ fn every_catalog_command_dispatches_without_panicking() {
         config_keys: &[],
         config_linux_keep: &[],
         goto_headings: vec![("Heading One".to_string(), 0)],
-        spell_target: Some((vec!["speling".to_string(), "spieling".to_string()], (0, 0, 3))),
+        spell_target: Some((vec!["speling".to_string(), "spieling".to_string()], (0, 0, 3), "speling".to_string())),
         history_entries: vec![],
         history_now: None,
         history_session_start: None,

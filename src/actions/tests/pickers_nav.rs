@@ -76,6 +76,7 @@ fn clicking_a_spell_suggestion_replaces_the_word() {
     let mut overlay: Option<OverlayState> = Some(OverlayState::new_spell(
         vec!["the".into(), "tea".into(), "ten".into()],
         (0, 0, 3),
+        "teh".into(),
     ));
     let mut shift = false;
     let mut zoom = 1.0;
@@ -101,6 +102,70 @@ fn clicking_a_spell_suggestion_replaces_the_word() {
     }
     assert!(overlay.is_none(), "accepting a suggestion closes the panel");
     assert_eq!(buffer.text(), "tea quick brown\n", "the clicked suggestion replaced the word");
+}
+
+#[test]
+fn accepting_the_add_to_dictionary_row_signals_add_and_never_edits_the_buffer() {
+    // The SAME spell panel carries an appended "Add '<word>' to dictionary" row
+    // (item 39). Selecting it and pressing Enter must NOT replace the word —
+    // instead it emits `Effect::AddToDictionary(word)` (the live App silences the
+    // word + appends it to the personal dictionary file) and closes the panel, the
+    // buffer untouched. One surface, no new chrome class.
+    let mut buffer = Buffer::from_str("teh quick brown\n");
+    let mut overlay: Option<OverlayState> = Some(OverlayState::new_spell(
+        vec!["the".into(), "tea".into(), "ten".into()],
+        (0, 0, 3),
+        "teh".into(),
+    ));
+    let mut shift = false;
+    let mut zoom = 1.0;
+    let mut search = None;
+    let mut make_overlay = |_: OverlayKind| None;
+    let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
+    // The add row is the LAST row (after the 3 suggestions) and is the ONLY one
+    // `selected_is_add_to_dictionary` flags.
+    let last = overlay.as_ref().unwrap().items.len() - 1;
+    assert_eq!(last, 3, "3 suggestions + 1 add row");
+    overlay.as_mut().unwrap().selected = last;
+    assert!(overlay.as_ref().unwrap().selected_is_add_to_dictionary());
+    let eff = {
+        let mut ctx = ActionCtx {
+            buffer: &mut buffer,
+            shift_selecting: &mut shift,
+            zoom: &mut zoom,
+            search: &mut search,
+            scroll_page_lines: 1,
+            overlay: &mut overlay,
+            make_overlay: &mut make_overlay,
+            browse_to: &mut browse_to,
+            oracle: None,
+        };
+        apply_core(&mut ctx, &Action::Newline, false)
+    };
+    assert!(
+        matches!(&eff, Effect::AddToDictionary(w) if w == "teh"),
+        "the add row emits AddToDictionary(word): {eff:?}"
+    );
+    assert!(overlay.is_none(), "accepting the add row closes the panel");
+    assert_eq!(buffer.text(), "teh quick brown\n", "the add row NEVER edits the buffer");
+}
+
+#[test]
+fn spell_add_row_survives_a_typed_query_that_matches_no_suggestion() {
+    // The add row acts on the TARGETED word, not the filter text, so a query that
+    // fuzzy-drops every suggestion still keeps it reachable (refilter exemption).
+    let mut ov = OverlayState::new_spell(
+        vec!["the".into(), "tea".into(), "ten".into()],
+        (0, 0, 3),
+        "teh".into(),
+    );
+    // A query no suggestion contains — "zzz" — normally empties the list.
+    for c in "zzz".chars() {
+        ov.push(c);
+    }
+    assert_eq!(ov.items.len(), 1, "only the add row survives an all-miss query");
+    ov.selected = 0;
+    assert!(ov.selected_is_add_to_dictionary(), "the surviving row is the add row");
 }
 
 #[test]
@@ -211,6 +276,7 @@ fn spell_picker_replaces_word_with_chosen_suggestion() {
         OverlayKind::Spell => Some(OverlayState::new_spell(
             vec!["receive".into(), "relieve".into()],
             (1, 4, 11),
+            "recieve".into(),
         )),
         _ => None,
     };
@@ -252,7 +318,7 @@ fn right_press_retarget_dismisses_first_menu_then_opens_the_second() {
     let mut buffer = Buffer::from_str("one recieve two seperate three\n");
     // Start with the FIRST word's spell menu already open (target span A).
     let mut overlay: Option<OverlayState> =
-        Some(OverlayState::new_spell(vec!["receive".into()], (0, 4, 11)));
+        Some(OverlayState::new_spell(vec!["receive".into()], (0, 4, 11), "recieve".into()));
     let mut shift = false;
     let mut zoom = 1.0;
     let mut search = None;
@@ -262,6 +328,7 @@ fn right_press_retarget_dismisses_first_menu_then_opens_the_second() {
         OverlayKind::Spell => Some(OverlayState::new_spell(
             vec!["separate".into(), "desperate".into()],
             (0, 16, 24),
+            "seperate".into(),
         )),
         _ => None,
     };

@@ -154,6 +154,23 @@ fn config_path_env_precedence() {
 }
 
 #[test]
+fn dictionary_path_sits_beside_config_toml() {
+    // The personal dictionary is `dictionary.txt` in the SAME dir as config.toml.
+    assert_eq!(
+        dictionary_path(&PathBuf::from("/home/me/.config/awl/config.toml")),
+        Some(PathBuf::from("/home/me/.config/awl/dictionary.txt")),
+    );
+    assert_eq!(
+        dictionary_path(&PathBuf::from("/xdg/awl/config.toml")),
+        Some(PathBuf::from("/xdg/awl/dictionary.txt")),
+    );
+    // No durable home: the `Config::empty` placeholder's blank path, and a bare
+    // relative filename with no directory, both yield None (in-memory-only add).
+    assert_eq!(dictionary_path(&PathBuf::new()), None);
+    assert_eq!(dictionary_path(&PathBuf::from("awl-config.toml")), None);
+}
+
+#[test]
 fn merge_slot_caps_at_two_newest_first_dedup() {
     // Newest binding goes first; existing slots follow; canonical duplicates drop.
     assert_eq!(Config::merge_slot(&[], "C-j"), vec!["C-j".to_string()]);

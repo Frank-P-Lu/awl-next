@@ -401,7 +401,7 @@ impl<'a> ReplaySession<'a> {
         // SPELL picker target: the misspelled word the cursor is on (or adjacent to)
         // + its corrections, resolved before the builder and ONLY when the spell
         // binding fired. None when the cursor isn't on a flagged word (no-op summon).
-        let spell_target: Option<(Vec<String>, (usize, usize, usize))> =
+        let spell_target: Option<(Vec<String>, (usize, usize, usize), String)> =
             if matches!(action, Action::OpenSpellSuggest) {
                 self.spell.as_ref().and_then(|sc| {
                     let (line, col) = self.buffer.cursor_line_col();
@@ -409,6 +409,7 @@ impl<'a> ReplaySession<'a> {
                         (
                             t.suggestions,
                             (t.misspelling.line, t.misspelling.start_col, t.misspelling.end_col),
+                            t.word,
                         )
                     })
                 })
@@ -816,6 +817,14 @@ impl<'a> ReplaySession<'a> {
             // moment of commit; only the disk write itself is deferred here.
             | actions::Effect::RenameNoteCommit { .. }
             | actions::Effect::DuplicateNote
+            // ADD TO DICTIONARY (Cmd-`;` add row): silencing the word + APPENDING it
+            // to the on-disk personal dictionary is a live-App-only concern
+            // (`App::add_to_dictionary`) — a capture must never write the dictionary
+            // file (the same determinism gate `KeepVersion`/`Export` sit behind), so
+            // this is a documented no-op here; the load/persist itself is unit-tested
+            // at the App seam, and the picker's add-row select/accept flow IS
+            // core-driven and fully `--keys`-drivable up to this signal.
+            | actions::Effect::AddToDictionary(_)
             | actions::Effect::None => {}
         }
         }

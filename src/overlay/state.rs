@@ -6,6 +6,13 @@
 
 use super::{Capture, KeepEdit, LinkEdit, OverlayKind, RenameEdit, ValueEdit, PIN_TAG};
 
+/// The row LABEL for the spell picker's "Add to dictionary" affordance — the ONE
+/// owner of its wording, so the built row, the tests, and any future re-summon
+/// agree. Matter-of-fact + the word in single quotes (docs voice).
+pub fn add_to_dictionary_label(word: &str) -> String {
+    format!("Add '{word}' to dictionary")
+}
+
 /// Live overlay state. `corpus` is the full candidate list (the RAW accept
 /// values — root-relative paths for Goto, child names for Project, entry names
 /// for Browse); `items` is the fuzzy-filtered + ranked view of it that the panel
@@ -94,6 +101,19 @@ pub struct OverlayState {
     /// span, so the accept can map it to a buffer char range and replace it with the
     /// chosen suggestion. `None` for every other kind.
     pub spell_target: Option<(usize, usize, usize)>,
+    /// Spell picker only: parallel to `corpus`, `true` for the appended "Add
+    /// '<word>' to dictionary" row (always the LAST corpus entry) and `false` for
+    /// every suggestion row. Drives the accept split ([`Self::selected_is_add_to_dictionary`]:
+    /// the add row emits [`crate::actions::Effect::AddToDictionary`] instead of a
+    /// word replacement) and the refilter EXEMPTION (the add row survives any typed
+    /// query — it acts on the targeted word, not the filter text). EMPTY for every
+    /// other kind, so every gate keyed off it is inert there.
+    pub spell_add: Vec<bool>,
+    /// Spell picker only: the misspelled WORD this picker would add to the personal
+    /// dictionary — the payload of the "Add to dictionary" row's accept effect, and
+    /// the text its row label echoes. `None` for every other kind (and a spell
+    /// picker built without a word, which then offers no add row).
+    pub add_word: Option<String>,
     /// History timeline only: the RESTORE key for each version, parallel to `corpus`
     /// (the row shows a relative timestamp; the id is the opaque handle
     /// [`crate::history::load`] resolves back to content). Enter on a row emits
@@ -259,6 +279,8 @@ impl OverlayState {
             lines: Vec::new(),
             heading: Vec::new(),
             spell_target: None,
+            spell_add: Vec::new(),
+            add_word: None,
             history_ids: Vec::new(),
             capture: None,
             notice: String::new(),
@@ -696,18 +718,33 @@ impl OverlayState {
     /// the accept can map it to a buffer char range and replace it. The list may be
     /// empty (the engine had no suggestion); the picker still summons (the word IS
     /// flagged), and Enter on an empty list is a no-op close.
-    pub fn new_spell(suggestions: Vec<String>, target: (usize, usize, usize)) -> Self {
+    /// Build the SPELL-SUGGESTION picker (Cmd-`;`): the corpus is the ordered
+    /// corrections for `word` (the misspelled text at `target`'s span), plus ONE
+    /// appended "Add '<word>' to dictionary" row — the same surface, no new chrome
+    /// class. The add row is flagged in `spell_add` (always the LAST corpus entry)
+    /// and carries `word` in `add_word` so the accept can emit
+    /// [`crate::actions::Effect::AddToDictionary`]; it is present even when the
+    /// suggestion list is EMPTY (so a word with no correction can still be added).
+    pub fn new_spell(suggestions: Vec<String>, target: (usize, usize, usize), word: String) -> Self {
         let n = suggestions.len();
+        // Corpus = suggestions ++ the add row; `spell_add` marks only the last.
+        let mut corpus = suggestions;
+        corpus.push(add_to_dictionary_label(&word));
+        let mut spell_add = vec![false; n];
+        spell_add.push(true);
+        let len = corpus.len();
         let mut s = Self::new_marked(
             OverlayKind::Spell,
-            suggestions,
-            vec![false; n],
-            vec![false; n],
+            corpus,
+            vec![false; len],
+            vec![false; len],
             Vec::new(),
             Vec::new(),
             None,
         );
         s.spell_target = Some(target);
+        s.spell_add = spell_add;
+        s.add_word = Some(word);
         s
     }
 

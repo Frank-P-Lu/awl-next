@@ -222,6 +222,18 @@ pub enum Effect {
     /// caller moves the cursor (live App + headless replay both); the core never
     /// touches the buffer here.
     JumpToLine(usize),
+    /// SPELL picker "Add '<word>' to dictionary" accepted (Enter on the add row):
+    /// add `.0` to the USER (personal) dictionary — the live App
+    /// ([`crate::app::App::add_to_dictionary`]) both silences the word in the live
+    /// checker AND appends it to the on-disk word list beside `config.toml`, then
+    /// rescans so the squiggle clears THIS frame. The pure core can't reach the fs
+    /// / the checker, so it signals this. LIVE-APP-ONLY: the headless `--keys`
+    /// replay no-ops it (a capture must never write the dictionary file — the same
+    /// determinism gate `KeepVersion`/`Export` sit behind); the load/persist itself
+    /// is unit-tested at the App seam, and the picker's own add-row select/accept
+    /// flow IS core-driven and fully `--keys`-drivable up to this signal. ZERO-
+    /// NETWORK: a file append, never a fetch.
+    AddToDictionary(String),
     /// REBIND MENU committed a capture: write `binding` into the `[keys]` SLOT of the
     /// command `slug` (the caller persists to config + live-reloads). `confirmed` is
     /// true when the user already accepted a CONFLICT warning (Confirm stage), so the

@@ -750,8 +750,90 @@ impl App {
         // it forces `run_spellcheck_now` to actually re-scan against the new
         // dictionary right away.
         self.spell_checked_version = None;
+        // Re-fold the user (personal) dictionary onto the FRESH checker: the switch
+        // reconstructed it with an empty personal set, so without this the words the
+        // user added would stop suppressing squiggles until the next launch.
+        self.load_user_dictionary();
         self.run_spellcheck_now();
         self.persist_dictionary();
+    }
+
+    /// The USER (personal) DICTIONARY path — `dictionary.txt` beside `config.toml`
+    /// (GLOBAL across projects). `None` when no config dir resolved (the
+    /// `Config::empty` placeholder), so the add stays in-memory-only that session.
+    pub(super) fn user_dictionary_path(&self) -> Option<std::path::PathBuf> {
+        crate::config::dictionary_path(&self.config.path)
+    }
+
+    /// LOAD the user's personal dictionary from disk into the live
+    /// [`crate::spell::SpellChecker`] — called at launch and after
+    /// [`Self::set_dictionary`] rebuilds the checker. An ABSENT file loads as an
+    /// empty list (no error — the file only exists once a word has been added).
+    /// ZERO-NETWORK: a plain file read through the [`crate::fs`] seam, never a
+    /// fetch. The one owner of "pull the word list into the checker".
+    pub(super) fn load_user_dictionary(&mut self) {
+        let Some(path) = self.user_dictionary_path() else { return };
+        let text = crate::fs::active().read_to_string(&path).unwrap_or_default();
+        let words = crate::spell::parse_dictionary(&text);
+        if let Some(sc) = self.spell.as_mut() {
+            sc.set_user_words(words);
+        }
+    }
+
+    /// "Add '<word>' to dictionary" (the Cmd-`;` overlay row / the right-click
+    /// summon): add `word` to the live checker AND persist it to the personal
+    /// dictionary file, then rescan so the squiggle clears THIS frame. In-memory
+    /// FIRST so a failed disk write still silences the word this session; the file
+    /// append is skipped when the word was already known (no duplicate lines).
+    /// GLOBAL across projects (the file is config-dir scoped); removal v1 =
+    /// hand-edit the file. ZERO-NETWORK: an append through the [`crate::fs`] seam,
+    /// never a fetch.
+    pub(super) fn add_to_dictionary(&mut self, word: &str) {
+        let word = word.trim();
+        if word.is_empty() {
+            return;
+        }
+        let newly = self.spell.as_mut().map(|sc| sc.add_user_word(word)).unwrap_or(false);
+        if newly {
+            if let Some(path) = self.user_dictionary_path() {
+                if let Err(e) = Self::append_word_to_dictionary_file(&path, word) {
+                    eprintln!("could not add '{word}' to dictionary at {}: {e}", path.display());
+                }
+            }
+        }
+        self.spell_checked_version = None;
+        self.run_spellcheck_now();
+    }
+
+    /// Append `word` as its own line to the personal dictionary FILE (creating the
+    /// file + its config dir), through the [`crate::fs`] seam + atomic write (crash
+    /// leaves the old or the new file, never a torn one — same durability the
+    /// config writes get). A word already present (case-insensitively) is a no-op,
+    /// so re-adding never duplicates a line. The existing text is preserved
+    /// verbatim (hand-edited comments/order kept) with the new word appended after a
+    /// terminating newline. Associated fn (no `self`) so it stays a pure path→disk
+    /// unit, testable under the `InMemoryFs`.
+    fn append_word_to_dictionary_file(path: &std::path::Path, word: &str) -> std::io::Result<()> {
+        let fs = crate::fs::active();
+        let existing = fs.read_to_string(path).unwrap_or_default();
+        if crate::spell::parse_dictionary(&existing)
+            .iter()
+            .any(|w| w.eq_ignore_ascii_case(word))
+        {
+            return Ok(()); // already on disk — keep the file duplicate-free
+        }
+        if let Some(dir) = path.parent() {
+            if !dir.as_os_str().is_empty() {
+                let _ = fs.create_dir_all(dir);
+            }
+        }
+        let mut out = existing;
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(word);
+        out.push('\n');
+        crate::fs::write_atomic(path, out.as_bytes())
     }
 
     /// Persist the SETTLED zoom (the DEBOUNCED write-on-change). Called from
@@ -2532,6 +2614,70 @@ mod tests {
             assert!(!crate::spell::spellcheck_on(), "the persisted OFF value re-applies on reload");
         });
         crate::spell::set_spellcheck_on(saved);
+    }
+
+    // ── ADD TO DICTIONARY (item 39): a plain-text word list beside config.toml,
+    // GLOBAL, hand-editable, ZERO-NETWORK. "Add to dictionary" both silences the
+    // word live AND appends it to the file; startup loads the file so an added
+    // word never squiggles again, across a restart. ─────────────────────────
+
+    /// `App::add_to_dictionary` silences the word in the LIVE checker AND appends
+    /// it (one word per line) to `dictionary.txt` beside `config.toml`. Re-adding
+    /// the same word never duplicates the line.
+    #[test]
+    fn add_to_dictionary_persists_the_word_and_silences_it_live() {
+        let _sp = crate::testlock::serial();
+        let fake = Arc::new(crate::fs::InMemoryFs::new().with_dir("/w/proj").with_dir("/cfg"));
+        crate::fs::with_fs(fake, || {
+            let mut config = Config::empty();
+            config.path = PathBuf::from("/cfg/config.toml");
+            let mut app = App::new(None, PathBuf::from("/w/proj"), None, None, config);
+            // Precondition: a made-up word squiggles.
+            assert!(!app.spell.as_ref().unwrap().check("wrold"));
+
+            app.add_to_dictionary("wrold");
+            // Live: the checker now accepts it.
+            assert!(app.spell.as_ref().unwrap().check("wrold"), "silenced in the live checker");
+            // Persisted: the file beside config.toml holds exactly one line.
+            let dict = PathBuf::from("/cfg/dictionary.txt");
+            let text = crate::fs::active().read_to_string(&dict).expect("the file was written");
+            assert_eq!(crate::spell::parse_dictionary(&text), vec!["wrold"]);
+
+            // Re-adding it is a no-op on disk (no duplicate line) and still silent.
+            app.add_to_dictionary("wrold");
+            let text2 = crate::fs::active().read_to_string(&dict).unwrap();
+            assert_eq!(crate::spell::parse_dictionary(&text2), vec!["wrold"], "no duplicate line");
+        });
+    }
+
+    /// THE RESTART GUARANTEE: a word already in the on-disk personal dictionary is
+    /// loaded AT STARTUP (`App::new` → `load_user_dictionary`), so a fresh App
+    /// never squiggles it — the "never squiggles again, including across a restart"
+    /// contract. Seeds the file first, THEN constructs, and asserts the just-built
+    /// App's checker already accepts the word (proving construction did the load).
+    #[test]
+    fn startup_loads_the_personal_dictionary_so_an_added_word_never_squiggles_across_a_restart() {
+        let _sp = crate::testlock::serial();
+        let fake = Arc::new(crate::fs::InMemoryFs::new().with_dir("/w/proj").with_dir("/cfg"));
+        crate::fs::with_fs(fake, || {
+            // A prior session already wrote the word list (hand-edited shape: a
+            // header comment + one word per line).
+            crate::fs::write_atomic(
+                Path::new("/cfg/dictionary.txt"),
+                b"# my words\nwrold\n",
+            )
+            .unwrap();
+            let mut config = Config::empty();
+            config.path = PathBuf::from("/cfg/config.toml");
+            // Fresh App (the "restart"): its startup load reads the file.
+            let app = App::new(None, PathBuf::from("/w/proj"), None, None, config);
+            assert!(
+                app.spell.as_ref().unwrap().check("wrold"),
+                "startup loaded the personal dictionary — the word never squiggles across a restart"
+            );
+            // A word NOT in the file still squiggles (the load is scoped to the file).
+            assert!(!app.spell.as_ref().unwrap().check("teh"));
+        });
     }
 
     #[test]

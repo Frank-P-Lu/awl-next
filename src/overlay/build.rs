@@ -37,10 +37,12 @@ pub struct BuildCtx<'a> {
     /// Caller-gathered (it needs the live buffer text); EMPTY for a non-markdown
     /// buffer or one with no headings, so the Headings lens simply reads empty.
     pub goto_headings: Vec<(String, usize)>,
-    /// The Cmd-`;` spell target — the misspelled word's corrections + its span —
-    /// resolved by the caller ONLY when the spell binding fired. `None` when the
-    /// cursor isn't on a flagged word (or spell-check is off), so the summon no-ops.
-    pub spell_target: Option<(Vec<String>, (usize, usize, usize))>,
+    /// The Cmd-`;` spell target — the misspelled word's corrections, its span, AND
+    /// its current TEXT — resolved by the caller ONLY when the spell binding fired.
+    /// `None` when the cursor isn't on a flagged word (or spell-check is off), so
+    /// the summon no-ops. The word text builds the "Add '<word>' to dictionary" row
+    /// label + rides the add-row accept effect ([`OverlayState::new_spell`]).
+    pub spell_target: Option<(Vec<String>, (usize, usize, usize), String)>,
     /// The HISTORY TIMELINE rows for the current file — [`crate::history::TimelineRow`]
     /// (when / which / counts / id), newest-first — resolved by the caller (via
     /// [`crate::history::timeline_rows`]) ONLY when the History binding fired. EMPTY
@@ -178,7 +180,7 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
         OverlayKind::Spell => ctx
             .spell_target
             .clone()
-            .map(|(sugg, target)| OverlayState::new_spell(sugg, target)),
+            .map(|(sugg, target, word)| OverlayState::new_spell(sugg, target, word)),
         // History: the caller-gathered timeline rows. ALWAYS summons: an empty list
         // becomes the calm "no history yet" row, so the picker never silently no-ops
         // on a file that simply hasn't been snapshotted yet.
