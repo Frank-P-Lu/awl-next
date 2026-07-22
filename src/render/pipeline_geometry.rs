@@ -460,6 +460,10 @@ impl TextPipeline {
         self.scroll_lines = view.scroll_lines;
         self.image_base_dir = view.doc_dir.clone();
         self.selection = view.selection;
+        // COLLAPSED-HEADING TAILS: mirror the fold-tail rows so the ornament pass can
+        // hang each "… N lines" glyph (+ caret/hover chevron). `hover_line` is a
+        // pointer fact set separately (live only), NOT carried on the view.
+        self.fold_tails = view.fold_tails.clone();
         self.preedit = view.preedit.clone();
         // Mirror the spell list ONLY when it actually changed (a rescan landing),
         // bumping its version so the cached squiggle protos rebuild; the common

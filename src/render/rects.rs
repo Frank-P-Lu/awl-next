@@ -592,6 +592,43 @@ impl TextPipeline {
             .collect()
     }
 
+    /// The absolute pixel x just PAST a collapsed heading's own rendered text on its
+    /// filtered row `line` — where the affordance cluster (chevron + "… N lines" tail)
+    /// hangs. Reads the SHAPED buffer's real glyph advances (so it honours the heading
+    /// SIZE scale + any caret-on-line conceal reveal), then adds a small gap. The base
+    /// every fold-affordance mark shares so the chevron + tail can't drift apart.
+    fn fold_affordance_base_x(&self, line: usize) -> f32 {
+        let end = self.line_glyph_xs(line).last().copied().unwrap_or(0.0);
+        self.text_left() + end + self.metrics.char_width * 0.6
+    }
+
+    /// The quiet "… N lines" TAIL for every VISIBLE collapsed heading:
+    /// `(top-y, left-x, N hidden, filtered line)`. One entry per
+    /// [`ViewState::fold_tails`] row that is on-screen. The tail rides the heading's
+    /// EXISTING row (an ornament, never a shaped line), so it adds no row and cannot
+    /// disturb the zero-height hidden-row law. A fixed chevron SLOT is reserved to its
+    /// left so the tail's x is stable whether or not the chevron shows (no reveal jump
+    /// when the caret lands on the heading). `line` lets the draw pass center the small
+    /// glyph on the heading's grown row. Empty unless folded.
+    pub(super) fn fold_tail_marks(&self) -> Vec<(f32, f32, usize, usize)> {
+        if self.fold_tails.is_empty() {
+            return Vec::new();
+        }
+        let slot = self.metrics.char_width * 1.4; // reserved chevron slot + gap
+        self.fold_tails
+            .iter()
+            .filter(|t| self.line_ornament_visible(t.line))
+            .map(|t| {
+                (
+                    self.line_ornament_top(t.line),
+                    self.fold_affordance_base_x(t.line) + slot,
+                    t.hidden,
+                    t.line,
+                )
+            })
+            .collect()
+    }
+
     /// The bullet GLYPHS the renderer would draw, in document order — the char half of
     /// [`Self::bullet_marks`]. A test accessor for the depth-cycle + reveal-on-cursor
     /// assertions (which care about WHICH glyph, not its pixel placement).

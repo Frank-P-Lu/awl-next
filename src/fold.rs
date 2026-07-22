@@ -85,12 +85,34 @@ pub fn hidden_lines(levels: &[u8], folds: &BTreeSet<usize>) -> Vec<bool> {
 }
 
 /// The number of LINES a folded heading at `h` hides (its section length) — the
-/// count shown in the quiet "... N lines" tail on a collapsed heading. `0` when `h`
+/// count shown in the quiet "… N lines" tail on a collapsed heading. `0` when `h`
 /// is not a folded-worthy heading or its section is empty.
-#[allow(dead_code)] // consumed by the render increment (the "... N lines" tail)
 pub fn hidden_count(levels: &[u8], h: usize) -> usize {
     let (s, e) = section_range(levels, h);
     e.saturating_sub(s)
+}
+
+/// The "… N lines" TAIL data for every folded heading that is ITSELF still
+/// VISIBLE — one `(heading_line, hidden_count)` per collapsed section whose
+/// heading a reviewer / the render can see, ascending. A folded heading nested
+/// inside another folded parent is HIDDEN (its own line collapses into the
+/// parent's section), so it contributes NO tail — the parent's tail already
+/// accounts for it in its own count. Empty when nothing is folded. PURE
+/// (`heading_line` is a FULL-document line; the render remaps it into filtered
+/// space via [`Filter::line`]).
+pub fn fold_tails(levels: &[u8], folds: &BTreeSet<usize>) -> Vec<(usize, usize)> {
+    if folds.is_empty() {
+        return Vec::new();
+    }
+    let hidden = hidden_lines(levels, folds);
+    folds
+        .iter()
+        .filter(|&&h| !hidden.get(h).copied().unwrap_or(false)) // the heading itself is visible
+        .filter_map(|&h| {
+            let n = hidden_count(levels, h);
+            (n > 0).then_some((h, n))
+        })
+        .collect()
 }
 
 /// The innermost heading whose SECTION contains `line` — i.e. the nearest heading
@@ -289,11 +311,27 @@ impl Filter {
 /// lines, so those remaps are exact. A no-op when the mask hides nothing (the text
 /// and every coordinate stay byte-identical). Shared by the live `sync_view` and
 /// the headless capture builder so the two flows cannot drift.
-pub fn apply_to_view(view: &mut crate::render::ViewState, hidden: &[bool]) {
+///
+/// `tails` is the FULL-document `(heading_line, hidden_count)` list ([`fold_tails`]);
+/// each entry's heading is remapped into filtered space here and recorded as a
+/// [`crate::render::FoldTail`] so the render can hang the quiet "… N lines" glyph on
+/// the collapsed heading's own row (the count is fold-derived, not re-shaped).
+pub fn apply_to_view(
+    view: &mut crate::render::ViewState,
+    hidden: &[bool],
+    tails: &[(usize, usize)],
+) {
     let filter = Filter::new(&view.text, hidden);
     if !filter.any_hidden() {
         return;
     }
+    view.fold_tails = tails
+        .iter()
+        .map(|&(h, n)| crate::render::FoldTail {
+            line: filter.line(h),
+            hidden: n,
+        })
+        .collect();
     view.cursor_line = filter.line(view.cursor_line);
     view.selection = view
         .selection

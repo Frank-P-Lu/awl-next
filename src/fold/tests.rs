@@ -73,6 +73,27 @@ fn hidden_count_is_the_section_length() {
 }
 
 #[test]
+fn fold_tails_reports_visible_headings_with_their_hidden_counts() {
+    let levels = heading_levels(OUTLINE, true);
+    // Fold ## A.1 (line 2, hides line 3) and # B (line 6, hides line 7): both
+    // headings are still visible, so both get a tail with their own count.
+    let tails = fold_tails(&levels, &folds(&[2, 6]));
+    assert_eq!(tails, vec![(2, 1), (6, 1)]);
+    // Nothing folded → no tails.
+    assert!(fold_tails(&levels, &BTreeSet::new()).is_empty());
+}
+
+#[test]
+fn fold_tails_suppresses_a_heading_hidden_by_a_folded_parent() {
+    let levels = heading_levels(OUTLINE, true);
+    // Fold # A (line 0, hides lines 1..=5) AND its child ## A.1 (line 2). The child
+    // is itself HIDDEN inside # A's section, so it contributes NO tail — only the
+    // visible parent's tail shows, counting its whole subtree (5 lines).
+    let tails = fold_tails(&levels, &folds(&[0, 2]));
+    assert_eq!(tails, vec![(0, 5)], "the nested child's tail is suppressed");
+}
+
+#[test]
 fn enclosing_heading_reads_the_innermost_section() {
     let levels = heading_levels(OUTLINE, true);
     assert_eq!(enclosing_heading(&levels, 0), Some(0)); // on # A itself

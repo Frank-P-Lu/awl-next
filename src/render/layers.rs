@@ -29,6 +29,18 @@ const QUOTE_MARK_SCALE: f32 = 2.0;
 /// real type, not a symbol-font ornament.
 const QUOTE_MARK_GLYPH: char = '\u{201C}';
 
+/// The collapsed-heading TAIL text: `… N lines` (singular `… 1 line`). The leading
+/// glyph is U+2026 HORIZONTAL ELLIPSIS (the same General-Punctuation mark the row
+/// elision uses in the display face); the rest is ASCII, so it shapes cleanly in any
+/// world. `N` is the fold's hidden-line count ([`crate::fold::hidden_count`]).
+fn fold_tail_text(n: usize) -> String {
+    if n == 1 {
+        "\u{2026} 1 line".to_string()
+    } else {
+        format!("\u{2026} {n} lines")
+    }
+}
+
 /// One GFM table's shaped GRID layout — the shared output of
 /// [`super::TextPipeline::shape_table_grid`], consumed by both the row-height
 /// RESERVATION (`compute_table_layout`) and the DRAW pass (`prepare_table_grid`)
@@ -1158,6 +1170,28 @@ impl TextPipeline {
         let fence_lang_right = self.text_left() + self.text_wrap_width();
         let fence_lang_inset = m.char_width * 0.5;
 
+        // COLLAPSED-HEADING TAIL (item 47a): the quiet "… N lines" glyph on every
+        // visible folded heading. An ornament hung on the heading's OWN row, so it adds
+        // NO row and never touches the zero-height hidden-row law. Shaped in a line-box
+        // of the heading's grown row height (`md_line_scale`) so the small glyph centers
+        // vertically on the big heading text — the same trick the break fleuron uses on
+        // its tall row. FAINT ink for the quiet tail; never amber (DESIGN §3).
+        let faint = theme::faint().to_glyphon();
+        let fold_tail_marks = self.fold_tail_marks();
+        let fold_label_scale = crate::markdown::type_scale::LABEL;
+        let fold_tail_attrs = panel_attrs().color(faint);
+        let mut fold_tail_buffers: Vec<GlyphBuffer> =
+            Vec::with_capacity(fold_tail_marks.len());
+        for &(_, _, n, line) in &fold_tail_marks {
+            let box_h = m.line_height * md_line_scale(self.buffer.lines[line].text(), self.md_enabled);
+            let metrics = GlyphMetrics::new(m.font_size * fold_label_scale, box_h);
+            let mut buf = GlyphBuffer::new(&mut self.font_system, metrics);
+            buf.set_size(&mut self.font_system, Some(col_w), Some(box_h));
+            buf.set_text(&mut self.font_system, &fold_tail_text(n), &fold_tail_attrs, Shaping::Advanced, None);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            fold_tail_buffers.push(buf);
+        }
+
         // DIFF-AS-PREVIEW: ornament glyphs are document content — clip to the
         // panel band exactly like the text layer.
         let (o_top, o_bottom) = match self.doc_clip_band(height as f32) {
@@ -1166,7 +1200,11 @@ impl TextPipeline {
         };
         let bounds = TextBounds { left: 0, top: o_top, right: width as i32, bottom: o_bottom };
         let mut areas: Vec<TextArea> = Vec::with_capacity(
-            rule_marks.len() + bullet_marks.len() + quote_tops.len() + fence_lang_marks.len(),
+            rule_marks.len()
+                + bullet_marks.len()
+                + quote_tops.len()
+                + fence_lang_marks.len()
+                + fold_tail_marks.len(),
         );
         for (top, ch) in &rule_marks {
             let idx = distinct.iter().position(|c| c == ch).expect("char was deduped in");
@@ -1219,6 +1257,19 @@ impl TextPipeline {
                 scale: 1.0,
                 bounds,
                 default_color: muted,
+                custom_glyphs: &[],
+            });
+        }
+        // FOLD TAIL: the faint "… N lines" glyph, hung at its computed (top, left) on
+        // the collapsed heading's own row.
+        for (i, &(top, left, _n, _line)) in fold_tail_marks.iter().enumerate() {
+            areas.push(TextArea {
+                buffer: &fold_tail_buffers[i],
+                left,
+                top,
+                scale: 1.0,
+                bounds,
+                default_color: faint,
                 custom_glyphs: &[],
             });
         }

@@ -584,6 +584,18 @@ impl Buffer {
         crate::fold::heading_levels(&self.text(), self.is_markdown())
     }
 
+    /// The "… N lines" TAIL data for the current fold set — one
+    /// `(full-doc heading line, hidden line count)` per VISIBLE folded heading,
+    /// ascending ([`crate::fold::fold_tails`]). Empty when nothing is folded. The
+    /// render remaps each heading into filtered space to hang its quiet tail glyph.
+    pub fn fold_tails(&self) -> Vec<(usize, usize)> {
+        if self.folds.is_empty() {
+            return Vec::new();
+        }
+        let levels = self.heading_levels();
+        crate::fold::fold_tails(&levels, &self.folds)
+    }
+
     /// Toggle the fold on the heading enclosing the caret (fold ⇄ unfold). No-op on
     /// a non-markdown buffer or a caret with no enclosing heading. Returns the
     /// toggled heading line, or `None` when nothing was toggled. On a FOLD (not an
