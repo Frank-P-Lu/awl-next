@@ -94,6 +94,23 @@ fn fold_tails_suppresses_a_heading_hidden_by_a_folded_parent() {
 }
 
 #[test]
+fn visible_to_full_inverts_the_fold_filter() {
+    // Fold # A of "# A\na1\na2\n# B\nb1": hidden = [F,T,T,F,F].
+    let hidden = [false, true, true, false, false];
+    assert_eq!(visible_to_full(&hidden, 0), 0); // # A
+    assert_eq!(visible_to_full(&hidden, 1), 3); // # B — two hidden lines skipped
+    assert_eq!(visible_to_full(&hidden, 2), 4); // b1
+    // Identity when nothing is hidden.
+    let none = [false, false, false];
+    assert_eq!(visible_to_full(&none, 2), 2);
+    // Exact round-trip against Filter::line (the other direction) on every visible line.
+    let f = Filter::new("# A\na1\na2\n# B\nb1", &hidden);
+    for full in [0usize, 3, 4] {
+        assert_eq!(visible_to_full(&hidden, f.line(full)), full);
+    }
+}
+
+#[test]
 fn chevron_reveals_only_on_the_caret_or_hovered_heading() {
     // The caret ON the heading's row reveals its chevron; a different caret row does not.
     assert!(chevron_revealed(2, 2, None));

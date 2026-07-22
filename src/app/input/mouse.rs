@@ -22,14 +22,16 @@ impl App {
             .is_some_and(|gpu| gpu.pipeline.over_writing_column(self.cursor_px.0))
     }
 
-    /// Map the current mouse pixel position to a buffer char index, accounting
-    /// for scroll + zoom, then clamp to the document. Returns the char index.
-    pub(in crate::app) fn hit_test_char(&self) -> usize {
+    /// Map the current mouse pixel position to a VISIBLE (fold-filtered) `(line, col)`,
+    /// accounting for scroll + zoom. `line` indexes the SHAPED buffer, which is the
+    /// fold-filtered document when a section is collapsed — the caller remaps it to a
+    /// FULL-document line before touching the rope.
+    fn hit_test_line_col(&self) -> (usize, usize) {
         let (px, py) = self.cursor_px;
         // Advance-aware hit test: walk the REAL shaped glyph advances so a click
         // lands on the right glyph for mixed CJK + Latin lines. Falls back to the
         // fixed-pitch free function only if the pipeline is not yet up.
-        let (line, col) = match self.gpu.as_ref() {
+        match self.gpu.as_ref() {
             Some(gpu) => gpu.pipeline.hit_test(px, py, self.scroll_lines),
             None => render::hit_test(
                 px,
@@ -38,8 +40,31 @@ impl App {
                 &render::Metrics::with_dpi(self.zoom, self.dpi),
                 render::TEXT_LEFT,
             ),
-        };
-        self.buffer.line_col_to_char(line, col)
+        }
+    }
+
+    /// Map the current mouse pixel position to a buffer char index, accounting for
+    /// scroll + zoom + FOLDS, then clamp to the document. The hit-test line is in the
+    /// FILTERED document (the render shapes the folded text), so it is remapped to its
+    /// FULL-document line before resolving the char — otherwise a click below a
+    /// collapsed section would land on the wrong rope line. The identity remap when
+    /// nothing is folded, so an unfolded click is byte-identical.
+    pub(in crate::app) fn hit_test_char(&self) -> usize {
+        let (line, col) = self.hit_test_line_col();
+        let full = self.buffer.visible_line_to_full(line);
+        self.buffer.line_col_to_char(full, col)
+    }
+
+    /// CLICK-TO-EXPAND (item 47c): if the current pointer lands on a collapsed
+    /// heading's "… N lines" tail / chevron affordance (the cluster past the heading
+    /// text), the FULL-document heading line to expand; else `None`. Cheap no-op unless
+    /// a section is folded. See [`crate::buffer::Buffer::fold_tail_hit`].
+    fn fold_affordance_at_pointer(&self) -> Option<usize> {
+        if !self.buffer.has_folds() {
+            return None;
+        }
+        let (line, col) = self.hit_test_line_col();
+        self.buffer.fold_tail_hit(line, col)
     }
 
     /// Multi-click detection: same spot, within the time window (`MULTICLICK_MS`) —
@@ -99,6 +124,20 @@ impl App {
     pub(in crate::app) fn on_press(&mut self, shift: bool, over_writing_column: bool) {
         if !over_writing_column {
             return;
+        }
+        // CLICK-TO-EXPAND (item 47c): a plain click on a collapsed heading's "… N lines"
+        // tail / chevron affordance OPENS that fold and parks the caret on the heading —
+        // it never starts a text selection or a drag (returns before `self.dragging`).
+        // The caller's `sync_view(true)` repaints the now-expanded section. A shift-click
+        // is left to extend a selection as usual; a click on the heading TEXT (not the
+        // affordance) falls through to the normal caret placement below.
+        if !shift {
+            if let Some(h) = self.fold_affordance_at_pointer() {
+                self.buffer.seal_undo_group();
+                self.buffer.unfold_at(h);
+                self.buffer.clear_mark();
+                return;
+            }
         }
         let click_count = self.bump_click_count();
         // A click is a non-edit gesture: seal the open undo group so text typed

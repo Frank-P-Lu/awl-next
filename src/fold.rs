@@ -125,6 +125,29 @@ pub fn chevron_revealed(line: usize, cursor_line: usize, hover_line: Option<usiz
     line == cursor_line || hover_line == Some(line)
 }
 
+/// Invert the fold filter: map a VISIBLE (fold-filtered) line index back to its
+/// FULL-document line. `hidden` is the per-full-line mask ([`hidden_lines`]); the
+/// `k`-th visible line is the `k`-th `false` entry. A `visible_line` past the last
+/// visible row extends one full line per overshoot row (the caller then clamps to the
+/// buffer). The IDENTITY when nothing is hidden. This is the click/hit-test seam's
+/// counterpart to [`Filter::line`] (which maps the other direction): the render
+/// pipeline hit-tests the SHAPED, already-filtered buffer, so a click's filtered
+/// (line, col) resolves to the right FULL-document line under a fold.
+pub fn visible_to_full(hidden: &[bool], visible_line: usize) -> usize {
+    let mut seen = 0usize;
+    for (i, &h) in hidden.iter().enumerate() {
+        if !h {
+            if seen == visible_line {
+                return i;
+            }
+            seen += 1;
+        }
+    }
+    // Past the last visible line: extend by however many rows overshoot the last
+    // visible one (each maps to a distinct full line beyond the mask).
+    hidden.len() + (visible_line - seen)
+}
+
 /// The innermost heading whose SECTION contains `line` — i.e. the nearest heading
 /// at or before `line` that `line` sits under. When `line` IS a heading line, that
 /// heading is returned (a caret on a heading toggles that heading). `None` when
