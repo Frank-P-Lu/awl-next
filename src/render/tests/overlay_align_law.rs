@@ -275,3 +275,71 @@ fn frozen_right_alignment_renders_against_the_right_edge() {
     assert!((lx - inset).abs() < 0.5, "the frozen-left card hugs the left edge: x={lx}");
     assert!(rx > lx + 1.0, "right-frozen card ({rx}) sits well right of the left-frozen one ({lx})");
 }
+
+// ---------------------------------------------------------------------------
+// 3b. FABLE PICKS (item 45) — the right-anchor law reaching REAL WORLD DATA.
+// ---------------------------------------------------------------------------
+
+/// The overlay-audition's fable pass (item 45) flipped exactly two shipped
+/// worlds to a RIGHT rail — Cassowary (a terminal readout) and Mangrove (a tidal
+/// margin) — leaving every other world at its own alignment. This anchors the
+/// pure/rendered right-anchor laws above to the SHIPPED data: those two worlds
+/// (and ONLY those two) carry `CardAnchor::TopRight`, and an overlay summoned
+/// while one of them is active freezes that world's own RIGHT anchor and draws
+/// its card hugging the right window edge — the mechanism reaching all the way
+/// through world data, not just a hand-forced `overlay_align`.
+#[test]
+fn fable_right_picks_ship_right_anchor_and_render_against_the_right_edge() {
+    // DATA — the RIGHT-anchored shipped worlds are EXACTLY the two fable picks.
+    let mut right: Vec<&str> = theme::THEMES
+        .iter()
+        .filter(|t| t.render_caps.card_anchor == theme::CardAnchor::TopRight)
+        .map(|t| t.name)
+        .collect();
+    right.sort_unstable();
+    assert_eq!(
+        right,
+        vec!["Cassowary", "Mangrove"],
+        "item 45's fable RIGHT picks are exactly Cassowary + Mangrove; every other \
+         shipped world keeps its own alignment. found: {right:?}"
+    );
+
+    // RENDERED — summon under each flipped world and read the card straight off
+    // geometry: its own frozen RIGHT anchor hugs the right window edge.
+    let _g = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping fable_right_picks_ship_right_anchor_and_render_against_the_right_edge: no wgpu adapter");
+        return;
+    };
+    let ww = 1200.0_f32;
+    let inset = chrome::CARD_EDGE_INSET;
+    let restore = theme::active().name;
+    set_card_anchor_test_override(None); // the world's OWN data drives placement
+
+    for world in ["Cassowary", "Mangrove"] {
+        theme::set_active_by_name(world).unwrap();
+        p.sync_theme();
+        let mut v = view("hello\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec!["Alpha".into(), "Beta".into()];
+        // Freeze the world's OWN anchor exactly as the summon path does
+        // (`OverlayState::align` = `effective_card_anchor()` at open).
+        v.overlay_align = Some(crate::render::effective_card_anchor());
+        assert_eq!(
+            v.overlay_align,
+            Some(theme::CardAnchor::TopRight),
+            "{world} must freeze a RIGHT anchor at summon"
+        );
+        let [rx, _, rw, _] = card_x_after(&mut p, &v);
+        assert!(
+            ((rx + rw) - (ww - inset)).abs() < 0.5,
+            "{world}'s summoned card hugs the right edge: card_x+card_w={}, want {}",
+            rx + rw,
+            ww - inset
+        );
+        // Its whole body sits past centre — genuinely a right rail, not a nudge.
+        assert!(rx > ww * 0.5, "{world}'s right-anchored card body sits in the right half: x={rx}");
+    }
+
+    theme::set_active_by_name(restore).unwrap();
+}
