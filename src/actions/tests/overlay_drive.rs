@@ -273,6 +273,9 @@ fn command_overlay_with_settings() -> OverlayState {
     let mut ov = OverlayState::new_command(
         crate::commands::visible_names(),
         crate::commands::visible_effective_bindings(&[], &[]),
+        // No daemon waiter in this fixture: matches the real arm's default
+        // (`BuildCtx::has_waiter: false`) for every non-live caller.
+        crate::commands::visible_hidden_mask(false),
     );
     ov.attach_settings_rows(
         crate::settings::palette_names(),
@@ -931,10 +934,10 @@ fn follow_link_signals_the_url_only_when_the_caret_is_inside_a_link() {
 /// (before it, both actions shared one arm that popped a single char).
 #[test]
 fn palette_query_word_delete_routes_through_apply_core() {
-    let mut overlay = Some(OverlayState::new_command(
-        crate::commands::names(),
-        crate::commands::bindings(),
-    ));
+    let names = crate::commands::names();
+    let hidden = vec![false; names.len()];
+    let mut overlay =
+        Some(OverlayState::new_command(names, crate::commands::bindings(), hidden));
     for c in "foo bar baz".chars() {
         drive_eff(&mut overlay, &Action::InsertChar(c));
     }

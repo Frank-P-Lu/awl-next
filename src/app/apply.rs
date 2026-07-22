@@ -542,6 +542,18 @@ impl App {
         };
         #[cfg(target_arch = "wasm32")]
         let assets: Vec<crate::assets::Orphan> = Vec::new();
+        // DAEMON WAITER: is a `--wait` client actively parked on the CURRENT
+        // buffer right now (the one "Finish file" would actually save + notify
+        // + switch away from)? Gated exactly like `wait_conns` itself (native,
+        // non-`mas` — see that field's doc): wasm/`mas` builds have no daemon at
+        // all, so the palette row stays hidden there unconditionally. Drives
+        // `commands::visible_hidden_mask` below — the ONE live fact behind the
+        // "Finish file" row's visibility.
+        #[cfg(all(not(target_arch = "wasm32"), not(feature = "mas")))]
+        let has_waiter = crate::buffers::BufferKey::of(&self.buffer)
+            .is_some_and(|key| self.wait_conns.get(&key).is_some_and(|w| !w.is_empty()));
+        #[cfg(any(target_arch = "wasm32", feature = "mas"))]
+        let has_waiter = false;
         // The non-navigable builder (Goto / Theme / Command + the buffer-scoped
         // Spell / History) lives in `overlay`, fed the caller-gathered inputs: the
         // live recency bits + Go-to's folded headings / spell target / history rows
@@ -574,6 +586,7 @@ impl App {
                 crate::dateformat::today_from_system_clock(),
             ),
             assets,
+            has_waiter,
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);

@@ -580,6 +580,7 @@ fn every_catalog_command_dispatches_without_panicking() {
         history_session_start: None,
         settings_values: crate::settings::SettingsValues::default(),
         assets: vec![],
+        has_waiter: false,
     };
 
     for c in crate::commands::COMMANDS.iter() {

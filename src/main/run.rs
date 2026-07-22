@@ -479,6 +479,11 @@ impl<'a> ReplaySession<'a> {
                 crate::dateformat::CAPTURE_PLACEHOLDER_YMD,
             ),
             assets,
+            // The headless capture/replay path is structurally daemon-free (never
+            // imports `crate::daemon` — the daemon capture gate, docs/platform.md):
+            // there is no waiter to have, so "Finish file" is deterministically
+            // hidden from every `--keys`/`--screenshot` palette.
+            has_waiter: false,
         };
         let mut make_overlay =
             |kind: crate::overlay::OverlayKind| crate::overlay::build(kind, &build_ctx);

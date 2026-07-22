@@ -168,6 +168,7 @@ fn non_file_picker_ignores_hidden_toggle() {
     let mut ov = OverlayState::new_command(
         vec!["Save".into(), ".secret command".into()],
         vec!["C-x C-s".into(), String::new()],
+        vec![false, false],
     );
     assert!(!ov.kind.hides_dotfiles());
     let before = ov.item_strings();
@@ -354,7 +355,6 @@ fn project_recent_lens_is_empty_on_a_fresh_session() {
 
 /// A minimal [`BuildCtx`] with every field empty/None — the tests that only
 /// care about ONE input fill just that one.
-#[allow(dead_code)] // kept for future BuildCtx-driven tests (was the recents-build helper).
 fn empty_build_ctx<'a>(config_keys: &'a [(String, Vec<String>)]) -> BuildCtx<'a> {
     BuildCtx {
         goto_corpus: Vec::new(),
@@ -370,7 +370,59 @@ fn empty_build_ctx<'a>(config_keys: &'a [(String, Vec<String>)]) -> BuildCtx<'a>
         history_session_start: None,
         settings_values: Default::default(),
         assets: Vec::new(),
+        has_waiter: false,
     }
+}
+
+/// FINISH BUFFER GATING (item 13): the palette row list excludes "Finish file"
+/// with no daemon `--wait` client waiting, and re-includes it — dispatching
+/// correctly — the instant one is. Built through the REAL `overlay::build` seam
+/// (the same one the live App and the headless replay both call), so this is the
+/// purest reachable seam short of a live daemon round-trip (flagged for human
+/// confirmation in the report — the daemon itself is structurally live-only).
+#[test]
+fn command_palette_hides_finish_buffer_without_a_waiter_and_shows_it_with_one() {
+    // NO waiter (the default `BuildCtx`, matching headless capture / a fresh
+    // live App with nothing waiting): "Finish file" is absent from what's
+    // rankable/selectable...
+    let ctx_idle = BuildCtx { has_waiter: false, ..empty_build_ctx(&[]) };
+    let ov_idle = crate::overlay::build(OverlayKind::Command, &ctx_idle)
+        .expect("the Command palette always summons");
+    assert!(
+        !ov_idle.item_strings().contains(&"Finish file".to_string()),
+        "Finish file must be hidden from the palette with no active daemon waiter"
+    );
+    // ...but the underlying corpus itself is UNTOUCHED (only what's shown/
+    // selectable shrinks) — the row-index math `commands::visible_action_of`
+    // relies on for every OTHER command stays valid.
+    assert!(
+        ov_idle.corpus.contains(&"Finish file".to_string()),
+        "hiding a row must not shrink the underlying corpus (index-stability)"
+    );
+    assert_eq!(
+        ov_idle.corpus.len(),
+        crate::commands::visible_names().len() + crate::settings::palette_names().len(),
+        "corpus stays exactly commands::visible() + the settings union, unshrunk"
+    );
+
+    // A waiter IS active: the row reappears...
+    let ctx_waiting = BuildCtx { has_waiter: true, ..empty_build_ctx(&[]) };
+    let mut ov_waiting = crate::overlay::build(OverlayKind::Command, &ctx_waiting)
+        .expect("the Command palette always summons");
+    assert!(
+        ov_waiting.item_strings().contains(&"Finish file".to_string()),
+        "Finish file must show while a daemon waiter is active"
+    );
+    // ...and selecting it resolves through the SAME `commands::visible_action_of`
+    // seam the real palette Enter/accept uses (`actions::overlay_nav`) — proving
+    // DISPATCH stays unchanged: a shown Finish file row still runs the real
+    // `Action::FinishBuffer`.
+    ov_waiting.query = "Finish file".to_string();
+    ov_waiting.refilter();
+    let idx = ov_waiting
+        .selected_corpus_index()
+        .expect("the exact name must fuzzy-match its own row");
+    assert_eq!(crate::commands::visible_action_of(idx), crate::keymap::Action::FinishBuffer);
 }
 
 #[test]
@@ -469,10 +521,10 @@ fn theme_picker_is_flat_and_lists_every_world_with_active_selected() {
 fn clicking_the_current_facet_is_a_calm_no_op() {
     // Driven over a still-faceting picker (the Command palette) — the theme picker
     // retired its lens strip, so this generic law now rides a surviving faceter.
-    let mut ov = OverlayState::new_command(
-        crate::commands::names(),
-        crate::commands::effective_bindings(&[], &[]),
-    );
+    let names = crate::commands::names();
+    let hidden = vec![false; names.len()];
+    let mut ov =
+        OverlayState::new_command(names, crate::commands::effective_bindings(&[], &[]), hidden);
     ov.set_facet_lens(2); // switch to the Edit lens once, a real change
     assert_eq!(ov.active_facet_id(), Some("edit"));
     let (before_lens, before_selected, before_scroll, before_items) =
@@ -596,7 +648,7 @@ fn command_palette_lists_names_with_parallel_bindings() {
         "Save".to_string(),
     ];
     let binds = vec!["C-x C-f".to_string(), "C-x t".to_string(), "C-x C-s".to_string()];
-    let mut ov = OverlayState::new_command(names.clone(), binds.clone());
+    let mut ov = OverlayState::new_command(names.clone(), binds.clone(), vec![false; names.len()]);
     assert_eq!(ov.kind.as_str(), "command");
     // Empty query: rows are the names in order, bindings stay parallel.
     assert_eq!(ov.item_strings(), names);
@@ -708,7 +760,8 @@ fn history_picker_lists_versions_navigates_and_carries_ids() {
 fn command_picker_lands_on_all_then_groups_by_menu_section_and_recent() {
     let names = crate::commands::names();
     let binds = crate::commands::effective_bindings(&[], &[]);
-    let mut ov = OverlayState::new_command(names, binds);
+    let hidden = vec![false; names.len()];
+    let mut ov = OverlayState::new_command(names, binds, hidden);
     // Lands on the flat All home; the strip is All-first.
     assert_eq!(ov.active_facet_id(), Some("all"), "opens on the flat All landing");
     assert_eq!(ov.lens_strip().first().map(|(l, _)| l.clone()), Some("All".to_string()));

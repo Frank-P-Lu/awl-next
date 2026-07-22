@@ -58,6 +58,7 @@ fn rescan_file_index_picks_up_a_file_created_after_the_last_scan() {
         history_session_start: None,
         settings_values: Default::default(),
         assets: Vec::new(),
+        has_waiter: false,
     };
     let ov = crate::overlay::build(crate::overlay::OverlayKind::Goto, &build_ctx)
         .expect("Goto always summons");

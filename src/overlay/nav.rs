@@ -37,6 +37,15 @@ impl OverlayState {
                 .then_with(|| a.index.cmp(&b.index))
         });
         let mut ranked: Vec<usize> = scored.into_iter().map(|r| r.index).collect();
+        // RUNTIME-GATED ROW FILTER (Command palette only, today): drop any corpus
+        // entry marked `hidden` (e.g. "Finish file" with no daemon `--wait` client
+        // actively waiting — see `commands::visible_hidden_mask`). `corpus` itself
+        // stays untouched — only what's rankable/selectable shrinks — so the
+        // row-index math `commands::visible_action_of` relies on stays valid. A
+        // no-op (`hidden` empty) for every kind but the Command palette.
+        if !self.hidden.is_empty() {
+            ranked.retain(|&i| !self.hidden.get(i).copied().unwrap_or(false));
+        }
         // DOTFILE DISPLAY FILTER (file pickers only, gated on `show_hidden`): drop any
         // corpus entry whose basename / ancestor component starts with `.` (except
         // `.env*`). The full corpus is untouched — this is purely what's SHOWN — so

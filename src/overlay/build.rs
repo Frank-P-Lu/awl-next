@@ -67,6 +67,16 @@ pub struct BuildCtx<'a> {
     /// App AND the headless replay both fill it from the same scan over the
     /// [`crate::fs`] seam, so a `--keys` capture sees the real orphan list.
     pub assets: Vec<crate::assets::Orphan>,
+    /// Is a daemon `--wait` client actively waiting on the CURRENT buffer right
+    /// now (`crate::daemon`'s module doc, `App::wait_conns`)? The ONE live fact
+    /// behind the Command palette's "Finish file" row visibility
+    /// (`commands::visible_hidden_mask`) — `true` only on the live App, when the
+    /// daemon exists AND some connection is parked waiting. Structurally `false`
+    /// in the headless capture/replay path (which never imports `crate::daemon`
+    /// at all — the daemon capture gate) and on wasm/`mas` (no daemon compiled),
+    /// so a default palette build hides the row deterministically everywhere but
+    /// a real `EDITOR=awl --wait` round-trip.
+    pub has_waiter: bool,
 }
 
 /// Build the SUMMONED overlay for a non-navigable picker kind (Goto / Theme /
@@ -125,6 +135,9 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
             let mut ov = OverlayState::new_command(
                 crate::commands::visible_names(),
                 crate::commands::visible_effective_bindings(ctx.config_keys, ctx.config_linux_keep),
+                // RUNTIME gate: "Finish file" only shows while a daemon `--wait`
+                // client is actively waiting (see `BuildCtx::has_waiter`'s doc).
+                crate::commands::visible_hidden_mask(ctx.has_waiter),
             );
             // The Recent lens reads the in-memory recently-run MRU (empty in a fresh
             // process, so headless Recent is inert), translated into VISIBLE-CORPUS

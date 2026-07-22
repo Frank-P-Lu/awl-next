@@ -53,10 +53,11 @@ pub(super) fn drive(
     let mut zoom = 1.0;
     let mut search = None;
     let mut make_overlay = |k: OverlayKind| match k {
-        OverlayKind::Command => Some(OverlayState::new_command(
-            crate::commands::names(),
-            crate::commands::bindings(),
-        )),
+        OverlayKind::Command => {
+            let names = crate::commands::names();
+            let hidden = vec![false; names.len()];
+            Some(OverlayState::new_command(names, crate::commands::bindings(), hidden))
+        }
         // The SETTINGS breadcrumb target: re-summoned when a value-pick launched
         // FROM Settings pops back on commit (the one parent that retains its child).
         OverlayKind::Settings => Some(settings_overlay()),
@@ -93,10 +94,11 @@ pub(super) fn drive_run(
     let mut zoom = 1.0;
     let mut search = None;
     let mut make_overlay = |k: OverlayKind| match k {
-        OverlayKind::Command => Some(OverlayState::new_command(
-            crate::commands::names(),
-            crate::commands::bindings(),
-        )),
+        OverlayKind::Command => {
+            let names = crate::commands::names();
+            let hidden = vec![false; names.len()];
+            Some(OverlayState::new_command(names, crate::commands::bindings(), hidden))
+        }
         _ => None,
     };
     let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);

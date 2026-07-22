@@ -1086,6 +1086,26 @@ pub fn visible_recent_indices() -> Vec<usize> {
     recent_indices().into_iter().filter_map(|catalog_i| idx.iter().position(|&v| v == catalog_i)).collect()
 }
 
+/// RUNTIME-gated rows, parallel to [`visible`]/[`visible_names`] — `true` at index
+/// `i` iff `visible()[i]` should be HIDDEN from selection right now for a reason
+/// that is NOT the compile-time `Platform` axis (`native_only`/`web_only`) but a
+/// live fact the caller gathers. Today exactly one row is runtime-gated: "Finish
+/// file" (`Action::FinishBuffer`, C-x #) only makes sense mid a daemon `--wait`
+/// round-trip (`crate::daemon`'s module doc) — with no terminal actively waiting
+/// there is nothing to finish, so it stays out of the palette. `has_waiter` is the
+/// ONE live fact the caller passes (the live App's `wait_conns`; always `false` in
+/// the headless capture/replay path, which has no daemon at all — the daemon
+/// capture gate — so a `--keys`/`--screenshot` palette is deterministically built
+/// WITHOUT this row). A pure fn of that one bool: `has_waiter` true unmasks every
+/// row (an empty mask, byte-identical to before this round existed); false masks
+/// exactly the one `FinishBuffer` row. Consumed by `OverlayState::new_command`'s
+/// `hidden` parameter, which `refilter` reads to drop masked rows from what's
+/// SELECTABLE while leaving `corpus` itself (and every index into it that
+/// `visible_action_of` relies on) untouched.
+pub fn visible_hidden_mask(has_waiter: bool) -> Vec<bool> {
+    visible().iter().map(|c| c.action == Action::FinishBuffer && !has_waiter).collect()
+}
+
 /// The DISPATCH-time gate: is `action` available on `platform`? `true` for any action
 /// with NO catalog entry (a motion / self-insert / non-catalog effect always fires, and
 /// there is nothing to hide) and for a catalog action that IS available; `false` for a
@@ -2384,6 +2404,35 @@ mod tests {
         for (i, c) in corpus.iter().enumerate() {
             assert_eq!(names[i], c.name);
         }
+    }
+
+    #[test]
+    fn visible_hidden_mask_gates_finish_buffer_on_the_live_waiter_fact_alone() {
+        // The purest reachable seam for the Finish Buffer gating round: a pure
+        // predicate over the ONE live fact (`has_waiter`), independent of the
+        // daemon/App entirely. `visible()` is Platform-only (native-run tests see
+        // the full unfiltered catalog), so FinishBuffer is IN it here regardless.
+        let corpus = visible();
+        let idx = corpus
+            .iter()
+            .position(|c| c.action == Action::FinishBuffer)
+            .expect("FinishBuffer is a real catalog row");
+
+        // No waiter: the row is masked (hidden) — every OTHER row stays unmasked.
+        let mask_no_waiter = visible_hidden_mask(false);
+        assert_eq!(mask_no_waiter.len(), corpus.len(), "mask is parallel to visible()");
+        assert!(mask_no_waiter[idx], "FinishBuffer must be hidden with no waiter");
+        assert_eq!(
+            mask_no_waiter.iter().filter(|&&h| h).count(),
+            1,
+            "exactly one row (FinishBuffer) is ever runtime-hidden"
+        );
+
+        // A waiter IS active: the row unmasks — the mask is then all-false, byte-
+        // identical to "nothing runtime-hidden" (mirrors pre-round behavior).
+        let mask_waiting = visible_hidden_mask(true);
+        assert!(!mask_waiting[idx], "FinishBuffer must show while a waiter is active");
+        assert!(mask_waiting.iter().all(|&h| !h), "no OTHER row is ever runtime-gated");
     }
 
     #[test]

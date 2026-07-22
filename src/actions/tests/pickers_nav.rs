@@ -388,10 +388,10 @@ fn command_arrows_cycle_the_lens() {
     // The command palette gains the ←/→ lens strip: All -> File -> Edit -> View ->
     // Recent, driven through the real `apply_core` overlay intercept (so a
     // `--keys "C-p <right>"` capture reaches the same code).
-    let mut overlay = Some(OverlayState::new_command(
-        crate::commands::names(),
-        crate::commands::effective_bindings(&[], &[]),
-    ));
+    let names = crate::commands::names();
+    let hidden = vec![false; names.len()];
+    let mut overlay =
+        Some(OverlayState::new_command(names, crate::commands::effective_bindings(&[], &[]), hidden));
     let mut accept = None;
     assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"), "lands on All");
     for expect in ["file", "edit", "view", "recent"] {

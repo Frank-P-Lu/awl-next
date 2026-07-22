@@ -458,10 +458,10 @@ fn command_and_history_pickers_faceted_lens_render_and_report() {
 
     // COMMAND palette, cycled RIGHT once to the File lens: every shown row is a
     // File-section command (Save among them).
-    let mut cmd = OverlayState::new_command(
-        crate::commands::names(),
-        crate::commands::effective_bindings(&[], &[]),
-    );
+    let names = crate::commands::names();
+    let hidden = vec![false; names.len()];
+    let mut cmd =
+        OverlayState::new_command(names, crate::commands::effective_bindings(&[], &[]), hidden);
     cmd.cycle_lens(1);
     assert_eq!(cmd.active_facet_id(), Some("file"));
     let cpng = dir.join("cmd.png");

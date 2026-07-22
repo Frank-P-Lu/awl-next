@@ -412,6 +412,7 @@ fn palette(cx: &mut Cx) -> Result<CellOut> {
                 crate::dateformat::CAPTURE_PLACEHOLDER_YMD,
             ),
             assets: Vec::new(),
+            has_waiter: false,
         };
         let t0 = Instant::now();
         let ov = crate::overlay::build(crate::overlay::OverlayKind::Command, &build_ctx)

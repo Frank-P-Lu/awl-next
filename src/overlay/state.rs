@@ -190,6 +190,16 @@ pub struct OverlayState {
     /// menu itself, never a second copy). EMPTY for every other kind and for a
     /// Command palette with no settings attached (`attach_settings_rows` never called).
     pub is_setting: Vec<bool>,
+    /// RUNTIME-GATED rows (Command palette only, today): parallel to `corpus`,
+    /// `true` for a row that exists in the catalog but is hidden from selection
+    /// right now because a LIVE fact — not the compile-time `Platform` axis —
+    /// says it doesn't apply (see `commands::visible_hidden_mask`; today's one
+    /// case is "Finish file" with no daemon `--wait` client actively waiting).
+    /// `refilter` drops any masked row out of `items` (mirrors the dotfile
+    /// display filter), so `corpus` itself — and every OTHER index into it that
+    /// `commands::visible_action_of`'s row-index math relies on — stays
+    /// untouched; only what's SELECTABLE shrinks. EMPTY for every other kind.
+    pub hidden: Vec<bool>,
     /// DIFF-AS-PREVIEW (History only): whether the keyboard FOCUS sits in the DIFF
     /// PANEL below the picker card (Tab shifts it there; Tab/Esc return it to the
     /// version list). While `true`, ↑/↓ scroll the diff step-wise instead of moving
@@ -278,6 +288,10 @@ impl OverlayState {
             // No settings rows attached on a fresh summon; `attach_settings_rows`
             // (Command palette only) arms it right after.
             is_setting: Vec::new(),
+            // No runtime-gated rows on a fresh summon; `new_command` sets this
+            // right after (before the refilter below), since it's the only
+            // constructor that ever populates it.
+            hidden: Vec::new(),
             // DIFF-AS-PREVIEW: focus opens on the version LIST, diff at its top.
             diff_focus: false,
             diff_scroll: 0,
@@ -512,8 +526,11 @@ impl OverlayState {
     /// back to that filtered corpus, NOT the raw `commands::COMMANDS` catalog; see
     /// `commands.rs`'s "PLATFORM-SCOPED COMMANDS" section) and `bindings` carries each
     /// command's current chord label, shown dim beside the name. Fuzzy-filterable like
-    /// the other pickers.
-    pub fn new_command(names: Vec<String>, bindings: Vec<String>) -> Self {
+    /// the other pickers. `hidden` is the RUNTIME-gated mask parallel to `names`
+    /// (`commands::visible_hidden_mask`, e.g. "Finish file" with no daemon `--wait`
+    /// client waiting) — set BEFORE the initial `refilter` (via `new_marked`) so a
+    /// hidden row never appears even in the unqueried, freshly-opened list.
+    pub fn new_command(names: Vec<String>, bindings: Vec<String>, hidden: Vec<bool>) -> Self {
         let n = names.len();
         let mut s = Self::new_marked(
             OverlayKind::Command,
@@ -525,6 +542,8 @@ impl OverlayState {
             None,
         );
         s.bindings = bindings;
+        s.hidden = hidden;
+        s.refilter();
         s
     }
 
