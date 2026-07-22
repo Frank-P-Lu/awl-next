@@ -857,7 +857,22 @@ pub struct RenderCaps {
     /// in the page-mode margins. [`AmbientStyle::None`] everywhere
     /// (byte-identical, zero instances) except Currawong.
     pub ambient: AmbientStyle,
+    /// THE SPELL-SQUIGGLE round's per-world baseline dial: the vertical gap
+    /// (px at zoom 1.0) between a misspelled word's glyph-cell BOTTOM and the
+    /// top of its wavy underline band — see
+    /// `render::rects::TextPipeline::spell_squiggles`, the ONE reader (never a
+    /// per-world code path; this field IS the caps-as-data escape hatch).
+    /// [`SPELL_UNDERLINE_GAP_DEFAULT`] (byte-identical to the pre-dial
+    /// hardcoded gap) on every world except Bilby, whose taller display-serif
+    /// row geometry floated the squiggle noticeably below the true baseline —
+    /// see `worlds::BILBY`'s own doc for the tighter value.
+    pub spell_underline_gap: f32,
 }
+
+/// Default value of [`RenderCaps::spell_underline_gap`] — the gap every world
+/// carried before the per-world dial existed. A world overriding the field
+/// away from this is a conscious taste call, not an accident.
+pub const SPELL_UNDERLINE_GAP_DEFAULT: f32 = 1.0;
 
 impl RenderCaps {
     pub const DEFAULT: RenderCaps = RenderCaps {
@@ -892,6 +907,9 @@ impl RenderCaps {
         // default life — every world is byte-identical until it opts in
         // (Currawong is the one assignment).
         ambient: AmbientStyle::None,
+        // SPELL-SQUIGGLE round: the per-world baseline dial lands at the
+        // pre-dial gap on every world until Bilby's own override.
+        spell_underline_gap: SPELL_UNDERLINE_GAP_DEFAULT,
     };
 
 }

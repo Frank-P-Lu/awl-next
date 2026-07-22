@@ -3,23 +3,40 @@
 //! behave identically) and carries out the live-only side effects the pure core
 //! can't reach — the GPU-measured page scroll, the system-clipboard mirror, the
 //! render-toggle window work, theme re-tint, sticky-pref writes. Plus the
-//! debounced spell re-scan. Lifted out of `app.rs` verbatim.
+//! EAGER spell re-scan. Lifted out of `app.rs` verbatim.
 
 use super::*;
 
 impl App {
-    /// Recompute spell spans against the current buffer text (called from
-    /// about_to_wait once the debounce elapses), then refresh the view.
-    pub(super) fn run_spellcheck_now(&mut self) {
+    /// Recompute the KEYED spell-verdict cache (`self.spell_cache`, see
+    /// [`crate::spell::SpellVerdict`]) against the current buffer text — pure
+    /// state mutation, no `sync_view` side effect, so [`Self::sync_view`] can
+    /// call it INLINE on every version change (the EAGER half of the
+    /// completed-word-lag fix: "check every word as it changes") without
+    /// recursing back into itself.
+    pub(super) fn recompute_spell_cache(&mut self) {
         if let Some(spell) = self.spell.as_ref() {
             let text = self.buffer.text();
             // The ONE spell-scope owner: a CODE buffer checks only its
             // prose-comment + string spans (identifiers never squiggle); a prose
             // buffer takes the unscoped path byte-identically.
-            self.spell_cache = spell.misspellings_for(&text, self.buffer.syntax_lang());
+            let spans = spell.misspellings_for(&text, self.buffer.syntax_lang());
+            // KEYED against the SAME text the spans came from, so every fresh
+            // verdict starts out valid by construction.
+            self.spell_cache = crate::spell::keyed(&text, spans);
             self.spell_checked_version = Some(self.buffer.version());
         }
-        self.spell_dirty_at = None;
+    }
+
+    /// Force an IMMEDIATE rescan + view refresh — for discrete action
+    /// handlers OUTSIDE a text edit that still need squiggles to reflect a
+    /// change THIS frame (the spellcheck toggle, a dictionary switch, a
+    /// config reload, replacing a misspelled word): [`Self::recompute_spell_cache`]
+    /// plus the `sync_view` that pushes it to the renderer. A plain text edit
+    /// never needs this — `sync_view`'s own eager version check already
+    /// calls `recompute_spell_cache` inline.
+    pub(super) fn run_spellcheck_now(&mut self) {
+        self.recompute_spell_cache();
         self.sync_view(false);
     }
 

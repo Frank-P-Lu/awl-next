@@ -823,12 +823,21 @@ pub const FONT_CJK_COMPANION_FACES: &[&[u8]] = &[
 /// rather than a full cell, so the composing text reads as distinct/provisional.
 pub const PREEDIT_UNDERLINE_H: f32 = 2.5;
 
-/// Squiggle wave parameters at zoom 1.0 (px). Amplitude ~2px, period ~6px, and
-/// a ~2px stroke give a clearly wavy (not straight, not dashed) underline that
-/// still scales cleanly with zoom. All three are multiplied by the zoom factor.
-pub const SPELL_AMP: f32 = 1.6;
-pub const SPELL_PERIOD: f32 = 6.0;
-pub const SPELL_THICKNESS: f32 = 1.8;
+/// Squiggle wave parameters at zoom 1.0 (px). All three are multiplied by the
+/// zoom factor, so the shape stays correct at any zoom.
+///
+/// SPELL-SQUIGGLE round (user report, "too thin at default zoom" — "the
+/// 200%-zoom look is right for default zoom"): the pre-round values (amp 1.6,
+/// period 6.0, thickness 1.8) read exactly the way the user wants ONLY at 2x
+/// zoom, since every one of the three scales with `m.zoom` identically. Rather
+/// than fatten thickness alone (which would change the wave's proportions,
+/// not just its size), all three are doubled here — zoom 1.0 now renders
+/// BYTE-IDENTICAL pixels to what the OLD constants produced at zoom 2.0 (see
+/// `spell_squiggle_thickness_law` in `render/tests/nits.rs`), and zoom stays
+/// exactly as scale-aware as before (still a flat per-constant multiply).
+pub const SPELL_AMP: f32 = 3.2;
+pub const SPELL_PERIOD: f32 = 12.0;
+pub const SPELL_THICKNESS: f32 = 3.6;
 
 /// Stroke thickness (px, at zoom 1.0) of a WRITING-NIT underline — the quiet
 /// mechanical-typo hint. Finer than the spell squiggle (`SPELL_THICKNESS`) so a

@@ -477,3 +477,130 @@ fn squiggle_scroll_culls_offscreen_and_reveals_on_scroll() {
         s[0].y
     );
 }
+
+/// SQUIGGLE THICKNESS AT DEFAULT ZOOM (user report: "the 200%-zoom look is
+/// right — default zoom reads too thin") — MUTATION-CHECK against the
+/// pre-round thin values. The old constants (amp 1.6, period 6.0, thickness
+/// 1.8 at zoom 1.0) read correctly ONLY at 2x zoom, since all three multiply
+/// by `m.zoom` identically; this round doubles all three, so zoom 1.0 now
+/// renders the exact pixels the OLD constants produced at zoom 2.0 — a revert
+/// to the old numbers fails every assertion below, and the wave stays exactly
+/// as scale-aware as before (still a flat per-constant multiply, checked at
+/// zoom 1.6 too).
+#[test]
+fn spell_squiggle_thickens_at_default_zoom_matching_the_old_200pct_look() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping spell_squiggle_thickens_at_default_zoom_matching_the_old_200pct_look: no wgpu adapter");
+        return;
+    };
+    // "helo" on line0; caret parked on line1 so reveal-on-cursor never
+    // suppresses the one squiggle this test reads.
+    let text = "helo\nzzz";
+    let mut v = view(text, 1, 0);
+    v.misspelled = vec![crate::spell::Misspelling { line: 0, start_col: 0, end_col: 4 }];
+    p.set_view(&v);
+    let s = p.spell_squiggles();
+    assert_eq!(s.len(), 1);
+    // MUTATION-CHECK: strictly thicker than the pre-round default-zoom value.
+    assert!(
+        s[0].thickness > 1.8 + 0.5,
+        "squiggle stroke must be thicker than the OLD default-zoom value \
+         (1.8px, which only looked right at 2x zoom): got {}",
+        s[0].thickness
+    );
+    // Exact new value: zoom 1.0 now matches the OLD zoom-2.0 pixels exactly.
+    assert!((s[0].thickness - 3.6).abs() < 1e-3, "thickness = {}", s[0].thickness);
+    assert!((s[0].amp - 3.2).abs() < 1e-3, "amp = {}", s[0].amp);
+    assert!((s[0].period - 12.0).abs() < 1e-3, "period = {}", s[0].period);
+
+    // SCALE-AWARE: still correct at a non-1.0 zoom — every param keeps
+    // multiplying by the SAME zoom factor, so the ratio to zoom 1.0 is exact.
+    let mut v2 = view(text, 1, 0);
+    v2.misspelled = vec![crate::spell::Misspelling { line: 0, start_col: 0, end_col: 4 }];
+    v2.zoom = 1.6;
+    p.set_view(&v2);
+    let s2 = p.spell_squiggles();
+    assert_eq!(s2.len(), 1);
+    assert!((s2[0].thickness - s[0].thickness * 1.6).abs() < 1e-3);
+    assert!((s2[0].amp - s[0].amp * 1.6).abs() < 1e-3);
+    assert!((s2[0].period - s[0].period * 1.6).abs() < 1e-3);
+}
+
+/// PER-WORLD BASELINE DIAL (user report: on Bilby the squiggle floats too far
+/// below the baseline) — a pixel cross-check against the SAME line's nit
+/// underline, which shares the exact same row geometry (`row_band_for`) but
+/// rides its OWN, UNCHANGED `cell_bottom + 1.0*zoom` formula (see
+/// `render::rects`'s nit-underline builder). On a DEFAULT-dial world
+/// (`RenderCaps::spell_underline_gap == SPELL_UNDERLINE_GAP_DEFAULT == 1.0`)
+/// the two underlines must land at the EXACT SAME y; on Bilby's tighter dial
+/// the squiggle must sit measurably HIGHER (closer to the baseline) by
+/// exactly the dial's 2px delta at zoom 1.0 — proof the per-world offset is
+/// live DATA driving real geometry, not a comment.
+#[test]
+fn spell_squiggle_baseline_dial_pulls_bilby_tighter_than_the_shared_default() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping spell_squiggle_baseline_dial_pulls_bilby_tighter_than_the_shared_default: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    crate::nits::set_nits_on(true);
+    // "helo" (misspelling, cols 0..4) then a double space (nit, cols 4..6) —
+    // SAME line, so both read the SAME row geometry. Caret on line1, off both.
+    let text = "helo  wrld\nzzz";
+    let mut v = view(text, 1, 0);
+    v.misspelled = vec![crate::spell::Misspelling { line: 0, start_col: 0, end_col: 4 }];
+
+    // CONTROL: a default-dial world (Tawny — no override).
+    theme::set_active_by_name("Tawny").unwrap();
+    p.sync_theme();
+    p.set_view(&v);
+    let n_ctrl = p.nit_underlines();
+    let s_ctrl = p.spell_squiggles();
+    assert_eq!((n_ctrl.len(), s_ctrl.len()), (1, 1), "one nit + one squiggle on line0");
+    assert!(
+        (n_ctrl[0].y - s_ctrl[0].y).abs() < 0.01,
+        "on the DEFAULT dial the squiggle must sit at the SAME y as the nit \
+         underline (both cell_bottom + 1.0*zoom): nit y={}, squiggle y={}",
+        n_ctrl[0].y,
+        s_ctrl[0].y
+    );
+
+    // BILBY: the tighter per-world override.
+    theme::set_active_by_name("Bilby").unwrap();
+    p.sync_theme();
+    p.set_view(&v);
+    let n_bilby = p.nit_underlines();
+    let s_bilby = p.spell_squiggles();
+    assert_eq!((n_bilby.len(), s_bilby.len()), (1, 1), "one nit + one squiggle on line0");
+    let delta = n_bilby[0].y - s_bilby[0].y;
+    assert!(
+        (delta - 2.0).abs() < 0.05,
+        "Bilby's squiggle must sit exactly 2px ABOVE the nit underline's y \
+         (the dial's delta at zoom 1.0) — nit y={}, squiggle y={}, delta={delta}",
+        n_bilby[0].y,
+        s_bilby[0].y
+    );
+
+    // OTHER WORLDS UNCHANGED (sweep): every world but Bilby keeps
+    // squiggle-y == nit-y, exactly like the control above.
+    for t in theme::THEMES.iter().filter(|t| t.name != "Bilby") {
+        theme::set_active_by_name(t.name).unwrap();
+        p.sync_theme();
+        p.set_view(&v);
+        let n = p.nit_underlines();
+        let s = p.spell_squiggles();
+        assert_eq!((n.len(), s.len()), (1, 1), "{}: one nit + one squiggle", t.name);
+        assert!(
+            (n[0].y - s[0].y).abs() < 0.01,
+            "{}: not Bilby, so the squiggle must sit at the SAME y as the nit \
+             underline (nit y={}, squiggle y={})",
+            t.name,
+            n[0].y,
+            s[0].y
+        );
+    }
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+    crate::nits::set_nits_on(true);
+}

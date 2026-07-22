@@ -791,6 +791,13 @@ impl TextPipeline {
         let amp = SPELL_AMP * m.zoom;
         let period = SPELL_PERIOD * m.zoom;
         let thickness = SPELL_THICKNESS * m.zoom;
+        // PER-WORLD BASELINE DIAL (`Theme::render_caps.spell_underline_gap`,
+        // px at zoom 1.0): the gap between the glyph cell's bottom and the
+        // band's top. DATA, read fresh every frame like amp/period/thickness
+        // above (never cached into the protos, so no invalidation to manage;
+        // a theme switch already reshapes anyway) — `SPELL_UNDERLINE_GAP_DEFAULT`
+        // on every world except Bilby's tighter override.
+        let gap = theme::active().render_caps.spell_underline_gap * m.zoom;
         // The band must be tall enough to contain the wave crests + the stroke.
         let band_h = amp * 2.0 + thickness + 2.0;
         let protos = self.squiggle_cache.protos.borrow();
@@ -810,8 +817,9 @@ impl TextPipeline {
             // bottom of the caret-height box), centered vertically in its band.
             let (band_y, row_caret_h) = self.row_band_for(p.line, p.line_height, line_top);
             let cell_bottom = band_y + row_caret_h;
-            // Center the wave band a touch below the cell bottom.
-            let y = cell_bottom + 1.0 * m.zoom;
+            // Center the wave band a touch below the cell bottom, per the
+            // active world's baseline dial.
+            let y = cell_bottom + gap;
             if !self.band_admits(y, band_h) {
                 continue; // DIFF-AS-PREVIEW: the row scrolled past the card edge
             }

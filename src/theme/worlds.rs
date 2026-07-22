@@ -12,7 +12,7 @@ use super::model::{
     AmbientStyle, Backdrop, Background, CardAnchor, CaretBlockStyle, ChipVariant, ChromeFace,
     DecorativeWash, Elevation, FacetStyle, HighlightTexture, ImageReveal, LavaEdge, ListStyle,
     MotionJuice, PageFrame, PlacardCorner, PlacardInk, RenderCaps, RoleOverrides, SelectionStyle,
-    Theme, ThemeTags, TitleStyle, WashOverride,
+    SPELL_UNDERLINE_GAP_DEFAULT, Theme, ThemeTags, TitleStyle, WashOverride,
 };
 use super::ornament::{
     Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, ORNAMENT_GARAMOND,
@@ -214,6 +214,14 @@ pub const BILBY: Theme = Theme {
         // user's eyes ("the frame is so weird") — Bilby stays frameless; the
         // roster's reserved dark-line-on-light assignment goes back on the
         // shelf for some future light-pole world.
+        //
+        // SPELL-SQUIGGLE round (user report): Newsreader's tall display-serif
+        // row geometry (a generous descent baked into the caret-height box)
+        // floated the squiggle noticeably below the true baseline here — a
+        // tighter per-world gap (2px less than the shared default at zoom
+        // 1.0) pulls it back up. DATA dial, not a code path; every other
+        // world stays on `SPELL_UNDERLINE_GAP_DEFAULT`.
+        spell_underline_gap: SPELL_UNDERLINE_GAP_DEFAULT - 2.0,
         ..RenderCaps::DEFAULT
     },
 };
@@ -1310,6 +1318,11 @@ pub const WAGTAIL: Theme = Theme {
         // law `ambient_stars_laws_hold_for_every_world` guards it), and the
         // silent pole would decline the personality anyway.
         ambient: AmbientStyle::None,
+        // SPELL-SQUIGGLE round: the silent pole keeps the default gap — its
+        // display face isn't the tall-serif shape Bilby's dial compensates
+        // for. Listed explicitly because this literal names every field (no
+        // `..DEFAULT` spread).
+        spell_underline_gap: SPELL_UNDERLINE_GAP_DEFAULT,
     },
 };
 

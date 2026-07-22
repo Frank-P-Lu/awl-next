@@ -228,7 +228,7 @@ pub struct Buffer {
     /// motion that does not extend.
     anchor: Option<usize>,
     /// Monotonic edit version, bumped on every mutation of the rope CONTENT. Lets
-    /// callers (the view sync / spell debounce) detect "did the text change?" with
+    /// callers (the view sync / eager spell rescan) detect "did the text change?" with
     /// a cheap `u64` compare instead of cloning + comparing the whole rope string
     /// each keystroke. Cursor/selection-only changes do NOT bump it.
     version: u64,
@@ -302,7 +302,7 @@ impl Buffer {
     }
 
     /// The current edit version (bumped on every content mutation). A cheap change
-    /// token for the view-sync / spell-debounce hot path: equal versions ⇒ the
+    /// token for the view-sync / spell-rescan hot path: equal versions ⇒ the
     /// rope text is unchanged, so a full-string compare can be skipped.
     pub fn version(&self) -> u64 {
         self.version

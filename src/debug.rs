@@ -211,7 +211,7 @@ pub enum DebugStill {
 /// The frame-TOP transition: classify the redraw that just began. A pending
 /// un-rendered input wins over a queued stamp (this frame is activity, and the
 /// settle will re-queue a fresh stamp); any redraw arriving OUT of stillness
-/// (resize, spell-debounce repaint, which-key summon) is activity too — it
+/// (resize, an eager spell-rescan repaint, which-key summon) is activity too — it
 /// re-enters `Active` and re-settles to a fresh stamp. Only a `StampQueued`
 /// redraw with NO pending input is the stamp frame itself.
 pub fn still_wake(state: DebugStill, pending_input: bool) -> DebugStill {

@@ -8,6 +8,7 @@ mod files;
 mod history;
 mod lifecycle;
 mod source_audit;
+mod spell;
 mod which_key;
 
 use common::*;

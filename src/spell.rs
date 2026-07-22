@@ -171,6 +171,76 @@ pub struct Misspelling {
     pub end_col: usize,
 }
 
+/// The exact word text at `m`'s span in `text` — the same char-column
+/// extraction [`SpellChecker::suggest_at`] uses to read the word it's about to
+/// offer corrections for. `""` when the span no longer resolves (a vanished
+/// line, or `end_col <= start_col`) — never a panic on a stale span read
+/// against edited-out text.
+pub fn word_at(text: &str, m: &Misspelling) -> String {
+    text.split('\n')
+        .nth(m.line)
+        .unwrap_or("")
+        .chars()
+        .skip(m.start_col)
+        .take(m.end_col.saturating_sub(m.start_col))
+        .collect()
+}
+
+/// A spell verdict KEYED to the exact word text it judged (the COMPLETED-WORD-
+/// LAG fix's "keyed" half): [`Misspelling`] alone says WHERE a word was
+/// flagged; this additionally freezes WHAT text was there at judgment time, so
+/// a caller holding a verdict across an edit can tell "still genuinely
+/// misspelled" apart from "this span's text has since changed underneath it"
+/// (an edit can shift/alter a span's covered text without moving its columns —
+/// e.g. correcting "helo" to "hell" keeps the SAME `0..4` span but a DIFFERENT
+/// word). [`Self::still_valid`] is the one check every consumer routes
+/// through, so a stale verdict can never paint a squiggle under text it never
+/// actually judged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpellVerdict {
+    pub span: Misspelling,
+    pub word: String,
+}
+
+impl SpellVerdict {
+    /// True iff `text` still holds this verdict's EXACT word at its span. A
+    /// `false` means the text under this span changed since the verdict was
+    /// computed — painting it now would show a squiggle under the WRONG word
+    /// (or a stale MISSPELLED squiggle for a word that's since been fixed):
+    /// the just-completed-word flash this type exists to make structurally
+    /// impossible.
+    pub fn still_valid(&self, text: &str) -> bool {
+        word_at(text, &self.span) == self.word
+    }
+}
+
+/// Build the KEYED verdict list for `misspellings` (a [`SpellChecker::misspellings_for`]
+/// result) against the SAME `text` it was computed from — pairs each span with
+/// the exact word it covers RIGHT NOW, the key [`SpellVerdict::still_valid`]
+/// checks on a later read (typically against a NEWER text, after further
+/// edits). Calling this with the text the spans came from always produces
+/// verdicts that start out valid by construction.
+pub fn keyed(text: &str, misspellings: Vec<Misspelling>) -> Vec<SpellVerdict> {
+    misspellings
+        .into_iter()
+        .map(|span| {
+            let word = word_at(text, &span);
+            SpellVerdict { span, word }
+        })
+        .collect()
+}
+
+/// Filter a KEYED verdict cache down to the render-facing spans still valid
+/// against `text` — plain [`Misspelling`] positions, word text dropped (the
+/// renderer never needs it). THE ONE reader every "what does the view push as
+/// `misspelled`" call site routes through ([`crate::app::App::sync_view`]), so
+/// the keying discipline can't be bypassed by a future caller reading `.span`
+/// directly off a possibly-stale verdict — a verdict whose text has changed
+/// since it was computed is silently dropped here, never painted.
+pub fn visible(cache: &[SpellVerdict], text: &str) -> Vec<Misspelling> {
+    cache.iter().filter(|v| v.still_valid(text)).map(|v| v.span).collect()
+}
+
 /// Loaded-once spell checker. Holds the parsed Hunspell dictionary; `check` is a
 /// pure lookup. Construction is the only fallible part (dictionary parse).
 pub struct SpellChecker {
@@ -1256,6 +1326,107 @@ mod tests {
         assert!(t.suggestions.iter().any(|w| w == "receive"));
         // A cursor on a CORRECT word yields nothing (calm no-op for the binding).
         assert!(sc.suggest_at(text, 0, 2, None).is_none(), "'Please' is correct");
+    }
+
+    // ── COMPLETED-WORD-LAG FIX: keyed spell verdicts ────────────────────────
+    // `word_at` / `SpellVerdict::still_valid` / `keyed` — the "a stale verdict
+    // can never paint on changed text" half of the eager+keyed mechanism.
+
+    #[test]
+    fn word_at_extracts_the_exact_span_text() {
+        // Line 1 is "hi helo there": "helo" starts at char col 3, ends at 7.
+        let m = Misspelling { line: 1, start_col: 3, end_col: 7 };
+        assert_eq!(word_at("first\nhi helo there\nlast", &m), "helo");
+    }
+
+    #[test]
+    fn word_at_is_char_index_aware_not_byte_index() {
+        // "café " is 5 chars but 6 bytes (é is 2 bytes) — start_col/end_col are
+        // CHAR columns, so word_at must walk chars, not bytes, or it would slice
+        // into the middle of the multi-byte é and panic / mis-extract.
+        let m = Misspelling { line: 0, start_col: 5, end_col: 9 };
+        assert_eq!(word_at("café helo", &m), "helo");
+    }
+
+    #[test]
+    fn word_at_degrades_to_empty_on_a_vanished_span() {
+        // A line that no longer exists (buffer shrank) — never panics.
+        let m = Misspelling { line: 5, start_col: 0, end_col: 4 };
+        assert_eq!(word_at("only one line", &m), "");
+    }
+
+    #[test]
+    fn keyed_verdicts_start_out_valid_against_their_own_text() {
+        let text = "helo wrld";
+        let spans = vec![
+            Misspelling { line: 0, start_col: 0, end_col: 4 },
+            Misspelling { line: 0, start_col: 5, end_col: 9 },
+        ];
+        let verdicts = keyed(text, spans);
+        assert_eq!(verdicts.len(), 2);
+        assert_eq!(verdicts[0].word, "helo");
+        assert_eq!(verdicts[1].word, "wrld");
+        assert!(verdicts.iter().all(|v| v.still_valid(text)));
+    }
+
+    /// THE CORE BUG FIX, at the pure-function seam: a verdict keyed to "helo"
+    /// must go INVALID the instant the SAME span's text changes underneath it
+    /// — even though the span's (line, start_col, end_col) columns are
+    /// unchanged (an in-place correction, "helo" -> "hell", keeps the same
+    /// 0..4 char range). This is exactly the completed-word-flash scenario: a
+    /// verdict computed BEFORE an edit must never be read as still describing
+    /// the text AFTER it.
+    #[test]
+    fn a_verdict_keyed_to_old_text_never_validates_against_new_text_at_the_same_span() {
+        let old_text = "helo wrld";
+        let verdict = keyed(old_text, vec![Misspelling { line: 0, start_col: 0, end_col: 4 }])
+            .into_iter()
+            .next()
+            .unwrap();
+        assert!(verdict.still_valid(old_text));
+
+        // In-place fix: "helo" -> "hell" (still 4 chars, SAME span).
+        let new_text = "hell wrld";
+        assert_ne!(word_at(new_text, &verdict.span), verdict.word);
+        assert!(
+            !verdict.still_valid(new_text),
+            "a verdict keyed to the OLD word must not validate against the NEW text at the same span"
+        );
+
+        // Length-changing fix: "helo" -> "hello" (span 0..4 now covers only
+        // "hell", the first 4 chars of the corrected word) — still invalid.
+        let new_text2 = "hello wrld";
+        assert!(!verdict.still_valid(new_text2));
+    }
+
+    /// SEQUENCE test mirroring the live flow: scan text A, key against A,
+    /// then re-key a DIFFERENT scan against text B — a verdict from the FIRST
+    /// (stale) keying can never validate against B, but a verdict freshly
+    /// keyed against B does. Models "edit completes a word, caret leaves it":
+    /// the old cache must never paint; the fresh rescan must.
+    #[test]
+    fn a_fresh_rescan_validates_where_the_stale_one_does_not() {
+        let good = stub(&["hello", "world"]);
+        let text_a = "helo world"; // "helo" misspelled
+        let stale = keyed(text_a, misspelled_spans(text_a, &good));
+        assert_eq!(stale.len(), 1);
+        assert!(stale[0].still_valid(text_a));
+
+        // The word is corrected in place at the SAME span.
+        let text_b = "hello world"; // now fully correct
+        assert!(
+            !stale[0].still_valid(text_b),
+            "the STALE verdict (keyed to the old misspelling) must not paint on the corrected text"
+        );
+
+        // A FRESH rescan against text_b finds nothing wrong (the word is now
+        // correct) — the eager half: the very next check already reflects
+        // reality, with no verdict left over that could flash.
+        let fresh = keyed(text_b, misspelled_spans(text_b, &good));
+        assert!(
+            fresh.is_empty(),
+            "a fresh rescan of the corrected text must not flag anything: {fresh:?}"
+        );
     }
 }
 

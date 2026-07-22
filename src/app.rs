@@ -99,8 +99,6 @@ mod web_clipboard {
     }
 }
 
-/// Quiet period after the last edit before spell-check re-scans (debounce).
-const SPELL_DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// Quiet period after the last edit before a quick note is auto-saved (debounce),
 /// so a note is written calmly as you pause typing rather than on every keystroke.
@@ -657,18 +655,28 @@ pub struct App {
     /// `None` if the dictionary failed to parse (reported to stderr); spell-check
     /// then no-ops rather than crashing the editor.
     spell: Option<crate::spell::SpellChecker>,
-    /// Cached misspelled spans plus the buffer EDIT VERSION they were computed for.
-    /// A whole-buffer re-check only runs when the version actually changed (cursor
-    /// moves / scroll reuse the cached spans); comparing a `u64` version avoids
-    /// cloning + comparing the whole rope string on every keystroke (the old hot
-    /// path did `spell_cache.0 != buffer.text()`).
-    spell_cache: Vec<crate::spell::Misspelling>,
+    /// Cached KEYED misspelling verdicts (see [`crate::spell::SpellVerdict`])
+    /// plus the buffer EDIT VERSION they were computed for. A whole-buffer
+    /// re-check only runs when the version actually changed (cursor moves /
+    /// scroll reuse the cached spans); comparing a `u64` version avoids
+    /// cloning + comparing the whole rope string on every keystroke (the old
+    /// hot path did `spell_cache.0 != buffer.text()`).
+    ///
+    /// EAGER + KEYED (the completed-word-lag fix): recomputed SYNCHRONOUSLY
+    /// (`App::recompute_spell_cache`) the instant the version changes — no
+    /// debounce window in which a stale verdict could paint. The "don't flag
+    /// mid-typing" job the old ~150ms debounce did now belongs entirely to
+    /// the DISPLAY-side caret-word suppression (`word_at_caret` in
+    /// `render/rects.rs`): the caret's own word is always freshly checked,
+    /// just not SHOWN while the caret sits in it. Each entry is additionally
+    /// KEYED to the exact word text it judged, so even a verdict this sync
+    /// doesn't (yet) replace can never paint over text that has since
+    /// changed underneath it (`ViewState.misspelled` is built by filtering
+    /// through `SpellVerdict::still_valid` in `sync_view`).
+    spell_cache: Vec<crate::spell::SpellVerdict>,
     /// Buffer version the `spell_cache` reflects. `None` until the first check, so
     /// the first edit always schedules one.
     spell_checked_version: Option<u64>,
-    /// When the buffer text last changed; spell-check is recomputed only after a
-    /// ~150ms quiet period (debounce) so squiggles don't flicker mid-word.
-    spell_dirty_at: Option<Instant>,
     /// Buffer version at the previous `sync_view`. A change since then means the
     /// cursor moved BECAUSE of an edit (typing/delete/paste/newline), so the
     /// caret slides as a plain block; an unchanged version means navigation.
@@ -1268,7 +1276,6 @@ impl App {
             },
             spell_cache: Vec::new(),
             spell_checked_version: None,
-            spell_dirty_at: None,
             caret_synced_version: initial_version,
             sync_text_cache: None,
             caret_edit_streaks: false,

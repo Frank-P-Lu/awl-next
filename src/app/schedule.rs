@@ -1,11 +1,13 @@
 //! The `about_to_wait` SCHEDULING body, lifted verbatim out of
 //! `App::about_to_wait` (the decomposition round — zero behaviour change).
 //! This is the winit idle pass that owns every debounce / settle deadline:
-//! which-key + hold-peek pauses, the spell / note / document autosave idle
-//! timers, the theme-font / sticky-zoom / resize / move / crossing settles,
-//! the ambient (lava/stars) tick, event-toast expiry, GPU acquire retries,
-//! and the GPU soak drive — each a single `WaitUntil` (never a hot per-frame
+//! which-key + hold-peek pauses, the note / document autosave idle timers,
+//! the theme-font / sticky-zoom / resize / move / crossing settles, the
+//! ambient (lava/stars) tick, event-toast expiry, GPU acquire retries, and
+//! the GPU soak drive — each a single `WaitUntil` (never a hot per-frame
 //! loop), guarded on `last_frame` so the caret spring's `Poll` always wins.
+//! (Spell-check is NOT debounced here — see `App::recompute_spell_cache`'s
+//! doc for why it's eager instead.)
 //!
 //! A trait impl can't span files, so the body moves to an inherent `App`
 //! method here and the `ApplicationHandler::about_to_wait` in `app.rs` stays
@@ -125,19 +127,10 @@ impl App {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
             }
         }
-        // Debounced spell check: re-scan only after ~150ms with no edits, so a
-        // word isn't squiggled while you're still typing it.
-        if let Some(dirty) = self.spell_dirty_at {
-            let deadline = dirty + SPELL_DEBOUNCE;
-            if self.clock.now() >= deadline {
-                self.run_spellcheck_now();
-                if let Some(gpu) = self.gpu.as_ref() {
-                    gpu.window.request_redraw();
-                }
-            } else if self.last_frame.is_none() {
-                event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
-            }
-        }
+        // Spell check is no longer debounced here (the completed-word-lag fix,
+        // 2026-07): `App::sync_view` recomputes the KEYED verdict cache EAGERLY,
+        // synchronously, the instant the buffer version changes — see
+        // `App::recompute_spell_cache`'s doc. Nothing left to schedule.
         // Debounced quick-note AUTO-SAVE: write the note after ~400ms of quiet, so
         // it persists calmly as you pause. An empty note writes nothing.
         if let Some(dirty) = self.autosave_dirty_at {

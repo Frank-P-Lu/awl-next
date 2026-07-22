@@ -258,7 +258,7 @@ impl App {
     /// `presentsWithTransaction` for the WHOLE stream. The transaction sync is
     /// the structural half of the move-flash fix: pausing the ambient tick
     /// (318e1fe) stopped the ~10 fps mid-move presents, but every OTHER present
-    /// around a move — the settle redraw, a sibling debounce (spell/autosave/
+    /// around a move — the settle redraw, a sibling debounce (autosave/
     /// toast/zoom-persist) firing mid-stream, a cross-display
     /// `ScaleFactorChanged` redraw — still presented ASYNC and raced the
     /// window-server's move transaction (the diagnosed compositor-flash class;

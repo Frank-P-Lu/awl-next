@@ -27,11 +27,22 @@ impl App {
         // change via the cheap edit VERSION (a `u64` bump per content mutation)
         // instead of cloning + comparing the whole rope string each keystroke. The
         // preedit composition is deliberately NOT included, so composing text is
-        // never flagged. Debounced: if the version changed, just mark it dirty and
-        // keep showing the previous squiggles; the re-scan runs in about_to_wait
-        // after ~150ms of quiet so a word isn't flagged while you're still typing.
+        // never flagged.
+        //
+        // EAGER (the completed-word-lag fix's first half): recompute SYNCHRONOUSLY,
+        // right here, every time the version changed — no debounce window in which
+        // an old verdict could paint over text it never judged. The former ~150ms
+        // debounce existed so a word wasn't flagged while you were still typing it;
+        // that job now belongs entirely to the DISPLAY-side caret-word suppression
+        // (`word_at_caret` in `render/rects.rs`) — the word under the caret is
+        // checked exactly as eagerly as every other word, just not SHOWN while the
+        // caret sits in it. Every verdict is ALSO KEYED to the exact text it judged
+        // (`spell::keyed`/`SpellVerdict::still_valid`, filtered below when building
+        // `ViewState.misspelled`) as a second, independent guarantee: even within
+        // this one call, a verdict this rescan is ABOUT to replace can never be
+        // read as still describing the new text.
         if self.spell.is_some() && self.spell_checked_version != Some(self.buffer.version()) {
-            self.spell_dirty_at = Some(self.clock.now());
+            self.recompute_spell_cache();
         }
         // SAVE-FEEDBACK round: the window-title EDITED marker + the native
         // macOS titlebar dot, kept live WITHOUT re-titling every keystroke —
@@ -157,6 +168,23 @@ impl App {
             search_editing_replacement,
         ) = self.search_view_fields();
 
+        // KEYED (the completed-word-lag fix's second half): filter the cache down
+        // to the verdicts still valid against the text about to be pushed
+        // (`spell::visible`, THE ONE reader) — a verdict whose exact word has
+        // since changed underneath its span (an edit this same sync just made,
+        // or — belt and suspenders — any future path that mutates `spell_cache`
+        // without an immediate rescan) can never paint. A DIFF-AS-PREVIEW
+        // substitutes a different transcript into `text` above; every verdict
+        // stays keyed to the REAL buffer text, so key against that (a cached
+        // `view_text()` clone, not a fresh rope walk) rather than the preview
+        // transcript it would never match anyway.
+        let misspelled = if preview.is_some() {
+            let buffer_text = self.view_text();
+            crate::spell::visible(&self.spell_cache, &buffer_text)
+        } else {
+            crate::spell::visible(&self.spell_cache, &text)
+        };
+
         // Build the snapshot once and push it so the pipeline shapes the CURRENT
         // text/zoom. The scroll offset is counted in VISUAL ROWS; row geometry
         // (and thus the cursor's visual row + the document's total rows) does not
@@ -174,7 +202,7 @@ impl App {
             zoom: self.zoom,
             selection: self.buffer.selection_line_col(),
             preedit: self.preedit.clone(),
-            misspelled: self.spell_cache.clone(),
+            misspelled,
             is_edit_move,
             held,
             search_matches,

@@ -31,9 +31,8 @@ pub(super) struct BufferExtra {
     /// this only matters for the one motion right after a switch).
     pub shift_selecting: bool,
     pub scroll_lines: usize,
-    pub spell_cache: Vec<crate::spell::Misspelling>,
+    pub spell_cache: Vec<crate::spell::SpellVerdict>,
     pub spell_checked_version: Option<u64>,
-    pub spell_dirty_at: Option<Instant>,
     pub sync_text_cache: Option<(u64, String)>,
     pub caret_synced_version: u64,
     pub doc_saved_version: Option<u64>,
@@ -55,7 +54,6 @@ impl App {
             scroll_lines: self.scroll_lines,
             spell_cache: std::mem::take(&mut self.spell_cache),
             spell_checked_version: self.spell_checked_version.take(),
-            spell_dirty_at: self.spell_dirty_at.take(),
             sync_text_cache: self.sync_text_cache.take(),
             caret_synced_version: self.caret_synced_version,
             doc_saved_version: self.doc_saved_version.take(),
@@ -74,7 +72,6 @@ impl App {
         self.scroll_lines = extra.scroll_lines;
         self.spell_cache = extra.spell_cache;
         self.spell_checked_version = extra.spell_checked_version;
-        self.spell_dirty_at = extra.spell_dirty_at;
         self.sync_text_cache = extra.sync_text_cache;
         self.caret_synced_version = extra.caret_synced_version;
         self.doc_saved_version = extra.doc_saved_version;
@@ -690,11 +687,10 @@ impl App {
     /// SWITCH the active spell-check dictionary: reconstruct the App's
     /// [`crate::spell::SpellChecker`] for `variant` (the ONE real per-switch cost —
     /// timed + reported here, so a live switch's latency is observable), then
-    /// INVALIDATE the spell debounce + squiggle cache (`spell_checked_version` /
-    /// `spell_dirty_at`) and recompute IMMEDIATELY — a discrete picker commit
-    /// deserves instant feedback, not the next-edit debounce — before persisting
-    /// the sticky pref. A failed parse disables spell-check (reported to stderr),
-    /// exactly like the `App::new` startup path.
+    /// INVALIDATE the squiggle cache (`spell_checked_version`) and recompute
+    /// IMMEDIATELY — a discrete picker commit deserves instant feedback —
+    /// before persisting the sticky pref. A failed parse disables spell-check
+    /// (reported to stderr), exactly like the `App::new` startup path.
     pub(super) fn set_dictionary(&mut self, variant: crate::spell::DictVariant) {
         let t0 = std::time::Instant::now();
         self.spell = match crate::spell::SpellChecker::new(variant) {
@@ -712,10 +708,9 @@ impl App {
         // CACHE-KEY DISCIPLINE: `spell_checked_version` gates on the BUFFER's
         // version alone, which the dictionary switch never bumps — so without this
         // reset the stale cache would look "current" until the next edit. Clearing
-        // it (and any pending debounce) forces `run_spellcheck_now` to actually
-        // re-scan against the new dictionary right away.
+        // it forces `run_spellcheck_now` to actually re-scan against the new
+        // dictionary right away.
         self.spell_checked_version = None;
-        self.spell_dirty_at = None;
         self.run_spellcheck_now();
         self.persist_dictionary();
     }
@@ -742,8 +737,9 @@ impl App {
     /// toggle): a hand-edited `spellcheck = false` saved straight into the config
     /// buffer takes effect immediately, exactly like using the "Toggle
     /// Spellcheck" palette command, and the rescan below clears/restores
-    /// squiggles in the SAME frame rather than waiting for the next edit's
-    /// debounce. Likewise, hand-editing `page_width_code` while a `.rs` file is
+    /// squiggles in the SAME frame rather than waiting for the next text
+    /// edit to trip the eager rescan. Likewise, hand-editing `page_width_code`
+    /// while a `.rs` file is
     /// open re-wraps it immediately (`sync_page_measure`), since the config alone
     /// (not a live toggle) is the only way to change either key's OVERRIDE value.
     pub(super) fn reload_config(&mut self) {

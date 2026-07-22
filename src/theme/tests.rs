@@ -2200,6 +2200,9 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 // TWINKLING-STARS round: no ambient life on the silent pole
                 // (and a fractional-alpha breath is 1-bit-illegal besides).
                 ambient: model::AmbientStyle::None,
+                // SPELL-SQUIGGLE round: the silent pole keeps the shared
+                // default gap.
+                spell_underline_gap: model::SPELL_UNDERLINE_GAP_DEFAULT,
             },
             // DAWN ROUND (2026-07-18): Bilby is the LIGHT POLE — the roster
             // decision ("the dark-line-on-light page frame is reserved for a
@@ -2211,6 +2214,9 @@ fn personality_assignments_are_exactly_the_decided_table() {
             // the user live ("the frame is so weird") — Bilby ships frameless.
             "Bilby" => RenderCaps {
                 elevation: Elevation::Bordered,
+                // SPELL-SQUIGGLE round: the tighter per-world baseline dial
+                // (see `worlds::BILBY`'s own doc).
+                spell_underline_gap: model::SPELL_UNDERLINE_GAP_DEFAULT - 2.0,
                 ..RenderCaps::DEFAULT
             },
             // LIGHT-WORLD BORDER (composition round item 6): the remaining
@@ -2311,6 +2317,36 @@ fn page_frame_ink_is_the_ladder_and_assigned_weights_are_real() {
         }
     }
     set_active(DEFAULT_THEME);
+}
+
+/// THE SPELL-SQUIGGLE PER-WORLD BASELINE DIAL: every world carries
+/// [`model::SPELL_UNDERLINE_GAP_DEFAULT`] (byte-identical to the pre-dial
+/// hardcoded gap) EXCEPT Bilby, whose report ("the squiggle floats too far
+/// below the baseline") earned a tighter, strictly SMALLER override — DATA on
+/// `RenderCaps`, never a per-world code path (`render/tests/theme_caps_law.rs`
+/// structurally bans a `"Bilby"` string or `.is_one_bit()` read under
+/// `src/render/`). No-wildcard over `THEMES`, so a future 19th world defaults
+/// through `RenderCaps::DEFAULT` until it consciously opts in too.
+#[test]
+fn spell_underline_gap_is_the_shared_default_everywhere_except_bilbys_tighter_dial() {
+    for t in THEMES.iter() {
+        if t.name == "Bilby" {
+            assert!(
+                t.render_caps.spell_underline_gap < model::SPELL_UNDERLINE_GAP_DEFAULT,
+                "Bilby must carry a STRICTLY tighter (smaller) gap than the shared default \
+                 ({} vs default {})",
+                t.render_caps.spell_underline_gap,
+                model::SPELL_UNDERLINE_GAP_DEFAULT
+            );
+        } else {
+            assert_eq!(
+                t.render_caps.spell_underline_gap,
+                model::SPELL_UNDERLINE_GAP_DEFAULT,
+                "{}: every world but Bilby stays on the shared default gap",
+                t.name
+            );
+        }
+    }
 }
 
 /// REPAIR ROUND 2's flagged gap, closed structurally — and extended by the
