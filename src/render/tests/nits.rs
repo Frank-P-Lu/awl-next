@@ -739,3 +739,84 @@ fn off_cursor_image_conceal_emits_no_spell_or_nit_underline() {
     crate::markdown::set_inline_images_on(prev_img);
     crate::nits::set_nits_on(true);
 }
+
+/// SQUIGGLE PHASE (item 38): the wave BEGINS AT ITS TOP (crest) under the word's
+/// FIRST glyph — a cosine start (`-cos`), not the old sine zero-crossing that
+/// dived DOWN first. This is a shader-level fact (the `wave_y` phase in
+/// `spellunderline.wgsl`), so it can only be pinned in real pixels: render a
+/// flagged word and diff it against the UNflagged frame (identical text, so the
+/// squiggle ink is the ONLY difference), then measure the ink's vertical CENTROID
+/// over the first quarter-period after the word's left edge. With the crest-start
+/// phase the ink rides clearly ABOVE the band's vertical center (toward the
+/// glyphs); the retired sine phase put it clearly BELOW — so the `< center` margin
+/// below is exactly the phase-pinning assertion, and it FAILS on the old shader.
+#[test]
+fn spell_squiggle_wave_begins_at_its_crest_under_the_first_glyph() {
+    let _g = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping spell_squiggle_wave_begins_at_its_crest_under_the_first_glyph: no wgpu adapter");
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+    // Caret parked off the word's own line so reveal-on-cursor never suppresses it.
+    let text = "wrold\n\nprose\n";
+    let mis = vec![crate::spell::Misspelling { line: 0, start_col: 0, end_col: 5 }];
+
+    let mut clean = view(text, 2, 0);
+    clean.misspelled = Vec::new();
+    p.set_view(&clean);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let a = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    let mut flagged = view(text, 2, 0);
+    flagged.misspelled = mis;
+    p.set_view(&flagged);
+    let squiggles = p.spell_squiggles();
+    assert_eq!(squiggles.len(), 1, "one squiggle proto");
+    let s = squiggles[0];
+    p.prepare(&device, &queue, w, h).unwrap();
+    let b = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    // The wave band's vertical center, and a horizontal window covering the FIRST
+    // QUARTER-period after the word's left edge (x0 == s.x): where a crest-start
+    // (`-cos`) wave rides the TOP half and a sine-start wave the BOTTOM half.
+    let cy = (s.y + s.h * 0.5) as f64;
+    let x_lo = s.x.round() as i64;
+    let x_hi = (s.x + s.period * 0.25).round() as i64;
+    let y_lo = (s.y - 2.0).max(0.0) as i64;
+    let y_hi = (s.y + s.h + 2.0) as i64;
+
+    // Centroid (y) of the squiggle INK — the pixels that differ between the two
+    // frames (identical text ⇒ only the squiggle changed) — over that window.
+    let mut sum_y = 0f64;
+    let mut n = 0f64;
+    for y in y_lo..y_hi {
+        for x in x_lo..x_hi {
+            if x < 0 || x >= w as i64 || y < 0 || y >= h as i64 {
+                continue;
+            }
+            let i = (y * w as i64 + x) as usize;
+            if (0..4).any(|c| a[i][c] != b[i][c]) {
+                sum_y += y as f64;
+                n += 1.0;
+            }
+        }
+    }
+    assert!(n > 5.0, "the squiggle paints ink under the first glyph: only {n} px");
+    let centroid_y = sum_y / n;
+    // CREST-START: the ink's centroid sits ABOVE the band center by a clear
+    // fraction of the amplitude. The old sine phase put it the SAME fraction
+    // BELOW center — this margin is what fails on the retired shader.
+    assert!(
+        centroid_y < cy - s.amp as f64 * 0.2,
+        "the wave begins at its TOP (crest) under the first glyph: \
+         ink centroid_y={centroid_y:.1} must be above band center={cy:.1} (amp={})",
+        s.amp,
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}
