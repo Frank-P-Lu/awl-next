@@ -140,6 +140,19 @@ impl OverlayState {
         self.refilter();
     }
 
+    /// ⌥⌫ (M-Backspace / DeleteWordBackward): remove the trailing WORD from the
+    /// query — one whitespace/punct run + one word — then refilter. Shares the
+    /// document buffer's exact word-delete boundary rule (the minibuffer caret is
+    /// implicitly at the end of the append/pop query, so the boundary is computed
+    /// from `query.len()`), so ⌥⌫ means the same thing in the palette as in the
+    /// text. A NO-OP on an empty query (nothing to remove).
+    pub fn pop_word(&mut self) {
+        truncate_trailing_word(&mut self.query);
+        self.selected = 0;
+        self.scroll = 0;
+        self.refilter();
+    }
+
     /// Cmd-Shift-. : REVEAL / re-hide dot-prefixed entries in THIS file picker (the
     /// Finder "show hidden files" convention). Flips `show_hidden` and re-runs the
     /// display filter (`refilter`) so the listing rebuilds with dotfiles shown/hidden
@@ -414,5 +427,19 @@ impl OverlayState {
             .iter()
             .map(|&i| self.times.get(i).cloned().unwrap_or_default())
             .collect()
+    }
+}
+
+/// Remove the trailing word (its preceding non-word run + the word itself) from a
+/// minibuffer input `s`, in place — the ⌥⌫ word-delete shared by EVERY overlay
+/// input (the fuzzy query + the Rename / Link / Keep / Settings-value edits).
+/// Routes through the document buffer's ONE word-delete boundary owner
+/// ([`crate::buffer::word_delete_backward_boundary`]) so the minibuffer can never
+/// disagree with the text about where a word ends. A NO-OP on an empty string.
+pub(super) fn truncate_trailing_word(s: &mut String) {
+    let chars: Vec<char> = s.chars().collect();
+    let keep = crate::buffer::word_delete_backward_boundary(chars.len(), |i| chars[i]);
+    if keep < chars.len() {
+        *s = chars[..keep].iter().collect();
     }
 }

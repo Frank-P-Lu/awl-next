@@ -42,8 +42,13 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 ctx.overlay.as_mut().unwrap().rename_edit_push(*c);
                 return Effect::None;
             }
-            Action::DeleteBackward | Action::DeleteWordBackward => {
+            Action::DeleteBackward => {
                 ctx.overlay.as_mut().unwrap().rename_edit_pop();
+                return Effect::None;
+            }
+            // ⌥⌫ / C-⌫ delete a whole WORD, matching the document buffer.
+            Action::DeleteWordBackward => {
+                ctx.overlay.as_mut().unwrap().rename_edit_pop_word();
                 return Effect::None;
             }
             Action::Newline => {
@@ -78,8 +83,13 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 ctx.overlay.as_mut().unwrap().link_edit_push(*c);
                 return Effect::None;
             }
-            Action::DeleteBackward | Action::DeleteWordBackward => {
+            Action::DeleteBackward => {
                 ctx.overlay.as_mut().unwrap().link_edit_pop();
+                return Effect::None;
+            }
+            // ⌥⌫ / C-⌫ delete a whole WORD of the URL, matching the buffer.
+            Action::DeleteWordBackward => {
+                ctx.overlay.as_mut().unwrap().link_edit_pop_word();
                 return Effect::None;
             }
             Action::Newline => {
@@ -115,8 +125,13 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 ctx.overlay.as_mut().unwrap().keep_edit_push(*c);
                 return Effect::None;
             }
-            Action::DeleteBackward | Action::DeleteWordBackward => {
+            Action::DeleteBackward => {
                 ctx.overlay.as_mut().unwrap().keep_edit_pop();
+                return Effect::None;
+            }
+            // ⌥⌫ / C-⌫ delete a whole WORD, matching the document buffer.
+            Action::DeleteWordBackward => {
+                ctx.overlay.as_mut().unwrap().keep_edit_pop_word();
                 return Effect::None;
             }
             Action::Newline => {
@@ -147,8 +162,13 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 ctx.overlay.as_mut().unwrap().value_edit_push(*c);
                 return Effect::None;
             }
-            Action::DeleteBackward | Action::DeleteWordBackward => {
+            Action::DeleteBackward => {
                 ctx.overlay.as_mut().unwrap().value_edit_pop();
+                return Effect::None;
+            }
+            // ⌥⌫ / C-⌫ delete a whole WORD, matching the document buffer.
+            Action::DeleteWordBackward => {
+                ctx.overlay.as_mut().unwrap().value_edit_pop_word();
                 return Effect::None;
             }
             Action::Newline => {
@@ -272,7 +292,15 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 }
                 return Effect::None;
             }
-            ctx.overlay.as_mut().unwrap().pop();
+            // A non-empty query: ⌥⌫ / C-⌫ (DeleteWordBackward) drops a whole WORD
+            // of the fuzzy filter, plain ⌫ (DeleteBackward) a single char — the
+            // same split the document buffer makes, so word-delete means the same
+            // thing in the palette as in the text.
+            if matches!(action, Action::DeleteWordBackward) {
+                ctx.overlay.as_mut().unwrap().pop_word();
+            } else {
+                ctx.overlay.as_mut().unwrap().pop();
+            }
             preview_overlay(ctx.overlay.as_ref().unwrap());
             return Effect::None;
         }

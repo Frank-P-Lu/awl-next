@@ -396,6 +396,17 @@ static COMMAND_SEED: &[Command] = &[
     Command { name: "Backward char",     action: Action::BackwardChar,    native: "",          emacs: ""  , native_only: false, web_only: false },
     Command { name: "Next line",         action: Action::NextLine,        native: "",          emacs: ""  , native_only: false, web_only: false },
     Command { name: "Previous line",     action: Action::PreviousLine,    native: "",          emacs: ""  , native_only: false, web_only: false },
+    // WORD-DELETE, the mutating siblings of the word MOTIONS above — catalog rows
+    // so `[keys]` can reach them (`delete_word_forward = "M-d"` reclaims the
+    // classic emacs kill-word; `delete_word_backward = "M-Backspace"`). Both slots
+    // are EMPTY by default: the SURVIVING default chords (⌥⌫ back, ⌥Delete / C-⌫ /
+    // C-Delete forward) are dispatched by `keymap::resolve_named`'s static
+    // NamedKey arms, NOT a catalog chord — the SAME split the plain char/line
+    // motions above use (arrows fire from static arms; the catalog row exists only
+    // to show in Cmd-P + be rebindable). The retired M-letter emacs slot stays
+    // empty for the user to fill, never re-shipped (the word-motion precedent).
+    Command { name: "Delete word forward",  action: Action::DeleteWordForward,  native: "", emacs: "", native_only: false, web_only: false },
+    Command { name: "Delete word backward", action: Action::DeleteWordBackward, native: "", emacs: "", native_only: false, web_only: false },
     // Settings: Cmd-, is THE preferences chord since Mac OS X 10.1 (P1 of the
     // keybinding idiom audit — the highest-value single binding in that report).
     // It summons the faceted SETTINGS MENU (the friendly default); the raw
@@ -1356,6 +1367,11 @@ mod tests {
             "Widen page",
             "Narrow page",
             "Toggle debug",
+            // Word-delete: no ADVERTISED catalog chord (the surviving ⌥⌫ / ⌥Delete
+            // defaults dispatch from keymap.rs's static NamedKey arms); both slots
+            // empty, reachable via Cmd-P + rebindable via [keys] (word-ops round).
+            "Delete word forward",
+            "Delete word backward",
             // Format toggles with no native convention:
             "Blockquote",
             "Bullet list",
@@ -2154,6 +2170,44 @@ mod tests {
         let keys = vec![("forward_word".to_string(), vec!["M-f".to_string()])];
         let i = COMMANDS.iter().position(|c| c.name == "Forward word").unwrap();
         assert_eq!(effective_bindings(&keys, &[])[i], glyph("M-f"));
+    }
+
+    #[test]
+    fn word_delete_commands_are_catalog_rows_and_rebindable() {
+        // WORD-OPS ROUND (c): `delete_word_forward` / `delete_word_backward` are
+        // catalog rows so `[keys]` can reach them — the concrete ask being
+        // `delete_word_forward = "M-d"` (reclaim the classic emacs kill-word,
+        // retired-by-default like every M-letter). Both default slots are empty:
+        // the surviving ⌥⌫ / ⌥Delete defaults dispatch from keymap.rs's static
+        // NamedKey arms, so the catalog carries no chord to advertise (the
+        // char/line-motion precedent). Each is rebind-addressable by label AND
+        // snake_case slug through `action_for_name`.
+        let deletes: &[(&str, Action)] = &[
+            ("Delete word forward", Action::DeleteWordForward),
+            ("Delete word backward", Action::DeleteWordBackward),
+        ];
+        for (name, action) in deletes {
+            let cmd = COMMANDS
+                .iter()
+                .find(|c| c.name == *name)
+                .unwrap_or_else(|| panic!("word-delete command {name:?} missing from catalog"));
+            assert_eq!(&cmd.action, action, "{name}: catalog action");
+            assert_eq!(cmd.native, "", "{name}: native slot empty by default");
+            assert_eq!(cmd.emacs, "", "{name}: emacs slot empty by default");
+            assert_eq!(action_for_name(name), Some(action.clone()), "{name}: label rebind");
+            assert_eq!(action_for_name(&slug(name)), Some(action.clone()), "{name}: slug rebind");
+        }
+        // `delete_word_forward` addresses the forward delete by its exact slug (the
+        // string a `[keys]` line uses), and `M-d` parses + conflicts with nothing —
+        // so `[keys] delete_word_forward = "M-d"` is a live, non-clashing rebind.
+        assert_eq!(action_for_name("delete_word_forward"), Some(Action::DeleteWordForward));
+        assert_eq!(action_for_name("delete_word_backward"), Some(Action::DeleteWordBackward));
+        assert!(crate::keymap::parse_binding("M-d").is_ok(), "M-d must parse");
+        assert_eq!(binding_conflict("M-d", "delete_word_forward", &[]), None);
+        // The override surfaces in the palette's binding column (M-d → ⌥D on Mac).
+        let keys = vec![("delete_word_forward".to_string(), vec!["M-d".to_string()])];
+        let i = COMMANDS.iter().position(|c| c.name == "Delete word forward").unwrap();
+        assert_eq!(effective_bindings(&keys, &[])[i], glyph("M-d"));
     }
 
     // ── PLATFORM-SCOPED COMMANDS ────────────────────────────────────────────────

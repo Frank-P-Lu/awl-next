@@ -996,6 +996,12 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::InlineCode
         | Action::Highlight
         | Action::Strikethrough
+        // WORD-DELETE joined the catalog (word-ops round, to be palette-visible +
+        // rebindable via `[keys]`); dispatched from the palette they just edit the
+        // buffer in place — assert-no-panic, like every other edit here. (Plain ⌫
+        // / DeleteForward stay uncataloged in the NotCatalog group below.)
+        | Action::DeleteWordBackward
+        | Action::DeleteWordForward
         // The smoke fixture (`rich_markdown_buffer`) is a NO-PATH buffer, so
         // `Action::OpenRenameNote`'s pure-buffer-state gate declines to open —
         // an in-place no-op under this harness, not an Opener.
@@ -1011,8 +1017,6 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::InsertTab
         | Action::Outdent
         | Action::DeleteBackward
-        | Action::DeleteWordBackward
-        | Action::DeleteWordForward
         | Action::DeleteToLineStart
         | Action::DeleteForward
         | Action::KillLine

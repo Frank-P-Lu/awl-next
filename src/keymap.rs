@@ -1717,6 +1717,8 @@ forward_char|||C-f
 backward_char|||C-b
 next_line|||C-n
 previous_line|||C-p
+delete_word_forward|||
+delete_word_backward|||
 settings|Cmd-,|C-,|
 keybindings|||
 ";

@@ -331,6 +331,19 @@ impl OverlayState {
         }
     }
 
+    /// SETTINGS VALUE EDIT: ⌥⌫ word-delete — drop the trailing word, mirroring the
+    /// change into the row's cell. A no-op when no value edit is active.
+    pub fn value_edit_pop_word(&mut self) {
+        let Some(ve) = self.value_edit.as_mut() else {
+            return;
+        };
+        super::nav::truncate_trailing_word(&mut ve.input);
+        let (row, text) = (ve.row, ve.input.clone());
+        if let Some(cell) = self.bindings.get_mut(row) {
+            *cell = text;
+        }
+    }
+
     /// SETTINGS VALUE EDIT commit target: the `(config key, typed value)` to persist,
     /// consumed when Enter commits. `None` when no value edit is active.
     pub fn value_edit_target(&self) -> Option<(String, String)> {
@@ -380,6 +393,19 @@ impl OverlayState {
         if c != '/' {
             re.input.push(c);
         }
+        let text = re.input.clone();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
+    /// RENAME MINIBUFFER: ⌥⌫ word-delete — drop the trailing word, mirroring the
+    /// change into `corpus[0]`. A no-op when no rename edit is active.
+    pub fn rename_edit_pop_word(&mut self) {
+        let Some(re) = self.rename_edit.as_mut() else {
+            return;
+        };
+        super::nav::truncate_trailing_word(&mut re.input);
         let text = re.input.clone();
         if let Some(cell) = self.corpus.get_mut(0) {
             *cell = text;
@@ -451,6 +477,19 @@ impl OverlayState {
         }
     }
 
+    /// LINK MINIBUFFER: ⌥⌫ word-delete — drop the trailing word of the URL,
+    /// mirroring the change into `corpus[0]`. A no-op when no link edit is active.
+    pub fn link_edit_pop_word(&mut self) {
+        let Some(le) = self.link_edit.as_mut() else {
+            return;
+        };
+        super::nav::truncate_trailing_word(&mut le.input);
+        let text = le.input.clone();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
     /// LINK MINIBUFFER commit target: the typed URL + the mode it applies to,
     /// consumed when Enter commits. `None` when no link edit is active.
     pub fn link_edit_target(&self) -> Option<(String, LinkEditMode)> {
@@ -497,6 +536,19 @@ impl OverlayState {
             return;
         };
         ke.input.pop();
+        let text = ke.input.clone();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
+    /// KEEP-VERSION MINIBUFFER: ⌥⌫ word-delete — drop the trailing word, mirroring
+    /// the change into `corpus[0]`. A no-op when no keep edit is active.
+    pub fn keep_edit_pop_word(&mut self) {
+        let Some(ke) = self.keep_edit.as_mut() else {
+            return;
+        };
+        super::nav::truncate_trailing_word(&mut ke.input);
         let text = ke.input.clone();
         if let Some(cell) = self.corpus.get_mut(0) {
             *cell = text;

@@ -1797,3 +1797,37 @@
             assert!(mem.exists(&third_new) && !mem.exists(&third));
         });
     }
+
+    #[test]
+    fn delete_word_backward_boundary_sweep() {
+        // Exhaustive boundary probe for ⌥⌫ (M-Backspace / DeleteWordBackward):
+        // from the caret, skip a run of trailing non-word chars LEFT, then a run
+        // of word chars LEFT, and delete exactly that span — never more. This
+        // pins that ⌥⌫ removes ONE trailing whitespace/punct run + ONE word (the
+        // mac/emacs word-delete contract), and specifically that the classic
+        // `abc def ghi|` case deletes only "ghi" (the reported over-delete does
+        // NOT occur — the scan stops at the previous word boundary, not buffer
+        // start). Each tuple: (text, caret char-index, expected remaining text).
+        let cases: &[(&str, usize, &str)] = &[
+            ("abc def ghi", 11, "abc def "),   // caret after a word -> only "ghi"
+            ("abc def ghi   ", 14, "abc def "), // caret after trailing spaces
+            ("abc def...", 10, "abc "),         // caret after a punctuation run
+            ("abc", 0, "abc"),                  // caret at buffer start -> no-op
+            ("abc def", 2, "c def"),            // mid-word "ab|c" -> only "ab"
+            ("abc\ndef", 4, "def"),             // caret at start of line 2 (after \n)
+            ("abc def  ", 9, "abc "),           // multiple consecutive spaces
+            ("hello", 5, ""),                   // lone word -> empties, not a crash
+            ("  hello", 7, "  "),               // leading whitespace preserved
+            ("word ", 5, ""),                   // word + one trailing space
+        ];
+        for (text, cur, want) in cases {
+            let mut buf = b(text);
+            buf.set_cursor(*cur);
+            buf.delete_word_backward();
+            assert_eq!(
+                &buf.text(),
+                want,
+                "delete_word_backward over-/under-deleted: text={text:?} caret={cur}"
+            );
+        }
+    }
