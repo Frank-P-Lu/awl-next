@@ -55,6 +55,9 @@ translates those into board edits:
 How a brainstorm/interview session ("awl design"-type) turns talk into work:
 
 1. **Brainstorm read-only.** During discussion the orchestrator changes nothing.
+   **Interview ruthlessly (user rule 2026-07-23):** when a note or an answer is
+   ambiguous, the designer asks until the intent is unambiguous — a guess never
+   gets built into a queue item.
 2. **Decisions land as queue items.** Each crystallized decision becomes a
    self-contained item (or a `DECIDED <date>` line folded into an existing
    item) — a worker must receive the decided thing, never the open question.
