@@ -867,12 +867,61 @@ pub struct RenderCaps {
     /// row geometry floated the squiggle noticeably below the true baseline —
     /// see `worlds::BILBY`'s own doc for the tighter value.
     pub spell_underline_gap: f32,
+    /// THE FROST-AS-CAPABILITY round's dial: the softened-lamp recipe behind a
+    /// lava world's margin ink (outline pills + gutter corner) — see [`Frost`]'s
+    /// own doc. [`Frost::DEFAULT`] (byte-identical to the pre-capability
+    /// `crate::lava` consts) on every world; a lava world dials its own frost as
+    /// one-line DATA. Inert on a static-ground world (no lava → no frost).
+    pub frost: Frost,
 }
 
 /// Default value of [`RenderCaps::spell_underline_gap`] — the gap every world
 /// carried before the per-world dial existed. A world overriding the field
 /// away from this is a conscious taste call, not an accident.
 pub const SPELL_UNDERLINE_GAP_DEFAULT: f32 = 1.0;
+
+/// THE FROST RECIPE — the ONE softened-lamp treatment behind a lava world's
+/// margin ink (the outline entries' pills AND the bottom-left gutter corner),
+/// promoted from bare `crate::lava` consts into a per-world CAPABILITY so a world
+/// can dial its own frost as DATA (never a per-world code path — the one runtime
+/// consumer [`crate::render::TextPipeline::prepare_lava_layer`] reads THIS, the
+/// `theme_caps_law` grep-law bans a world name in `render/`). Three numeric dials,
+/// all authored in LOGICAL px (the shader consumes physical via
+/// [`crate::lava::frost_px`]):
+///
+/// * `dim` — how far the softened field is mixed back toward the flat page
+///   `ground` (0 = raw softened lamp, 1 = pure flat ground). The value-dim that
+///   keeps the dim margin ink legible over the pill (law tests
+///   `outline_frost_pills_keep_ink_contrast_on_every_lava_world` /
+///   `gutter_frost_pill_keeps_ink_contrast_on_every_lava_world`).
+/// * `blur_px` — the 3×3 cross tap offset [`crate::lava::frost_field`] averages
+///   the SMOOTH field over (never the posterized color — the Bayer-moiré lesson).
+/// * `feather_px` — the edge band over which a pill's coverage ramps 1 → 0, so it
+///   blends into the live lamp instead of drawing a hard rectangle.
+///
+/// The per-world TINT is not a fourth numeric dial: the dim already mixes toward
+/// the world's OWN lava `ground`, so a world's tint IS its ground color — already
+/// per-world data on [`Background::Lava`]. The pill GEOMETRY (pad / vertical
+/// inset) stays a shared const in `crate::lava` (it hugs text identically on every
+/// world), not part of this taste recipe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frost {
+    pub dim: f32,
+    pub blur_px: f32,
+    pub feather_px: f32,
+}
+
+impl Frost {
+    /// The shipped recipe — the exact values every lava world carried when they
+    /// lived as bare `crate::lava` consts, so promoting the recipe to a capability
+    /// is byte-identical until a world dials its own. `crate::lava` stays the
+    /// numeric SOURCE (its pure shader-mirror tests read the same literals).
+    pub const DEFAULT: Frost = Frost {
+        dim: crate::lava::FROST_DIM,
+        blur_px: crate::lava::FROST_BLUR_PX,
+        feather_px: crate::lava::FROST_FEATHER_PX,
+    };
+}
 
 impl RenderCaps {
     pub const DEFAULT: RenderCaps = RenderCaps {
@@ -910,6 +959,10 @@ impl RenderCaps {
         // SPELL-SQUIGGLE round: the per-world baseline dial lands at the
         // pre-dial gap on every world until Bilby's own override.
         spell_underline_gap: SPELL_UNDERLINE_GAP_DEFAULT,
+        // FROST-AS-CAPABILITY round: the recipe lands at the shipped
+        // `crate::lava` values on every world (byte-identical) until a lava
+        // world dials its own frost.
+        frost: Frost::DEFAULT,
     };
 
 }

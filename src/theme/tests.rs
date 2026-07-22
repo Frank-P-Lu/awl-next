@@ -556,8 +556,6 @@ fn outline_frost_pills_keep_ink_contrast_on_every_lava_world() {
     // Representative page geometry (the 1600x1000 gallery canvas). Frost pills sit
     // in the LEFT margin (x well below col_left), hugging the outline entries.
     let vp = (1600.0f32, 1000.0f32);
-    let blur = crate::lava::FROST_BLUR_PX;
-    let dim = crate::lava::FROST_DIM;
     for t in THEMES.iter() {
         // NO-WILDCARD: a future ground variant must decide its frost story here.
         let (ground, blob_lo, blob_hi) = match t.background {
@@ -569,6 +567,11 @@ fn outline_frost_pills_keep_ink_contrast_on_every_lava_world() {
             | Background::Stripes { .. } => continue,
             Background::Lava { ground, blob_lo, blob_hi, .. } => (ground, blob_lo, blob_hi),
         };
+        // FROST-AS-CAPABILITY: read the WORLD's own recipe (`render_caps.frost`),
+        // not the shipped consts — so a world that dials a gentler/stronger frost
+        // is held to the SAME ink-contrast floor it must clear.
+        let blur = t.render_caps.frost.blur_px;
+        let dim = t.render_caps.frost.dim;
         assert_eq!(ground, t.base_100, "{}: frost ground must be base_100", t.name);
 
         // (1) Phase sweep × a pill-region grid: the ACTUAL frost pixel clears the
@@ -682,9 +685,6 @@ fn gutter_frost_pill_keeps_ink_contrast_on_every_lava_world() {
     // the column, a BOTTOM band (the two stacked LABEL rows ~8px up from the canvas
     // bottom — `prepare_gutter` / `gutter_carve_rect`).
     let vp = (1600.0f32, 1000.0f32);
-    let blur = crate::lava::FROST_BLUR_PX;
-    let dim = crate::lava::FROST_DIM;
-    let feather = crate::lava::FROST_FEATHER_PX;
     let pill = [0.0f32, 850.0, 260.0, 1000.0];
     for t in THEMES.iter() {
         // NO-WILDCARD: a future ground variant must decide its frost story here.
@@ -697,6 +697,11 @@ fn gutter_frost_pill_keeps_ink_contrast_on_every_lava_world() {
             | Background::Stripes { .. } => continue,
             Background::Lava { ground, blob_lo, blob_hi, .. } => (ground, blob_lo, blob_hi),
         };
+        // FROST-AS-CAPABILITY: the WORLD's own recipe (`render_caps.frost`), so a
+        // world tuning its gutter frost is held to the same ink-contrast floor.
+        let blur = t.render_caps.frost.blur_px;
+        let dim = t.render_caps.frost.dim;
+        let feather = t.render_caps.frost.feather_px;
         // The pill's un-lit floor IS the page's own ground — the ink-ladder laws
         // govern it; the frost only ever LIFTS from there toward the dimmed lamp.
         assert_eq!(ground, t.base_100, "{}: frost ground must be base_100", t.name);
@@ -792,6 +797,63 @@ fn gutter_frost_pill_keeps_ink_contrast_on_every_lava_world() {
             );
         }
     }
+}
+
+/// THE FROST-AS-CAPABILITY law (the frost round). The softened-lamp recipe is a
+/// per-world RenderCaps dial ([`crate::theme::Frost`]), not bare `crate::lava`
+/// consts — so a world tunes its own frost as DATA (the runtime consumer
+/// `TextPipeline::prepare_lava_layer` reads `render_caps.frost`; the grep-law
+/// `theme_caps_law` bans a world name in `render/`). Three invariants:
+///
+/// (1) ONE SOURCE: `Frost::DEFAULT` equals the `crate::lava` numeric literals its
+///     pure shader-mirror tests still read, and `RenderCaps::DEFAULT.frost` is
+///     that default — so promoting the recipe to a capability is byte-identical.
+///
+/// (2) WELL-FORMED PER WORLD: every world's recipe is a sane frost — `dim` in
+///     [0,1], `blur_px` > 0, `feather_px` >= 0 — an invariant that HOLDS even
+///     after a world dials a gentler/stronger recipe (the ink-contrast floor the
+///     two frost laws enforce is the taste-safety net; this is the shape net).
+///
+/// (3) STATIC GROUNDS ARE INERT: a non-lava world carries the default recipe but
+///     never renders frost (the `lava_params().is_some()` gate in the consumer),
+///     so its `frost` field is dormant data — the 1-bit/static exclusion stays
+///     structural, gated on the lava CAPABILITY, never a world name.
+#[test]
+fn frost_recipe_is_a_per_world_capability_defaulting_to_the_shipped_lava_values() {
+    use crate::theme::Frost;
+    // (1) One source of truth: the capability default IS the lava consts.
+    assert_eq!(Frost::DEFAULT.dim, crate::lava::FROST_DIM, "frost dim default == lava const");
+    assert_eq!(Frost::DEFAULT.blur_px, crate::lava::FROST_BLUR_PX, "frost blur default == lava const");
+    assert_eq!(
+        Frost::DEFAULT.feather_px,
+        crate::lava::FROST_FEATHER_PX,
+        "frost feather default == lava const"
+    );
+    assert_eq!(
+        RenderCaps::DEFAULT.frost,
+        Frost::DEFAULT,
+        "the DEFAULT caps carry the shipped frost recipe (byte-identical promotion)"
+    );
+
+    // (2)+(3) Every world's recipe is well-formed, and the recipe is present as
+    //     DATA on lava and static worlds alike (dormant on static — the consumer
+    //     gates on the lava capability, not this field).
+    let mut saw_lava = false;
+    for t in THEMES.iter() {
+        let f = t.render_caps.frost;
+        assert!(
+            (0.0..=1.0).contains(&f.dim),
+            "{}: frost dim {} out of [0,1]",
+            t.name,
+            f.dim
+        );
+        assert!(f.blur_px > 0.0, "{}: frost blur must be positive ({})", t.name, f.blur_px);
+        assert!(f.feather_px >= 0.0, "{}: frost feather must be non-negative ({})", t.name, f.feather_px);
+        if t.background.is_lava() {
+            saw_lava = true;
+        }
+    }
+    assert!(saw_lava, "a lava world ships (the frost capability has a live consumer)");
 }
 
 /// FIRETAIL PALETTE CHARACTER law: the sixteenth world is an ORIGINAL deep
@@ -2325,6 +2387,8 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 // SPELL-SQUIGGLE round: the silent pole keeps the shared
                 // default gap.
                 spell_underline_gap: model::SPELL_UNDERLINE_GAP_DEFAULT,
+                // FROST-AS-CAPABILITY round: dormant default (no lava ground).
+                frost: model::Frost::DEFAULT,
             },
             // DAWN ROUND (2026-07-18): Bilby is the LIGHT POLE — the roster
             // decision ("the dark-line-on-light page frame is reserved for a

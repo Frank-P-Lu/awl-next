@@ -180,10 +180,16 @@ impl TextPipeline {
         } else {
             Vec::new()
         };
+        // FROST RECIPE AS DATA: the ONE runtime consumer reads the active world's
+        // `frost` capability (see `theme::Frost`), never the bare consts — so a
+        // world dials its own softened-lamp recipe with no per-world code path
+        // (`theme_caps_law`). Every world carries `Frost::DEFAULT` (the shipped
+        // `crate::lava` values), so this is byte-identical until a world tunes.
+        let frost = crate::theme::active().render_caps.frost;
         let frost_params = [
-            crate::lava::FROST_DIM,
-            crate::lava::frost_px(crate::lava::FROST_BLUR_PX, self.metrics.zoom, self.dpi),
-            crate::lava::frost_px(crate::lava::FROST_FEATHER_PX, self.metrics.zoom, self.dpi),
+            frost.dim,
+            crate::lava::frost_px(frost.blur_px, self.metrics.zoom, self.dpi),
+            crate::lava::frost_px(frost.feather_px, self.metrics.zoom, self.dpi),
         ];
         let params = self.effective_background().lava_params().map(
             |(ground, lo, hi, edge, dithered)| {
