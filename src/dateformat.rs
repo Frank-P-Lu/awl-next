@@ -102,6 +102,23 @@ impl DateFormat {
         Self::ALL.into_iter().find(|f| f.config_name() == s)
     }
 
+    /// The human-readable NAME of this format — drawn as the quiet secondary
+    /// (description) column of the Date-format PICKER, beside the row's live
+    /// example date. Mirrors `caret::CaretMode::label` / `spell::DictVariant::
+    /// label`: a capitalized reading name, distinct from the lower-case wire
+    /// [`Self::config_name`]. The row's PRIMARY text is the example date itself
+    /// (what-you-see-is-what-inserts), so this only has to orient which ordering
+    /// each example is.
+    pub fn label(self) -> &'static str {
+        match self {
+            DateFormat::DdMmYy => "Day / Month / Year",
+            DateFormat::MmDdYy => "Month / Day / Year",
+            DateFormat::Iso => "ISO 8601",
+            DateFormat::YyyyMmDd => "Year / Month / Day",
+            DateFormat::DMonthYyyy => "Day Month Year",
+        }
+    }
+
     /// The NEXT format in [`Self::ALL`]'s cycle order, wrapping past the end
     /// back to [`DateFormat::DdMmYy`] — what Enter on the Settings menu's
     /// "Date format" row does (`App::cycle_date_format`).

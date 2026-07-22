@@ -700,6 +700,16 @@ impl App {
         self.persist_pref("caret_mode", &format!("\"{name}\""));
     }
 
+    /// Persist the now-active DATE FORMAT (write-on-change after the Date-format
+    /// picker commits) — mirrors `persist_caret_mode`. The core already set the
+    /// process-global (`dateformat::set_active_format`) in the picker accept, so
+    /// this only writes the sticky slug (the SAME quoted `date_format` RHS
+    /// `cycle_date_format` wrote before the row became a picker).
+    pub(super) fn persist_date_format(&mut self) {
+        let slug = crate::dateformat::active_format().config_name();
+        self.persist_pref("date_format", &format!("\"{slug}\""));
+    }
+
     /// Persist the now-active DICTIONARY variant (write-on-change after the
     /// Dictionary picker commits).
     pub(super) fn persist_dictionary(&mut self) {

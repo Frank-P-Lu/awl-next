@@ -609,6 +609,59 @@ fn caret_picker_lists_three_styles_navigates_and_maps_modes() {
     crate::caret::clear_override();
 }
 
+/// ITEM 36 — the DATE-FORMAT picker. `new_date` lists all five formats EACH
+/// rendered with the given `today` as its PRIMARY text (what-you-see-is-what-
+/// inserts), with the format NAME in the secondary column, pre-selects the
+/// active format, and maps the selected CORPUS INDEX back to the format (the
+/// accept path's resolution). Uses the fixed capture placeholder date so the
+/// example strings are deterministic (item 14's gate).
+#[test]
+fn date_picker_lists_five_examples_with_names_and_maps_by_index() {
+    use crate::dateformat::DateFormat;
+    let today = crate::dateformat::CAPTURE_PLACEHOLDER_YMD; // (2009, 3, 7)
+
+    // SUMMON with DdMmYy active: the corpus is the five EXAMPLE DATES in ALL
+    // order, each row's secondary column carrying the format's human name.
+    let ov = OverlayState::new_date(DateFormat::DdMmYy, today);
+    assert_eq!(ov.kind.as_str(), "date");
+    assert_eq!(OverlayKind::Date.title(), "date format");
+    assert_eq!(
+        ov.item_strings(),
+        vec!["07/03/09", "03/07/09", "2009-03-07", "2009/03/07", "7 March 2009"],
+        "each row is TODAY rendered in that format — what you see is what inserts"
+    );
+    assert_eq!(
+        ov.item_bindings(),
+        vec![
+            "Day / Month / Year",
+            "Month / Day / Year",
+            "ISO 8601",
+            "Year / Month / Day",
+            "Day Month Year",
+        ]
+    );
+    // Opens highlighting the ACTIVE format's row (its example date).
+    assert_eq!(ov.selected_value(), Some("07/03/09"));
+    // The selected CORPUS INDEX maps back to the format (the accept path).
+    assert_eq!(
+        ov.selected_corpus_index().and_then(|i| DateFormat::ALL.get(i).copied()),
+        Some(DateFormat::DdMmYy)
+    );
+    // NAVIGATE down: the row's example + its mapped format both advance.
+    let mut ov = ov;
+    ov.move_sel(2);
+    assert_eq!(ov.selected_value(), Some("2009-03-07"));
+    assert_eq!(
+        ov.selected_corpus_index().and_then(|i| DateFormat::ALL.get(i).copied()),
+        Some(DateFormat::Iso)
+    );
+    // Opening with a different active format pre-selects THAT row.
+    let ov2 = OverlayState::new_date(DateFormat::DMonthYyyy, today);
+    assert_eq!(ov2.selected_value(), Some("7 March 2009"));
+    // The hint mirrors Dictionary/Caret (no live preview to teach): move + filter, ↵ apply.
+    assert_eq!(OverlayKind::Date.hint(), "type to filter   \u{21B5} apply");
+}
+
 /// `original_caret_was_auto`: the field the Caret-style picker's auto-aware
 /// Cancel relies on (see `actions::overlay_nav`'s Cancel arm). It reads the
 /// LIVE `crate::caret::is_auto()` global at construction, independent of

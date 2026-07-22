@@ -642,6 +642,28 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 dispose_after_accept(ctx);
                 return eff;
             }
+            if ov.kind == crate::overlay::OverlayKind::Date {
+                // COMMIT: NO live preview (the example dates ARE the preview), like
+                // Dictionary/CjkLang. The picker's PRIMARY text is the example DATE,
+                // not a mappable label, so resolve the choice by CORPUS INDEX — the
+                // corpus is built in `DateFormat::ALL` order (see `new_date`), so the
+                // selected corpus index maps straight back to the format (the Command
+                // palette's own `selected_corpus_index` idiom). Set the process-global
+                // THEN emit the committed slug so the caller (App) persists the pref.
+                let eff = match ov
+                    .selected_corpus_index()
+                    .and_then(|i| crate::dateformat::DateFormat::ALL.get(i).copied())
+                {
+                    Some(fmt) => {
+                        crate::dateformat::set_active_format(fmt);
+                        Effect::OverlayAccept(ov.kind, fmt.config_name().to_string())
+                    }
+                    None => Effect::None,
+                };
+                // Applying a date format is VALUE-PICKING: pop back to the parent.
+                dispose_after_accept(ctx);
+                return eff;
+            }
             if ov.kind == crate::overlay::OverlayKind::Goto && ov.selected_is_heading() {
                 // GO-TO's HEADINGS lens (the retired Outline picker): the highlighted
                 // row is a document heading, so JUMP the cursor to its line rather than

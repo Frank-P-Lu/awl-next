@@ -84,11 +84,12 @@ pub static SETTINGS: &[SettingRow] = &[
     SettingRow { name: "Page width (prose)", category: "Editor",     kind: SettingKind::Value },
     SettingRow { name: "Page width (code)",  category: "Editor",     kind: SettingKind::Value },
     SettingRow { name: "Zoom",              category: "Editor",      kind: SettingKind::Value },
-    // DATE FORMAT: a 5-way CYCLE (not a bool), riding the SAME `SettingKind::Toggle`
-    // Enter-to-flip mechanism the "Keymap" row's own non-bool cycle uses — see
-    // `toggle_key`/`App::cycle_date_format`. Value cell = TODAY rendered in the
-    // active format ("what you see is what inserts").
-    SettingRow { name: "Date format",       category: "Editor",      kind: SettingKind::Toggle },
+    // DATE FORMAT: a PICKER (promoted from the blind 5-way Enter-cycle) — Enter
+    // opens the Date-format picker (`OverlayKind::Date`, via `sub_overlay`), which
+    // lists all five formats EACH rendered with today's date (pick by sight, what
+    // you see is what inserts), exactly like Caret/Theme/Dictionary. The row's own
+    // value cell still shows TODAY in the active format, the picker's entry point.
+    SettingRow { name: "Date format",       category: "Editor",      kind: SettingKind::Picker },
     // Appearance —
     SettingRow { name: "Theme",             category: "Appearance",  kind: SettingKind::Picker },
     SettingRow { name: "WYSIWYG",           category: "Appearance",  kind: SettingKind::Toggle },
@@ -312,9 +313,9 @@ pub fn toggle_key(name: &str) -> Option<&'static str> {
         "Page mode" => "page_mode",
         "Typewriter scroll" => "typewriter_scroll",
         "Reduce motion" => "reduce_motion",
-        // DATE FORMAT — NOT a plain bool (a 5-way cycle), so `App::setting_toggle`
-        // special-cases it (see `App::cycle_date_format`), mirroring "Keymap" below.
-        "Date format" => "date_format",
+        // (DATE FORMAT was a Toggle-cycle here; it is now a Picker opening
+        // `OverlayKind::Date` — see `sub_overlay` — so it no longer has a
+        // toggle key.)
         // Appearance —
         "WYSIWYG" => "wysiwyg",
         "Format popover" => "popover",
@@ -407,6 +408,7 @@ pub fn sub_overlay(name: &str) -> Option<crate::overlay::OverlayKind> {
         "Theme" => crate::overlay::OverlayKind::Theme,
         "Dictionary" => crate::overlay::OverlayKind::Dictionary,
         "Ambiguous CJK reads as" => crate::overlay::OverlayKind::CjkLang,
+        "Date format" => crate::overlay::OverlayKind::Date,
         "Keybindings" => crate::overlay::OverlayKind::Keybindings,
         _ => return None,
     })
@@ -787,18 +789,19 @@ mod tests {
         );
     }
 
-    /// "Date format" is a `Toggle`-kind row that CYCLES (like "Keymap"), and
-    /// its value cell combines the ACTIVE process-global format with the
-    /// caller-gathered `today_ymd` — "what you see is what inserts". Both
-    /// halves are exercised: changing the format changes the cell (same
-    /// `today_ymd`), and the row is wired into `toggle_key` so Enter can
-    /// reach `App::cycle_date_format`.
+    /// "Date format" is now a `Picker`-kind row (promoted from the blind
+    /// Toggle-cycle) opening [`crate::overlay::OverlayKind::Date`] via
+    /// `sub_overlay`, mirroring "Ambiguous CJK reads as"/"Caret style". It is NO
+    /// longer a `toggle_key` row. Its value cell still combines the ACTIVE
+    /// process-global format with the caller-gathered `today_ymd` — the entry
+    /// point's preview, "what you see is what inserts" — exercised across formats.
     #[test]
-    fn date_format_row_cycles_and_previews_today() {
+    fn date_format_row_is_a_picker_and_previews_today() {
         let _g = crate::testlock::serial();
         let row = *SETTINGS.iter().find(|r| r.name == "Date format").unwrap();
-        assert_eq!(row.kind, SettingKind::Toggle);
-        assert_eq!(toggle_key(row.name), Some("date_format"));
+        assert_eq!(row.kind, SettingKind::Picker);
+        assert_eq!(sub_overlay(row.name), Some(crate::overlay::OverlayKind::Date));
+        assert_eq!(toggle_key(row.name), None, "a picker row has no toggle key");
 
         let saved = crate::dateformat::active_format();
         let values = SettingsValues {

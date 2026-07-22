@@ -342,6 +342,22 @@ mod tests {
                 let w = widest(&descs);
                 (names, Some(w))
             }
+            // Date-format picker: the five EXAMPLE DATES (rendered with the fixed
+            // capture placeholder) beside the format NAMES — the same
+            // short-primary-beside-descriptive-secondary shape as Caret/Dictionary.
+            OverlayKind::Date => {
+                let (y, m, d) = crate::dateformat::CAPTURE_PLACEHOLDER_YMD;
+                let names: Vec<String> = crate::dateformat::DateFormat::ALL
+                    .iter()
+                    .map(|f| f.format(y, m, d))
+                    .collect();
+                let descs: Vec<String> = crate::dateformat::DateFormat::ALL
+                    .iter()
+                    .map(|f| f.label().to_string())
+                    .collect();
+                let w = widest(&descs);
+                (names, Some(w))
+            }
             // Palette + rebind menu: the real command catalog and its real
             // effective binding labels ("⌘S · C-x C-s").
             OverlayKind::Command | OverlayKind::Keybindings => {

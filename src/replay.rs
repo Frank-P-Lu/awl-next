@@ -222,15 +222,17 @@ fn accept_class(kind: OverlayKind) -> EffectClass {
         // Applied for real: Goto drives the multi-buffer registry switch
         // inline in the replay loop; Project re-roots and History restores in
         // `capture_screenshot`'s accept stage; Theme / Caret / Dictionary /
-        // CjkLang set their process-global CORE-level (`actions/overlay_nav.rs`),
-        // so the replay session observes them exactly as live does.
+        // CjkLang / Date set their process-global CORE-level
+        // (`actions/overlay_nav.rs`), so the replay session observes them exactly
+        // as live does.
         OverlayKind::Goto
         | OverlayKind::Project
         | OverlayKind::History
         | OverlayKind::Theme
         | OverlayKind::Caret
         | OverlayKind::Dictionary
-        | OverlayKind::CjkLang => EffectClass::Applied,
+        | OverlayKind::CjkLang
+        | OverlayKind::Date => EffectClass::Applied,
         // The note move (mkdir + rename under the notes root) is live-App-only;
         // headlessly the buffer keeps its old path — a divergence.
         OverlayKind::MoveDest => EffectClass::Unsupported {

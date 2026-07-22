@@ -158,6 +158,8 @@ pub fn scheme(kind: OverlayKind) -> Option<&'static FacetScheme> {
         | OverlayKind::Caret
         | OverlayKind::Dictionary
         | OverlayKind::CjkLang
+        // The DATE-format picker is a flat five-row list — no lens strip.
+        | OverlayKind::Date
         | OverlayKind::MoveDest
         | OverlayKind::Spell
         | OverlayKind::Keybindings

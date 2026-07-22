@@ -216,8 +216,8 @@ fn settings_toggle_row_signals_setting_toggle_and_keeps_menu_open() {
 /// mis-select a neighbor) to `Effect::SettingToggle` carrying its OWN named
 /// key. This is the "does Enter even signal the right thing" half of the
 /// live dispatch chain the Keymap-row bug hid in — the row count assertion
-/// keeps this test itself honest against the settings corpus (16 toggles as
-/// of the "Date format" row's own 5-way cycle). Companion:
+/// keeps this test itself honest against the settings corpus (15 toggles;
+/// "Date format" left the roster when it became a Picker). Companion:
 /// `app::tests::every_settings_toggle_row_dispatches_live_and_flips_its_value`
 /// (App-level: the signaled effect is actually APPLIED and the value cell
 /// visibly flips — the "does the live door apply it" other half).
@@ -229,7 +229,7 @@ fn every_settings_toggle_row_signals_its_own_setting_toggle_key() {
         .collect();
     assert_eq!(
         toggle_rows.len(),
-        16,
+        15,
         "the toggle roster changed size — update this sweep deliberately"
     );
     for row in toggle_rows {

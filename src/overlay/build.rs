@@ -129,6 +129,16 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
                 .copied()
                 .unwrap_or(crate::frontmatter::Lang::Ja),
         )),
+        // Date-format picker: the five formats, EACH row's primary text rendered
+        // with `today` (live clock, or the fixed placeholder in a headless
+        // capture — the SAME `today_ymd` the Settings "Date format" row previews,
+        // so both surfaces agree), the active format pre-selected. Nothing
+        // previews on move (the example dates ARE the preview), so no revert
+        // bookkeeping — the Dictionary shape.
+        OverlayKind::Date => Some(OverlayState::new_date(
+            crate::dateformat::active_format(),
+            ctx.settings_values.today_ymd,
+        )),
         // Command palette: the PLATFORM-FILTERED command catalog
         // (`commands::visible()` — hides desktop-only commands on web; byte-identical
         // to the full catalog on native), each row showing its EFFECTIVE chord (config

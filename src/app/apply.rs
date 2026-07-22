@@ -770,6 +770,16 @@ impl App {
                 // ordered list to config.toml. A Cancel never reaches here (nothing
                 // was set to revert).
                 crate::overlay::OverlayKind::CjkLang => self.persist_cjk_priority(),
+                // The DATE-format picker COMMITTED (Enter): the core already set the
+                // process-global active format (no live preview — the example dates
+                // ARE the preview), so PERSIST the sticky slug, mirroring
+                // `persist_caret_mode`. A Cancel never reaches here (nothing to
+                // revert). Refresh the still-open Settings menu (the summoning
+                // overlay) so its "Date format" value cell shows the new example.
+                crate::overlay::OverlayKind::Date => {
+                    self.persist_date_format();
+                    self.refresh_settings_overlay();
+                }
                 crate::overlay::OverlayKind::Browse => {}
                 // The command palette never accepts a value — it runs an Action.
                 crate::overlay::OverlayKind::Command => {}
