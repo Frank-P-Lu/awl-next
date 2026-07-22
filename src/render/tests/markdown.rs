@@ -316,7 +316,7 @@ fn bullet_glyphs_swap_per_world() {
         ("Bombora", ('☞', '❧', '❦')),     // the manicule showpiece (level 1 only) + hedera + fleuron
         ("Gumtree", ('❧', '☙', '❦')),      // Junicode botanical hederas
         ("Bilby", ('❧', '❦', '☙')),        // Garamond Renaissance fleurons
-        ("Mopoke", ('\u{E670}', '❦', '❧')), // its own damask rosette (theme-QA glyph fix) + fleurons
+        ("Mopoke", ('\u{E670}', '\u{EF92}', '\u{E67D}')), // damask rosette → open sibling → foliate sprig (queue item 30)
     ];
     for (world, (g0, g1, g2)) in cases {
         theme::set_active_by_name(world).unwrap();

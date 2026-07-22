@@ -447,7 +447,7 @@ const BURST_WORLDS: [&str; 10] = [
     "Bombora",  // EB Garamond
     "Mulga",   // Zilla Slab
     "Tawny",     // IBM Plex Mono
-    "Mopoke",    // iA Writer Quattro S
+    "Mopoke",    // Bitter
     "Galah",     // Figtree
     "Mangrove",  // JetBrains Mono (back to the start face)
 ];

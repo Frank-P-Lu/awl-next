@@ -1231,16 +1231,19 @@ fn every_world_has_a_bullet_pair() {
             "{}: levels 1/3 must be distinct glyphs, got {:?}",
             t.name, t.bullets
         );
-        // OFF-TIER EXCEPTIONS (theme-QA padding round, EXACTLY two, pinned by
+        // OFF-TIER EXCEPTION (theme-QA padding round, EXACTLY one now, pinned by
         // NAME and VALUE — never a loose "any float passes" escape hatch): the
         // shared [`BULLET_SCALE_ORNAMENT`] tier is a byproduct of two unrelated
-        // font metrics (see that constant's own doc) that happened to pair badly
-        // on Bombora's manicule (too wide, touched the following text) and
-        // Mopoke's rosette (too small, stranded in a canyon) — each carries its
-        // OWN literal instead. Every other world stays on a shared tier.
+        // font metrics (see that constant's own doc) that paired badly on
+        // Bombora's manicule (too wide, touched the following text), so Bombora
+        // carries its OWN literal instead. (Mopoke once needed one too — its
+        // rosette stranded in a canyon under iA Writer Quattro S's wide duospaced
+        // advance — but queue item 30 moved Mopoke's body face to the proportional
+        // Bitter, whose narrower marker advance lets the rosette sit right on the
+        // shared tier; that exception retired with the old face.) Every other
+        // world stays on a shared tier.
         let off_tier_exception = match t.name {
             "Bombora" => Some(BOMBORA.bullet_scale),
-            "Mopoke" => Some(MOPOKE.bullet_scale),
             _ => None,
         };
         assert!(
@@ -1805,6 +1808,28 @@ fn at_least_six_distinct_faces() {
     assert!(faces.contains(&"Figtree"), "Figtree missing");
     // Home (Tawny) renders in the bundled mono so it looks exactly like home.
     assert_eq!(TAWNY.font, "IBM Plex Mono");
+}
+
+/// Queue item 30 (user + fable): Mopoke's body face is the warm slab Bitter
+/// (shared with Magpie — precedented face-sharing, no new asset) and its
+/// nested-bullet triple is a one-register, weight-descends-with-depth ornament
+/// set (a solid damask rosette → its open four-fold sibling → a small foliate
+/// sprig), all three in Mopoke's Junicode ornament face. This pins the DATA off
+/// any GPU; the render laws
+/// `render::tests::markdown::bullet_glyphs_resolve_in_each_worlds_assigned_face`
+/// (they resolve) and `..::bullet_glyph_never_touches_the_following_text_in_any_world`
+/// (they never touch the text) cover the appearance half.
+#[test]
+fn mopoke_body_face_is_bitter_with_the_item_30_bullet_triple() {
+    assert_eq!(MOPOKE.font, "Bitter", "Mopoke's body face is the warm slab Bitter");
+    assert_eq!(MOPOKE.mono, "IBM Plex Mono", "Mopoke keeps IBM Plex Mono for code");
+    assert_eq!(
+        MOPOKE.bullets,
+        ('\u{E670}', '\u{EF92}', '\u{E67D}'),
+        "Mopoke's bullet triple descends in weight within one ornament register"
+    );
+    // Face-sharing is precedented, never a new asset: Magpie draws in Bitter too.
+    assert_eq!(MAGPIE.font, "Bitter", "Bitter is bundled + shared (Magpie's masthead face)");
 }
 
 /// THE LAW ROUND's `Theme::highlight_treatment` — a NO-ABSENT-VARIANT

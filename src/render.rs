@@ -461,9 +461,9 @@ pub const SYMBOL_FAMILY: &str = "Awl Marks";
 /// order: "IBM Plex Mono" (already FONT_DATA, the default), "Literata",
 /// "Newsreader 16pt 16pt" (the static Newsreader master registers under this
 /// optical-size name), "IBM Plex Sans", "Zilla Slab", "JetBrains Mono"
-/// (Mangrove), "Figtree" (Galah), "iA Writer Quattro S" (Mopoke), "Monaspace
-/// Xenon" (Potoroo), "Fraunces 9pt" (Saltpan), and "EB Garamond" (Bombora) —
-/// eleven distinct faces across the worlds.
+/// (Mangrove), "Figtree" (Galah), "iA Writer Quattro S" (now unassigned — Mopoke
+/// moved to Bitter, queue item 30), "Monaspace Xenon" (Potoroo), "Fraunces 9pt"
+/// (Saltpan), and "EB Garamond" (Bombora) — eleven distinct faces.
 ///
 /// Literata/Newsreader/Plex Sans/Zilla/Fraunces/EB Garamond are PROPORTIONAL and
 /// iA Writer Quattro S / Monaspace Xenon are (duo/mono)spaced; cosmic-text shapes
@@ -482,8 +482,9 @@ pub const FONT_THEME_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/JetBrainsMono.ttf"),
     // Figtree — Galah's friendly humanist sans (registers as "Figtree").
     include_bytes!("../assets/fonts/Figtree-Regular.ttf"),
-    // iA Writer Quattro S — Mopoke's duospaced writing face (registers as
-    // "iA Writer Quattro S"). SIL OFL, github.com/iaolo/iA-Fonts.
+    // iA Writer Quattro S — a duospaced writing face (registers as
+    // "iA Writer Quattro S"); bundled + bold-paired, currently unassigned to a
+    // world (Mopoke moved to Bitter, queue item 30). SIL OFL, github.com/iaolo/iA-Fonts.
     include_bytes!("../assets/fonts/iAWriterQuattroS-Regular.ttf"),
     // Monaspace Xenon — Potoroo's slab-serif monospace (registers as
     // "Monaspace Xenon"). SIL OFL, github.com/githubnext/monaspace.
@@ -504,7 +505,8 @@ pub const FONT_THEME_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/Iosevka-Regular.ttf"),
     // Bitter — a slab serif for reading (registers as "Bitter"), instanced at
     // wght=400 then Latin-subset. SIL OFL, github.com/google/fonts/tree/main/
-    // ofl/bitter. Registered for addressability; not yet assigned to any world.
+    // ofl/bitter. The shared body face of Magpie (stark-paper masthead) and
+    // Mopoke (warm cosy dark, queue item 30) — precedented face-sharing.
     include_bytes!("../assets/fonts/Bitter-Regular.ttf"),
 ];
 

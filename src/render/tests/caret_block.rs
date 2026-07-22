@@ -162,8 +162,8 @@ fn block_caret_full_cell_on_wrap_boundary_space() {
 /// anchor column maps ONE-TO-ONE onto a single shaped glyph, the BLOCK
 /// caret's settled rest quad must sit EXACTLY on that glyph's own swash ink
 /// box (what MORPH already recolours) — never the naive advance CELL.
-/// Reproduces the reported bug: on "awl" (Mopoke = iA Writer Quattro S) the
-/// middle 'w' has a nonzero ink left-bearing AND an ink width narrower than
+/// Reproduces the reported bug: on "awl" (Mopoke = Bitter, a proportional slab)
+/// the middle 'w' has a nonzero ink left-bearing AND an ink width narrower than
 /// its advance cell, so the OLD cell-only block quad sat visibly offset +
 /// narrow against the real glyph while Morph (which already samples the
 /// glyph) did not.
@@ -180,7 +180,7 @@ fn block_caret_ink_aligns_on_kerned_glyph() {
         eprintln!("skipping block_caret_ink_aligns_on_kerned_glyph: no wgpu adapter");
         return;
     };
-    theme::set_active_by_name("Mopoke").unwrap(); // proportional (iA Writer Quattro S)
+    theme::set_active_by_name("Mopoke").unwrap(); // proportional (Bitter, a slab serif)
     p.sync_theme();
     let text = "awl"; // col 1 = 'w', kerned between 'a' and 'l'
     p.set_view(&view(text, 0, 1));

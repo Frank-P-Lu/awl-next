@@ -553,12 +553,14 @@ pub const MOPOKE: Theme = Theme {
         tint: Srgb::rgb(0x33, 0x2D, 0x24),
         edge: false,
     },
-    // iA Writer Quattro S — a duospaced writing face; breaks up the mono darks
-    // (Tawny keeps IBM Plex Mono as its signature; Potoroo takes Monaspace Xenon).
-    font: "iA Writer Quattro S",
+    // Bitter — a warm, screen-bred slab serif; breaks up the mono darks with a
+    // cosy reading face (shared with Magpie's stark-paper masthead — face-sharing
+    // is precedented; Tawny keeps IBM Plex Mono as its signature, Potoroo takes
+    // Monaspace Xenon). Body face swap: queue item 30 (user + fable, 2026-07-23).
+    font: "Bitter",
     // Warm cosy charcoal → the warm humanist IBM Plex Mono (kin to Tawny's home look).
     mono: "IBM Plex Mono",
-    // Quattro is a mono at heart (Plex Mono-derived, near-uniform strokes) — weight marks it.
+    // Bitter's slab weight sections cleanly — the bundled Bitter-Bold carries headings.
     heading_bold: true,
     cjk: CJK_JA_KLEE,
     zh_hans: CJK_ZH_HANS_KLEE,
@@ -568,27 +570,24 @@ pub const MOPOKE: Theme = Theme {
     ornaments: Ornaments { dash: '\u{E670}', star: '\u{F011}', underscore: '\u{F014}' },
     ornament_face: ORNAMENT_JUNICODE,
     ornament_scale: ORNAMENT_SCALE_ORNATE,
-    // GLYPH FIX (theme-QA round): the original `⁑` (TWO ASTERISK PUNCTUATION) read
-    // as a punctuation/footnote mark, not a bullet — the one characterful world
-    // whose level-1 glyph broke the "round/floral" register every other hedera
-    // world shares. Swapped to Mopoke's OWN damask rosette (the very glyph its
-    // `---` ornament already draws at ORNATE scale — "the ornament trio, one
-    // level down" made literal) for a mark that reads as a bullet AND stays
-    // in Mopoke's own established vocabulary.
-    // Level 3 (item 15's per-level rotation) draws the remaining Garamond-pool
-    // fleuron ❧ (Junicode's own — see the doc above), distinct from both.
-    bullets: ('\u{E670}', '❦', '❧'),
-    // PADDING FIX (theme-QA round): at the shared [`BULLET_SCALE_ORNAMENT`] tier
-    // the rosette's ink was too small for iA Writer Quattro S's wide duospaced
-    // `"- "` marker+space advance, leaving a canyon before the text (measured
-    // gap far past every other characterful world's — see
+    // BULLET TRIPLE (queue item 30, user + fable): one ornament register whose
+    // WEIGHT descends with depth — E670 a solid damask rosette (level 1, the very
+    // glyph Mopoke's `---` ornament already draws at ORNATE scale), EF92 its open
+    // four-fold sibling (level 2), E67D a small foliate sprig (level 3). All three
+    // resolve in Mopoke's ornament face (Junicode) and read as one family, quiet →
+    // quieter with depth (verified present + non-touching by the two
+    // `render::tests::markdown` bullet laws).
+    bullets: ('\u{E670}', '\u{EF92}', '\u{E67D}'),
+    // Back on the shared [`BULLET_SCALE_ORNAMENT`] tier: the old off-tier 0.8 was
+    // tuned to fill a CANYON left by iA Writer Quattro S's WIDE duospaced `"- "`
+    // advance; Bitter is proportional with a far narrower marker advance (exactly
+    // Magpie's Bitter-body case, which already rides the shared tier), so the
+    // rosette sits right at half-body with no canyon and no touch (see
     // `render::tests::markdown::bullet_glyph_never_touches_the_following_text_in_any_world`).
-    // A dedicated, larger-than-the-shared-tier literal closes it without
-    // touching any other world's bullet.
-    bullet_scale: 0.8,
+    bullet_scale: BULLET_SCALE_ORNAMENT,
     list_indent_scale: LIST_INDENT_SCALE_WIDE,
-    // Warm charcoal cosy dark → Dusk (warm dark); iA Writer Quattro utilitarian → Humble; sans-class writing face → Modern; warm hue → Warm.
-    // Curated: shows under Dusk / Humble (its cosy utilitarian core); opts OUT of Voice (Modern crowded) + Temperature (Warm crowded).
+    // Warm charcoal cosy dark → Dusk (warm dark); warm slab-serif reading face → Humble (cosy, unpretentious); warm hue → Warm.
+    // Curated: shows under Dusk / Humble (its cosy core); opts OUT of Voice (Bitter's Literary slot is Magpie's) + Temperature (Warm crowded).
     tags: ThemeTags { time: Some("Dusk"), register: Some("Humble"), voice: None, temperature: None },
     role_overrides: RoleOverrides::NONE,
     render_caps: RenderCaps::DEFAULT,
