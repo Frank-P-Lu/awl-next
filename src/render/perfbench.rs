@@ -192,17 +192,29 @@ async fn run_async() -> anyhow::Result<()> {
     };
 
     // ---- HAS GLYPH: PDF bundled-font coverage probe ---------------------------
-    let has_glyph_ns = {
-        const ITERS: usize = 200;
-        let mut samples = Vec::with_capacity(ITERS);
-        let mut sink = 0usize;
-        for _ in 0..ITERS {
-            let t0 = crate::clock::Instant::now();
-            sink = sink.wrapping_add(crate::export::pdf_glyph_probe());
-            samples.push(t0.elapsed().as_nanos());
+    // `pdf_glyph_probe` wraps the native-only PDF path (`export::to_pdf` and its
+    // helper are `cfg(not(wasm32))`), so this probe is native-only too. The wasm
+    // build compiles the whole crate including this hidden `--bench-perf` harness
+    // even though the flag is unreachable in the browser, so gate the probe and
+    // report 0 there rather than call a configured-out fn.
+    let has_glyph_ns: u128 = {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            const ITERS: usize = 200;
+            let mut samples = Vec::with_capacity(ITERS);
+            let mut sink = 0usize;
+            for _ in 0..ITERS {
+                let t0 = crate::clock::Instant::now();
+                sink = sink.wrapping_add(crate::export::pdf_glyph_probe());
+                samples.push(t0.elapsed().as_nanos());
+            }
+            std::hint::black_box(sink);
+            median(samples)
         }
-        std::hint::black_box(sink);
-        median(samples)
+        #[cfg(target_arch = "wasm32")]
+        {
+            0
+        }
     };
     println!(
         "{:>10} | {:>14} | {:>28}\n{:>10} | {:>14} | {:>28}",
