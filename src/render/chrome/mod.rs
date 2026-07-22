@@ -47,19 +47,35 @@ const DIFF_PANEL_BOTTOM: f32 = 14.0;
 /// How much of the float trio draws around a summoned card's opaque fill — the
 /// ONE elevation vocabulary every [`set_float_quads`] caller names explicitly
 /// (no bare bool a new panel can pass without thinking).
+///
+/// DARK-DEPTH OPTION C (decided 2026-07-22): this used to be a THREE-way
+/// choice (`Shadowed` / `Rimmed` / `Flat`) — `Shadowed` drew a translucent
+/// `base_content`-ink drop-shadow quad behind+below the card, `Rimmed` drew
+/// only the raised border. The drop-shadow tone was ALWAYS the world's own
+/// ink (near-white on a dark world), so on Currawong/Mangrove/etc. the
+/// "shadow" measurably BRIGHTENED the ground into a pale slab (+0.12..0.25
+/// luminance) instead of receding it — the exact bug the popover (see
+/// `popover.rs`) and the diff panel (`prepare_diff_panel` below) had already
+/// dodged by hand-picking `Rimmed`. DESIGN §5 says the quiet part out loud —
+/// "no drop-shadows… a thin value step does the work" — so the shadow quad is
+/// now RETIRED OUTRIGHT, for every world, not just the dark ones (a world
+/// that wants a stronger edge already carries `RenderCaps::elevation ==
+/// Elevation::Bordered`, a data knob, not a shadow). That collapses the old
+/// `Shadowed` and `Rimmed` arms into one identical shape, so they're merged:
+/// `Rimmed` is now the ONLY "elevated" style, drawn by every large summoned
+/// panel that used to ask for `Shadowed` (overlay cards, which-key, HUD,
+/// menus, the caret/spell float) as well as the popover / diff panel that
+/// already asked for it. `set_float_quads` still takes a `shadow` pipeline
+/// (the fields aren't deleted this round — a further cleanup is logged, not
+/// blocking) but never uploads an instance to it, for any elevation, on any
+/// world.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(in crate::render) enum FloatElevation {
-    /// Drop shadow + raised border + card — the large summoned panels
-    /// (overlay cards, which-key, HUD, menus, the caret/spell float).
-    Shadowed,
-    /// Raised border + card, NO shadow — the FORMAT POPOVER's shape (and the
-    /// DIFF-AS-PREVIEW panel). Its card is barely two line-heights tall, so the
-    /// hard-edged shadow quad hanging ~9px below the rim OUT-MASSED the card's
-    /// own 7px pad and read as a "fat chin" under the button row (on a dark
-    /// world the ink-alpha "shadow" composites LIGHTER than the page — a bright
-    /// slab, not depth). The 1px rim + the `base_300` value step carry a
-    /// micro-strip's elevation alone (DESIGN §5: depth by value, not
-    /// drop-shadows).
+    /// Raised border + card, no shadow — every "elevated" summoned float
+    /// (overlay cards, which-key, HUD, menus, the caret/spell float, the
+    /// format popover, the diff panel). A thin `surface_selected` (muted
+    /// surface-ramp step, never full ink/white) rim + the `base_300` card's
+    /// own value step over `base_100` carry the depth (DESIGN §5).
     Rimmed,
     /// Card fill alone — a caller whose OWN backdrop (blur/scrim) already
     /// carries the card's contrast, so only a TRUE 1-BIT world (where that
@@ -67,15 +83,19 @@ pub(in crate::render) enum FloatElevation {
     Flat,
 }
 
-/// Upload the three FLOAT-PANEL elevation quads (drop `shadow` -> raised `border` ->
-/// opaque `card`) for `rect`, or PARK all three empty when `rect` is `None`. Shared by
-/// the reusable [`TextPipeline::prepare_float_panel`] (the caret-preview / spell
-/// panels), the which-key panel, and the centered-overlay card (`overlay.rs`) — each
-/// passes ITS OWN three pipelines, so summoned micro-panels never race the same
-/// quads. `card` is drawn last (on top of its shadow + border), matching the
-/// painter's-order draw in `render.rs`. `elevation` picks how much of the trio
-/// draws ([`FloatElevation`]); the quads a shape omits are prepared EMPTY, never
-/// left stale from a previous frame.
+/// Upload the FLOAT-PANEL elevation quads (raised `border` -> opaque `card`) for
+/// `rect`, or PARK both empty when `rect` is `None`. Shared by the reusable
+/// [`TextPipeline::prepare_float_panel`] (the caret-preview / spell panels), the
+/// which-key panel, and the centered-overlay card (`overlay.rs`) — each passes
+/// ITS OWN pipelines, so summoned micro-panels never race the same quads. `card`
+/// is drawn last (on top of its border), matching the painter's-order draw in
+/// `render.rs`. `elevation` picks how much draws ([`FloatElevation`]); the quads
+/// a shape omits are prepared EMPTY, never left stale from a previous frame.
+///
+/// `shadow` is ALWAYS parked empty here, unconditionally, for every `rect` and
+/// every `elevation` — see [`FloatElevation`]'s doc for why (the dark-depth
+/// Option C round retired the drop-shadow quad outright rather than gating it
+/// dark-world-only).
 #[allow(clippy::too_many_arguments)]
 fn set_float_quads(
     shadow: &mut SelectionPipeline,
@@ -88,16 +108,12 @@ fn set_float_quads(
     rect: Option<[f32; 4]>,
     elevation: FloatElevation,
 ) {
+    // RETIRED (dark-depth Option C, 2026-07-22): the shadow quad never
+    // uploads an instance any more — see `FloatElevation`'s doc. Parked once,
+    // up front, regardless of `rect`/`elevation`.
+    shadow.prepare(device, queue, width, height, &[]);
     match rect {
         Some([x, y, w, h]) => {
-            if elevation == FloatElevation::Shadowed {
-                // Drop SHADOW: offset DOWN + a touch wider, translucent ink, so the
-                // card reads as risen a step above the document (depth by value,
-                // DESIGN §8).
-                shadow.prepare(device, queue, width, height, &[[x - 2.0, y + 4.0, w + 4.0, h + 6.0]]);
-            } else {
-                shadow.prepare(device, queue, width, height, &[]);
-            }
             if elevation != FloatElevation::Flat {
                 // Crisp raised BORDER edge: a slightly larger surface-step rect whose
                 // 1px rim peeks past the card, giving the box a clean, present edge.
@@ -108,7 +124,8 @@ fn set_float_quads(
             card.prepare(device, queue, width, height, &[[x, y, w, h]]);
         }
         None => {
-            shadow.prepare(device, queue, width, height, &[]);
+            // `shadow` already parked above; only border/card are conditional
+            // on `rect`.
             border.prepare(device, queue, width, height, &[]);
             card.prepare(device, queue, width, height, &[]);
         }
@@ -366,15 +383,15 @@ impl TextPipeline {
     // ===== FLOATING PANEL PRIMITIVE + CARET-STYLE PREVIEW PANEL ============
 
     /// THE PANEL PRIMITIVE — a small, summoned, transient FLOATING PANEL: a discrete
-    /// bordered box with CARD ELEVATION (a translucent drop SHADOW behind + below, a
-    /// crisp raised BORDER edge, the opaque CARD), and crucially NO scrim — so it
-    /// floats over the live document without dimming it, distinct from the full-width
-    /// takeover overlay. `rect = Some([x, y, w, h])` summons it; `None` parks all three
-    /// elevation quads empty (nothing drawn). `elevation` picks the dressing
-    /// ([`FloatElevation`]) — the caret-style preview panel and the spell popup both
-    /// want the full drop-SHADOW read ([`FloatElevation::Shadowed`]); the format
-    /// popover rides the RIMMED style instead (border + card, no shadow slab — see
-    /// [`Self::prepare_popover`]'s "fat chin" note).
+    /// bordered box with CARD ELEVATION (a crisp raised BORDER edge + the opaque
+    /// CARD — no drop shadow, see [`FloatElevation`]'s doc), and crucially NO
+    /// scrim — so it floats over the live document without dimming it, distinct
+    /// from the full-width takeover overlay. `rect = Some([x, y, w, h])` summons
+    /// it; `None` parks both elevation quads empty (nothing drawn). `elevation`
+    /// picks the dressing ([`FloatElevation`]) — the caret-style preview panel,
+    /// the spell popup, AND the format popover all ride the same RIMMED style
+    /// (border + card, no shadow slab — see [`Self::prepare_popover`]'s "fat
+    /// chin" note, the decision this round's `Shadowed`/`Rimmed` merge generalized).
     ///
     /// THE ONE FLOAT-SURFACE OWNER (overlay/chrome polish round): every summoned
     /// micro-panel that wants this "small floating card, no scrim" language routes
@@ -547,15 +564,16 @@ impl TextPipeline {
         height: u32,
         rect: Option<[f32; 4]>,
     ) {
-        // The card's edge (rim + shadow) rides the EFFECTIVE elevation — the
-        // world's own `render_caps.elevation`, or the `AWL_OVERLAY_ELEVATION_FORCE`
-        // dev probe (the PALETTE-COMPOSITION round's light-world-border A/B; no
-        // world's data flips). Composes with the new anchor + header gap freely —
-        // the rim just traces the card rect, wherever it sits.
+        // The card's edge (the rim; no shadow — see `FloatElevation`'s doc)
+        // rides the EFFECTIVE elevation — the world's own `render_caps.elevation`,
+        // or the `AWL_OVERLAY_ELEVATION_FORCE` dev probe (the PALETTE-COMPOSITION
+        // round's light-world-border A/B; no world's data flips). Composes with
+        // the new anchor + header gap freely — the rim just traces the card
+        // rect, wherever it sits.
         let elevation = if rect.is_some()
             && crate::render::effective_card_elevation() == theme::Elevation::Bordered
         {
-            FloatElevation::Shadowed
+            FloatElevation::Rimmed
         } else {
             FloatElevation::Flat
         };

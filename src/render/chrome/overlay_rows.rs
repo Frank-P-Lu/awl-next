@@ -267,9 +267,10 @@ impl TextPipeline {
     /// positioned over the chosen candidate.
     ///
     /// The card is drawn one of two ways. The contextual SPELL panel rides the
-    /// reusable FLOATING-PANEL primitive ([`Self::prepare_float_panel`]) — shadow +
-    /// raised border + card, unconditionally — so it reads as risen a step above the
-    /// crisp document with NO scrim (DESIGN §5/§8); `panel_card` is left empty then.
+    /// reusable FLOATING-PANEL primitive ([`Self::prepare_float_panel`]) — raised
+    /// border + card, unconditionally, no drop shadow (dark-depth Option C) — so it
+    /// reads as risen a step above the crisp document with NO scrim (DESIGN §5);
+    /// `panel_card` is left empty then.
     /// Every OTHER (CENTERED) overlay — go-to / command / theme / keybindings /
     /// settings / … — uses `panel_card` through
     /// [`Self::prepare_panel_card_elevation`]: the flat opaque fill on every
@@ -305,7 +306,7 @@ impl TextPipeline {
                 // bounded per-plate scrims are prepared below once the just-shaped
                 // plate rects are known. Park every raised-panel quad here so a future
                 // reorder can never leak a pane back beneath the plates.
-                self.prepare_float_panel(device, queue, width, height, None, FloatElevation::Shadowed);
+                self.prepare_float_panel(device, queue, width, height, None, FloatElevation::Rimmed);
                 self.panel_shadow.prepare(device, queue, width, height, &[]);
                 self.panel_border.prepare(device, queue, width, height, &[]);
                 // `panel_card` is DEFERRED to the plate block (the per-plate scrims).
@@ -320,7 +321,7 @@ impl TextPipeline {
                     width,
                     height,
                     Some(card_rect),
-                    FloatElevation::Shadowed,
+                    FloatElevation::Rimmed,
                 );
                 self.panel_card.prepare(device, queue, width, height, &[]);
                 self.panel_shadow.prepare(device, queue, width, height, &[]);

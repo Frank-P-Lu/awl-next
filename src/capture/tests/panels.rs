@@ -1513,3 +1513,197 @@ fn diff_panel_card_dressing_is_visible_around_the_column_in_every_world() {
     crate::theme::set_active(crate::theme::DEFAULT_THEME);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// WCAG relative luminance of an sRGB byte pixel — the same formula
+/// `render::tests::stars::rel_lum` uses, reproduced here (a raw PNG-pixel
+/// helper; the render-test one lives in a `cfg(test)` module this file can't
+/// reach).
+fn px_rel_lum(px: image::Rgba<u8>) -> f32 {
+    fn lin(u: u8) -> f32 {
+        let s = u as f32 / 255.0;
+        if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+    }
+    0.2126 * lin(px[0]) + 0.7152 * lin(px[1]) + 0.0722 * lin(px[2])
+}
+
+/// Mean WCAG relative luminance over `[x0, x1] x [y0, y1]` (inclusive, sampled
+/// every 3rd pixel for speed), clamped to the image bounds. Returns `None` if
+/// the (clamped) band is degenerate.
+fn band_mean_lum(img: &image::RgbaImage, x0: f64, x1: f64, y0: f64, y1: f64) -> Option<f32> {
+    let (iw, ih) = img.dimensions();
+    let cx0 = x0.round().clamp(0.0, iw as f64 - 1.0) as u32;
+    let cx1 = x1.round().clamp(0.0, iw as f64 - 1.0) as u32;
+    let cy0 = y0.round().clamp(0.0, ih as f64 - 1.0) as u32;
+    let cy1 = y1.round().clamp(0.0, ih as f64 - 1.0) as u32;
+    if cx1 <= cx0 || cy1 <= cy0 {
+        return None;
+    }
+    let mut sum = 0.0f32;
+    let mut n = 0u32;
+    let mut yy = cy0;
+    while yy <= cy1 {
+        let mut xx = cx0;
+        while xx <= cx1 {
+            sum += px_rel_lum(*img.get_pixel(xx, yy));
+            n += 1;
+            xx += 3;
+        }
+        yy += 2;
+    }
+    (n > 0).then(|| sum / n as f32)
+}
+
+/// Summon the caret-style picker (+ its live preview PANEL below it) at the
+/// given canvas, returning the decoded PNG and the preview panel's `[x, y, w,
+/// h]` rect read from the sidecar (never inferred/hand-computed — the sidecar
+/// is the state oracle for GEOMETRY; appearance is still read from the PNG's
+/// own bytes, per the sidecar-vs-appearance tripwire).
+fn open_caret_preview_panel(dir: &std::path::Path, tag: &str) -> (image::RgbaImage, [f64; 4]) {
+    let buf = Buffer::from_str("preview me\n");
+    let opts = CaptureOpts {
+        overlay: Some(OverlayInfo {
+            active: true,
+            mode: "caret",
+            title: "caret style",
+            query: String::new(),
+            items: vec!["Block".into(), "Morph".into(), "I-beam".into()],
+            bindings: vec![String::new(), String::new(), String::new()],
+            git: Vec::new(),
+            selected_index: 0,
+            hint: "Enter apply".into(),
+            browse_dir: None,
+            return_to: None,
+            spell_target: None,
+            capture: None,
+            notice: String::new(),
+            lens: None,
+            lens_strip: Vec::new(),
+            sections: Vec::new(),
+            preview_id: None,
+            diff_focus: false,
+            diff_scroll: 0,
+            empty: None,
+            show_hidden: false,
+        }),
+        ..CaptureOpts::default()
+    };
+    let png = dir.join(format!("{tag}.png"));
+    capture_with(&png, &buf, &opts).expect("caret preview capture");
+    let sidecar: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap();
+    let rect = &sidecar["caret_preview"]["rect"];
+    assert!(!rect.is_null(), "{tag}: the caret-preview panel must be open");
+    let r = [
+        rect[0].as_f64().unwrap(),
+        rect[1].as_f64().unwrap(),
+        rect[2].as_f64().unwrap(),
+        rect[3].as_f64().unwrap(),
+    ];
+    let img = image::open(&png).expect("decode PNG").to_rgba8();
+    (img, r)
+}
+
+/// DARK-DEPTH OPTION C — THE NO-SLAB LAW: retiring the drop-shadow quad must
+/// not leave a brighter band where it used to paint. Before this round
+/// `float_shadow_srgba()` colored the shadow quad in the world's own INK
+/// (`base_content`) at low alpha — near-WHITE on a dark world — so the
+/// "shadow" measurably BRIGHTENED the ground it sat on into a pale slab
+/// (+0.12..0.25 luminance, measured on Currawong's card) instead of receding
+/// it. `render::chrome::set_float_quads` now parks the shadow pipeline
+/// unconditionally (see [`FloatElevation`]'s doc), so this asserts the
+/// OUTCOME in real pixels — never inferred from the sidecar (the Wagtail
+/// tripwire): WCAG relative luminance in the EXACT footprint the old shadow
+/// quad used to occupy (`[x-2, y+h+4, w+4, h+6]`, `set_float_quads`'
+/// `Shadowed` arm before this round) must be no brighter than an equal-size
+/// reference band a little further below (past where the old shadow ever
+/// reached) — the TWO-ZONE comparison rides adjacent Y bands so it stays
+/// world-agnostic (a per-world margin gradient/dot/star pattern, if any,
+/// affects both zones roughly alike; only the retired shadow quad singled
+/// out the nearer zone).
+#[test]
+fn dark_world_card_casts_no_brightening_slab_below_it() {
+    if !adapter_available() {
+        eprintln!("skipping dark_world_card_casts_no_brightening_slab_below_it: no wgpu adapter");
+        return;
+    }
+    let _tg = crate::testlock::serial();
+    let dir = std::env::temp_dir().join(format!("awl_darkdepth_noslab_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // SAMPLED, not exhaustive (the standing audit policy): Currawong is the
+    // world the bug was originally measured on (OLED-black, TopLeft anchor,
+    // ambient stars); Mopoke is a second, unrelated dark world (default
+    // anchor, no ambient decoration) so the law isn't Currawong-specific.
+    for world in ["Currawong", "Mopoke"] {
+        crate::theme::set_active_by_name(world);
+        let (img, [x, y, w, h]) = open_caret_preview_panel(&dir, &format!("{world}_noslab"));
+
+        // Zone A: the old shadow quad's exact footprint (offset DOWN 4..10px,
+        // wider by 2px each side). Zone B: an equal-size band a further 10px
+        // down (12..20px past the old shadow's own reach) — same X range, an
+        // adjacent Y band, so any ambient world decoration affects both alike.
+        let (x0, x1) = (x - 2.0, x + w + 2.0);
+        let mean_a = band_mean_lum(&img, x0, x1, y + h + 4.0, y + h + 10.0)
+            .unwrap_or_else(|| panic!("{world}: zone A degenerate (rect [{x},{y},{w},{h}])"));
+        let mean_b = band_mean_lum(&img, x0, x1, y + h + 22.0, y + h + 28.0)
+            .unwrap_or_else(|| panic!("{world}: zone B degenerate (rect [{x},{y},{w},{h}])"));
+
+        assert!(
+            mean_a <= mean_b + 0.02,
+            "{world}: the old shadow's footprint reads brighter than the ground just past it \
+             (zone A mean lum={mean_a:.4} vs zone B mean lum={mean_b:.4}) — the retired \
+             drop-shadow's pale-slab bug is back"
+        );
+    }
+
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// DARK-DEPTH OPTION C — LIGHT WORLDS STILL READ ELEVATED: DESIGN §5 never
+/// wanted drop-shadows on ANY world, so deleting the shadow quad outright
+/// (not just gating it dark-only) is the honest reading of the law — but it
+/// must not silently flatten a light world's summoned card. This asserts the
+/// raised BORDER RIM (the thing that now carries the depth alone) still
+/// paints a measurable value step against the ground, in real pixels, on
+/// worlds that never had the pale-slab bug in the first place.
+#[test]
+fn light_world_card_still_reads_elevated_without_a_drop_shadow() {
+    if !adapter_available() {
+        eprintln!("skipping light_world_card_still_reads_elevated_without_a_drop_shadow: no wgpu adapter");
+        return;
+    }
+    let _tg = crate::testlock::serial();
+    let dir = std::env::temp_dir().join(format!("awl_darkdepth_light_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // SAMPLED: two light worlds (Saltpan is DEFAULT_THEME; Bilby carries its
+    // own `Bordered` elevation cap on the CENTERED-overlay family, a taste
+    // exception unrelated to this float panel, which always draws its rim).
+    for world in ["Saltpan", "Bilby"] {
+        crate::theme::set_active_by_name(world);
+        let (img, [x, y, w, h]) = open_caret_preview_panel(&dir, &format!("{world}_elevated"));
+
+        // The border rides `[x-1, y-1, w+2, h+2]` (`set_float_quads`'s border
+        // rect), landing its top edge at `y-1`. The panel hangs a fixed
+        // `gap = 10.0` below the picker card's own bottom edge
+        // (`caret_preview_panel_rect`), so the GAP band `(y-10, y)` is clear
+        // document ground on both sides — sample the rim right at its edge
+        // and a reference band mid-gap, safely clear of both the panel's own
+        // rim and the picker card's separate border above it.
+        let (x0, x1) = (x + w * 0.25, x + w * 0.75);
+        let rim = band_mean_lum(&img, x0, x1, y - 2.0, y + 1.0)
+            .unwrap_or_else(|| panic!("{world}: rim band degenerate (rect [{x},{y},{w},{h}])"));
+        let ground = band_mean_lum(&img, x0, x1, y - 8.0, y - 3.0)
+            .unwrap_or_else(|| panic!("{world}: ground band degenerate (rect [{x},{y},{w},{h}])"));
+
+        assert!(
+            (rim - ground).abs() > 0.01,
+            "{world}: the card's raised rim must still read as a measurable value step \
+             against the ground with no drop shadow (rim lum={rim:.4} vs ground lum={ground:.4})"
+        );
+    }
+
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    let _ = std::fs::remove_dir_all(&dir);
+}

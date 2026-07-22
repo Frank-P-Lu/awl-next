@@ -1018,10 +1018,23 @@ pub const OVERSCROLL_KEEP_ROWS: usize = 1;
 /// document (1 char = 1 advance), keeping the panels' fixed-pitch caret/column math
 /// honest. The panel buffers are re-shaped every frame, so a live theme switch picks
 /// up the new family on the next `prepare` with no extra reshape bookkeeping.
-/// The FLOATING PANEL PRIMITIVE's drop-shadow tone: the active world's INK
-/// (`base_content`) at a low alpha, so the elevation reads as a soft dark ledge on a
-/// light world and a gentle rim on a dark one — value-only depth (DESIGN §8), never a
-/// hue, never amber (§3). Kept as a free helper so `new` + `sync_theme` agree.
+/// RETIRED (dark-depth Option C, 2026-07-22) — was the FLOATING PANEL
+/// PRIMITIVE's drop-shadow tone: the active world's INK (`base_content`) at a
+/// low alpha. That is exactly the measured bug: `base_content` is near-WHITE
+/// on a dark world, so the "shadow" quad BRIGHTENED the ground it sat on into
+/// a pale slab (+0.12..0.25 luminance on Currawong's card) instead of
+/// receding it. `render::chrome::set_float_quads` no longer uploads a shadow
+/// quad for ANY [`chrome::FloatElevation`], on any world — the raised
+/// border's own `surface_selected` value step + the card's `base_300` step
+/// over `base_100` carry the depth instead (DESIGN §5: "a thin value step
+/// does the work", not a cast shadow). This fn is consequently DEAD CODE in
+/// practice — every one of its six call sites (`sync_theme_colors`) colors a
+/// `_shadow` pipeline that `set_float_quads` now unconditionally parks at 0
+/// instances — kept only because the `_shadow` `SelectionPipeline` fields
+/// themselves aren't deleted this round (a further cleanup, logged, not
+/// blocking). Left computing a real per-world tone rather than a bare
+/// `[0, 0, 0, 0]` so a future full removal of the shadow plumbing has nothing
+/// surprising to untangle.
 fn float_shadow_srgba() -> [u8; 4] {
     if theme::active().render_caps.decorative_wash == theme::DecorativeWash::Off {
         // A translucent ink-over-canvas shadow would composite a forbidden
@@ -2755,10 +2768,13 @@ pub struct TextPipeline {
     /// paired with `panel_shadow`/`panel_border` below.
     pub panel_card: SelectionPipeline,
     /// CENTERED-OVERLAY elevation companions to `panel_card` — the SAME
-    /// shadow/raised-border shape [`set_float_quads`] draws for every other
-    /// summoned card (search / spell / caret-preview / HUD / which-key / menu
-    /// dropdown), but drawn ONLY when `Theme::render_caps.elevation ==
-    /// Elevation::Bordered` (a true 1-bit world).
+    /// raised-border shape [`set_float_quads`] draws for every other summoned
+    /// card (search / spell / caret-preview / HUD / which-key / menu dropdown),
+    /// but drawn ONLY when `Theme::render_caps.elevation == Elevation::Bordered`
+    /// (a true 1-bit world). `panel_shadow` is always parked empty — the
+    /// drop-shadow quad was RETIRED outright (dark-depth Option C; see
+    /// [`float_shadow_srgba`]'s doc), kept as a field only pending a fuller
+    /// pipeline-removal cleanup.
     /// Every OTHER world's centered overlay stays the exact pre-existing flat
     /// `panel_card` fill with these two parked empty — byte-identical to before
     /// this pair existed. On a one-bit world the blur/scrim backdrop that used to
@@ -2837,20 +2853,24 @@ pub struct TextPipeline {
     /// would have each stomp the other's bound masks / instance count). Parked empty
     /// unless the demo is settled on an inhabited glyph in Morph mode this frame.
     pub caret_preview_glyph_pipeline: CaretGlyphPipeline,
-    /// FLOATING PANEL PRIMITIVE — the three elevation quads (drop shadow, a crisp
-    /// raised border edge, the opaque card) of a small summoned card with NO scrim,
-    /// distinct from the full-width overlay. Uploaded by `prepare_float_panel`; its
-    /// first use is the caret-style preview panel, and future summoned micro-panels
-    /// (spell / thesaurus / which-key) reuse the same helper. Empty when unsummoned.
+    /// FLOATING PANEL PRIMITIVE — a crisp raised border edge + the opaque card of a
+    /// small summoned card with NO scrim, distinct from the full-width overlay.
+    /// Uploaded by `prepare_float_panel`; its first use is the caret-style preview
+    /// panel, and future summoned micro-panels (spell / thesaurus / which-key)
+    /// reuse the same helper. Empty when unsummoned. `float_shadow` is always
+    /// parked empty too — the drop-shadow quad was RETIRED outright (dark-depth
+    /// Option C; see [`float_shadow_srgba`]'s doc), kept as a field only pending a
+    /// fuller pipeline-removal cleanup.
     pub float_shadow: SelectionPipeline,
     pub float_border: SelectionPipeline,
     pub float_card: SelectionPipeline,
     /// DIFF-AS-PREVIEW panel dressing — its OWN elevation trio (the established
     /// per-surface pattern: popover/hud/which-key each own theirs), because the
     /// `float_*` trio belongs to the spell/caret panels and `panel_*` to the very
-    /// picker card floating over this panel the SAME frame. Shadow + border ride
+    /// picker card floating over this panel the SAME frame. Border rides
     /// `set_float_quads`' one shape; the card is the opaque fill the transcript
-    /// draws on. All parked empty unless a History diff preview is up.
+    /// draws on; `diffpanel_shadow` is always parked empty (no drop shadow — dark-
+    /// depth Option C). All parked empty unless a History diff preview is up.
     pub diffpanel_shadow: SelectionPipeline,
     pub diffpanel_border: SelectionPipeline,
     pub diffpanel_card: SelectionPipeline,
@@ -3247,8 +3267,9 @@ pub struct TextPipeline {
     /// the anchored float card + its item rows. Its OWN float-elevation pipelines
     /// (not the shared `float_*`, which the overlay/search own) so the two can never
     /// race the same quads — the dropdown draws in the chrome tail, over everything.
-    ///   * `menu_drop_shadow`/`_border`/`_card` — the card elevation (shadow -> raised
-    ///     border -> `base_300` card), the same tokens the HUD/which-key floats use.
+    ///   * `menu_drop_shadow`/`_border`/`_card` — the card elevation (raised border ->
+    ///     `base_300` card, no drop shadow — dark-depth Option C), the same tokens the
+    ///     HUD/which-key floats use. `menu_drop_shadow` is always parked empty.
     ///   * `menu_drop_sep` — the thin `muted` hairline drawn across each separator row.
     ///   * `menu_drop_renderer`/`_buffer` — the item LABELS (left-aligned).
     ///   * `menu_chord_renderer`/`_buffer` — the item native CHORDS (right-aligned,
@@ -3275,11 +3296,12 @@ pub struct TextPipeline {
     pub menu_drop_menu: Option<usize>,
     /// HELD STATS HUD: the calm CARD the stats sit on — a `base_300` surface risen one
     /// value step forward over the FROSTED-BLUR backdrop (the same hue-preserving frost
-    /// the palette recedes behind; depth by value, DESIGN §5/§8), so the figures read on
+    /// the palette recedes behind; depth by value, DESIGN §5), so the figures read on
     /// a clean ground instead of clashing with the prose beneath. On the SAME float-panel
-    /// elevation the palette + which-key use (drop `hud_shadow` -> raised `hud_border` ->
-    /// opaque card), so its summoned card carries the crisp edge every other float has.
-    /// Sized to the stacked block + padding, centered; empty when the HUD is released.
+    /// elevation the palette + which-key use (raised `hud_border` -> opaque card, no
+    /// drop shadow — dark-depth Option C), so its summoned card carries the crisp edge
+    /// every other float has. Sized to the stacked block + padding, centered; empty
+    /// when the HUD is released. `hud_shadow` is always parked empty.
     pub hud_shadow: SelectionPipeline,
     pub hud_border: SelectionPipeline,
     pub hud_card: SelectionPipeline,
@@ -3343,11 +3365,12 @@ pub struct TextPipeline {
     /// is byte-identical. Set via [`Self::set_keybindings_tips`].
     keybindings_tips: Vec<String>,
     /// WHICH-KEY PANEL: the summoned "what can follow this prefix?" hint card
-    /// (bottom-left), on its own float-panel elevation (shadow -> raised border ->
-    /// `base_300` card) + text renderer, so it composes independently of the shared
-    /// float quads (which the caret preview / spell panels own). Parked (nothing
-    /// drawn) unless `whichkey_rows` is `Some` — the App summons it on a prefix pause
-    /// (`app.rs`) and the headless `--whichkey` capture forces it. See `crate::whichkey`.
+    /// (bottom-left), on its own float-panel elevation (raised border -> `base_300`
+    /// card, no drop shadow — dark-depth Option C) + text renderer, so it composes
+    /// independently of the shared float quads (which the caret preview / spell
+    /// panels own). Parked (nothing drawn) unless `whichkey_rows` is `Some` — the App
+    /// summons it on a prefix pause (`app.rs`) and the headless `--whichkey` capture
+    /// forces it. See `crate::whichkey`. `wk_shadow` is always parked empty.
     pub wk_shadow: SelectionPipeline,
     pub wk_border: SelectionPipeline,
     pub wk_card: SelectionPipeline,
