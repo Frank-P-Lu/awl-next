@@ -680,3 +680,62 @@ fn spell_squiggle_paints_real_pixels_across_a_world_sample() {
     theme::set_active(theme::DEFAULT_THEME);
     p.sync_theme();
 }
+
+/// OFF-CURSOR IMAGE CONCEAL — no stray spell/nit underline in the placeholder
+/// card (queue item 25). An inline-image line's `![alt](path)` source conceals
+/// to a ~ZERO-width run off the caret's line, but the raw spell/nit scan still
+/// flags words / mechanical typos INSIDE that source (an alt word, a double
+/// space in the alt). Pre-fix each collapsed to a 1px stray tick — a faint
+/// muted dash (nit) + a warm-red tick (squiggle) — floating inside the tall
+/// placeholder card. Both proto builders now drop a span whose advance collapses
+/// on an image line (`line_is_inline_image` + the min-advance guard), so an
+/// off-cursor image line emits ZERO underline geometry over its source. The
+/// `line_is_inline_image` gate is load-bearing: a trailing-whitespace nit on an
+/// ORDINARY line ALSO shapes to ~0 advance and keeps its deliberate faint tick
+/// (asserted by `nit_underlines_flag_mechanical_typos_...`), so this guard must
+/// never fire there.
+#[test]
+fn off_cursor_image_conceal_emits_no_spell_or_nit_underline() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    let prev_img = crate::markdown::inline_images_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    crate::nits::set_nits_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping off_cursor_image_conceal_emits_no_spell_or_nit_underline: no wgpu adapter");
+        crate::markdown::set_inline_images_on(prev_img);
+        return;
+    };
+    // The alt text carries BOTH a (flagged) misspelled word — "wrold" at cols
+    // 2..7 — and a mechanical double space at cols 7..9 (a nit): `![wrold  x]`.
+    // The caret is parked on line 2 (prose), OFF the image's own line, so the
+    // `![alt](path)` source conceals to ~0 width and the placeholder card shows.
+    let text = "![wrold  x](samples/tiny.png)\n\nprose here\n";
+    let mut v = view(text, 2, 0);
+    v.is_markdown = true;
+    v.misspelled = vec![crate::spell::Misspelling { line: 0, start_col: 2, end_col: 7 }];
+    p.set_view(&v);
+
+    // Sanity: the fixture really IS an off-cursor concealed image line — the row
+    // reserves the tall image height and the source collapsed to ~0 width (so a
+    // pre-fix builder WOULD have placed a stray tick here).
+    assert!(p.line_is_inline_image(0), "line 0 is an inline-image line");
+    let rows0 = p.visual_rows(0);
+    let xs = &rows0[0].xs;
+    let total = xs.last().copied().unwrap_or(0.0) - xs.first().copied().unwrap_or(0.0);
+    assert!(total < 2.0, "off-cursor the image source is concealed to ~0 width: {total}");
+
+    // THE FIX: neither underline layer emits geometry over the concealed source.
+    assert!(
+        p.spell_squiggles().is_empty(),
+        "no spell squiggle over an off-cursor concealed image source (stray red tick)"
+    );
+    assert!(
+        p.nit_underlines().is_empty(),
+        "no nit underline over an off-cursor concealed image source (stray muted dash)"
+    );
+
+    crate::markdown::set_inline_images_on(prev_img);
+    crate::nits::set_nits_on(true);
+}

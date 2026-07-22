@@ -704,6 +704,20 @@ impl TextPipeline {
         }
     }
 
+    /// OFF-CURSOR IMAGE-CONCEAL underline guard (queue item 25): the shaped
+    /// advance (px) a span on an inline-image line must clear for its spell/nit
+    /// underline to survive. Off the caret's line an `![alt](path)` source
+    /// conceals to a near-ZERO-width run (`CONCEAL_ZERO_WIDTH_FONT_SIZE`), so a
+    /// misspelling / nit the raw scan flagged INSIDE that source (an alt or path
+    /// word, a double space in the alt) would otherwise collapse to a 1px stray
+    /// tick floating inside the placeholder card. Gated on `line_is_inline_image`
+    /// so it can NEVER suppress the deliberate faint tick a trailing-whitespace
+    /// nit shows on an ordinary line (also a collapsed run); a REVEALED image line
+    /// keeps its full-width source (advance well past this) so its behaviour is
+    /// unchanged. Sub-pixel by construction at every zoom (the concealed font size
+    /// is 0.01), while any real glyph run clears it with room to spare.
+    const IMAGE_CONCEAL_UNDERLINE_MIN_ADVANCE: f32 = 1.0;
+
     /// Rebuild the cached spell-squiggle protos IF the shaped geometry or the
     /// misspelling list changed since they were last built (keyed by the row-geometry
     /// GENERATION + the spell list generation). ONE `layout_runs()` walk for ALL
@@ -738,6 +752,14 @@ impl TextPipeline {
             // The two x boundaries `row_x_span` reads (same `.get` fallbacks).
             let xs_s = row.xs.get(s).copied().unwrap_or(0.0);
             let xs_e = row.xs.get(e).copied().unwrap_or(xs_s);
+            // Item 25: drop a misspelling collapsed inside an OFF-cursor image
+            // source (concealed to ~0 width) so no stray red tick lands in the
+            // placeholder card. See `IMAGE_CONCEAL_UNDERLINE_MIN_ADVANCE`.
+            if self.line_is_inline_image(sp.line)
+                && xs_e - xs_s < Self::IMAGE_CONCEAL_UNDERLINE_MIN_ADVANCE
+            {
+                continue;
+            }
             protos.push(UnderlineProto {
                 line: sp.line,
                 start_col: sp.start_col,
@@ -935,6 +957,15 @@ impl TextPipeline {
                 // The two x boundaries `row_x_span` reads (same `.get` fallbacks).
                 let xs_s = row.xs.get(s).copied().unwrap_or(0.0);
                 let xs_e = row.xs.get(e).copied().unwrap_or(xs_s);
+                // Item 25: drop a nit collapsed inside an OFF-cursor image source
+                // (concealed to ~0 width) so no stray muted dash lands in the
+                // placeholder card. The `line_is_inline_image` gate keeps the
+                // deliberate faint trailing-whitespace tick on ORDINARY lines.
+                if self.line_is_inline_image(li)
+                    && xs_e - xs_s < Self::IMAGE_CONCEAL_UNDERLINE_MIN_ADVANCE
+                {
+                    continue;
+                }
                 protos.push(UnderlineProto {
                     line: li,
                     start_col,
