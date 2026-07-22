@@ -348,10 +348,11 @@ fn browse_arrows_cycle_the_lens_ascend_is_backspace() {
 
 #[test]
 fn goto_arrows_cycle_the_lens() {
-    // The FLAT file picker gains the ←/→ lens strip: All -> Recent -> This folder
-    // -> By type -> Headings (the fold that retired the Outline picker), driven
-    // through the real `apply_core` overlay intercept (so a `--keys "C-x f <right>"`
-    // capture reaches the same code).
+    // The FLAT file picker gains the ←/→ lens strip: All (the current doc's headings
+    // mixed with files, item 11's unified default) -> Recent -> This folder ->
+    // Headings (the fold that retired the Outline picker; "By type" was CUT — the
+    // redundant facet item 11 removed), driven through the real `apply_core` overlay
+    // intercept (so a `--keys "C-x f <right>"` capture reaches the same code).
     let corpus = vec![
         "README.md".to_string(),
         "src/main.rs".to_string(),
@@ -366,8 +367,6 @@ fn goto_arrows_cycle_the_lens() {
     drive(&mut overlay, &mut accept, &Action::ForwardChar);
     assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("folder"));
     drive(&mut overlay, &mut accept, &Action::ForwardChar);
-    assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("type"));
-    drive(&mut overlay, &mut accept, &Action::ForwardChar);
     assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("headings"));
     // RIGHT at the last lens clamps.
     drive(&mut overlay, &mut accept, &Action::ForwardChar);
@@ -377,7 +376,7 @@ fn goto_arrows_cycle_the_lens() {
         "clamp at last lens"
     );
     // LEFT walks all the way back to the All home.
-    for _ in 0..4 {
+    for _ in 0..3 {
         drive(&mut overlay, &mut accept, &Action::BackwardChar);
     }
     assert_eq!(overlay.as_ref().unwrap().active_facet_id(), Some("all"));

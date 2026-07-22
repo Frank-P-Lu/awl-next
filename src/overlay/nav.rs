@@ -54,13 +54,15 @@ impl OverlayState {
                     || !crate::index::is_hidden_entry(&self.corpus[i])
             });
         }
-        // HEADINGS-LENS GATE (Go-to only): the appended document-heading rows belong
-        // ONLY to the Headings lens — the flat All home + the file lenses (Recent /
-        // This folder / By type) list files. Drop heading rows UNLESS the Headings lens
-        // is active; under it the bucket ([`crate::index::goto_bucket`]) re-admits them
-        // (and drops the files). Inert when `heading` is empty (every other picker, and
-        // a Go-to over a buffer with no headings).
-        if !self.heading.is_empty() && self.active_facet_id() != Some("headings") {
+        // HEADINGS-LENS GATE (Go-to only): a REFINEMENT lens other than Headings
+        // (Recent / This folder) still lists files only — the appended document-
+        // heading rows are dropped there. The flat `All` home (`facet_lens == 0`)
+        // is the UNIFIED DEFAULT (item 11): it keeps heading rows IN, mixed with
+        // file rows and ranked together by the same fuzzy score, so one query can
+        // reach either kind. The Headings lens re-admits them exclusively via its
+        // own bucket ([`crate::index::goto_bucket`]). Inert when `heading` is empty
+        // (every other picker, and a Go-to over a buffer with no headings).
+        if !self.heading.is_empty() && self.facet_lens != 0 && self.active_facet_id() != Some("headings") {
             ranked.retain(|&i| !self.heading.get(i).copied().unwrap_or(false));
         }
         // FACETING picker under a real lens (strip index != 0, the All home): GROUP the
@@ -339,6 +341,14 @@ impl OverlayState {
         if self.kind == OverlayKind::Command && self.is_setting.get(i).copied().unwrap_or(false) {
             return format!("{}{}", OverlayKind::SETTINGS_MARKER_PREFIX, self.corpus[i]);
         }
+        // ITEM 11's UNIFIED LIST: a Go-to HEADING row (appended after the file rows
+        // by `attach_headings`) draws the `❡ ` marker glyph before its (already
+        // depth-indented) title — the mirror-image of the settings marker above —
+        // so it reads apart from a file row at a glance once the default `All` list
+        // mixes both kinds together.
+        if self.kind == OverlayKind::Goto && self.heading.get(i).copied().unwrap_or(false) {
+            return format!("{}{}", OverlayKind::HEADING_MARKER_PREFIX, self.corpus[i]);
+        }
         let mut s = self.corpus[i].clone();
         if self.is_dir.get(i).copied().unwrap_or(false) {
             s.push('/');
@@ -421,11 +431,22 @@ impl OverlayState {
     }
 
     /// The filtered relative-time LABELS, in the same row order as [`item_strings`]
-    /// (go-to picker only; empty for every other kind and in headless capture).
+    /// (go-to picker only; empty for every other kind and in headless capture). A
+    /// HEADING row (see [`Self::heading`]) carries no mtime — since item 11's unified
+    /// `All` list mixes heading rows in among file rows, its cell reads the constant
+    /// `"heading"` KIND HINT instead, the rowlayout SECONDARY-cell disambiguator that
+    /// tells a heading row apart from a file row at a glance (a file row's cell is
+    /// its relative edit time live, or blank in headless where mtime is never read).
     pub fn item_times(&self) -> Vec<String> {
         self.items
             .iter()
-            .map(|&i| self.times.get(i).cloned().unwrap_or_default())
+            .map(|&i| {
+                if self.heading.get(i).copied().unwrap_or(false) {
+                    "heading".to_string()
+                } else {
+                    self.times.get(i).cloned().unwrap_or_default()
+                }
+            })
             .collect()
     }
 }

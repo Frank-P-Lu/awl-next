@@ -81,10 +81,14 @@ pub struct OverlayState {
     pub lines: Vec<usize>,
     /// Go-to only: parallel to `corpus`, true for the appended document-HEADING rows
     /// (the fold that retired the standalone Outline picker), false for the ordinary
-    /// FILE rows. Drives the Headings-lens gate in [`Self::refilter`] (headings show
-    /// ONLY under the Headings lens) and the accept split ([`Self::selected_is_heading`]:
-    /// a heading row jumps to `lines[i]`, a file row opens the path). EMPTY for every
-    /// other kind AND for a Go-to over a buffer with no headings — the gate is then inert.
+    /// FILE rows. Item 11's unified default: the flat `All` lens keeps heading rows
+    /// IN, mixed with file rows in one fuzzy-ranked list; a REFINEMENT lens other than
+    /// Headings (Recent / This folder) still drops them ([`Self::refilter`]'s gate).
+    /// Also drives the accept split ([`Self::selected_is_heading`]: a heading row
+    /// jumps to `lines[i]`, a file row opens the path) and the SECONDARY-column kind
+    /// hint ([`Self::item_times`]: a heading row's cell reads `"heading"`). EMPTY for
+    /// every other kind AND for a Go-to over a buffer with no headings — every gate
+    /// keyed off it is then inert.
     pub heading: Vec<bool>,
     /// Spell picker only: the misspelled word's `(line, start_col, end_col)` CHAR
     /// span, so the accept can map it to a buffer char range and replace it with the
@@ -590,13 +594,15 @@ impl OverlayState {
     /// that RETIRED the standalone Outline picker. Each `(display, line)` heading is
     /// APPENDED after the file rows (display = the title indented by depth, the fuzzy
     /// corpus; `line` = where Enter jumps), carrying its `heading` flag + jump line in
-    /// the parallel arrays. The file rows stay FIRST, so the flat All home + the file
-    /// lenses (Recent / This folder / By type) still list files only —
-    /// [`Self::refilter`]'s heading gate hides these appended rows everywhere EXCEPT
-    /// the Headings lens, where [`crate::index::goto_bucket`] re-admits them. An EMPTY
-    /// `headings` list is a clean no-op (the `heading` flag stays empty → the gate is
-    /// inert → the Headings lens reads "no headings yet"); a non-markdown buffer never
-    /// calls this at all.
+    /// the parallel arrays. The file rows stay FIRST (their original corpus order
+    /// tiebreaks an equal fuzzy score), but item 11's UNIFIED DEFAULT means the flat
+    /// `All` home lists them together with the appended heading rows, ranked by one
+    /// fuzzy filter — [`Self::refilter`]'s heading gate only drops heading rows under
+    /// a file-only REFINEMENT lens (Recent / This folder); the Headings lens keeps its
+    /// old job of showing ONLY them, via [`crate::index::goto_bucket`]. An EMPTY
+    /// `headings` list is a clean no-op (the `heading` flag stays empty → every gate
+    /// keyed off it is inert → the Headings lens reads "no headings yet", and `All`
+    /// simply lists the files); a non-markdown buffer never calls this at all.
     pub fn attach_headings(&mut self, headings: Vec<(String, usize)>) {
         if headings.is_empty() {
             return;

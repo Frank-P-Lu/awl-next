@@ -58,52 +58,28 @@ pub fn is_hidden_entry(rel: &str) -> bool {
 // "All" is HOME (strip index 0, the flat list); LEFT/RIGHT step into the refinements.
 //
 // The bucketing is a PURE function of the [`FacetItem`] — the accept string for
-// Go-to's path-derived lenses (This folder / By type), the `recent` flag for Go-to's
-// Recent lens (the recently-OPENED-files MRU, [`crate::recent_files`]), the `is_dir`
-// / `is_git` flags for Browse's Folders / Files / Git-repos split. No filesystem
-// read, no clock inside the bucket.
+// Go-to's path-derived This-folder lens, the `recent` flag for Go-to's Recent lens
+// (the recently-OPENED-files MRU, [`crate::recent_files`]), the `is_dir` / `is_git`
+// flags for Browse's Folders / Files / Git-repos split. No filesystem read, no clock
+// inside the bucket.
 
-/// The FIXED section roster for the go-to **By type** lens (a faceting lens's
-/// sections must be a `&'static` set, and each item buckets into exactly one). A
-/// recognized language extension → `Code`; markdown/text/data get their own bucket;
-/// everything else (unknown or extensionless) falls to `Other`. Referenced by
-/// [`GOTO_FACET_STRIP`] so the strip and [`goto_type_section`] can never drift.
-pub const GOTO_TYPE_SECTIONS: &[&str] = &["Markdown", "Code", "Text", "Data", "Other"];
-
-/// Which [`GOTO_TYPE_SECTIONS`] bucket a root-relative path `rel` sits in, by its
-/// filename extension (lower-cased). Extensionless / unrecognized files fall to
-/// `Other`; an `.env*` file is `Data`. PURE — the go-to By-type lens's whole rule.
-pub fn goto_type_section(rel: &str) -> &'static str {
-    let name = rel.rsplit('/').next().unwrap_or(rel);
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
-    match ext.as_deref() {
-        Some("md" | "markdown") => "Markdown",
-        Some(
-            "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "go" | "c" | "h" | "cc" | "cpp" | "hpp"
-            | "java" | "rb" | "sh" | "lua" | "swift" | "kt" | "php" | "sql" | "css" | "html"
-            | "zig" | "hs" | "ml" | "ex" | "exs" | "clj",
-        ) => "Code",
-        Some("txt" | "text" | "rst" | "org" | "adoc") => "Text",
-        Some("toml" | "json" | "yaml" | "yml" | "ini" | "cfg" | "conf" | "env" | "xml") => "Data",
-        _ => "Other",
-    }
-}
-
-/// Go-to's lens strip: **All** (flat home) · **Recent** (recently-OPENED files, a
-/// real MRU — EMPTY until you open something) · **This folder** · **By type** ·
-/// **Headings** (the current markdown doc's headings — the fold that RETIRED the
-/// standalone Outline picker; jump-to-heading is now a Go-to lens). All FIRST (the
-/// landing lens); the rest are ←/→ refinements. Headings is parked LAST — it swaps
-/// the corpus from files to the doc's headings, so it reads as the furthest
-/// refinement. (TASTE CALL, logged: the Headings lens is ALWAYS on the strip, even
-/// over a non-markdown buffer, where it reads empty ("no headings yet") — a static
-/// strip keeps the lens indices stable for the generic bucket/cycle machinery, and
-/// an empty lens is calmer than per-instance strip surgery.)
-const GOTO_FACET_STRIP: [Facet; 5] = [
+/// Go-to's lens strip: **All** (flat home — the current doc's HEADINGS mixed with
+/// FILES in one fuzzy-ranked list, the unified default; see [`crate::overlay::nav`]'s
+/// `refilter`) · **Recent** (recently-OPENED files, a real MRU — EMPTY until you open
+/// something) · **This folder** · **Headings** (an explicit refinement down to ONLY
+/// the current markdown doc's headings — the fold that retired the standalone
+/// Outline picker). All FIRST (the landing lens); the rest are ←/→ refinements.
+/// Headings is parked LAST — it swaps the corpus from files to the doc's headings, so
+/// it reads as the furthest refinement. (TASTE CALL, logged: the Headings lens is
+/// ALWAYS on the strip, even over a non-markdown buffer, where it reads empty ("no
+/// headings yet") — a static strip keeps the lens indices stable for the generic
+/// bucket/cycle machinery, and an empty lens is calmer than per-instance strip
+/// surgery.) The former **By type** lens was CUT (decision: redundant once the
+/// unified All list exists — a fuzzy query already reaches a file by its extension).
+const GOTO_FACET_STRIP: [Facet; 4] = [
     Facet { label: "All", id: "all", sections: &[] },
     Facet { label: "Recent", id: "recent", sections: &["Recent"] },
     Facet { label: "This folder", id: "folder", sections: &["This folder"] },
-    Facet { label: "By type", id: "type", sections: GOTO_TYPE_SECTIONS },
     Facet { label: "Headings", id: "headings", sections: &["Headings"] },
 ];
 
@@ -113,18 +89,18 @@ const GOTO_FACET_STRIP: [Facet; 5] = [
 /// [`crate::recent_files`], via [`crate::overlay::OverlayState`]'s `recent` vec) and
 /// OUT (returns `None`) otherwise, so on a fresh session with nothing opened the lens
 /// is EMPTY and shows the empty state. MRU order (most-recent first) is applied by
-/// `refilter`'s MRU tiebreak, not here. `This folder` keeps only top-level entries
-/// (no `/` in the path); `By type` buckets by extension. `Headings` keeps ONLY the
-/// document-heading rows (`item.heading`) — Go-to's corpus appends the doc's headings
-/// after its files, and `refilter`'s heading gate already excludes them from every
-/// OTHER lens, so this arm just re-admits them under their one section.
+/// `refilter`'s MRU tiebreak, not here. `This folder` keeps only top-level FILE
+/// entries (no `/` in the path, and NOT a heading row — `refilter`'s heading gate
+/// already keeps headings out of every lens but All/Headings, so this arm never sees
+/// one, but the explicit `!item.heading` guard keeps the rule true even if that gate
+/// ever changes). `Headings` keeps ONLY the document-heading rows (`item.heading`) —
+/// Go-to's corpus appends the doc's headings after its files.
 fn goto_bucket(item: FacetItem, lens_idx: usize) -> Option<&'static str> {
     match lens_idx {
         1 => item.recent.then_some("Recent"), // Recent: ONLY recently-OPENED files (a real MRU)
-        2 => (!item.accept.contains('/')).then_some("This folder"), // top level of the root only
-        3 => Some(goto_type_section(item.accept)), // By type
-        4 => item.heading.then_some("Headings"),   // Headings: the doc's heading rows only
-        _ => None,                                 // 0 = All (never grouped)
+        2 => (!item.heading && !item.accept.contains('/')).then_some("This folder"),
+        3 => item.heading.then_some("Headings"), // Headings: the doc's heading rows only
+        _ => None,                               // 0 = All (never grouped)
     }
 }
 
@@ -611,23 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn goto_type_section_buckets_by_extension() {
-        assert_eq!(goto_type_section("doc-fixture.md"), "Markdown");
-        assert_eq!(goto_type_section("src/main.rs"), "Code");
-        assert_eq!(goto_type_section("notes.txt"), "Text");
-        assert_eq!(goto_type_section("Cargo.toml"), "Data");
-        assert_eq!(goto_type_section("config/.env"), "Data");
-        assert_eq!(goto_type_section("Makefile"), "Other"); // extensionless
-        assert_eq!(goto_type_section("archive.tar.gz"), "Other"); // last ext only, unknown
-        // Every returned label is a member of the FIXED roster (the strip and the
-        // bucket can't drift — refilter only keeps a bucket that matches a section).
-        for rel in ["a.md", "b.rs", "c.txt", "d.toml", "e", "f.png"] {
-            assert!(GOTO_TYPE_SECTIONS.contains(&goto_type_section(rel)), "{rel}");
-        }
-    }
-
-    #[test]
-    fn goto_picker_lands_on_all_then_groups_by_folder_and_type() {
+    fn goto_picker_lands_on_all_then_groups_by_folder() {
         use crate::overlay::{OverlayKind, OverlayState};
         let corpus = vec![
             "doc-fixture.md".to_string(),
@@ -649,19 +609,94 @@ mod tests {
         assert!(shown.iter().any(|s| s == "doc-fixture.md"));
         assert!(shown.iter().any(|s| s == "notes.txt"));
         assert!(!shown.iter().any(|s| s.contains('/')), "nested files opt out: {shown:?}");
-        // "By type" (strip index 3): every row's section == its extension bucket.
-        ov.set_facet_lens(3);
-        assert_eq!(ov.active_facet_id(), Some("type"));
-        let items = ov.item_strings();
-        let sections = ov.item_sections();
-        assert_eq!(items.len(), sections.len());
-        assert_eq!(items.len(), 4, "By type shows every file (each buckets somewhere)");
-        for (row, name) in items.iter().enumerate() {
-            assert_eq!(sections[row], goto_type_section(name), "row {name} mis-bucketed");
+    }
+
+    /// THE UNIFIED-LIST LAW (item 11): the DEFAULT Go-to list (`All`, strip index 0)
+    /// mixes the current doc's HEADING rows with its FILE rows, ranked together by
+    /// ONE fuzzy filter — the redundant "By type" facet is gone (there is no strip
+    /// index 3 left for it; index 3 is now Headings). A query substring that matches
+    /// a heading title AND a query substring that matches a filename both surface
+    /// their row from the SAME `All` list, and picking a heading row is distinguished
+    /// from a file row via `selected_is_heading` (the accept-time split), plus a
+    /// dim "heading" secondary-column tag ([`crate::overlay::OverlayState::item_times`]) —
+    /// the rowlayout PRIMARY/SECONDARY disambiguator this item asked for.
+    #[test]
+    fn goto_all_lens_unifies_headings_and_files_in_one_fuzzy_list() {
+        use crate::overlay::{OverlayKind, OverlayState};
+        const H: &str = OverlayKind::HEADING_MARKER_PREFIX;
+        let corpus = vec!["doc-fixture.md".to_string(), "src/main.rs".to_string()];
+        let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
+        ov.attach_headings(vec![
+            ("Introduction".to_string(), 3),
+            ("  Widgets".to_string(), 7),
+        ]);
+        // Strip lost "By type": All / Recent / This folder / Headings — 4 lenses.
+        let strip: Vec<String> = ov.lens_strip().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(strip, vec!["All", "Recent", "This folder", "Headings"]);
+        assert_eq!(ov.active_facet_id(), Some("all"));
+        // ALL home: BOTH files AND headings show, mixed — the unified default. A
+        // heading row carries the `❡ ` KIND-HINT marker (item 11's rowlayout
+        // PRIMARY-cell disambiguator); a file row never does.
+        let all = ov.item_strings();
+        assert!(all.iter().any(|s| s == "doc-fixture.md"), "{all:?}");
+        assert!(all.iter().any(|s| s == "src/main.rs"), "{all:?}");
+        assert!(
+            all.iter().any(|s| s == &format!("{H}Introduction")),
+            "heading row present under All, marked: {all:?}"
+        );
+        assert!(
+            all.iter().any(|s| s == &format!("{H}  Widgets")),
+            "heading row present under All, marked: {all:?}"
+        );
+        assert_eq!(all.len(), 4, "2 files + 2 headings, one flat list");
+        // A query substring that ONLY a heading title matches surfaces it from All
+        // (the fuzzy filter runs over the RAW corpus title, unaffected by the
+        // display-only marker).
+        ov.push('w');
+        ov.push('i');
+        ov.push('d');
+        assert_eq!(
+            ov.item_strings(),
+            vec![format!("{H}  Widgets")],
+            "heading-only query: {:?}",
+            ov.item_strings()
+        );
+        assert!(ov.selected_is_heading());
+        assert_eq!(ov.selected_line(), Some(7));
+        for _ in 0..3 {
+            ov.pop();
         }
-        assert!(sections.contains(&"Markdown".to_string()));
-        assert!(sections.contains(&"Code".to_string()));
-        assert!(sections.contains(&"Text".to_string()));
+        // A query substring that ONLY a filename matches surfaces it from the SAME
+        // All list — one fuzzy filter reaches both kinds.
+        ov.push('m');
+        ov.push('a');
+        ov.push('i');
+        ov.push('n');
+        assert_eq!(ov.item_strings(), vec!["src/main.rs".to_string()]);
+        assert!(!ov.selected_is_heading());
+        for _ in 0..4 {
+            ov.pop();
+        }
+        // A second disambiguator: the secondary column tags a heading row "heading";
+        // a file row's secondary cell is blank in headless (no mtime read).
+        let times = ov.item_times();
+        let idx = |name: &str| all.iter().position(|s| s == name).unwrap();
+        assert_eq!(times[idx(&format!("{H}Introduction"))], "heading");
+        assert_eq!(times[idx(&format!("{H}  Widgets"))], "heading");
+        assert_eq!(times[idx("doc-fixture.md")], "");
+        assert_eq!(times[idx("src/main.rs")], "");
+    }
+
+    /// GATE: a doc with NO headings still lists its files under All — attaching an
+    /// empty heading list is a clean no-op (never a crash, never an empty list).
+    #[test]
+    fn goto_all_lens_lists_files_even_with_no_headings() {
+        use crate::overlay::{OverlayKind, OverlayState};
+        let corpus = vec!["a.rs".to_string(), "b.rs".to_string()];
+        let mut ov = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
+        ov.attach_headings(Vec::new()); // non-markdown buffer / no headings
+        assert_eq!(ov.active_facet_id(), Some("all"));
+        assert_eq!(ov.item_strings(), vec!["a.rs".to_string(), "b.rs".to_string()]);
     }
 
     #[test]

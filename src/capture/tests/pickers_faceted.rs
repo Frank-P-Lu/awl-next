@@ -169,7 +169,7 @@ fn overlay_empty_state_renders_and_reports() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// FILE PICKERS faceted lens strips: the go-to (By type) + browse (Git repos)
+/// FILE PICKERS faceted lens strips: the go-to (Headings) + browse (Git repos)
 /// pickers, driven through the REAL [`OverlayState`] into the capture, render their
 /// settled frame AND the sidecar surfaces the lens / lens strip / per-row sections —
 /// the same generic reporting the theme picker uses, proving the file pickers plug
@@ -217,31 +217,39 @@ fn file_pickers_faceted_lens_render_and_report() {
         serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap()
     };
 
-    // GO-TO, cycled RIGHT×3 to the By-type lens.
+    // GO-TO, cycled RIGHT×3 to the Headings lens (the last, "By type" was CUT —
+    // item 11's unified-list decision).
     let goto_corpus = vec![
         "README.md".to_string(),
         "src/main.rs".to_string(),
         "notes.txt".to_string(),
     ];
     let mut goto = OverlayState::new(OverlayKind::Goto, goto_corpus, vec![], vec![]);
+    goto.attach_headings(vec![("Intro".to_string(), 0), ("Setup".to_string(), 3)]);
     goto.cycle_lens(1);
     goto.cycle_lens(1);
     goto.cycle_lens(1);
-    assert_eq!(goto.active_facet_id(), Some("type"));
+    assert_eq!(goto.active_facet_id(), Some("headings"));
     let gpng = dir.join("goto.png");
     capture_with(&gpng, &buf, &fold(&goto)).expect("goto picker capture renders");
     let gj = read(&gpng);
     assert_eq!(gj["overlay"]["mode"], serde_json::json!("goto"));
-    assert_eq!(gj["overlay"]["lens"], serde_json::json!("type"));
+    assert_eq!(gj["overlay"]["lens"], serde_json::json!("headings"));
     assert_eq!(
         gj["overlay"]["lens_strip"],
         serde_json::json!([
             ["All", false],
             ["Recent", false],
             ["This folder", false],
-            ["By type", true],
-            ["Headings", false]
+            ["Headings", true]
         ])
+    );
+    // Heading rows carry the `❡ ` kind-hint marker (item 11's rowlayout
+    // PRIMARY-cell disambiguator) even under their own dedicated lens.
+    const H: &str = OverlayKind::HEADING_MARKER_PREFIX;
+    assert_eq!(
+        gj["overlay"]["items"],
+        serde_json::json!([format!("{H}Intro"), format!("{H}Setup")])
     );
     let gsections: Vec<String> = gj["overlay"]["sections"]
         .as_array()
@@ -249,8 +257,7 @@ fn file_pickers_faceted_lens_render_and_report() {
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
-    assert!(gsections.contains(&"Markdown".to_string()), "{gsections:?}");
-    assert!(gsections.contains(&"Code".to_string()), "{gsections:?}");
+    assert!(gsections.iter().all(|s| s == "Headings"), "{gsections:?}");
 
     // BROWSE, cycled RIGHT×3 to the Git-repos lens: only the git-marked folder shows.
     let corpus = vec!["repo".to_string(), "plain".to_string(), "note.md".to_string()];
@@ -324,22 +331,17 @@ fn faceted_grouped_window_is_bounded_and_scrolls_to_selection() {
         serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap()).unwrap()
     };
 
-    // A LARGE go-to corpus across three type buckets (20 Markdown + 20 Code + 20 Text),
-    // cycled to the By-type lens → a grouped list of 60 rows under 3 section headers,
-    // far more than the 12-row window can show at once.
-    let mut corpus: Vec<String> = Vec::new();
-    for i in 0..20 {
-        corpus.push(format!("doc{i:02}.md"));
-        corpus.push(format!("src{i:02}.rs"));
-        corpus.push(format!("note{i:02}.txt"));
-    }
-    let n = corpus.len();
+    // A LARGE go-to corpus of 60 top-level files, cycled to the "This folder" lens
+    // (the "By type" multi-bucket lens was CUT, item 11 — no picker groups a single
+    // lens into more than one section any more) → a grouped list of 60 rows under
+    // ONE section header, far more than the 12-row window can show at once.
+    let n = 60;
+    let corpus: Vec<String> = (0..n).map(|i| format!("file{i:02}.md")).collect();
     let mut goto = OverlayState::new(OverlayKind::Goto, corpus, vec![], vec![]);
     goto.cycle_lens(1);
     goto.cycle_lens(1);
-    goto.cycle_lens(1);
-    assert_eq!(goto.active_facet_id(), Some("type"));
-    assert_eq!(goto.item_strings().len(), n, "every row shows under By-type");
+    assert_eq!(goto.active_facet_id(), Some("folder"));
+    assert_eq!(goto.item_strings().len(), n, "every row shows under This folder");
 
     // TOP of the list: the window is bounded and the selection (row 0) is on screen.
     let top_png = dir.join("goto_top.png");
@@ -351,12 +353,12 @@ fn faceted_grouped_window_is_bounded_and_scrolls_to_selection() {
     let card_h = w["card_h"].as_f64().unwrap();
     let canvas_h = w["canvas_h"].as_f64().unwrap();
     let sel_row = w["sel_row"].as_u64().unwrap();
-    // BOUNDED: far fewer drawn candidate lines than the full plan (60 rows + 3 headers),
+    // BOUNDED: far fewer drawn candidate lines than the full plan (60 rows + 1 header),
     // and the card never exceeds the canvas.
     assert!(lines < n as u64, "windowed: {lines} drawn lines < {n} rows");
     assert!(
-        lines <= 12 + 3,
-        "drawn lines ≤ item cap (12) + section headers (3), got {lines}"
+        lines <= 12 + 1,
+        "drawn lines ≤ item cap (12) + section header (1), got {lines}"
     );
     assert!(card_h <= canvas_h, "card_h {card_h} must fit canvas_h {canvas_h}");
     // SELECTED VISIBLE: the highlighted row sits within the drawn window.
@@ -364,8 +366,9 @@ fn faceted_grouped_window_is_bounded_and_scrolls_to_selection() {
     let top = w["top"].as_u64().unwrap();
     assert_eq!(top, 0, "list starts at the top before any scroll");
 
-    // MOVE the selection to the LAST row (the bottom of the Text section) → the window
-    // SCROLLS so the selection stays visible, and the top advances past the fold.
+    // MOVE the selection to the LAST row (the bottom of the This-folder section) →
+    // the window SCROLLS so the selection stays visible, and the top advances past
+    // the fold.
     goto.move_sel(n as isize); // clamps to the last row
     assert_eq!(goto.selected, n - 1);
     let bot_png = dir.join("goto_bottom.png");
