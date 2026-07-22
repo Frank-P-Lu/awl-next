@@ -445,6 +445,23 @@ pub(super) fn settled_viewstate(
         vstate.search_replacement = String::new();
         vstate.search_editing_replacement = false;
     }
+    // FOLDS: collapse the folded sections out of the shaped text BEFORE the first
+    // `set_view`, so the pipeline shapes the fold-filtered document (a hidden line
+    // is never laid out → contributes ZERO height) and the scroll math below counts
+    // the filtered rows. The buffer's fold set was built during the `--keys` replay;
+    // recorded (unfiltered) for the sidecar. Skipped during a history preview (its
+    // transcript owns the text). No-op → byte-identical when nothing is folded.
+    vstate.folds = buffer.folds().iter().copied().collect();
+    if opts.preview_text.is_none() && buffer.has_folds() {
+        let hidden = buffer.hidden_lines();
+        // Remap the resting-caret row the scroll-follow below reads into filtered
+        // space (the action-seam auto-expand keeps the caret on a visible line).
+        let filter = crate::fold::Filter::new(&vstate.text, &hidden);
+        if filter.visible(sc_line) {
+            sc_line = filter.line(sc_line);
+        }
+        crate::fold::apply_to_view(&mut vstate, &hidden);
+    }
     pipeline.set_view(&vstate);
 
     // Now compute the VISUAL-ROW scroll from the shaped buffer. Variable-row-height

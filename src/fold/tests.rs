@@ -176,6 +176,29 @@ fn expand_range_leaves_a_fold_the_selection_does_not_touch() {
 }
 
 #[test]
+fn filter_drops_hidden_lines_and_remaps_visible_ones() {
+    let text = "# A\na1\na2\n# B\nb1";
+    let hidden = [false, true, true, false, false];
+    let f = Filter::new(text, &hidden);
+    assert!(f.any_hidden());
+    assert_eq!(f.text, "# A\n# B\nb1");
+    // Visible full lines remap to their filtered index.
+    assert_eq!(f.line(0), 0);
+    assert_eq!(f.line(3), 1); // # B: two hidden lines removed before it
+    assert_eq!(f.line(4), 2);
+    assert!(f.visible(0) && !f.visible(1) && f.visible(3));
+}
+
+#[test]
+fn filter_is_identity_when_nothing_is_hidden() {
+    let text = "# A\na1\n# B";
+    let f = Filter::new(text, &[false, false, false]);
+    assert!(!f.any_hidden());
+    assert_eq!(f.text, text);
+    assert_eq!(f.line(2), 2);
+}
+
+#[test]
 fn prune_stale_drops_a_fold_whose_heading_was_edited_away() {
     // Same lines as OUTLINE but line 2 is no longer a heading.
     let edited = "# A\na body\nA.1 plain\na1 body\n## A.2\na2 body\n# B\nb body";

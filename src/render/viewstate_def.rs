@@ -237,6 +237,16 @@ pub struct ViewState {
     /// widens a px (the value-free half of the cue, so it survives a one-bit
     /// world). Never amber. Inert unless `diff_panel`.
     pub diff_panel_focus: bool,
+    /// COLLAPSED SECTIONS (folds): the FULL-document logical lines of the ATX
+    /// headings whose sections are folded, ascending. VIEW state only — the rope is
+    /// untouched. `text` above is already the FOLD-FILTERED document (hidden lines
+    /// dropped by [`crate::fold::Filter`], so they shape to ZERO height — the row
+    /// simply does not exist), and `cursor_line` / `selection` / `search_matches` /
+    /// `misspelled` are in that same filtered line space; this field carries the
+    /// (unfiltered) folded-heading lines so the sidecar can report the fold state
+    /// and a future tail/chevron pass can find each collapsed heading. Empty when
+    /// nothing is folded, so a default capture is byte-identical.
+    pub folds: Vec<usize>,
 }
 
 impl ViewState {
@@ -304,6 +314,7 @@ impl ViewState {
             popover: None,
             diff_panel: false,
             diff_panel_focus: false,
+            folds: Vec::new(),
         }
     }
 }

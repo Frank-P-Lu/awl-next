@@ -555,16 +555,26 @@ impl Buffer {
 
     /// The set of folded heading LOGICAL LINES (read-only). Empty when nothing is
     /// collapsed.
-    #[allow(dead_code)] // read by the render increment (ViewState folds) + tests
     pub fn folds(&self) -> &std::collections::BTreeSet<usize> {
         &self.folds
     }
 
     /// True when there is at least one collapsed section. The cheap short-circuit
     /// every render / reveal path checks first so an unfolded document pays nothing.
-    #[allow(dead_code)] // read by the render increment + tests
     pub fn has_folds(&self) -> bool {
         !self.folds.is_empty()
+    }
+
+    /// The per-logical-line HIDDEN mask for the current fold set — `true` where a
+    /// line is collapsed inside a folded section (never the heading line itself).
+    /// Empty-of-`true` when nothing is folded. The render builds its fold-filtered
+    /// text from this ([`crate::fold::Filter`]).
+    pub fn hidden_lines(&self) -> Vec<bool> {
+        if self.folds.is_empty() {
+            return Vec::new();
+        }
+        let levels = self.heading_levels();
+        crate::fold::hidden_lines(&levels, &self.folds)
     }
 
     /// This buffer's per-logical-line heading levels ([`crate::fold::heading_levels`]

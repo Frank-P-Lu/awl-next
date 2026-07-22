@@ -346,6 +346,10 @@ impl App {
                 .as_ref()
                 .map(|o| o.diff_focus)
                 .unwrap_or(false),
+            // FOLDS: filled just below (with the buffer's fold set), after which the
+            // hidden lines are dropped from `text` + coordinates remapped. Kept as
+            // the conscious render decision this exhaustive site forces.
+            folds: Vec::new(),
         };
         // HISTORY PREVIEW geometry safety: the pushed text is a DIFFERENT (possibly
         // shorter) version than the buffer, so every field whose line/col spans
@@ -380,6 +384,18 @@ impl App {
             // A history preview shows a DIFFERENT version's text; the popover's
             // spans would index the wrong bytes, so it never rides a preview frame.
             view.popover = None;
+        }
+        // FOLDS: collapse the folded sections out of the shaped text. `view.text`
+        // is the full document; drop the hidden lines and remap the caret /
+        // selection / search / spell coordinates into the filtered space the
+        // pipeline shapes — a hidden line is never laid out, so it contributes ZERO
+        // height. Recorded (unfiltered) for the sidecar. A no-op when nothing is
+        // folded (byte-identical) and skipped during a history preview (its
+        // substitute transcript owns the text). The action-seam auto-expand keeps
+        // the caret + any selection on visible lines.
+        view.folds = self.buffer.folds().iter().copied().collect();
+        if preview.is_none() && self.buffer.has_folds() {
+            crate::fold::apply_to_view(&mut view, &self.buffer.hidden_lines());
         }
         {
             let gpu = self.gpu.as_mut().unwrap();
