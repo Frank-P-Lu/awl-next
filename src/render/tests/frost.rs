@@ -23,6 +23,9 @@ fn frost_pill_geometry_is_dpi_invariant_in_logical_space() {
     const H: f32 = 640.0;
     const ZOOM: f32 = 1.25;
     let Some((_device, _queue, mut p)) = headless_dqp(W, H) else {
+        eprintln!(
+            "skipping frost_pill_geometry_is_dpi_invariant_in_logical_space: no wgpu adapter"
+        );
         return;
     };
     let _g = crate::testlock::serial();
