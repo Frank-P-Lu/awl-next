@@ -858,3 +858,85 @@ fn fence_lang_label_paints_real_pixels_on_the_fence_row() {
         "the fence's opening-line row gains real pixels from the 'rust' label",
     );
 }
+
+/// ITEM 29 — the task-list neighborhood's GENUINELY NON-VACUOUS appearance
+/// oracle, replacing the one the item-19 audit dropped (1b573bf): that test
+/// compared an OPEN document to a CHECKED one and "passed" purely on the
+/// `[ ]`/`[x]` checkbox glyph — reverting the entire checked-task dim left it
+/// green (byte-identical on the mono world it ran, where `muted` ≈ content).
+/// The dim IS real — but ONLY where `muted` reads apart from the content ink,
+/// which a MONO/high-contrast world can collapse. So this pins it on a
+/// PROPORTIONAL world (Gumtree = Literata) where the recede is unambiguous,
+/// and — the fix for the old vacuity — compares the two rows' BODY ink WITHIN
+/// ONE FRAME by dominant-ink color: an open task's body rides the full content
+/// ink; a checked task's body (`MdKind::TaskDone`) RECEDES toward `muted`, so
+/// it must (a) differ from the open body's ink and (b) sit measurably CLOSER
+/// to the page ground. Byte-identical body text ("read the field notes") on
+/// both rows means the ONLY thing that can move the ink is the dim itself —
+/// revert it and both bodies share the content ink, collapsing (a) and (b).
+/// Caret parked OFF both task rows so neither reveals raw (the old test's
+/// other trap — a caret-on-line render shows source, not the styled preview).
+#[test]
+fn checked_task_body_recedes_from_open_task_body_real_pixels_item_29() {
+    let _g = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping checked_task_body_recedes_from_open_task_body_real_pixels_item_29: no wgpu adapter"
+        );
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    // A PROPORTIONAL-body world — `muted` reads apart from the content ink here,
+    // so a real recede is visible (the mono default world can collapse the two).
+    theme::set_active_by_name("Gumtree").unwrap();
+    p.sync_theme();
+    crate::markdown::set_wysiwyg_on(true);
+    // Row 0 open, row 1 checked, BYTE-IDENTICAL body text — the checkbox state is
+    // the only source difference, so any BODY ink difference is the dim alone.
+    // Caret parked on the trailing prose line (row 3), OFF both task rows.
+    let text = "- [ ] read the field notes\n- [x] read the field notes\n\nanchor\n";
+    let mut v = view(text, 3, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let pixels = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    let text_left = p.text_left() as i64;
+    let row_h = (p.metrics.line_height as i64).max(1);
+    // Background: a blank row well below both tasks, still in the page column.
+    let bg = pixels[((h as i64 - 20) * w as i64 + (text_left + 20)) as usize];
+
+    // The two task rows' body regions (same x/width; the long body text
+    // dominates the dominant-ink mode over the short leading marker+checkbox).
+    let open_top = p.line_ornament_top(0) as f32;
+    let done_top = p.line_ornament_top(1) as f32;
+    let region = |top: f32| Region::new(text_left as f32, top, 360.0, row_h as f32);
+    let open_ink = pixeldiff::dominant_ink_color(&pixels, w as i64, h as i64, region(open_top), bg, 18)
+        .expect("the OPEN task row must paint SOME body ink");
+    let done_ink = pixeldiff::dominant_ink_color(&pixels, w as i64, h as i64, region(done_top), bg, 18)
+        .expect("the CHECKED task row must paint SOME body ink");
+
+    // (a) The checked body ink is a DIFFERENT color than the open body ink.
+    assert_ne!(
+        done_ink, open_ink,
+        "a CHECKED task body {done_ink:?} must not render in the same ink as an OPEN task body \
+         {open_ink:?} — reverting the checked-task dim collapses them (the dropped test's vacuity)"
+    );
+    // (b) …and specifically RECEDES: its ink sits closer to the page ground than
+    // the open body's, in RGB channel distance — the dim is a recede, not just
+    // some other color (amber is the caret's alone, DESIGN §3).
+    let dist_to_bg = |c: [u8; 4]| -> i64 {
+        (0..3).map(|k| (c[k] as i64 - bg[k] as i64).abs()).sum()
+    };
+    let open_d = dist_to_bg(open_ink);
+    let done_d = dist_to_bg(done_ink);
+    assert!(
+        done_d + 30 <= open_d,
+        "the CHECKED task body must RECEDE toward the ground: its ink distance-to-bg {done_d} \
+         should be well under the OPEN body's {open_d} (open_ink={open_ink:?} done_ink={done_ink:?} bg={bg:?})"
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}

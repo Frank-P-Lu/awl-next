@@ -387,6 +387,68 @@ fn nested_list_marker_fix_is_content_independent() {
     set_inline_images_on(prev);
 }
 
+/// ITEM 41 regression — a list item that OWNS a nested child must render its
+/// OWN text at BODY weight, exactly like a childless sibling. The reopened bug
+/// (survived item 4c, reported twice) showed the parent bolded — a
+/// loose-list/span-range sibling of the 4c marker-range defect. A row's shaped
+/// WEIGHT/STYLE is derived PURELY from the md-span KIND over its content bytes
+/// (`render::md_attrs`: only `Bold`/`BoldItalic`/`Heading` re-weight and
+/// `Italic` re-slants — a bare `ListMarker`/`Quote` only recolours, never
+/// re-weights; verified live by pixel arithmetic, parent-content ink == sibling
+/// ink on both a mono and a proportional world), so the pure-parse oracle for
+/// "renders at body weight" is: NO weight/style span may cover a parent item's
+/// CONTENT range. This is the neighborhood's missing appearance law — it pins
+/// the plain nested list, a task parent, and a blockquote nested under a parent,
+/// where bugs cluster.
+#[test]
+fn nested_parent_item_content_stays_body_weight_item_41() {
+    // A span whose KIND re-weights or re-slants the run it covers — the exact
+    // set `render::md_attrs` turns into a non-body face. `ListMarker`/`Quote`
+    // recolour only, so they are deliberately NOT here.
+    fn reweights(k: &MdKind) -> bool {
+        matches!(
+            k,
+            MdKind::Bold | MdKind::BoldItalic | MdKind::Italic | MdKind::Heading(_)
+        )
+    }
+    // True if any re-weighting span OVERLAPS the half-open content range [lo, hi).
+    fn content_reweighted(spans: &[(Range<usize>, MdKind)], lo: usize, hi: usize) -> bool {
+        spans.iter().any(|(r, k)| reweights(k) && r.start < hi && lo < r.end)
+    }
+
+    // Plain nested list: "parent" (bytes 2..8) OWNS the "  - child" nested item;
+    // "sibling" (bytes 21..28) is childless. NEITHER content run may re-weight —
+    // the childless sibling is the control that proves the parent's weight is
+    // the anomaly, not a global style.
+    let doc = "- parent\n  - child\n- sibling\n";
+    let s = spans(doc);
+    assert!(
+        !content_reweighted(&s, 2, 8),
+        "the parent-with-nested-child stays body weight (item 41): {s:?}"
+    );
+    assert!(
+        !content_reweighted(&s, 21, 28),
+        "the childless sibling stays body weight (the control): {s:?}"
+    );
+
+    // TASK parent with a nested task child — same law across the task neighborhood.
+    let task = "- [ ] parent\n  - [ ] child\n";
+    let st = spans(task);
+    assert!(
+        !content_reweighted(&st, 6, 12),
+        "a task parent with a nested task child stays body weight: {st:?}"
+    );
+
+    // A blockquote nested under a parent list item — the parent's OWN text is
+    // still body weight (the quote body recolours, but color is not weight).
+    let bq = "- parent\n  > note\n- sibling\n";
+    let sb = spans(bq);
+    assert!(
+        !content_reweighted(&sb, 2, 8),
+        "a list parent above a nested blockquote stays body weight: {sb:?}"
+    );
+}
+
 #[test]
 fn table_pipes_separator_and_header_spans() {
     //        0      7 9        (line 0 "| a | b |" is 9 bytes incl newline at 9)
