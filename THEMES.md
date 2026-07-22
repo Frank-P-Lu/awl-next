@@ -586,6 +586,18 @@ the exception is fenced by **measurable laws**, exactly like the monochrome and
   world — so a different font or moving shader can never disguise a copied
   palette. Tests: `theme::tests::firetail_is_oxblood_wine_and_ember_not_potoroo_rust_or_bombora_violet`
   and `theme::tests::firetail_palette_is_numerically_distinct_from_every_other_world`.
+- **Tawny↔Mopoke differentiation (2026-07-22, Option A).** The pair used to
+  ship a BYTE-IDENTICAL caret (`#FFC05E`) and selection (`#3A6FD8`) — the
+  same ten-token RMS redmean recipe above measured them at only 24.6 apart,
+  awl's tightest pair. Mopoke (never Tawny, the anchor) moved both: caret
+  golden→copper/ember (`#F56E3D`, hue ~16°), selection blue→violet-plum
+  (`#7B39C6`) at the same `0x52` alpha. Locked so it can't regress back to
+  identity: Mopoke's caret and selection RGB must each differ from Tawny's,
+  and the pair's whole-palette RMS must clear 60 (measured ~76 post-change).
+  `primary_content` stays the shared dark-warm ink — an authored token, not
+  derived from `primary`, and inert for Mopoke's `CaretBlockStyle::Normal`
+  (the knockout-to-`primary_content` repaint is the `Filled` arm's alone).
+  Test: `theme::tests::tawny_and_mopoke_carets_and_selections_are_now_numerically_distinct`.
 - **The 1-bit foil (why a lava world can NEVER be Wagtail).** A `Background::Lava`
   paints authored COLOR (wine, teal) at fractional metaball-blend coverage — the
   exact two things a TRUE 1-bit world (`Theme::is_one_bit()`) forbids: a hue at
