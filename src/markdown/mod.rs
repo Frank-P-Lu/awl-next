@@ -114,8 +114,9 @@ pub use refs::{
 };
 #[allow(unused_imports)] // ListItem/READING_WPM: public API surface, no in-crate caller today
 pub use spans::{
-    break_kind, equals_runs, frontmatter_end, is_thematic_break, list_item, reading_time_min,
-    spans, strike_engaged, word_count, BreakKind, ListItem, MdKind, LIST_INDENT, READING_WPM,
+    break_kind, equals_runs, fence_line_lang, frontmatter_end, is_thematic_break, list_item,
+    reading_time_min, spans, strike_engaged, word_count, BreakKind, ListItem, MdKind,
+    LIST_INDENT, READING_WPM,
 };
 pub(crate) use tables::ColAlign;
 pub use tables::{align_table, table_block_lines};

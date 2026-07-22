@@ -2,7 +2,23 @@
 //! contract, row-band merging, fence-panel cache warmth) -- split out of the
 //! former monolithic `render::tests` (2026-07 code-organization pass).
 
-use super::{headless_pipeline, view};
+use super::super::*;
+use super::pixeldiff::{self, DistinguishFloor, Region};
+use super::{headless_dqp, headless_pipeline, view};
+
+/// MEASURED redmean RGB distance — a small, deliberate duplication of
+/// `syntax_roles.rs`'s own copy (the same accepted shape as
+/// `srgba_u8_to_linear` living twice in this codebase; see that file's doc).
+fn redmean(a: theme::Srgb, b: theme::Srgb) -> f32 {
+    let rbar = (a.r as f32 + b.r as f32) * 0.5;
+    let dr = a.r as f32 - b.r as f32;
+    let dg = a.g as f32 - b.g as f32;
+    let db = a.b as f32 - b.b as f32;
+    ((2.0 + rbar / 256.0) * dr * dr
+        + 4.0 * dg * dg
+        + (2.0 + (255.0 - rbar) / 256.0) * db * db)
+        .sqrt()
+}
 
 #[test]
 fn selection_rects_multiline_geometry_and_eol_pad() {
@@ -618,4 +634,204 @@ fn strike_text_and_line_share_one_ink_in_every_world() {
             th.name
         );
     }
+}
+
+/// APPEARANCE ORACLE (real GPU pixels, the CLAUDE.md tripwire): a `~~struck~~`
+/// row ACTUALLY PAINTS DIFFERENT pixels than the byte-identical PLAIN row —
+/// proving the strike-line mechanism (`strike_lines` returning non-empty)
+/// really reaches the framebuffer, not just existing on paper (the shape of
+/// the Wagtail invisible-picker-row bug this harness exists to catch).
+#[test]
+fn strike_line_paints_real_pixels_through_the_struck_row() {
+    let _g = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping strike_line_paints_real_pixels_through_the_struck_row: no wgpu adapter");
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    // Caret parked on a distant blank line so the `~~` markers conceal in the
+    // struck frame — the two documents' VISIBLE text is otherwise identical.
+    let plain = "plain text here\n\nprose\n";
+    let struck = "~~plain text here~~\n\nprose\n";
+    let mut a_view = view(plain, 2, 0);
+    a_view.is_markdown = true;
+    p.set_view(&a_view);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let a = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    let mut b_view = view(struck, 2, 0);
+    b_view.is_markdown = true;
+    p.set_view(&b_view);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let b = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    let top = p.line_ornament_top(0);
+    let lh = p.metrics.line_height;
+    let region = Region::new(p.text_left(), top, p.text_wrap_width(), lh);
+    pixeldiff::assert_perceptibly_different(
+        &a,
+        &b,
+        w as i64,
+        h as i64,
+        region,
+        DistinguishFloor::DEFAULT,
+        "the struck row gains real pixels from the strike LINE + receded ink",
+    );
+}
+
+/// THE LINK UNDERLINE geometry contract (2026-07-22 decision): a link's visible
+/// TEXT gets a thin, flat underline — the SAME line-band primitive the strike
+/// rides ([`spans::line_band`]), just near the BASELINE instead of mid-run —
+/// hugging the text's own glyph extents, surviving the caret landing on the
+/// link's line (content styling, not marker conceal). Mirrors
+/// [`strike_lines_hug_the_struck_run_and_survive_the_caret`] exactly.
+#[test]
+fn link_underline_hugs_the_link_text_and_survives_the_caret() {
+    let _t = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping link_underline_hugs_the_link_text_and_survives_the_caret: no wgpu adapter");
+        return;
+    };
+    let text = "keep [linked text](https://example.com) end\nplain second line\n";
+    // Caret parked on line 1: the `[]()` plumbing conceals, the underline draws.
+    let mut v = view(text, 1, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+
+    let lines = p.link_underlines();
+    assert_eq!(lines.len(), 1, "one link, one underline: {lines:?}");
+    let s = lines[0];
+    assert_eq!(s.amp, 0.0, "an underline is FLAT");
+    assert!(s.thickness > 0.0, "positive stroke");
+
+    // The link TEXT "linked text" is chars 6..17 on line 0; its selection rect
+    // reads the SAME row xs boundaries the underline proto captured.
+    let sel = p.range_rects((0, 6), (0, 17));
+    assert_eq!(sel.len(), 1, "one selection rect for the link text: {sel:?}");
+    let [rx, ry, rw, rh] = sel[0];
+    assert!((s.x - rx).abs() < 0.6, "underline x hugs the link text: {} vs {rx}", s.x);
+    assert!((s.w - rw).abs() < 2.5, "underline width hugs the link text: {} vs {rw}", s.w);
+    // Near the BASELINE — inside the glyph cell, but in its LOWER portion
+    // (unlike the strike, which centers) — proving the two share the primitive
+    // but differ in vertical placement.
+    let center = s.y + s.h * 0.5;
+    assert!(
+        center > ry && center < ry + rh,
+        "underline center {center} inside the glyph cell [{ry}, {}]",
+        ry + rh
+    );
+    assert!(
+        center > ry + rh * 0.5,
+        "underline sits in the LOWER half of the glyph cell (near the baseline), not centered: \
+         center={center}, cell=[{ry}, {}]",
+        ry + rh
+    );
+
+    // Caret ON the link's line: the `[]()` plumbing reveals, but the underline
+    // stays (content styling, not marker conceal) — it re-hugs the now-wider
+    // revealed text run.
+    let mut on = view(text, 0, 8);
+    on.is_markdown = true;
+    p.set_view(&on);
+    let on_lines = p.link_underlines();
+    assert_eq!(on_lines.len(), 1, "the underline survives the caret landing");
+
+    // A link-less buffer: zero underline geometry (the byte-identity half).
+    let mut plain = view("no link text here\n", 0, 0);
+    plain.is_markdown = true;
+    p.set_view(&plain);
+    assert!(p.link_underlines().is_empty(), "no link span, no underline geometry");
+}
+
+/// APPEARANCE ORACLE (real GPU pixels): a linked row ACTUALLY PAINTS DIFFERENT
+/// pixels under its text than the byte-identical PLAIN row (same visible
+/// words) — the drawn underline reaching the framebuffer, not just existing on
+/// paper. Mirrors [`strike_line_paints_real_pixels_through_the_struck_row`].
+#[test]
+fn link_underline_paints_real_pixels_under_the_link_row() {
+    let _g = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping link_underline_paints_real_pixels_under_the_link_row: no wgpu adapter");
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    // Caret parked on a distant blank line so the `[]()` plumbing conceals in
+    // the linked frame — the two documents' VISIBLE words are identical.
+    let plain = "check out this cool link for more\n\nprose\n";
+    let linked = "check out [this cool link](https://example.com) for more\n\nprose\n";
+    let mut a_view = view(plain, 2, 0);
+    a_view.is_markdown = true;
+    p.set_view(&a_view);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let a = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    let mut b_view = view(linked, 2, 0);
+    b_view.is_markdown = true;
+    p.set_view(&b_view);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let b = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    let top = p.line_ornament_top(0);
+    let lh = p.metrics.line_height;
+    let region = Region::new(p.text_left(), top, p.text_wrap_width(), lh);
+    pixeldiff::assert_perceptibly_different(
+        &a,
+        &b,
+        w as i64,
+        h as i64,
+        region,
+        DistinguishFloor::DEFAULT,
+        "the linked row gains real pixels from the underline",
+    );
+}
+
+/// LINK TEXT INK — the 2026-07-22 decision, ink half: a link's visible TEXT
+/// stays FULL CONTENT ink (never the caret's amber — DESIGN §3), and ONLY the
+/// underline drawn under it carries the muted tint. Verified at the MECHANISM
+/// seam — `md_attrs`'s own `LinkText` arm — for every world: the color it
+/// produces is EXACTLY `base_content` (never a re-derivation, never amber),
+/// plus a measured-distance ("hue-distance check" generalized to full redmean,
+/// see the inline note below) proof that content ink is never perceptibly
+/// close to the world's own caret accent.
+#[test]
+fn link_text_ink_is_content_not_amber_in_every_world() {
+    let _g = crate::testlock::serial();
+    let prev = theme::active().name;
+    for th in crate::theme::THEMES.iter() {
+        // `md_attrs` reads `theme::active()` internally (not a passed `&Theme`),
+        // so the world under test must actually BE active for its LinkText arm
+        // to compute against it.
+        theme::set_active_by_name(th.name).unwrap();
+        let base = Attrs::new();
+        let a = super::spans::md_attrs(&base, crate::markdown::MdKind::LinkText);
+        assert_eq!(
+            a.color_opt,
+            Some(th.base_content.to_glyphon()),
+            "{}: link text renders in EXACTLY base_content, never a re-derivation",
+            th.name
+        );
+        // DISTANCE FROM THE ACCENT: measured redmean RGB distance (the same
+        // perceptual metric `role_style_laws_hold_for_every_world`'s amber guard
+        // uses), not a raw hue angle — a near-white/near-black reading ink can
+        // carry a faint warm/cool HUE lean (e.g. Mopoke's cream `base_content` at
+        // hue ~40° sits close to its own amber `primary`'s hue) without reading
+        // as remotely "amber" to the eye, because lightness/saturation carry the
+        // whole distinction. redmean correctly credits that; a bare hue-distance
+        // floor would false-positive on exactly this legitimate warm-world case.
+        // An ink-caret world (`primary == base_content` BY DESIGN, compensated by
+        // a non-Normal block caret style) is exempt — there the "distance" is
+        // deliberately zero.
+        if !th.ink_caret() {
+            let d = redmean(th.base_content, th.primary);
+            assert!(
+                d >= 40.0,
+                "{}: link text ink (base_content) sits only {d:.1} redmean from the caret's \
+                 own accent color — too close to read as distinct from amber",
+                th.name
+            );
+        }
+    }
+    theme::set_active_by_name(prev).unwrap();
 }

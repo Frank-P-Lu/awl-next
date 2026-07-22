@@ -5,7 +5,8 @@
 //! for blockquote + heading-size tests.
 
 use super::super::*;
-use super::{headless_pipeline, view};
+use super::pixeldiff::{self, DistinguishFloor, Region};
+use super::{headless_dqp, headless_pipeline, view};
 
 #[test]
 fn markdown_styling_gated_and_composed() {
@@ -548,4 +549,91 @@ fn notice_parked_offscreen_when_empty() {
     );
     p.set_view(&v);
     assert!(p.notice.is_empty(), "the notice clears when the view drops it");
+}
+
+/// THE FENCE-LANGUAGE-LABEL geometry contract: a recognized-language fence gets
+/// exactly ONE mark, at its OPENING FENCE LINE's own row top, naming its
+/// language; an unknown-lang / no-lang fence gets NONE (DATA-driven off the
+/// parsed info string, never a second per-fence flag). Two fences mixing a
+/// recognized + unrecognized language in ONE doc prove the gate is per-block,
+/// not document-wide.
+#[test]
+fn fence_lang_marks_labels_only_recognized_fences_at_their_own_row() {
+    let _g = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping fence_lang_marks_labels_only_recognized_fences_at_their_own_row: no wgpu adapter");
+        return;
+    };
+    let text = "prose\n\n```rust\nfn f() {}\n```\n\n```\nno lang here\n```\n\n```made-up\nbody\n```\n";
+    let mut v = view(text, 0, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+    let marks = p.fence_lang_marks();
+    assert_eq!(marks.len(), 1, "only the rust fence gets a label: {marks:?}");
+    assert_eq!(marks[0].1, crate::syntax::Lang::Rust, "the label names the fence's OWN language: {marks:?}");
+    // The mark's top matches the opening fence LINE's own row (line 2, the
+    // "```rust" line: "prose\n" + "\n" precede it).
+    let want_top = p.line_ornament_top(2);
+    assert!(
+        (marks[0].0 - want_top).abs() < 0.01,
+        "the label sits on the fence's OWN opening line: {} vs {want_top}",
+        marks[0].0
+    );
+
+    // A fence-less / non-markdown buffer draws no label at all.
+    let mut plain = view("just prose, no fence\n", 0, 0);
+    plain.is_markdown = true;
+    p.set_view(&plain);
+    assert!(p.fence_lang_marks().is_empty(), "no fence, no label");
+}
+
+/// APPEARANCE ORACLE (real GPU pixels, the CLAUDE.md tripwire): a `​```rust`
+/// fence's opening-line row ACTUALLY PAINTS DIFFERENT pixels than the
+/// byte-identical fence with no language — the drawn "rust" label — while a
+/// no-lang fence's row (same geometry, same panel) does not gain the same
+/// difference. Guards the mechanism (`fence_lang_marks` returning non-empty)
+/// actually reaching the framebuffer, not just existing on paper.
+#[test]
+fn fence_lang_label_paints_real_pixels_on_the_fence_row() {
+    let _g = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping fence_lang_label_paints_real_pixels_on_the_fence_row: no wgpu adapter");
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    // Caret parked far below both fences so neither's markers reveal — the ONLY
+    // difference between the two documents is the info string naming a language.
+    let no_lang = "```\nfn f() {}\n```\n\nprose\n";
+    let rust = "```rust\nfn f() {}\n```\n\nprose\n";
+
+    let mut a_view = view(no_lang, 4, 0);
+    a_view.is_markdown = true;
+    p.set_view(&a_view);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let a = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    let mut b_view = view(rust, 4, 0);
+    b_view.is_markdown = true;
+    p.set_view(&b_view);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let b = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    // The opening fence line's own row band, RIGHT-hand portion only (where the
+    // right-aligned label actually sits) — the whole row would dilute the
+    // differing-pixel fraction below the floor (a short word vs a wide column).
+    let top = p.line_ornament_top(0);
+    let lh = p.metrics.line_height;
+    let right = p.text_left() + p.text_wrap_width();
+    let label_band_w = p.metrics.char_width * 8.0; // comfortably wider than "rust"
+    let region = Region::new(right - label_band_w, top, label_band_w, lh);
+    pixeldiff::assert_perceptibly_different(
+        &a,
+        &b,
+        w as i64,
+        h as i64,
+        region,
+        DistinguishFloor::DEFAULT,
+        "the fence's opening-line row gains real pixels from the 'rust' label",
+    );
 }

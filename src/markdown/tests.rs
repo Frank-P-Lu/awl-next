@@ -322,6 +322,71 @@ fn list_marker_dim() {
     assert!(has(&s, 0, 2, MdKind::ListMarker), "marker dim: {s:?}");
 }
 
+/// THE NESTED-LIST MIS-HIGHLIGHT FIX: a nested item's `ListMarker` span covers its
+/// WHOLE prefix — indent + marker + space — not just the marker, mirroring the
+/// shared [`list_item`] scanner's own `0..content` shape. Before the fix, pulldown's
+/// `Tag::Item` range (which starts at the marker CHARACTER, excluding indentation)
+/// meant a nested item's leading indent bytes carried NO span at all — the "a space
+/// missing for syntax highlighting" gap the notes named. Two levels deep + an
+/// ordered nested item are all covered, so the fix generalizes past depth 1.
+#[test]
+fn nested_list_marker_dims_its_full_indent_prefix() {
+    // Depth 1 (2-space indent): the marker span starts at byte 0 of "  - nested",
+    // covering the indent too, not just "- " at byte 2.
+    let doc = "- top\n  - nested\n";
+    let s = spans(doc);
+    assert!(
+        has(&s, 6, 10, MdKind::ListMarker),
+        "'  - ' (indent + marker + space) is ONE dim span: {s:?}"
+    );
+    assert!(
+        !s.iter().any(|(r, k)| *k == MdKind::ListMarker && r.start == 8),
+        "the marker span no longer starts mid-indent (the old excluded-indent bug): {s:?}"
+    );
+
+    // Depth 2 (4-space indent).
+    let doc2 = "- top\n  - mid\n    - deep\n";
+    let s2 = spans(doc2);
+    // "- top\n" = 6 bytes, "  - mid\n" = 8 bytes -> depth-2 line starts at 14.
+    assert!(
+        has(&s2, 14, 20, MdKind::ListMarker),
+        "'    - ' at depth 2 dims its full 4-space indent + marker: {s2:?}"
+    );
+
+    // A nested ORDERED item ("  1. text") gets the same full-prefix treatment.
+    let doc3 = "- top\n  1. nested ordered\n";
+    let s3 = spans(doc3);
+    assert!(
+        has(&s3, 6, 11, MdKind::ListMarker),
+        "'  1. ' (indent + ordered marker + space) is ONE dim span: {s3:?}"
+    );
+}
+
+/// The same nested-marker fix applies whether the nested item's CONTENT is plain
+/// text, styled inline markup, or (the reported repro) an image reference — the
+/// marker span is derived from the LINE alone, before any content-specific span is
+/// pushed, so it can never depend on what follows it.
+#[test]
+fn nested_list_marker_fix_is_content_independent() {
+    let plain = spans("- top\n  - plain nested\n");
+    assert!(has(&plain, 6, 10, MdKind::ListMarker), "plain content: {plain:?}");
+
+    let bold = spans("- top\n  - **bold** nested\n");
+    assert!(has(&bold, 6, 10, MdKind::ListMarker), "bold content: {bold:?}");
+
+    let prev = inline_images_on();
+    set_inline_images_on(true);
+    let img = spans("- top\n  - ![caption|400](x.png)\n");
+    assert!(has(&img, 6, 10, MdKind::ListMarker), "image content: {img:?}");
+    // The image's own conceal span starts EXACTLY where the marker span ends —
+    // no gap, no overlap.
+    assert!(
+        img.iter().any(|(r, k)| *k == MdKind::ConcealMarkup(ConcealKind::Image) && r.start == 10),
+        "the image span picks up right where the fixed marker span ends: {img:?}"
+    );
+    set_inline_images_on(prev);
+}
+
 #[test]
 fn table_pipes_separator_and_header_spans() {
     //        0      7 9        (line 0 "| a | b |" is 9 bytes incl newline at 9)
@@ -924,6 +989,39 @@ fn break_kind_tracks_the_syntax_and_maps_to_default_ornaments() {
     assert_eq!(ORNAMENTS_DEFAULT.pick(BreakKind::Dash), '❧');
     assert_eq!(ORNAMENTS_DEFAULT.pick(BreakKind::Star), '⁂');
     assert_eq!(ORNAMENTS_DEFAULT.pick(BreakKind::Underscore), '❦');
+}
+
+/// THE FENCE-LANGUAGE-LABEL gate: [`fence_line_lang`] recognizes a fenced
+/// block's opening line's info string EXACTLY when [`crate::syntax::Lang::
+/// from_info`] would (the same gate `CodeSyntax` highlighting uses), so the
+/// quiet render-only LABEL can never disagree with what the fence body actually
+/// highlights as. A no-lang / unrecognized-lang / non-fence line yields `None`
+/// (no label drawn).
+#[test]
+fn fence_line_lang_matches_the_syntax_highlighting_gate() {
+    use crate::syntax::Lang;
+    assert_eq!(fence_line_lang("```rust"), Some(Lang::Rust));
+    assert_eq!(fence_line_lang("```python"), Some(Lang::Python));
+    // Aliases / attribute tails resolve through the SAME `Lang::from_info` gate.
+    assert_eq!(fence_line_lang("```rust,ignore"), Some(Lang::Rust));
+    assert_eq!(fence_line_lang("```sh title=\"x\""), Some(Lang::Bash));
+    // `~~~` fences work identically to backtick fences.
+    assert_eq!(fence_line_lang("~~~rust"), Some(Lang::Rust));
+    // Up to 3 leading indent spaces (CommonMark's fence-indent allowance).
+    assert_eq!(fence_line_lang("   ```rust"), Some(Lang::Rust));
+    // No language, an unrecognized language, or too little indent/run: no label.
+    assert_eq!(fence_line_lang("```"), None, "bare fence: no label");
+    assert_eq!(fence_line_lang("```made-up-lang"), None, "unrecognized language: no label");
+    assert_eq!(fence_line_lang("not a fence"), None, "not a fence line at all: no label");
+    assert_eq!(fence_line_lang("``rust"), None, "only 2 backticks is not a fence");
+    assert_eq!(fence_line_lang("    ```rust"), None, "4-space indent is a CODE block, not a fence");
+
+    // AGREEMENT LAW: for every recognized fence line, `fence_line_lang` agrees
+    // with `Lang::from_info` on the raw info string alone — the label can never
+    // name a language the body's own highlighting disagrees with.
+    for (line, info) in [("```rust", "rust"), ("```python extra", "python extra"), ("~~~toml", "toml")] {
+        assert_eq!(fence_line_lang(line), Lang::from_info(info), "label/highlight gate must agree: {line:?}");
+    }
 }
 
 #[test]

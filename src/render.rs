@@ -2871,6 +2871,16 @@ pub struct TextPipeline {
     /// TEXT's muted transform and the popover's `S` demo share). Geometry from
     /// [`rects`]' strike bucket (`strike_lines`); empty for a strike-less buffer.
     pub strike_pipeline: SpellUnderlinePipeline,
+    /// The GPU quad pipeline that draws the quiet markdown LINK UNDERLINE — the
+    /// same flat-line trick as `strike_pipeline`, just a different vertical band
+    /// (`spans::link_underline_band`) and its own instance (mirrors `nit_pipeline`
+    /// / `strike_pipeline` / the popover's demo pipeline all sharing this ONE
+    /// pipeline TYPE), tinted THE link-underline ink (`spans::
+    /// link_underline_srgba_bytes`, the SAME muted rung the strike shares — the
+    /// link TEXT itself stays full content ink, see `md_attrs`'s `LinkText` arm).
+    /// Geometry from [`rects`]' link-underline bucket (`link_underlines`); empty
+    /// for a link-less buffer.
+    pub link_underline_pipeline: SpellUnderlinePipeline,
     /// Spring + shape-morph animation state for the caret.
     pub caret: CaretAnim,
     /// Last view state applied (for caret placement + scroll during draw).

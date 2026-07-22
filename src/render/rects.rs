@@ -38,6 +38,12 @@ pub(super) struct OrnamentCache {
     /// placed at (see [`TextPipeline::quote_marks`]). Empty for a non-markdown /
     /// quote-less buffer.
     quote_blocks: std::cell::RefCell<Vec<usize>>,
+    /// Each fenced code block's `(opening-fence line, recognized language)` — ONLY
+    /// for a block whose info string named a language [`crate::markdown::
+    /// fence_line_lang`] recognizes (the SAME gate `CodeSyntax` highlighting uses),
+    /// so a plain / unknown-lang fence contributes nothing. Drives the quiet
+    /// per-fence LANGUAGE LABEL (see [`TextPipeline::fence_lang_marks`]).
+    fence_lang_blocks: std::cell::RefCell<Vec<(usize, crate::syntax::Lang)>>,
 }
 
 impl OrnamentCache {
@@ -48,6 +54,7 @@ impl OrnamentCache {
             bullet_lines: std::cell::RefCell::new(Vec::new()),
             table_blocks: std::cell::RefCell::new(Vec::new()),
             quote_blocks: std::cell::RefCell::new(Vec::new()),
+            fence_lang_blocks: std::cell::RefCell::new(Vec::new()),
         }
     }
 }
@@ -117,10 +124,10 @@ impl UnderlineCache {
 /// stale bucket would keep drawing a pill after the toggle), rebuilt via the
 /// ONE-WALK [`TextPipeline::visual_rows_for_lines`], and per frame just offset by
 /// `doc_top` / `text_left` + culled to the visible band (O(visible), never
-/// O(doc)). Cursor moves and scrolls never invalidate it. FOUR proto buckets so
-/// the comment, string, highlight, and code-pill washes ride their own
-/// fixed-tint pipelines (the markdown `==highlight==` band has its OWN violet
-/// tint now, decoupled from the comment wash — see
+/// O(doc)). Cursor moves and scrolls never invalidate it. SIX proto buckets so
+/// the comment, string, highlight, code-pill, strike-line, and link-underline
+/// geometries ride their own fixed-tint pipelines (the markdown `==highlight==`
+/// band has its OWN violet tint now, decoupled from the comment wash — see
 /// [`super::spans::highlight_wash`]). Interior-mutable like its siblings.
 pub(super) struct WashCache {
     version: std::cell::Cell<Option<(u64, u64, bool)>>,
@@ -133,6 +140,12 @@ pub(super) struct WashCache {
     /// owner `super::spans::strike_line_band`). A fifth bucket of the SAME
     /// cache/build walk, not a parallel cache.
     strike_protos: std::cell::RefCell<Vec<UnderlineProto>>,
+    /// `MdKind::LinkText` span segments — the per-visual-row x-extents the quiet
+    /// link UNDERLINE rides ([`TextPipeline::link_underlines`], positioned by
+    /// `super::spans::link_underline_band` — the SAME line-band primitive
+    /// `strike_line_band` rides, just a different vertical fraction). A sixth
+    /// bucket of the SAME cache/build walk.
+    link_underline_protos: std::cell::RefCell<Vec<UnderlineProto>>,
 }
 
 impl WashCache {
@@ -144,6 +157,7 @@ impl WashCache {
             highlight_protos: std::cell::RefCell::new(Vec::new()),
             code_pill_protos: std::cell::RefCell::new(Vec::new()),
             strike_protos: std::cell::RefCell::new(Vec::new()),
+            link_underline_protos: std::cell::RefCell::new(Vec::new()),
         }
     }
 }
@@ -254,10 +268,29 @@ impl TextPipeline {
         let mut tables: Vec<(usize, std::ops::Range<usize>)> = Vec::new();
         let mut quotes: Vec<usize> = Vec::new();
         let mut prev_quote = false;
+        let mut fence_langs: Vec<(usize, crate::syntax::Lang)> = Vec::new();
         let mut start = 0usize;
         for (li, line) in self.buffer.lines.iter().enumerate() {
             let text = line.text();
             let end = start + text.len();
+            // FENCE LANGUAGE: this line OPENS a fenced code block when a
+            // `ConcealMarkup(Fence)` span's own START byte falls on it — re-derive
+            // the label straight from the RAW line text (mirrors `break_kind`'s
+            // post-hoc glyph pick for `Rule`: md_spans only marks WHERE the fence
+            // lives, never which label the render shows).
+            if !self.md_spans.is_empty() {
+                for (r, k) in &self.md_spans {
+                    if *k
+                        == crate::markdown::MdKind::ConcealMarkup(crate::markdown::ConcealKind::Fence)
+                        && r.start >= start
+                        && r.start < end
+                    {
+                        if let Some(lang) = crate::markdown::fence_line_lang(text) {
+                            fence_langs.push((li, lang));
+                        }
+                    }
+                }
+            }
             // BLOCKQUOTE blocks: a line "is a quote line" when a `Blockquote` marker
             // conceal span overlaps its byte range. The FIRST line of each contiguous
             // run (a run boundary = a quote line whose predecessor was not one) starts
@@ -306,6 +339,7 @@ impl TextPipeline {
         *self.ornament_cache.bullet_lines.borrow_mut() = bullets;
         *self.ornament_cache.table_blocks.borrow_mut() = tables;
         *self.ornament_cache.quote_blocks.borrow_mut() = quotes;
+        *self.ornament_cache.fence_lang_blocks.borrow_mut() = fence_langs;
         self.ornament_cache.version.set(Some(self.reshape_count));
     }
 
@@ -532,6 +566,30 @@ impl TextPipeline {
     pub(super) fn quote_block_lines(&self) -> Vec<usize> {
         self.ensure_ornament_lists();
         self.ornament_cache.quote_blocks.borrow().clone()
+    }
+
+    /// The quiet per-fence LANGUAGE LABEL's `(top-y, language)` for every VISIBLE
+    /// fenced code block whose info string named a language [`crate::markdown::
+    /// fence_line_lang`] recognizes (the SAME gate the fence's own `CodeSyntax`
+    /// highlighting uses) — an unknown-lang / no-lang fence contributes nothing, so
+    /// it draws no label (DATA-driven off the parsed info string, never a second
+    /// per-fence flag). `top` is the opening fence LINE's own row top (the label
+    /// rides the same row as the ` ``` ` marker text). Off-screen blocks are culled.
+    /// Empty for a non-markdown / fence-less buffer, keeping those renders
+    /// byte-identical.
+    pub(super) fn fence_lang_marks(&self) -> Vec<(f32, crate::syntax::Lang)> {
+        if !self.md_enabled || self.md_spans.is_empty() {
+            return Vec::new();
+        }
+        self.ensure_ornament_lists();
+        self.ornament_cache
+            .fence_lang_blocks
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|&(li, _)| self.line_ornament_visible(li))
+            .map(|(li, lang)| (self.line_ornament_top(li), lang))
+            .collect()
     }
 
     /// The bullet GLYPHS the renderer would draw, in document order — the char half of
@@ -987,6 +1045,11 @@ impl TextPipeline {
             /// (not a background wash; the band geometry is the one owner
             /// `super::spans::strike_line_band`'s at read time).
             Strike,
+            /// A link's visible TEXT — the quiet UNDERLINE's x-extents (not a
+            /// background wash; the band geometry is `super::spans::
+            /// link_underline_band`'s at read time, the SAME line-band primitive
+            /// `Strike` rides).
+            LinkUnderline,
         }
         // A GFM table renders as a drawn GRID (`prepare_table_grid`), which styles
         // each cell's inline code/highlight ITSELF; the raw table source is concealed
@@ -1033,6 +1096,12 @@ impl TextPipeline {
                 crate::markdown::MdKind::Strikethrough => {
                     spans.push((r.clone(), Bucket::Strike));
                 }
+                // A link's visible TEXT: the quiet underline's x-extents. NOT
+                // WYSIWYG-gated (like `Strike` — content styling, present
+                // whether or not the `[]()`  plumbing conceals).
+                crate::markdown::MdKind::LinkText => {
+                    spans.push((r.clone(), Bucket::LinkUnderline));
+                }
                 // INLINE code gets a small value-step pill — gated on WYSIWYG (off
                 // reproduces the pre-round render: no pill, no panel, no conceal).
                 crate::markdown::MdKind::Code { inline: true } if wysiwyg => {
@@ -1047,6 +1116,7 @@ impl TextPipeline {
             self.wash_cache.highlight_protos.borrow_mut().clear();
             self.wash_cache.code_pill_protos.borrow_mut().clear();
             self.wash_cache.strike_protos.borrow_mut().clear();
+            self.wash_cache.link_underline_protos.borrow_mut().clear();
             self.wash_cache.version.set(Some(key));
             return;
         }
@@ -1095,6 +1165,7 @@ impl TextPipeline {
         let mut highlight_protos = Vec::new();
         let mut code_pill_protos = Vec::new();
         let mut strike_protos = Vec::new();
+        let mut link_underline_protos = Vec::new();
         for (li, s_col, e_col, bucket) in segs {
             let Some(rows) = rows_by_line.get(&li) else {
                 continue; // unreachable: every requested line gets rows
@@ -1129,6 +1200,7 @@ impl TextPipeline {
                     Bucket::Highlight => highlight_protos.push(proto),
                     Bucket::CodePill => code_pill_protos.push(proto),
                     Bucket::Strike => strike_protos.push(proto),
+                    Bucket::LinkUnderline => link_underline_protos.push(proto),
                 }
             }
         }
@@ -1137,6 +1209,7 @@ impl TextPipeline {
         *self.wash_cache.highlight_protos.borrow_mut() = highlight_protos;
         *self.wash_cache.code_pill_protos.borrow_mut() = code_pill_protos;
         *self.wash_cache.strike_protos.borrow_mut() = strike_protos;
+        *self.wash_cache.link_underline_protos.borrow_mut() = link_underline_protos;
         self.wash_cache.version.set(Some(key));
     }
 
@@ -1278,6 +1351,59 @@ impl TextPipeline {
                 w,
                 h: band_h,
                 amp: 0.0,    // STRAIGHT — a strike is a calm flat line
+                period: 1.0, // unused when amp == 0 (kept > 0 so the shader div is safe)
+                thickness: stroke,
+            });
+        }
+        out
+    }
+
+    /// Build the link-text UNDERLINE — one flat [`Squiggle`] (`amp: 0.0`) per
+    /// visual-row segment of every [`crate::markdown::MdKind::LinkText`] span, in
+    /// pixels for the current scroll + zoom, from the cached
+    /// [`WashCache::link_underline_protos`] (the SAME cache/build as
+    /// [`Self::strike_lines`], a sixth bucket). The band's vertical placement +
+    /// stroke come from `super::spans::link_underline_band` — THE SAME line-band
+    /// primitive [`Self::strike_lines`] rides (`super::spans::line_band`), just
+    /// near the BASELINE instead of mid-run, so it reads as an underline under the
+    /// link text rather than a line through it: the decided quiet affordance (the
+    /// link TEXT itself stays full content ink — see `md_attrs`'s `LinkText` arm —
+    /// only this underline carries the muted tint). NOT caret-gated (content
+    /// styling, like the strike line — only the `[]()` plumbing's OWN conceal is
+    /// reveal-on-cursor) and NOT WYSIWYG-gated. Empty for a link-less / non-
+    /// markdown buffer, keeping those frames byte-identical.
+    pub(super) fn link_underlines(&self) -> Vec<Squiggle> {
+        if self.md_spans.is_empty() {
+            return Vec::new();
+        }
+        self.ensure_wash_protos();
+        let protos = self.wash_cache.link_underline_protos.borrow();
+        if protos.is_empty() {
+            return Vec::new();
+        }
+        let m = &self.metrics;
+        let doc_top = self.doc_top();
+        let text_left = self.text_left();
+        let mut out = Vec::with_capacity(protos.len());
+        for p in protos.iter() {
+            let line_top = doc_top + p.line_top;
+            if !self.proto_visible(line_top, p.line_height) {
+                continue; // off-screen: the quad would be clipped to nothing
+            }
+            let x = text_left + p.xs_s;
+            let w = (p.xs_e - p.xs_s).max(2.0 * m.zoom);
+            // The row's caret-height glyph cell, then THE owner's band over it.
+            let (band_y, cell_h) = self.row_band_for(p.line, p.line_height, line_top);
+            let (y, band_h, stroke) = super::spans::link_underline_band(band_y, cell_h, m.zoom);
+            if !self.band_admits(y, band_h) {
+                continue; // DIFF-AS-PREVIEW: the row scrolled past the card edge
+            }
+            out.push(Squiggle {
+                x,
+                y,
+                w,
+                h: band_h,
+                amp: 0.0,    // STRAIGHT — a calm flat underline
                 period: 1.0, // unused when amp == 0 (kept > 0 so the shader div is safe)
                 thickness: stroke,
             });

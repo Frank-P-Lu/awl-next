@@ -168,6 +168,44 @@ pub fn break_kind(line: &str) -> BreakKind {
     BreakKind::Dash
 }
 
+/// A fenced code block's OPENING FENCE LINE's recognized LANGUAGE, from the raw
+/// line text alone (e.g. `` "```rust" `` -> `Some(Lang::Rust)`, `` "```" `` or
+/// `` "```made-up" `` -> `None`) — the render-only counterpart of [`break_kind`]:
+/// `md_spans` only marks WHERE a fence lives ([`crate::markdown::ConcealKind::Fence`]),
+/// never which glyph/label the render should show for it, so the render re-derives
+/// the label straight from the line the SAME way `break_kind` re-derives the
+/// thematic-break ornament. Delegates the actual name→language gate to
+/// [`crate::syntax::Lang::from_info`] — THE SAME gate `spans` uses to decide
+/// whether a fence's body gets `CodeSyntax` highlighting at all — so the drawn quiet
+/// LABEL and the fence's own syntax highlighting can never disagree about which
+/// language a fence names. Skips up to 3 leading indent spaces (CommonMark's fence-
+/// indent allowance) then a run of 3+ matching `` ` `` or `~` fence characters;
+/// anything short of that (no fence, an indented code block, an unmatched run) is
+/// `None`. Pure + total.
+pub fn fence_line_lang(line: &str) -> Option<crate::syntax::Lang> {
+    let mut chars = line.chars();
+    let mut rest = line;
+    for _ in 0..3 {
+        match chars.clone().next() {
+            Some(' ') => {
+                chars.next();
+                rest = chars.as_str();
+            }
+            _ => break,
+        }
+    }
+    let fence_char = rest.chars().next()?;
+    if fence_char != '`' && fence_char != '~' {
+        return None;
+    }
+    let run = rest.chars().take_while(|&c| c == fence_char).count();
+    if run < 3 {
+        return None;
+    }
+    let info = &rest[run..];
+    crate::syntax::Lang::from_info(info)
+}
+
 /// True when `line` is a CommonMark THEMATIC BREAK: after up to 3 leading spaces, a
 /// run of THREE-OR-MORE matching `-`, `_`, or `*`, separated/surrounded only by
 /// spaces or tabs, and nothing else. This is the bare-text heuristic
@@ -834,34 +872,40 @@ fn push_quote_markers(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: 
     }
 }
 
-/// Dim a list item's leading marker (`-`/`*`/`+` or `1.`/`1)`), plus its space.
+/// Dim a list item's leading marker (`-`/`*`/`+` or `1.`/`1)`), plus its INDENT and
+/// its trailing space.
+///
+/// pulldown's `Tag::Item` `range` starts at the MARKER CHARACTER itself, NEVER at
+/// the line's own start — so for a NESTED item (`  - text`, `it.indent > 0`) the
+/// leading indent spaces sit BEFORE `range.start` and are invisible to a scan over
+/// `text[range.clone()]` alone. A top-level item has `indent == 0`, so this was
+/// masked there (the marker IS the line start) — only nesting exposed the gap: the
+/// nested marker's own span silently excluded its 2(+)-space indent, leaving those
+/// bytes with NO markdown span at all (the "space missing" mis-highlight the notes
+/// named — harmless for bare whitespace on its own, but a real, general nested-list
+/// gap, not an image-specific one).
+///
+/// FIX: re-derive the marker from the item's own LINE (walk back to the preceding
+/// `\n`, or byte 0), through the SAME shared [`list_item`] line-scanner the bullet
+/// reveal-conceal / Tab-Shift-Tab indent / depth-cycle machinery already use — one
+/// owner, so the marker's span can never again disagree with what those already
+/// treat as "the marker". The pushed span now covers the WHOLE prefix
+/// (indent + marker + its required space), matching `list_item`'s own
+/// `0..content` shape exactly.
 fn push_list_marker(out: &mut Vec<(Range<usize>, MdKind)>, text: &str, range: &Range<usize>) {
-    let s = &text[range.clone()];
-    let b = s.as_bytes();
-    let mut i = 0;
-    while i < b.len() && (b[i] == b' ' || b[i] == b'\t') {
-        i += 1;
-    }
-    let start = i;
-    if i < b.len() && (b[i] == b'-' || b[i] == b'*' || b[i] == b'+') {
-        i += 1;
-    } else {
-        let d0 = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i > d0 && i < b.len() && (b[i] == b'.' || b[i] == b')') {
-            i += 1;
-        } else {
-            return; // not a recognizable marker
-        }
-    }
-    // Include the single space after the marker.
-    if i < b.len() && (b[i] == b' ' || b[i] == b'\t') {
-        i += 1;
-    }
-    if i > start {
-        out.push((range.start..range.start + i, MdKind::ListMarker));
+    let line_start = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
+    let line_end = text[range.start..]
+        .find('\n')
+        .map_or(text.len(), |i| range.start + i);
+    let line = &text[line_start..line_end];
+    let Some(it) = list_item(line) else {
+        return; // not a recognizable marker line (shouldn't happen for a real Item)
+    };
+    // From the LINE's own start (byte 0, covering any indent) through `content`
+    // (past the marker + its required space) — `it.indent` is only the marker
+    // CHARACTER's own offset, not where the span should START.
+    if it.content > 0 {
+        out.push((line_start..line_start + it.content, MdKind::ListMarker));
     }
 }
 

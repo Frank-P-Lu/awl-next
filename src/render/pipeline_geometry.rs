@@ -180,6 +180,9 @@ impl TextPipeline {
         // Re-tint the `~~strikethrough~~` line from THE strike-ink owner (the
         // struck text's own muted transform re-reads the theme each reshape).
         self.strike_pipeline.set_color(strike_srgba_bytes());
+        // Re-tint the quiet link UNDERLINE from its own ink owner (the same
+        // muted rung as the strike, decoupled instance).
+        self.link_underline_pipeline.set_color(link_underline_srgba_bytes());
         // Re-tint the PAGE-MODE margin ground to the new world's tokens.
         self.background_pipeline.set_gradient(background_desc());
         // THE PAGE FRAME: re-tint from the one ink owner (`base_content`).

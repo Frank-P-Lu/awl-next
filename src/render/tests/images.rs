@@ -494,6 +494,40 @@ fn inline_image_missing_file_draws_placeholder_not_quad() {
     restore();
 }
 
+/// NESTED-LIST IMAGE CAPTION: an image nested inside a list item (`  - ![alt|W](p)`,
+/// two levels of indent) reports its ALT TEXT + resolved LINE + destination PATH
+/// exactly like a top-level image — the caption the placeholder card draws (see
+/// `layers::prepare_images`'s `Missing.alt` label) is driven straight off this
+/// report, so a correct report here IS the caption rendering correctly. Guards the
+/// "the caption never renders for a nested-list image" report: it already reads
+/// right off `images_report()` (which is untouched by the list-nesting depth — an
+/// image's `ConcealMarkup(Image)` span + `parse_image_source` never look at the
+/// preceding marker at all), so this pins the OUTCOME as a regression guard.
+#[test]
+fn nested_list_image_reports_alt_caption_and_line() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    let prev = crate::markdown::inline_images_on();
+    crate::markdown::set_inline_images_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping nested_list_image_reports_alt_caption_and_line: no wgpu adapter");
+        crate::markdown::set_inline_images_on(prev);
+        return;
+    };
+    let text = "- Item one\n  - ![a test caption|400](assets/does-not-exist.png)\n- Item two\n";
+    let mut v = view(text, 0, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+    let report = p.images_report();
+    assert_eq!(report.len(), 1, "one nested-list image reported: {report:?}");
+    let im = &report[0];
+    assert_eq!(im.alt, "a test caption", "the caption text (alt, hint stripped) survives nesting: {im:?}");
+    assert_eq!(im.path, "assets/does-not-exist.png", "the path is unaffected by nesting: {im:?}");
+    assert_eq!(im.line, 1, "the image resolves to its OWN (nested) line: {im:?}");
+    assert_eq!(im.width_hint, Some(400), "the |NNN width hint still parses: {im:?}");
+    crate::markdown::set_inline_images_on(prev);
+}
+
 /// A NON-IMAGE markdown buffer draws neither an image quad nor a placeholder —
 /// byte-identical to the pre-feature editor at the GPU layer.
 #[cfg(not(target_arch = "wasm32"))]
