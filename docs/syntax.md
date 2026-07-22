@@ -1,0 +1,14 @@
+# awl docs — Syntax highlighting (Alabaster) & spell scoping in code
+
+> Read BEFORE touching `syntax/`, role colors (`role_style_for`), comment classification, or spell-check behavior in code buffers. Moved verbatim out of CLAUDE.md 2026-07-22 (queue item 17); earlier round history: `git log -p CLAUDE.md`.
+
+## Syntax highlighting (`syntax/` + `render/spans.rs`) — Alabaster, four roles only
+
+The philosophy (tonsky.me/blog/alabaster) is the whole point — **do NOT rainbow-highlight.** A code buffer keeps EVERYTHING in the default ink and distinguishes ONLY four roles, quiet per-world hues, **never amber** (DESIGN §3: `primary` is the caret alone; role tints are law-tested away from it):
+
+- **Comment is TWO-TIER** (comments are the prose in the code, and awl is a writing tool): PROSE comments render prominent at full ink + a warm wash; COMMENTED-OUT CODE (`SynKind::CommentCode`, the `looks_like_code` heuristic, default-to-prose when unsure) stays muted grey, no wash.
+- **Str** → strings/chars: quiet green tint (+ green wash on dark worlds). **Constant** → numbers/booleans/nil: quiet violet, never washed. **Definition** → the name being defined: quiet blue, never washed.
+- **Role STYLE lives in ONE place — `role_style_for` (`render/spans.rs`)**, a pure fn of the world's palette (hue anchors Str=140°/Def=220°/Const=290°/comment-wash=50°; lightness rides the `base_content`→`muted` ladder; sat cap 0.50). No per-theme syntax palette (one escape hatch: `Theme::role_overrides`, `NONE` in all worlds). Fenced `CodeSyntax` inherits through the same seam. **Law test** `role_style_laws_hold_for_every_world`: pairwise distinguishability, comment-tier ink identity, wash whisper bounds, the AMBER GUARD (any saturated fg ≥ 30° from `primary`), monotone presence ordering. Role tints carry no bold weight (a taste call; every world's display face DOES ship a real bundled Bold — see render.rs's bold roster — used by markdown bold + per-world heading weight, never by syntax roles).
+- **Washes are background quads, O(visible) by law** (`rects::WashCache` proto-cache; re-tint rides `sync_theme_colors` O(1)). Prose/fence-less buffers → zero protos, byte-identical.
+- **Spell-check is SCOPED in code buffers** (`spell::misspellings_for`, the one owner): only prose-comment + string spans, with an identifier-shape post-filter (ALL-CAPS/CamelCase/`_`/len<3 never squiggle); `CommentCode` excluded. `lang == None` is the unscoped scan verbatim (prose byte-identical).
+- **Gating:** syntax applies ONLY to recognized code files (`Buffer::syntax_lang`); `.env`/`.md`/`.txt`/unrecognized → None, byte-identical. ~20 hand-written minimal lexers (`syntax/<lang>.rs`, `rust.rs` is the template). Adding a language edits ONLY its own file + tests — the comment split is central, `mod.rs`/`theme/`/`render.rs` are pre-wired.

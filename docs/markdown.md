@@ -1,0 +1,24 @@
+# awl docs — Markdown render, WYSIWYG conceal & formatting commands
+
+> Read BEFORE touching `markdown/`, `actions/format.rs`, `actions/link.rs`, heading sizes/row heights, or any conceal/reveal behavior. Moved verbatim out of CLAUDE.md 2026-07-22 (queue item 17); earlier round history: `git log -p CLAUDE.md`.
+
+## Markdown styling (`markdown/` + `render.rs`) — dim the markup, style the content
+
+- Syntax characters recede to `muted` (present + editable); content gains structure: bold weight, italic, mono+tint code, link text in content ink (brackets/URL recede — NOT amber), **headings = larger SIZE per level (Ladder J: 1.6/1.3/1.15 via `markdown/headings.rs::type_scale`), NO accent; WEIGHT is per-world DATA** — `Theme::heading_bold` (one bit: `##`/`###` bold, `#` NEVER; serif worlds regular, mono/sans worlds bold; law `heading_bold_worlds_shape_bold_in_their_own_family`) (amber stays the caret's, DESIGN §3).
+- Gated by `is_markdown` — a no-path scratch/note buffer reads as markdown from the first keystroke; a saved file by `.md`/`.markdown` only. A `.rs`/`.txt`/`.env` file renders byte-identically.
+- `markdown::spans(text)` (pulldown-cmark) → `(range, MdKind)` laid as base per-span `AttrsList` under the CJK spans (same seam). Pure/deterministic, re-parsed each reshape. Sidecar `md_spans`.
+- **Heading size = variable row heights:** keyed off leading `#` count. The scroll↔pixel math reads a per-row geometry table (`ensure_row_geom` → `cached_row_tops/_heights/_doc_height`), NOT a constant `LINE_HEIGHT`; block caret scales by `cursor_scale()`. A zoom/DPI change or `is_markdown` flip rebuilds attrs (`restyle_all_lines`).
+- **Fenced code syntax:** the info-string language highlights the body via `syntax::spans`, translated to doc offsets as `MdKind::CodeSyntax` (role color wins the flat Code tint, mono face kept). Unknown/indented → plain mono.
+- **`==highlight==`** (Obsidian convention, not CommonMark): a warm wash behind full-ink text; hand-rolled scan for exactly-two `=` (a bare `=`/`===`/cross-line stays inert). **Task lists / rules / word-count readout:** `- [ ]`/`- [x]`, `---` thematic break (dim quad across the column), a dim bottom-right word-count + reading-time (markdown only).
+
+## WYSIWYG conceal-on-cursor (`markdown/` + `render/spans.rs` + `render/rects.rs`)
+
+- **The rule:** "if the caret is on that line, show the actual markdown; otherwise show the preview." `MdKind::ConcealMarkup(ConcealKind)` renders dim like `Markup` until concealed by `add_wysiwyg_conceal_spans`. Kinds: Heading / Emphasis / Code (inline backticks) / Highlight are LINE-scoped; Fence is BLOCK-scoped (reveals iff the caret is anywhere in the block; a body line is never concealed). Links are OUT (v2).
+- **TRUE ZERO-WIDTH conceal:** a concealed span overrides `metrics` to a near-zero font size (`CONCEAL_ZERO_WIDTH_FONT_SIZE = 0.01`) — collapsing its pixel ADVANCE, not just its color — with its line-height half set to the row's real height. Works because cosmic-text computes advance at layout time and `Attrs::compatible` ignores `metrics_opt` (shaping runs unaffected). Accepted cost: the line reflows the instant the caret enters and markers reveal (line-local only). **TRIPWIRE:** `refresh_rule_conceal` now invalidates `row_geom` alongside its reshape (reveal can change advances, not just color — the stale-memo bug).
+- **Two washes (both `wysiwyg_on()`, opaque `base_200` value-step quads):** a pill behind inline code, a panel spanning the whole fenced block (always present — it IS the block's affordance; only marker TEXT is caret-gated). **Seam fix:** `render::rects::merge_row_bands` sizes each row to its full `line_height` and merges vertically-contiguous same-bucket rows into fewer taller quads (fence panel → one quad/block), so antialiasing only happens at true outer edges, never an internal row boundary.
+- **Config `wysiwyg` (sticky bool, default ON):** `false` is a TOTAL no-op (byte-identical to pre-round always-visible markup). Sidecar `wysiwyg { on, concealed }` shares the ONE reveal rule (`wysiwyg_reveals`) with the renderer.
+
+## Markdown formatting commands (`actions/format.rs`) + Links v2 (`actions/link.rs`)
+
+- **Eleven toggle commands**, each ONE undoable edit, markdown buffers only. Block: Blockquote, Bullet/Numbered/Task List, Heading, Code Block. Inline: Bold (Cmd-B), Italic (Cmd-I), Inline Code (Cmd-E), Highlight, Strikethrough. The rest are palette-only, all rebindable. Button-free (DESIGN §5): a chord or summoned command, never a floating format bar.
+- **Insert link… (Cmd-K, markdown only):** `link::plan` decides purely from state — selection wraps `[sel](url)`; caret in an existing link EDITs (prefills that link's URL); else inserts `[](url)`. A kill-ring URL prefills iff it looks like one. Cmd-K stays Insert-link on Mac unconditionally; on Linux `C-k` stays kill-line (see docs/config.md's tripwire).
