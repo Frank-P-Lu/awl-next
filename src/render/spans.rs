@@ -1370,6 +1370,50 @@ pub(super) fn wagtail_dither_density() -> f32 {
     }
 }
 
+/// THE ONE WAGTAIL HIGHLIGHT TEXTURE's CHUNK cell edge, in PHYSICAL pixels —
+/// the block size the dither branch quantizes to before its Bayer lookup so the
+/// stipple reads as DELIBERATE dithered pixels, not fine per-pixel noise
+/// (CHUNK round). Retina-aware: the base coarseness is
+/// [`dither::WAGTAIL_HIGHLIGHT_STIPPLE_CELL_LOGICAL`] LOGICAL px, scaled by the
+/// display `dpi` (so ~2 logical px is 2 physical px in the capture / on a 1×
+/// screen and ~4 physical px on a 2× Retina panel — the same APPARENT
+/// coarseness either way). `1.0` (a no-op cell — the fine per-pixel stipple)
+/// off a one-bit world, so the three consumers this feeds stay byte-identical
+/// there; the density gate and the cell share the SAME world check, one owner.
+/// Fed into `SelectionPipeline::set_dither_cell` at the SAME call sites
+/// [`wagtail_dither_density`] feeds `set_dither` (construction + every re-tint)
+/// PLUS a live DPI change (`set_dpi`), since the physical cell tracks the
+/// display scale. The `AWL_STIPPLE_CELL` dev knob overrides the logical base
+/// purely to shoot the round's candidate-coarseness gallery (see that reader's
+/// doc); unset it is the shipped 2-logical-px choice.
+pub(super) fn wagtail_stipple_cell_px(dpi: f32) -> f32 {
+    if wagtail_dither_density() <= 0.0 {
+        return 1.0;
+    }
+    let logical = stipple_cell_logical_override()
+        .unwrap_or(crate::render::dither::WAGTAIL_HIGHLIGHT_STIPPLE_CELL_LOGICAL);
+    (logical * dpi.max(1.0)).round().max(1.0)
+}
+
+/// DEV-ONLY escape hatch for the CHUNK round's candidate-coarseness gallery
+/// (`--theme Wagtail` with an `==highlight==` fixture at a few logical cell
+/// sizes for the user's eyeball-call): `AWL_STIPPLE_CELL=<f32>` overrides the
+/// logical Bayer-cell edge [`wagtail_stipple_cell_px`] scales by DPI. Read ONCE
+/// and memoized — same env-var thread-safety footing as `AWL_CJK_FORCE` /
+/// `AWL_OVERLAY_ANCHOR_FORCE` (an unmemoized `std::env::var` per re-tint would
+/// re-expose the hazard on every theme switch). A total no-op unless set (no
+/// config key, no CLI flag, undocumented in CAPTURE.md) — it changes nothing
+/// about normal/headless determinism, and the capture path never sets it.
+fn stipple_cell_logical_override() -> Option<f32> {
+    static ONCE: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+    *ONCE.get_or_init(|| {
+        std::env::var("AWL_STIPPLE_CELL")
+            .ok()
+            .and_then(|s| s.trim().parse::<f32>().ok())
+            .filter(|c| *c >= 1.0 && c.is_finite())
+    })
+}
+
 /// The ACTIVE world's SEARCH-MATCH quad rgba — `theme::selection()` on every
 /// ordinary world (unchanged), but on a one-bit world this NO LONGER shares
 /// the (now true-inverse-video) document-selection token: it instead reads

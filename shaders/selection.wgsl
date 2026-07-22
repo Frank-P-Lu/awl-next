@@ -48,10 +48,22 @@ struct Globals {
     // just inside the rounded-rect edge (the interior is left transparent),
     // so the quad reads as an OUTLINE — the `BarFill::Outline` bars and the
     // `FacetStyle::Chips` inactive ghost pills. Unused by `fs_invert` and the
-    // dither branch (both keep their hard on/off contract). Std140 pads the
-    // struct to a 32-byte multiple (`_pad` below) so the uniform stays aligned.
+    // dither branch (both keep their hard on/off contract).
     stroke: f32,
-    _pad: vec2<f32>,
+    // DITHER CELL (CHUNK round): the edge, in PHYSICAL pixels, of ONE Bayer
+    // cell — the quantization the dither branch snaps its absolute canvas
+    // position to BEFORE the Bayer lookup, so a block of `cell`x`cell`
+    // physical pixels shares one on/off decision and the stipple reads as
+    // DELIBERATE dithered pixels rather than fine per-pixel noise. `1.0`
+    // (every non-one-bit consumer's construction default) is a NO-OP —
+    // `floor(px/1.0) == floor(px)` — so every other dither consumer (the
+    // placard stipple, the always-on page frame at density 1.0) stays
+    // byte-identical. THE ONE WAGTAIL HIGHLIGHT TEXTURE's three consumers
+    // raise it to ~2 logical px (`render::spans::wagtail_stipple_cell_px`,
+    // Retina-aware). Unused by `fs_invert`. Std140 pads the struct to a
+    // 32-byte multiple (`_pad` below) so the uniform stays aligned.
+    cell: f32,
+    _pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -131,9 +143,17 @@ var<private> BAYER8: array<u32, 64> = array<u32, 64>(
     63u, 31u, 55u, 23u, 61u, 29u, 53u, 21u,
 );
 
-fn bayer_threshold01(px: vec2<f32>) -> f32 {
-    let x = u32(floor(px.x)) % 8u;
-    let y = u32(floor(px.y)) % 8u;
+// The Bayer threshold at absolute canvas position `px`, quantized to `cell`-px
+// blocks first (CHUNK round): `floor(px / cell)` lands every physical pixel in
+// its `cell`x`cell` block on ONE Bayer coordinate, so the whole block shares a
+// rank and the stipple coarsens. `cell = 1.0` is the exact pre-chunk behavior
+// (`floor(px / 1.0) == floor(px)`); a `max(cell, 1.0)` guard keeps a stray
+// `0.0` uniform (never uploaded — the field defaults to `1.0`) from dividing by
+// zero.
+fn bayer_threshold01(px: vec2<f32>, cell: f32) -> f32 {
+    let c = max(cell, 1.0);
+    let x = u32(floor(px.x / c)) % 8u;
+    let y = u32(floor(px.y / c)) % 8u;
     return f32(BAYER8[y * 8u + x]) / 64.0;
 }
 
@@ -156,7 +176,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         if (d > 0.0) {
             return vec4<f32>(0.0, 0.0, 0.0, 0.0);
         }
-        if (bayer_threshold01(in.px) < g.dither) {
+        if (bayer_threshold01(in.px, g.cell) < g.dither) {
             return vec4<f32>(in.color.rgb, 1.0);
         }
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);

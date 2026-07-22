@@ -66,6 +66,19 @@ pub(super) fn bayer_threshold01(x: u32, y: u32) -> f32 {
 /// coverage reads as a clear stipple band without swallowing the covered text.
 pub(crate) const WAGTAIL_HIGHLIGHT_DITHER_DENSITY: f32 = 0.25;
 
+/// TASTE TUNABLE (CHUNK round): the edge of ONE Bayer cell, in LOGICAL pixels,
+/// for THE ONE WAGTAIL HIGHLIGHT TEXTURE. The shader quantizes its absolute
+/// canvas position to blocks this wide (× the display scale — see
+/// `render::spans::wagtail_stipple_cell_px`) before the Bayer lookup, so a
+/// block of pixels shares one on/off decision and the stipple reads as
+/// DELIBERATE dithered pixels rather than fine per-pixel noise. ~2 logical px
+/// is the chosen coarseness (candidate screenshots at 1/2/3 logical px were
+/// eyeballed; 2 reads as a clean stipple without turning blocky). The density
+/// (`WAGTAIL_HIGHLIGHT_DITHER_DENSITY`) is unchanged — an ordered dither's
+/// exact coverage fraction is invariant under this block quantization (each
+/// cell's rank decision is merely shared by `cell²` pixels).
+pub(crate) const WAGTAIL_HIGHLIGHT_STIPPLE_CELL_LOGICAL: f32 = 2.0;
+
 /// The BANDING-KILL gradient offset at pixel `(x, y)`, in units of ONE 8-bit
 /// sRGB step (i.e. the caller adds this directly to a `[0,1]` float channel
 /// before the GPU quantizes it to `u8`) — a signed value in `(-0.5/255,
@@ -86,9 +99,19 @@ pub(super) fn gradient_dither_offset(x: u32, y: u32, flat: bool) -> f32 {
 /// "on" (draw the pure quad color, fully opaque) iff its Bayer rank falls
 /// under `density`'s proportional cutoff — an ordered-dither threshold, not a
 /// random roll, so the ~25% coverage is exact and deterministic.
+///
+/// `cell` (CHUNK round) is the Bayer-cell edge in PIXELS: the position is
+/// quantized to `floor((x,y) / cell)` before the lookup, so a `cell`x`cell`
+/// block shares one rank (one on/off decision) and the stipple coarsens. This
+/// is the EXACT mirror of `shaders/selection.wgsl`'s `bayer_threshold01(px,
+/// cell)`. `cell = 1.0` is the pre-chunk per-pixel behavior. A `max(cell, 1.0)`
+/// guard matches the shader's own divide-by-zero guard.
 #[allow(dead_code)]
-pub(super) fn highlight_dither_on(x: u32, y: u32, density: f32) -> bool {
-    bayer_threshold01(x, y) < density
+pub(super) fn highlight_dither_on(x: u32, y: u32, density: f32, cell: f32) -> bool {
+    let c = cell.max(1.0);
+    let cx = (x as f32 / c).floor() as u32;
+    let cy = (y as f32 / c).floor() as u32;
+    bayer_threshold01(cx, cy) < density
 }
 
 #[cfg(test)]
@@ -178,31 +201,83 @@ mod tests {
     }
 
     /// `highlight_dither_on` at density 0 never fires, at density 1 always
-    /// fires — the two degenerate sanity bounds around the real ~25% density.
+    /// fires — the two degenerate sanity bounds around the real ~25% density —
+    /// regardless of the CHUNK cell (a coarser block quantization changes WHICH
+    /// pixels share a decision, never the degenerate all-off / all-on answers).
     #[test]
     fn highlight_dither_on_respects_degenerate_densities() {
-        for y in 0..8u32 {
-            for x in 0..8u32 {
-                assert!(!highlight_dither_on(x, y, 0.0), "density 0 must never fire");
-                assert!(highlight_dither_on(x, y, 1.0), "density 1 must always fire");
+        for cell in [1.0f32, 2.0, 4.0] {
+            for y in 0..8u32 {
+                for x in 0..8u32 {
+                    assert!(!highlight_dither_on(x, y, 0.0, cell), "density 0 must never fire");
+                    assert!(highlight_dither_on(x, y, 1.0, cell), "density 1 must always fire");
+                }
             }
         }
     }
 
     /// At the round's chosen density (~25%), exactly a proportional COUNT of
-    /// the 64 cells in one full tile fire — an ordered dither's whole point is
-    /// an EXACT, not merely statistical, coverage fraction.
+    /// the pixels in one full tile fire — an ordered dither's whole point is an
+    /// EXACT, not merely statistical, coverage fraction — and that fraction is
+    /// INVARIANT under the CHUNK cell: over an `8*cell`x`8*cell` region (one
+    /// full Bayer period at that block size) exactly `round(density*64) *
+    /// cell²` pixels fire, because each of the 64 cell-ranks now governs a
+    /// `cell`x`cell` block instead of a single pixel. `cell = 1` recovers the
+    /// original 8x8/64-cell law.
     #[test]
     fn highlight_dither_density_hits_the_expected_exact_cell_count() {
-        let on = (0..8u32)
-            .flat_map(|y| (0..8u32).map(move |x| (x, y)))
-            .filter(|&(x, y)| highlight_dither_on(x, y, WAGTAIL_HIGHLIGHT_DITHER_DENSITY))
-            .count();
-        let expected = (WAGTAIL_HIGHLIGHT_DITHER_DENSITY * 64.0).round() as usize;
-        assert_eq!(
-            on, expected,
-            "density {WAGTAIL_HIGHLIGHT_DITHER_DENSITY} over one 8x8 tile should light exactly \
-             {expected} of 64 cells, got {on}"
+        let expected_cells = (WAGTAIL_HIGHLIGHT_DITHER_DENSITY * 64.0).round() as usize;
+        for cell in [1u32, 2, 3, 4] {
+            let period = 8 * cell;
+            let on = (0..period)
+                .flat_map(|y| (0..period).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    highlight_dither_on(x, y, WAGTAIL_HIGHLIGHT_DITHER_DENSITY, cell as f32)
+                })
+                .count();
+            let expected = expected_cells * (cell * cell) as usize;
+            assert_eq!(
+                on, expected,
+                "density {WAGTAIL_HIGHLIGHT_DITHER_DENSITY} at cell {cell} over one \
+                 {period}x{period} period should light exactly {expected} pixels \
+                 ({expected_cells} cells × {cell}² px), got {on}"
+            );
+        }
+    }
+
+    /// THE CHUNK LAW (this round's fix): with `cell = 2` every `2x2` block of
+    /// physical pixels shares ONE on/off decision — the stipple coarsens into
+    /// deliberate blocks rather than fine per-pixel noise. Asserted directly:
+    /// every pixel's decision equals its block's top-left pixel's decision. And
+    /// NON-VACUOUS — the chunk genuinely differs from the un-chunked stipple: at
+    /// least one pixel flips its on/off answer between `cell = 1` and `cell = 2`
+    /// (a no-op chunk that ignored `cell` would fail this, so the test fails
+    /// without the quantization).
+    #[test]
+    fn chunk_cell_coarsens_into_uniform_blocks_and_actually_changes_the_pattern() {
+        const CELL: u32 = 2;
+        let d = WAGTAIL_HIGHLIGHT_DITHER_DENSITY;
+        let mut differs_from_unchunked = false;
+        // A couple of full Bayer periods so blocks straddle the 8-cell wrap.
+        for y in 0..(8 * CELL * 2) {
+            for x in 0..(8 * CELL * 2) {
+                let block_x = (x / CELL) * CELL;
+                let block_y = (y / CELL) * CELL;
+                assert_eq!(
+                    highlight_dither_on(x, y, d, CELL as f32),
+                    highlight_dither_on(block_x, block_y, d, CELL as f32),
+                    "pixel ({x},{y}) must share its {CELL}x{CELL} block's ({block_x},{block_y}) \
+                     on/off decision — the chunk is not uniform"
+                );
+                if highlight_dither_on(x, y, d, CELL as f32) != highlight_dither_on(x, y, d, 1.0) {
+                    differs_from_unchunked = true;
+                }
+            }
+        }
+        assert!(
+            differs_from_unchunked,
+            "cell {CELL} produced the IDENTICAL pattern to the un-chunked (cell 1) stipple — \
+             the quantization is a silent no-op, not a real chunk"
         );
     }
 }

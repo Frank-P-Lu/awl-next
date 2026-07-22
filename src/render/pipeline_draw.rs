@@ -75,6 +75,11 @@ impl TextPipeline {
         let mut wash_highlight_pipeline =
             SelectionPipeline::new(device, format, highlight_wash_rgba_bytes());
         wash_highlight_pipeline.set_dither(wagtail_dither_density());
+        // CHUNK round: coarsen the stipple to ~2 logical px. `dpi` starts at the
+        // `1.0` construction default (the live app re-pushes the scaled cell via
+        // `set_dpi`; the capture leaves DPI at 1.0), so this is the 2-physical-px
+        // capture cell. A no-op `1.0` off a one-bit world.
+        wash_highlight_pipeline.set_dither_cell(wagtail_stipple_cell_px(1.0));
         // WYSIWYG value-step panel/pill: an OPAQUE `base_200` step (a literal
         // ground-lightness step, not a translucent hue wash like the two above).
         let fence_panel_pipeline =
@@ -111,6 +116,7 @@ impl TextPipeline {
         let mut match_pipeline =
             SelectionPipeline::new(device, format, search_match_rgba_bytes());
         match_pipeline.set_dither(wagtail_dither_density());
+        match_pipeline.set_dither_cell(wagtail_stipple_cell_px(1.0));
         // TRUE INVERSE-VIDEO SELECTION (one-bit worlds only) — its own
         // `OneMinusDst`-blended pipeline object, drawn AFTER text (see the
         // field doc + `draw_document_layers`). Idle on every other world.
@@ -316,6 +322,7 @@ impl TextPipeline {
         let mut popover_hl_wash =
             SelectionPipeline::new(device, format, highlight_wash_rgba_bytes());
         popover_hl_wash.set_dither(wagtail_dither_density());
+        popover_hl_wash.set_dither_cell(wagtail_stipple_cell_px(1.0));
         let popover_strike =
             SpellUnderlinePipeline::new(device, format, strike_srgba_bytes());
         let popover_renderer =
