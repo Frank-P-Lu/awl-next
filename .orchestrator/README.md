@@ -74,3 +74,28 @@ How a brainstorm/interview session ("awl design"-type) turns talk into work:
 5. **The user's notes (private, outside the repo) are the user's space.**
    Agents READ questionnaires and notes there when directed; they NEVER write
    there. The machine-side record lives in this repo.
+
+## Cooking: parallelize by clash, run unattended (user rule, 2026-07-23)
+
+When the orchestrator is cooking a queue, the default is throughput, not caution:
+
+1. **Parallelize by file-clash, not by fear.** Items whose file/module
+   footprints are DISJOINT cook CONCURRENTLY — a few at a time (~3–4; enough to
+   fill the machine without thrashing cargo), not one-at-a-time. Assess each
+   item's footprint up front; only genuine same-file clashes are sequenced.
+   Parallel builds run in ISOLATED worktrees (never the main tree), so
+   concurrent builds can't clobber each other or a live session.
+2. **Integration stays serial and gated.** Worktree branches merge to main ONE
+   at a time through the suite gate (full `cargo test`, both conventions for
+   keymap-adjacent work, wasm on the train — the existing merge train). A clash
+   on merge is reconciled by a delegated MERGE agent, never by serializing the
+   whole queue out of merge-fear and never by the orchestrator hand-editing
+   conflict markers. On any red at integration, reset main clean and skip-flag
+   the item (below) — main is never left broken.
+3. **Aim to cook unattended; never idle with work queued.** While independent
+   items remain, something is always cooking. A stuck item — can't reach green,
+   or hits an ambiguity that would need a user decision — is REVERTED clean,
+   left out of main, and FLAGGED for the user; it never blocks the rest. Only
+   genuinely user-gated items (a permission grant, an approval, a taste call the
+   user reserved) wait; everything else proceeds. "If you get stuck, do
+   everything else before pausing to wait for my say" (user, 2026-07-23).
