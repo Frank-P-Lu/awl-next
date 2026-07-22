@@ -180,11 +180,10 @@ impl TextPipeline {
         } else {
             Vec::new()
         };
-        let zoom = self.metrics.zoom;
         let frost_params = [
             crate::lava::FROST_DIM,
-            crate::lava::FROST_BLUR_PX * zoom,
-            crate::lava::FROST_FEATHER_PX * zoom,
+            crate::lava::frost_px(crate::lava::FROST_BLUR_PX, self.metrics.zoom, self.dpi),
+            crate::lava::frost_px(crate::lava::FROST_FEATHER_PX, self.metrics.zoom, self.dpi),
         ];
         let params = self.effective_background().lava_params().map(
             |(ground, lo, hi, edge, dithered)| {

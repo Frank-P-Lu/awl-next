@@ -128,7 +128,7 @@ pub const FROST_RAIL_DEFAULT: bool = true;
 /// of the softened lamp still reads behind the text.
 pub const FROST_DIM: f32 = 0.65;
 
-/// The frost BLUR kernel spacing (logical px, zoom-scaled by the caller): the
+/// The frost BLUR kernel spacing (logical px, zoom/DPI-scaled by the caller): the
 /// per-tap offset of the 3×3 cross [`frost_field`] averages the SMOOTH field over.
 /// Averaging the raw undithered field (never the posterized color) is the
 /// Mangrove REQUIREMENT — blurring the Bayer grid makes cross moiré (the
@@ -136,12 +136,12 @@ pub const FROST_DIM: f32 = 0.65;
 /// dither.
 pub const FROST_BLUR_PX: f32 = 5.0;
 
-/// The frost pill EDGE FEATHER (logical px, zoom-scaled): the band over which a
+/// The frost pill EDGE FEATHER (logical px, zoom/DPI-scaled): the band over which a
 /// pill's frost coverage ramps 1 → 0 at its boundary, so the pill blends into the
 /// live lamp instead of drawing a hard rectangle edge.
 pub const FROST_FEATHER_PX: f32 = 7.0;
 
-/// The horizontal padding (logical px, zoom-scaled) a frost pill extends past each
+/// The horizontal padding (logical px, zoom/DPI-scaled) a frost pill extends past each
 /// end of its outline entry's shaped text extent — the "comfortable padding" that
 /// hugs the text without clipping its antialiased edge.
 pub const FROST_PILL_PAD_X: f32 = 6.0;
@@ -151,6 +151,13 @@ pub const FROST_PILL_PAD_X: f32 = 6.0;
 /// and the lamp breathes in the leading BETWEEN consecutive pills (never a solid
 /// column of frost down the rail).
 pub const FROST_PILL_INSET_Y_FRAC: f32 = 0.1;
+
+/// Convert an authored Frost dimension from logical to physical pixels. The lava
+/// shader consumes physical pixels, so its blur, feather, and pill padding must
+/// use the same user-zoom × device-DPI scale as [`crate::render::Metrics::with_dpi`].
+pub fn frost_px(logical_px: f32, zoom: f32, dpi: f32) -> f32 {
+    logical_px * zoom * dpi
+}
 
 /// The MAX frost pills the shader's uniform carries (`array<vec4<f32>,
 /// MAX_FROST_PILLS>`). The visible outline row count is capped here — far above
@@ -1386,6 +1393,23 @@ mod tests {
         assert!(FROST_RAIL_DEFAULT, "the user's pick — frost ships");
         // No `AWL_LAVA_FROST` set in the test env → frost is on.
         assert!(frost_on(), "frost is on by default (no gallery knob)");
+    }
+
+    /// THE FROST DPI LAW: a 2× surface must receive 2× physical blur taps,
+    /// feather, and pill padding at the same zoom, preserving the 1× logical feel.
+    #[test]
+    fn frost_dimensions_scale_with_zoom_and_device_dpi() {
+        for zoom in [0.8_f32, 1.0, 1.25] {
+            for logical in [FROST_BLUR_PX, FROST_FEATHER_PX, FROST_PILL_PAD_X] {
+                let one = frost_px(logical, zoom, 1.0);
+                let two = frost_px(logical, zoom, 2.0);
+                assert!(
+                    (two - 2.0 * one).abs() < f32::EPSILON,
+                    "logical Frost dimension {logical} at zoom {zoom}: 2× physical {two} \
+                     must be exactly twice 1× {one}"
+                );
+            }
+        }
     }
 
     /// THE FROST BLUR: [`frost_field`] averages the SMOOTH field over a 3×3 tap
