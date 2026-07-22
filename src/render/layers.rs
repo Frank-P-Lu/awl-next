@@ -572,12 +572,17 @@ impl TextPipeline {
         // legible (InverseVideo flips it, Filled knocks it out), so Morph degrades
         // to Block here. Ibeam is UNCHANGED — its thin bar sits BETWEEN glyph
         // cells, never over one, so it never collides with a glyph's own ink.
+        // Read the PER-FRAME latched look (`caret_look`), not the live global, so
+        // the paint path agrees with the geometry — and so a live drag's insertion
+        // BAR override (`ViewState::selecting_drag`, latched into `caret_look`)
+        // reaches the draw path too. When not dragging, `caret_look` == the global,
+        // so every non-drag frame is byte-identical.
         let mode = if theme::active().render_caps.caret_block_style.folds_morph_to_block()
-            && crate::caret::mode() == CaretMode::Morph
+            && self.caret_look == CaretMode::Morph
         {
             CaretMode::Block
         } else {
-            crate::caret::mode()
+            self.caret_look
         };
         let settle = self.caret.settle_factor();
         let has_glyph = mode == CaretMode::Morph && self.prepare_caret_masks(device, queue);

@@ -347,8 +347,16 @@ impl TextPipeline {
         self.caret_from_key = from_key;
         // Re-latch the effective caret LOOK for this frame (see the field doc):
         // the anchor geometry below — including the spring target — reads the
-        // latched value, one global read per frame.
-        self.caret_look = crate::caret::mode();
+        // latched value, one global read per frame. A live text-selection DRAG
+        // overrides the configured look to the thin insertion BAR (the I-beam
+        // form) for the duration of the drag — item 33's drag-bar. This is the
+        // ONE seam that resolves the effective look, so every reader (geometry
+        // AND the paint path, which read `self.caret_look`) sees the same form.
+        self.caret_look = if view.selecting_drag {
+            CaretMode::Ibeam
+        } else {
+            crate::caret::mode()
+        };
         self.sync_view_fields(view);
         // MARKDOWN STYLING gate: copy the buffer's markdown-ness BEFORE shaping so
         // the per-line span pass sees it. A flip (switching between a `.md` and a

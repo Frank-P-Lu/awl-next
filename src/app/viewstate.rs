@@ -205,6 +205,10 @@ impl App {
             misspelled,
             is_edit_move,
             held,
+            // DRAG-BAR: while a live text-selection drag is in progress the caret
+            // melts to the thin insertion bar (see `ViewState::selecting_drag`),
+            // returning to the configured look on release.
+            selecting_drag: self.dragging,
             search_matches,
             search_current,
             search_query,
