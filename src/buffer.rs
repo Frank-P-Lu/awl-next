@@ -106,6 +106,25 @@ fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+/// The ONE owner of the backward word-delete boundary (⌥⌫ / M-Backspace): from
+/// char index `cursor`, skip a run of trailing NON-word chars LEFT, then a run of
+/// WORD chars LEFT, and return the char index the deletion should stop at. Deletes
+/// exactly one trailing whitespace/punct run + one word — never more, never
+/// running to buffer start when an earlier word boundary intervenes. `char_at(i)`
+/// yields the char at 0-based char index `i` (`i < cursor` always). Abstract over
+/// the storage so the rope-backed [`Buffer::delete_word_backward`] and the
+/// overlay minibuffer (a `String`) share this rule instead of duplicating it.
+pub(crate) fn word_delete_backward_boundary(cursor: usize, char_at: impl Fn(usize) -> char) -> usize {
+    let mut i = cursor;
+    while i > 0 && !is_word_char(char_at(i - 1)) {
+        i -= 1;
+    }
+    while i > 0 && is_word_char(char_at(i - 1)) {
+        i -= 1;
+    }
+    i
+}
+
 /// One recorded edit, the unit of undo. We store the CHANGE (op-based history),
 /// not a whole-document snapshot, so memory is proportional to what was edited.
 /// At char index `start`, the text `removed` was replaced by the text `inserted`.

@@ -199,6 +199,8 @@ markers below, byte for byte).
 | Backward char | C-b |  |
 | Next line | C-n |  |
 | Previous line | C-p |  |
+| Delete word forward |  |  |
+| Delete word backward |  |  |
 | Settings… | ⌘, | Ctrl+, |
 | Keybindings… |  |  |
 <!-- GENERATED:keys-reference:END -->

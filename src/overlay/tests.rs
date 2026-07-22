@@ -1360,3 +1360,62 @@ fn browse_dir_flags_directories() {
     assert!(!ov.selected_is_dir());
     assert_eq!(ov.selected_value(), Some("README.md"));
 }
+
+// ── WORD-OPS ROUND (b): ⌥⌫ word-delete in the minibuffer ────────────────────
+// Every overlay input (the fuzzy query + the Rename / Link / Keep / Settings-
+// value edits) deletes a WHOLE trailing word on ⌥⌫, routed through the ONE
+// document-buffer boundary owner (`buffer::word_delete_backward_boundary`) via
+// `nav::truncate_trailing_word` — so the palette can never disagree with the
+// text about where a word ends. (Word MOTION ⌥←/⌥→ is intentionally NOT added:
+// the query is an append/pop field with no in-query caret to move, and Left/
+// Right already drive list navigation — see the round's report.)
+
+#[test]
+fn query_word_delete_removes_a_trailing_word_not_a_char() {
+    let mut ov = OverlayState::new(OverlayKind::Goto, corpus(), vec![], vec![]);
+    for c in "foo bar baz".chars() {
+        ov.push(c);
+    }
+    assert_eq!(ov.query, "foo bar baz");
+    ov.pop_word(); // ⌥⌫ removes the trailing word "baz"
+    assert_eq!(ov.query, "foo bar ");
+    ov.pop_word(); // and its whitespace + the next word
+    assert_eq!(ov.query, "foo ");
+    ov.pop_word();
+    assert_eq!(ov.query, "");
+    ov.pop_word(); // NO-OP on an empty query (never panics / underflows)
+    assert_eq!(ov.query, "");
+    // Plain ⌫ still removes ONE char — the split is real.
+    ov.push('a');
+    ov.push('b');
+    ov.pop();
+    assert_eq!(ov.query, "a");
+}
+
+#[test]
+fn rename_minibuffer_word_delete() {
+    let mut ov = OverlayState::new_rename("hello world".to_string());
+    ov.rename_edit_pop_word();
+    // The word-deleted value mirrors into corpus[0] (the visible editable row).
+    assert_eq!(ov.corpus[0], "hello ");
+    ov.rename_edit_pop_word();
+    assert_eq!(ov.corpus[0], "");
+}
+
+#[test]
+fn link_minibuffer_word_delete() {
+    let mut ov =
+        OverlayState::new_link_edit("http://a.com/path".to_string(), LinkEditMode::Empty { at: 0 });
+    ov.link_edit_pop_word(); // drops the trailing "path" segment, keeps the "/"
+    assert_eq!(ov.corpus[0], "http://a.com/");
+}
+
+#[test]
+fn keep_minibuffer_word_delete() {
+    let mut ov = OverlayState::new_keep_name();
+    for c in "my great note".chars() {
+        ov.keep_edit_push(c);
+    }
+    ov.keep_edit_pop_word();
+    assert_eq!(ov.corpus[0], "my great ");
+}

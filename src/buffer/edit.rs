@@ -275,13 +275,8 @@ impl Buffer {
             self.last_was_kill = false;
             return;
         }
-        let mut i = self.cursor;
-        while i > 0 && !is_word_char(self.rope.char(i - 1)) {
-            i -= 1;
-        }
-        while i > 0 && is_word_char(self.rope.char(i - 1)) {
-            i -= 1;
-        }
+        let i =
+            super::word_delete_backward_boundary(self.cursor, |k| self.rope.char(k));
         if i < self.cursor {
             let killed = self.rope.slice(i..self.cursor).to_string();
             // Consecutive word-kills ACCUMULATE into the kill ring (the same

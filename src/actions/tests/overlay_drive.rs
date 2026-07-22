@@ -923,3 +923,28 @@ fn follow_link_signals_the_url_only_when_the_caret_is_inside_a_link() {
         "caret outside a link is the calm no-op"
     );
 }
+
+/// WORD-OPS ROUND (b) — the END-TO-END routing proof: ⌥⌫ (`DeleteWordBackward`)
+/// drives a WHOLE-word delete of the palette's fuzzy query through the real
+/// `apply_core` → `overlay_intercept` seam, while plain ⌫ (`DeleteBackward`)
+/// still removes a single char. This pins the match-arm SPLIT the round added
+/// (before it, both actions shared one arm that popped a single char).
+#[test]
+fn palette_query_word_delete_routes_through_apply_core() {
+    let mut overlay = Some(OverlayState::new_command(
+        crate::commands::names(),
+        crate::commands::bindings(),
+    ));
+    for c in "foo bar baz".chars() {
+        drive_eff(&mut overlay, &Action::InsertChar(c));
+    }
+    assert_eq!(overlay.as_ref().unwrap().query, "foo bar baz");
+    // ⌥⌫ / C-⌫ resolve to DeleteWordBackward: a whole trailing word goes.
+    drive_eff(&mut overlay, &Action::DeleteWordBackward);
+    assert_eq!(overlay.as_ref().unwrap().query, "foo bar ");
+    // Plain ⌫ (DeleteBackward) still removes exactly one char.
+    drive_eff(&mut overlay, &Action::DeleteBackward);
+    assert_eq!(overlay.as_ref().unwrap().query, "foo bar");
+    drive_eff(&mut overlay, &Action::DeleteWordBackward);
+    assert_eq!(overlay.as_ref().unwrap().query, "foo ");
+}

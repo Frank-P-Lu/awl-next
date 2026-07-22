@@ -126,5 +126,10 @@ forward_char = ["", "C-f"]
 backward_char = ["", "C-b"]
 next_line = ["", "C-n"]
 previous_line = ["", "C-p"]
+# Word-delete: both slots empty by default (the surviving ⌥⌫ / ⌥Delete defaults
+# fire from keymap.rs's static NamedKey arms, not a catalog chord — mirrors the
+# char/line motions above). Rebindable via [keys] delete_word_forward = "M-d".
+delete_word_forward = ["", ""]
+delete_word_backward = ["", ""]
 settings = ["Cmd-,", ""]
 keybindings = ["", ""]
