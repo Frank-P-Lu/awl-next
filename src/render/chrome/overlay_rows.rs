@@ -607,6 +607,33 @@ impl TextPipeline {
                         footer_hug,
                     ));
                 }
+                // ITEM 46 — the faceted grouped-lens SECTION HEADERS sit on a plate
+                // too. The theme picker's section-header plan lines
+                // ([`ThemeLine::Header`], e.g. "FILE"/"RECENT") were the ONE
+                // candidate-area line the bar draw skipped ("a header is a label"), so
+                // on a Bars world they floated BARE over the blurred backdrop while
+                // every item row sat on a plate — the wave-2 "floating commands" class,
+                // header edition. A header is CHROME (like the footer plate, laid
+                // regardless of `coverage`): give each its own QUIET plate hugging the
+                // header label, through the SAME `span_of` extent + `bar_off`/`bar_h`
+                // the unselected rows use (so the header plate and a row plate can't
+                // diverge) at the quiet `overlay_bar_unselected` value.
+                if geom.theme {
+                    for (k, line) in geom.plan.iter().enumerate() {
+                        if !matches!(line, ThemeLine::Header(_)) {
+                            continue;
+                        }
+                        let top = overlay_row_top(
+                            geom.text_top,
+                            geom.header_rows,
+                            geom.header_gap,
+                            k,
+                            lh,
+                        );
+                        let (x, w) = span_of(k);
+                        unsel.push([x, top + bar_off, w, bar_h]);
+                    }
+                }
                 // The SELECTED bar: its natural span (full or hugged), grown
                 // `grow_px` toward the open margin — RIGHT by default, mirrored
                 // LEFT under a right-anchored (`TopRight`) card. `grow_span` is the
