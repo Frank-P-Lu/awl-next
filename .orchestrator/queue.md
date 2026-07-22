@@ -64,12 +64,9 @@ Items 11–21 are the 2026-07-22 interview outcomes — every decision is the us
 
 ## Live confirmation still useful
 
-- Currawong star breathing and Retina density; Dawn/Bilby world feel.
-- Cassowary filled caret and copy pulse.
-- Living-band choreography over real time.
-- Writer-diff panel/Tab flow and zoom readout feel.
-- Gutter frost on Retina and during real resize.
-- Kana→kanji IME composition if the platform harness permits it.
+- **✅ 2026-07-22 live pass — user CONFIRMED (recompiled to current main first):** palette selection-glide fix (item 8e); page-width monotonic drag (item 9); i-beam-during-drag mouse POINTER (item 8d — confirmed it IS the i-beam; user has a nuance for their own suggestions list); Tawny↔Mopoke copper/plum (item TM-A — reads right; the plum SELECTION is the tell, caret shift is subtle); dark-world card depth (item C — "great", no slab); spell no-completed-word-flash (item 6); notes-flip round-trip (item 12 — works; settings-row clarity noted); Cassowary filled caret; copy pulse (motion is UNIVERSAL by design — user OK, flagged a possible per-world differentiation as a future tweak); living-band choreography; Kana→kanji IME (the hard-to-headless-verify one — works). Item 5 scroll + item 14 date-format were NOT re-flagged after the user's recompile → presumed resolved by the fresh build.
+- **User is compiling a SEPARATE suggestions list (to discuss with another agent), so DO NOT pre-build these:** i-beam behaviour nuance (item 8d); per-world copy-pulse differentiation; settings-row clarity (date-format cycling row); + whatever else lands in that write-up.
+- **Still OPEN (not yet confirmed):** Currawong star breathing + Retina density; Dawn/Bilby world feel. Writer-diff panel/Tab flow + zoom readout feel. **Gutter frost (item 2) — user "doesn't notice the frost" on a recompile; verify it's at least FAINTLY visible on a lava world in page mode (possible visibility concern, not just Retina taste).**
 - GPU memory: no action unless the 6 GB symptom recurs; then probe the live surface path with the window foregrounded.
 
 ## Standing execution notes
