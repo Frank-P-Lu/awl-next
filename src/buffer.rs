@@ -107,20 +107,45 @@ fn is_word_char(c: char) -> bool {
 }
 
 /// The ONE owner of the backward word-delete boundary (⌥⌫ / M-Backspace): from
-/// char index `cursor`, skip a run of trailing NON-word chars LEFT, then a run of
-/// WORD chars LEFT, and return the char index the deletion should stop at. Deletes
-/// exactly one trailing whitespace/punct run + one word — never more, never
-/// running to buffer start when an earlier word boundary intervenes. `char_at(i)`
-/// yields the char at 0-based char index `i` (`i < cursor` always). Abstract over
-/// the storage so the rope-backed [`Buffer::delete_word_backward`] and the
-/// overlay minibuffer (a `String`) share this rule instead of duplicating it.
+/// char index `cursor`, first consume any trailing WHITESPACE run LEFT, then
+/// delete exactly ONE token — a run of WORD chars if a word char now sits before
+/// the caret, else a run of PUNCTUATION (non-word, non-whitespace) chars. Return
+/// the char index the deletion should stop at.
+///
+/// This matches native macOS Option-Delete (verified 2026-07-22): a caret sitting
+/// after a punctuation run deletes only that run, NOT the word before it — so
+/// `abc ...⎸` leaves `abc ` (the word survives), while `abc def⎸` still deletes
+/// only `def` and `abc def ⎸` deletes `def ` (a word plus the space that
+/// introduced it). Punctuation and a word are DISTINCT token classes and never
+/// delete together in one stroke; only leading whitespace folds into the token it
+/// precedes. The old rule (skip-nonword-then-word) over-deleted the word after a
+/// trailing punctuation run — the reported `abc ...⎸` bug.
+///
+/// `char_at(i)` yields the char at 0-based char index `i` (`i < cursor` always).
+/// Abstract over the storage so the rope-backed [`Buffer::delete_word_backward`]
+/// and the overlay minibuffer (a `String`) share this rule instead of duplicating
+/// it.
 pub(crate) fn word_delete_backward_boundary(cursor: usize, char_at: impl Fn(usize) -> char) -> usize {
     let mut i = cursor;
-    while i > 0 && !is_word_char(char_at(i - 1)) {
+    // 1. Fold any trailing whitespace into the deletion (a word/punct token to the
+    //    left "owns" the space that introduced it, mirroring macOS word motion).
+    while i > 0 && char_at(i - 1).is_whitespace() {
         i -= 1;
     }
-    while i > 0 && is_word_char(char_at(i - 1)) {
-        i -= 1;
+    if i == 0 {
+        return 0;
+    }
+    // 2. Delete exactly one token — the class of the char now before the caret.
+    if is_word_char(char_at(i - 1)) {
+        while i > 0 && is_word_char(char_at(i - 1)) {
+            i -= 1;
+        }
+    } else {
+        // Punctuation: non-word AND non-whitespace (whitespace was consumed above
+        // and a word char ends the run), so this never crosses into an adjacent word.
+        while i > 0 && !is_word_char(char_at(i - 1)) && !char_at(i - 1).is_whitespace() {
+            i -= 1;
+        }
     }
     i
 }

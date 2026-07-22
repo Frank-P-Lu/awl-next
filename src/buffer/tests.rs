@@ -1801,21 +1801,24 @@
     #[test]
     fn delete_word_backward_boundary_sweep() {
         // Exhaustive boundary probe for ⌥⌫ (M-Backspace / DeleteWordBackward):
-        // from the caret, skip a run of trailing non-word chars LEFT, then a run
-        // of word chars LEFT, and delete exactly that span — never more. This
-        // pins that ⌥⌫ removes ONE trailing whitespace/punct run + ONE word (the
-        // mac/emacs word-delete contract), and specifically that the classic
-        // `abc def ghi|` case deletes only "ghi" (the reported over-delete does
-        // NOT occur — the scan stops at the previous word boundary, not buffer
-        // start). Each tuple: (text, caret char-index, expected remaining text).
+        // from the caret, consume any trailing WHITESPACE run, then delete exactly
+        // ONE token — a WORD run if a word char now precedes the caret, else a
+        // PUNCTUATION run. Punctuation and a word are DISTINCT classes that never
+        // delete together (native macOS Option-Delete, verified 2026-07-22): a
+        // caret after a punctuation run keeps the word before it. This pins both
+        // the classic `abc def ghi|` -> only "ghi" AND the previously-buggy
+        // `abc def...|` -> keeps "abc def" (the word "def" survives the "..." kill;
+        // the old rule over-deleted it to "abc "). Each tuple: (text, caret
+        // char-index, expected remaining text).
         let cases: &[(&str, usize, &str)] = &[
             ("abc def ghi", 11, "abc def "),   // caret after a word -> only "ghi"
-            ("abc def ghi   ", 14, "abc def "), // caret after trailing spaces
-            ("abc def...", 10, "abc "),         // caret after a punctuation run
+            ("abc def ghi   ", 14, "abc def "), // caret after trailing spaces -> ws + word
+            ("abc def...", 10, "abc def"),      // caret after a punct run -> ONLY "..." (word survives)
+            ("abc ...", 7, "abc "),             // the reported bug: `abc ...|` keeps "abc "
             ("abc", 0, "abc"),                  // caret at buffer start -> no-op
             ("abc def", 2, "c def"),            // mid-word "ab|c" -> only "ab"
             ("abc\ndef", 4, "def"),             // caret at start of line 2 (after \n)
-            ("abc def  ", 9, "abc "),           // multiple consecutive spaces
+            ("abc def  ", 9, "abc "),           // multiple consecutive spaces + word
             ("hello", 5, ""),                   // lone word -> empties, not a crash
             ("  hello", 7, "  "),               // leading whitespace preserved
             ("word ", 5, ""),                   // word + one trailing space
