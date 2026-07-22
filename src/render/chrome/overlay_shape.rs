@@ -1046,6 +1046,29 @@ impl TextPipeline {
         m
     }
 
+    /// ITEM 35 (overlay text on a surface) — per DISPLAY-row SECONDARY (right
+    /// column / chord) text width (px), read from the just-shaped
+    /// `panel_bind_buffer`, keyed by display-row index. Mirrors
+    /// [`Self::overlay_row_primary_px`] for the OTHER buffer: the right column
+    /// leads with `header_rows` empty lines (so line `header_rows + N` is
+    /// candidate `N`'s chord), and a run's `line_w` is the shaped chord's width.
+    /// A row with no chord contributes 0 (or is absent). The HugLabel bars read
+    /// this to lay a per-row CHORD PLATE so the right-aligned shortcut never
+    /// floats bare over the backdrop — the SAME shaped glyphs the chord draws
+    /// from, so plate and glyph can't disagree.
+    pub(in crate::render) fn overlay_row_secondary_px(
+        &self,
+        geom: &OverlayGeom,
+    ) -> std::collections::BTreeMap<usize, f32> {
+        let mut m = std::collections::BTreeMap::new();
+        for run in self.panel_bind_buffer.layout_runs() {
+            if run.line_i >= geom.header_rows && run.line_w > 0.0 {
+                m.insert(run.line_i - geom.header_rows, run.line_w);
+            }
+        }
+        m
+    }
+
     /// V8 — the WIDEST shaped FOOTER content line (px) in the just-shaped
     /// `panel_buffer`: the dim foot-hint plus the keybindings-tips lines, which
     /// all sit BELOW the `content_rows` candidate/empty lines (`line_i >=

@@ -528,6 +528,85 @@ fn interactive_states_are_visible_in_every_world_real_pixels() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
+/// ITEM 35 — OVERLAY TEXT SITS ON A SURFACE (the Mangrove Bars "floating
+/// commands" defect). Under the HugLabel poster HYBRID the label plate hugs the
+/// LABEL alone, so the right-aligned SHORTCUT chord floated BARE over the blurred
+/// backdrop. The fix lays a per-row CHORD PLATE. This is the OUTCOME proof over
+/// REAL pixels, swept across EVERY Bars world: rendering the SAME unselected row
+/// WITH vs WITHOUT a chord, the chord-slab's BACKGROUND (median luminance, robust
+/// to the minority glyph pixels) must CHANGE — a chord now brings a plate, where
+/// before it brought only bare glyphs over the unchanged backdrop.
+///
+/// Non-vacuous by construction: the only variable is whether row 0 carries a
+/// chord. Before the chord plate, both frames showed the same backdrop behind
+/// that slab (only a few glyph pixels differed, which the MEDIAN discards), so the
+/// median delta was ~0; the plate is exactly what moves it.
+#[test]
+fn overlay_chord_sits_on_a_plate_on_every_bars_world() {
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping overlay_chord_sits_on_a_plate_on_every_bars_world: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let w = 1200u32;
+    let h = 800u32;
+
+    let bars_worlds: Vec<&theme::Theme> = theme::THEMES
+        .iter()
+        .filter(|t| matches!(t.render_caps.list_style, theme::ListStyle::Bars { .. }))
+        .collect();
+    assert!(
+        !bars_worlds.is_empty(),
+        "expected at least one Bars world (Firetail/Galah/Magpie/Mangrove)"
+    );
+
+    for th in &bars_worlds {
+        theme::set_active_by_name(th.name).unwrap();
+        p.sync_theme();
+
+        // A flat palette; row 0 is UNSELECTED (select row 1) so the chord rides the
+        // QUIET unselected plate — the exact bare-chord surface the defect showed.
+        let mut v = view("hello world\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec!["Go to file".into(), "Switch project".into(), "Recent".into()];
+        v.overlay_selected = 1;
+
+        // WITH a chord on row 0.
+        v.overlay_bindings = vec!["\u{2318}O".into(), String::new(), String::new()];
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        let [cx, _cy, cw, _ch] = p.overlay_card_rect().expect("the Bars picker must have a card");
+        let region = overlay_row_region(&p, 0);
+        // The right-column chord slab: the rightmost span of the card text column,
+        // where `⌘O` right-aligns and (after the fix) its plate hugs it.
+        let slab = Region::new(cx + cw - 100.0, region.y as f32, 92.0, region.h as f32);
+        let with = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+        // WITHOUT a chord on row 0 (empty binding) — no chord, no plate.
+        v.overlay_bindings = vec![String::new(), String::new(), String::new()];
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        let without = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+        // The chord's PRESENCE changes the slab: with a plate, a LARGE fraction of
+        // the slab's pixels differ (the plate is a filled rect); the bare glyphs
+        // ALONE (the pre-fix state) touch only their sparse strokes. So a
+        // substantial differing fraction is the plate's signature.
+        let d = pixeldiff::diff_region(&with, &without, w as i64, h as i64, slab);
+        let frac = d.differing_fraction();
+        assert!(
+            frac >= 0.35,
+            "{}: only {:.1}% of the chord slab changed when a chord appeared — the \
+             shortcut is floating BARE over the backdrop (bare glyphs alone), not on a \
+             plate that hugs it",
+            th.name,
+            frac * 100.0
+        );
+    }
+
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 fn overlay_row_region(p: &TextPipeline, row: usize) -> Region {
     let [card_x, card_y, card_w, _] =
         p.overlay_card_rect().expect("the overlay card must be open");
