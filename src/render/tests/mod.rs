@@ -37,6 +37,7 @@ mod oracle;
 mod outline;
 mod overlay_personality;
 mod page_frame;
+mod folds;
 mod pixeldiff;
 mod stars;
 mod syntax_ligatures;

@@ -152,6 +152,8 @@ drift into this page silently.
 | Reset page width |  |  |
 | Toggle debug |  |  |
 | Toggle outline | ⌘⇧O | Ctrl+Shift+O |
+| Fold section | ⌘⇧E · C-c C-f | Ctrl+Shift+E |
+| Collapse other sections | ⌘⇧M · C-c C-t | Ctrl+Shift+M |
 | Toggle typewriter scroll |  |  |
 | Toggle menu bar |  |  |
 | About |  |  |

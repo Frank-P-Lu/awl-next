@@ -352,7 +352,14 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // `dictionary`'s own always-present shape. A default `--screenshot` reports
 // `{ "format": "ddmmyy", "example": "07/03/09" }` and is otherwise
 // byte-identical.
-pub const SCHEMA_VERSION: u32 = 178;
+// `/179` — FOLDS (collapse sections v1): a new top-level `folds` array — the
+// FULL-document logical lines of the collapsed ATX headings, ascending (`[]`
+// when nothing is folded). The `text`/`cursor`/`selection`/`search`/spell
+// fields are already the fold-FILTERED view (hidden section lines dropped, so
+// they shape to ZERO height — `line_count` shrinks accordingly), while `folds`
+// itself is the unfiltered heading set. A default `--screenshot` reports
+// `"folds": []` and is otherwise byte-identical.
+pub const SCHEMA_VERSION: u32 = 179;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

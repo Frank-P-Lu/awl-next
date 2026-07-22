@@ -765,6 +765,17 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
         Action::ToggleOutline => {
             crate::outline::toggle();
         }
+        // FOLDS (collapsed sections) are VIEW state on the BUFFER, so they belong in
+        // the shared core: a `--keys` capture folds/unfolds and its sidecar `folds`
+        // block records the state, exactly like the live window. Neither gesture
+        // moves the caret or touches the rope (the auto-expand tail below is a no-op
+        // for them — the caret stays on the visible heading line).
+        Action::ToggleFold => {
+            ctx.buffer.toggle_fold_at_cursor();
+        }
+        Action::CollapseOtherSections => {
+            ctx.buffer.collapse_other_sections();
+        }
         // Toggling the awl-RENDERED MENU BAR is a pure render concern (no buffer
         // change), exactly like the outline / debug / page toggles: flip the
         // process-global here so a `--keys "..."` capture renders (and records in its
@@ -1165,6 +1176,16 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     if !ctx.buffer.has_selection() {
         *ctx.shift_selecting = false;
     }
+
+    // AUTO-EXPAND (folds): any edit / motion that lands the caret INSIDE a collapsed
+    // section reveals it, and a selection never spans a fold invisibly. Both are a
+    // cheap no-op when nothing is folded (the common case), so this runs after every
+    // action without a measurable cost. The two fold GESTURES above leave the caret
+    // on the still-visible heading line, so they are unaffected. Search-hit and
+    // goto-heading landings reveal at their own seams (they never reach here — the
+    // search guard + overlay accept return early).
+    ctx.buffer.reveal_cursor();
+    ctx.buffer.reveal_selection();
 
     // RECOIL PRIMITIVE — if the action produced no other effect, see whether it was
     // BLOCKED (couldn't proceed) and, if so, arm a caret bump away from the wall.

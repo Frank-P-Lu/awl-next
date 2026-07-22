@@ -12,6 +12,7 @@
 use super::*;
 use crate::overlay::OverlayKind;
 
+mod folds;
 mod format_editing;
 mod overlay_drive;
 mod picker_misc_smoke;
@@ -501,6 +502,8 @@ pub(super) fn delete_flinch_fixture(
         | Action::ToggleOutline
         | Action::ToggleTypewriter
         | Action::ToggleMenuBar
+        | Action::ToggleFold
+        | Action::CollapseOtherSections
         | Action::ToggleWritingNits
         | Action::ToggleHiddenFiles
         | Action::ShowStatsHud
@@ -702,6 +705,8 @@ pub(super) fn all_actions() -> Vec<Action> {
             | Action::ToggleOutline
             | Action::ToggleTypewriter
             | Action::ToggleMenuBar
+        | Action::ToggleFold
+        | Action::CollapseOtherSections
             | Action::ToggleWritingNits
             | Action::ToggleHiddenFiles
             | Action::ShowStatsHud
@@ -810,6 +815,8 @@ pub(super) fn all_actions() -> Vec<Action> {
         Action::ToggleOutline,
         Action::ToggleTypewriter,
         Action::ToggleMenuBar,
+        Action::ToggleFold,
+        Action::CollapseOtherSections,
         Action::ToggleWritingNits,
         Action::ToggleHiddenFiles,
         Action::ShowStatsHud,
@@ -988,6 +995,8 @@ pub(super) fn smoke_command_kind(a: &Action) -> SmokeKind {
         | Action::ToggleOutline
         | Action::ToggleTypewriter
         | Action::ToggleMenuBar
+        | Action::ToggleFold
+        | Action::CollapseOtherSections
         | Action::ToggleWritingNits
         | Action::About
         | Action::LifetimeStats

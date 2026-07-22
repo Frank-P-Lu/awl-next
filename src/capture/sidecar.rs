@@ -160,7 +160,7 @@ pub(super) fn write_sidecar(
     let (schema, caret_extra) = caret_block(caret);
 
     let json = format!(
-        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp}, \"heading_bold\": {thb} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"date_format\": {date_format},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"popover\": {popover},\n  \"tables\": {tables},\n  \"xray\": {xray},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"streaks\": {streaks},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers},\n  \"diff\": {diff}{caret_extra}\n}}\n",
+        "{{\n  \"schema\": {schema_json},\n  \"canvas\": {canvas},\n  \"font\": {{ \"family\": {ff}, \"size\": {fs}, \"line_height\": {lh}, \"ornament\": {ornament}, \"cjk\": {cjk}, \"scripts\": {scripts} }},\n  \"theme\": {{ \"name\": {tn}, \"font_family\": {tf}, \"mode\": {tm}, \"base100\": {tb100}, \"primary\": {tp}, \"heading_bold\": {thb} }},\n  \"caret_mode\": {cm},\n  \"dictionary\": {dict},\n  \"spellcheck\": {sp},\n  \"date_format\": {date_format},\n  \"text_origin\": {{ \"left\": {left}, \"top\": {top} }},\n  \"page\": {page},\n  \"wysiwyg\": {wysiwyg},\n  \"popover\": {popover},\n  \"tables\": {tables},\n  \"xray\": {xray},\n  \"images\": {images},\n  \"outline\": {outline},\n  \"menubar\": {menubar},\n  \"doc_lang\": {doc_lang},\n  \"md_spans\": {md_spans},\n  \"syn_lang\": {syn_lang},\n  \"syn_spans\": {syn_spans},\n  \"readout\": {readout},\n  \"gutter\": {gutter},\n  \"dim_overlay\": {dim_overlay},\n  \"debug\": {debug},\n  \"whichkey\": {whichkey},\n  \"hud\": {hud},\n  \"about\": {about},\n  \"lifetime\": {lifetime},\n  \"streaks\": {streaks},\n  \"peek\": {peek},\n  \"caret_preview\": {caret_preview},\n  \"line_count\": {lc},\n  \"scroll_lines\": {sl},\n  \"cursor\": {{ \"line\": {cl}, \"col\": {cc} }},\n  \"folds\": {folds},\n  \"selection\": {sel},\n  \"text\": {text_json},\n  \"first_lines\": [{fl}],\n  \"search\": {{ \"query\": {sq}, \"active\": {sa}, \"case_sensitive\": {scs}, \"hit_count\": {hc}, \"current\": {cur}, \"replace_active\": {ra}, \"replacement\": {rep}, \"editing_replacement\": {er} }},\n  \"project\": {project},\n  \"overlay\": {overlay},\n  \"buffers\": {buffers},\n  \"diff\": {diff}{caret_extra}\n}}\n",
         schema_json = json_string(&schema),
         caret_extra = caret_extra,
         cjk = cjk_json(pipeline),
@@ -219,6 +219,7 @@ pub(super) fn write_sidecar(
         sl = view.scroll_lines,
         cl = cursor_line,
         cc = cursor_col,
+        folds = folds_json(view),
         sel = selection_json(view),
         text_json = json_string(text),
         fl = first_lines_json,
@@ -240,6 +241,16 @@ pub(super) fn write_sidecar(
         .with_context(|| format!("failed to create {}", json_path.display()))?;
     f.write_all(json.as_bytes())?;
     Ok(())
+}
+
+/// FOLDS block: the FULL-document logical lines of the collapsed (folded) ATX
+/// headings, ascending — a JSON array (`[]` when nothing is folded, so a default
+/// capture stays byte-stable). The `text`/`cursor`/`selection` above are already
+/// the fold-FILTERED view (hidden lines dropped → zero height); this lets a
+/// reviewer assert which sections are collapsed straight from the sidecar.
+fn folds_json(view: &ViewState) -> String {
+    let items: Vec<String> = view.folds.iter().map(|h| h.to_string()).collect();
+    format!("[{}]", items.join(", "))
 }
 
 /// Selection block: `null` when there is no active region, else the ordered
