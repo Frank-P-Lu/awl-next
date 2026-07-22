@@ -503,6 +503,13 @@ fn inline_image_missing_file_draws_placeholder_not_quad() {
 /// right off `images_report()` (which is untouched by the list-nesting depth — an
 /// image's `ConcealMarkup(Image)` span + `parse_image_source` never look at the
 /// preceding marker at all), so this pins the OUTCOME as a regression guard.
+///
+/// Native-only: `ImageReport::alt` (and the whole `images_report()` population in
+/// `compute_image_layout`) is `#[cfg(not(target_arch = "wasm32"))]` — image file
+/// headers are read on the native filesystem, never in the browser build, so the
+/// report is always empty on wasm. The gate matches that design (and its sibling
+/// `no_image_buffer_draws_neither_quad_nor_placeholder` below).
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn nested_list_image_reports_alt_caption_and_line() {
     let _w = crate::testlock::serial();
