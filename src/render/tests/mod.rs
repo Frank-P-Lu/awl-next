@@ -24,6 +24,7 @@ mod float_surface_law;
 mod frost;
 mod geometry;
 mod geometry_reshape;
+mod glide_anchor_law;
 mod hud;
 mod images;
 mod list_surfaces;
