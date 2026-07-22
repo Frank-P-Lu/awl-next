@@ -264,7 +264,7 @@ impl TextPipeline {
         };
         // DESIGNER PIXEL-PASS FIX (2026-07-16) — the placard's DRAW SLOT depends on
         // the list style. Under `Bars` it must sit BEHIND the bar quads, so it rides
-        // its own `placard_renderer` pass (run between the room veil and the bars in
+        // its own `placard_renderer` pass (run between the page/scrims and the bars in
         // `draw_overlay_card`); under `Pane` it stays FIRST-in-batch in
         // `panel_renderer` below (drawn behind the rows, over the opaque card — the
         // byte-identical historical slot). The dedicated pass is prepared empty

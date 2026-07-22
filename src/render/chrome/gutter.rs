@@ -38,9 +38,9 @@ impl TextPipeline {
         // DESIGNER PIXEL-PASS FIX (2026-07-16): a BARS-mode takeover drops the
         // boxed card, so nothing covers the bottom-left margin — the sharp,
         // crisp-path gutter (filename/project) collided with the overlay's foot
-        // HINT row ("↑/↓ move …"), two inks interleaving. The room veil already
-        // pulls the doc back a plane; the orientation gutter is redundant noise
-        // while a full picker is summoned, so hide it there. Pane/no-overlay are
+        // HINT row ("↑/↓ move …"), two inks interleaving. The local footer plate
+        // protects its own text, and the orientation gutter is redundant noise while
+        // a full picker is summoned, so hide it there. Pane/no-overlay are
         // untouched (the card covers the gutter, or there is no overlay).
         if self.overlay_active
             && matches!(
