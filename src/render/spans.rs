@@ -1200,6 +1200,21 @@ pub(in crate::render) const STRIKE_THICKNESS: f32 = 1.3;
 /// the conventional struck-through look.
 pub(in crate::render) const STRIKE_V_FRAC: f32 = 0.5;
 
+/// THE LINE-BAND PRIMITIVE — "a thin flat line over a fraction of a text band"
+/// (thickness + antialiasing feather, centered at `v_frac` of `height` from
+/// `top`), the ONE owner both [`strike_line_band`] (mid-run, `STRIKE_V_FRAC`)
+/// and [`link_underline_band`] (near the baseline, `LINK_UNDERLINE_V_FRAC`)
+/// route through — a strike-through and an underline are the SAME primitive,
+/// differing only in vertical placement (same behavior => same code). Pure +
+/// total; every caller hands the result straight to a
+/// [`crate::spellunderline::Squiggle`] with `amp: 0.0` (a flat line).
+fn line_band(top: f32, height: f32, zoom: f32, v_frac: f32, thickness: f32) -> (f32, f32, f32) {
+    let stroke = thickness * zoom;
+    let band_h = stroke + 2.0;
+    let center = top + height * v_frac;
+    (center - band_h * 0.5, band_h, stroke)
+}
+
 /// THE strike-line geometry over a text band: given the band's `top`/`height`
 /// (the run's glyph cell — caret band in the document, measured ink band in the
 /// popover) and the current `zoom`, the line's `(band_top, band_h, stroke)` — a
@@ -1209,10 +1224,27 @@ pub(in crate::render) const STRIKE_V_FRAC: f32 = 0.5;
 /// itself. Pure + total; both call sites hand these straight to a
 /// [`crate::spellunderline::Squiggle`] with `amp: 0.0` (a flat line).
 pub(in crate::render) fn strike_line_band(top: f32, height: f32, zoom: f32) -> (f32, f32, f32) {
-    let stroke = STRIKE_THICKNESS * zoom;
-    let band_h = stroke + 2.0;
-    let center = top + height * STRIKE_V_FRAC;
-    (center - band_h * 0.5, band_h, stroke)
+    line_band(top, height, zoom, STRIKE_V_FRAC, STRIKE_THICKNESS)
+}
+
+/// Link-underline stroke thickness (px at zoom 1.0) — the SAME fine weight as
+/// [`STRIKE_THICKNESS`] (one family of quiet lines; the underline is a quiet
+/// affordance, not an annotation).
+pub(in crate::render) const LINK_UNDERLINE_THICKNESS: f32 = STRIKE_THICKNESS;
+
+/// Vertical position of the link underline's CENTER, as a fraction of the
+/// text band's height from its top — near the BASELINE (unlike the strike's
+/// mid-run `STRIKE_V_FRAC`), so it reads as an underline under the link text
+/// rather than a line through it. `0.92` sits just under the caret-height
+/// glyph cell's bottom (inside it, never spilling into the next row).
+pub(in crate::render) const LINK_UNDERLINE_V_FRAC: f32 = 0.92;
+
+/// THE link-underline geometry over a text band — [`line_band`] at
+/// [`LINK_UNDERLINE_V_FRAC`]/[`LINK_UNDERLINE_THICKNESS`], the SAME primitive
+/// [`strike_line_band`] rides, just a different vertical band: "a line under a
+/// run" and "a line through a run" are one mechanism, not two.
+pub(in crate::render) fn link_underline_band(top: f32, height: f32, zoom: f32) -> (f32, f32, f32) {
+    line_band(top, height, zoom, LINK_UNDERLINE_V_FRAC, LINK_UNDERLINE_THICKNESS)
 }
 
 /// THE strike ink — the world's `muted` rung EXACTLY: the receding markup ink
@@ -1232,6 +1264,21 @@ pub(in crate::render) fn strike_ink(th: &theme::Theme) -> theme::Srgb {
 /// sibling of [`highlight_wash_rgba_bytes`] for the strike stroke.
 pub(in crate::render) fn strike_srgba_bytes() -> [u8; 4] {
     strike_ink(&theme::active()).rgba_bytes()
+}
+
+/// THE link-underline ink — the SAME world `muted` rung [`strike_ink`] uses (a
+/// quiet, value-only affordance under the link's full-content-ink TEXT, never
+/// the caret's amber — DESIGN §3: the link TEXT stays full content ink per the
+/// 2026-07-22 decision, so only the underline itself carries the muted tint).
+pub(in crate::render) fn link_underline_ink(th: &theme::Theme) -> theme::Srgb {
+    strike_ink(th)
+}
+
+/// The ACTIVE world's link-underline rgba, fed to the underline pipeline at
+/// construction and every `sync_theme_colors` re-tint — the sibling of
+/// [`strike_srgba_bytes`] for the link-underline stroke.
+pub(in crate::render) fn link_underline_srgba_bytes() -> [u8; 4] {
+    link_underline_ink(&theme::active()).rgba_bytes()
 }
 
 /// SYNTAX HIGHLIGHTING: lay the syntax spans that intersect ONE buffer line over

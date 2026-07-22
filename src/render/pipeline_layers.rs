@@ -165,6 +165,8 @@ impl TextPipeline {
         // stroke shares the struck text's own muted ink, so under vs over the
         // glyphs composites identically where they meet.
         self.strike_pipeline.draw(pass);
+        // The quiet link UNDERLINE — same under-text slot, its own instance.
+        self.link_underline_pipeline.draw(pass);
         self.caret_pipeline.draw(pass);
         self.caret_trail_pipeline.draw(pass);
         self.renderer

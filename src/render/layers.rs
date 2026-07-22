@@ -937,9 +937,12 @@ impl TextPipeline {
     /// [`SYMBOL_FAMILY`] face (the mono/display faces lack them) in the MUTED ink,
     /// at the active world's per-world [`theme::Theme::ornament_scale`] bump over the
     /// body size (the SAME factor `md_line_scale` grows the break ROW by) so a centered
-    /// break reads with a touch more presence (quiet; amber stays the caret's). Uploads NO areas
-    /// for a non-markdown buffer (`!md_enabled`), so a default capture stays
-    /// byte-identical.
+    /// break reads with a touch more presence (quiet; amber stays the caret's). Also
+    /// shapes the margin-hung blockquote pull-quote mark and the quiet per-fence
+    /// LANGUAGE LABEL (a muted word like "rust" right-aligned on a recognized
+    /// fence's opening line — [`TextPipeline::fence_lang_marks`], DATA-driven off
+    /// the parsed info string). Uploads NO areas for a non-markdown buffer
+    /// (`!md_enabled`), so a default capture stays byte-identical.
     pub(super) fn prepare_ornaments(
         &mut self,
         device: &wgpu::Device,
@@ -1090,6 +1093,49 @@ impl TextPipeline {
             );
         }
 
+        // FENCE LANGUAGE LABEL: a quiet MUTED word (e.g. "rust") right-aligned on
+        // each recognized fenced block's OPENING fence line — naming what the body
+        // is highlighted as, DATA-driven off the parsed info string
+        // (`fence_lang_marks`, the SAME `syntax::Lang::from_info` gate the fence's
+        // `CodeSyntax` highlighting itself uses), so a plain / unknown-lang fence
+        // draws nothing. Rides this SAME ornament renderer/pass — no new pipeline —
+        // deduped by distinct LANGUAGE (mirrors the rule/bullet glyph dedupe, just
+        // keyed by a word instead of a char) since a doc mixing a few fence
+        // languages shapes each only once.
+        let fence_lang_marks = if self.md_enabled {
+            self.fence_lang_marks()
+        } else {
+            Vec::new()
+        };
+        let label_scale = crate::markdown::type_scale::LABEL;
+        let fence_lang_metrics = GlyphMetrics::new(m.font_size * label_scale, m.line_height);
+        let fence_lang_attrs = panel_attrs().color(muted);
+        let mut fence_lang_distinct: Vec<crate::syntax::Lang> = Vec::new();
+        for (_, lang) in &fence_lang_marks {
+            if !fence_lang_distinct.contains(lang) {
+                fence_lang_distinct.push(*lang);
+            }
+        }
+        let mut fence_lang_buffers: Vec<GlyphBuffer> = Vec::with_capacity(fence_lang_distinct.len());
+        let mut fence_lang_widths: Vec<f32> = Vec::with_capacity(fence_lang_distinct.len());
+        for &lang in &fence_lang_distinct {
+            let mut buf = GlyphBuffer::new(&mut self.font_system, fence_lang_metrics);
+            buf.set_size(&mut self.font_system, Some(col_w), Some(m.line_height));
+            buf.set_text(&mut self.font_system, lang.name(), &fence_lang_attrs, Shaping::Advanced, None);
+            buf.shape_until_scroll(&mut self.font_system, false);
+            let mut w = 0.0f32;
+            for run in buf.layout_runs() {
+                w = w.max(run.line_w);
+            }
+            fence_lang_widths.push(w);
+            fence_lang_buffers.push(buf);
+        }
+        // Right-aligned to the fenced block's own text-wrap right edge (where the
+        // body's wrapped text would end), with a half-char inset so the label never
+        // touches the panel's own edge.
+        let fence_lang_right = self.text_left() + self.text_wrap_width();
+        let fence_lang_inset = m.char_width * 0.5;
+
         // DIFF-AS-PREVIEW: ornament glyphs are document content — clip to the
         // panel band exactly like the text layer.
         let (o_top, o_bottom) = match self.doc_clip_band(height as f32) {
@@ -1097,8 +1143,9 @@ impl TextPipeline {
             None => (0, height as i32),
         };
         let bounds = TextBounds { left: 0, top: o_top, right: width as i32, bottom: o_bottom };
-        let mut areas: Vec<TextArea> =
-            Vec::with_capacity(rule_marks.len() + bullet_marks.len() + quote_tops.len());
+        let mut areas: Vec<TextArea> = Vec::with_capacity(
+            rule_marks.len() + bullet_marks.len() + quote_tops.len() + fence_lang_marks.len(),
+        );
         for (top, ch) in &rule_marks {
             let idx = distinct.iter().position(|c| c == ch).expect("char was deduped in");
             areas.push(TextArea {
@@ -1133,6 +1180,23 @@ impl TextPipeline {
                 scale: 1.0,
                 bounds,
                 default_color: quote_faint,
+                custom_glyphs: &[],
+            });
+        }
+        for (top, lang) in &fence_lang_marks {
+            let idx = fence_lang_distinct
+                .iter()
+                .position(|l| l == lang)
+                .expect("lang was deduped in");
+            let w = fence_lang_widths[idx];
+            let left = (fence_lang_right - w - fence_lang_inset).max(self.text_left());
+            areas.push(TextArea {
+                buffer: &fence_lang_buffers[idx],
+                left,
+                top: *top,
+                scale: 1.0,
+                bounds,
+                default_color: muted,
                 custom_glyphs: &[],
             });
         }
@@ -2367,6 +2431,24 @@ impl TextPipeline {
     ) {
         let lines = self.strike_lines();
         self.strike_pipeline
+            .prepare(device, queue, width, height, &lines);
+    }
+
+    /// Build + upload the quiet markdown LINK UNDERLINE (one flat band per
+    /// visual-row segment of every `MdKind::LinkText` span), positioned by THE
+    /// ONE line-band owner (`super::spans::link_underline_band` — see
+    /// [`super::TextPipeline::link_underlines`]). Empty (nothing uploaded,
+    /// nothing drawn) for a link-less / non-markdown buffer, so those frames
+    /// stay byte-identical.
+    pub(super) fn prepare_link_underline_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+    ) {
+        let lines = self.link_underlines();
+        self.link_underline_pipeline
             .prepare(device, queue, width, height, &lines);
     }
 }

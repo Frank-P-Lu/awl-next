@@ -335,6 +335,11 @@ impl TextPipeline {
         // tinted THE strike ink — the one owner the struck text shares.
         let strike_pipeline =
             SpellUnderlinePipeline::new(device, format, strike_srgba_bytes());
+        // The quiet markdown LINK UNDERLINE (same flat-line pipeline shape, its
+        // own instance — a different vertical band from `strike_pipeline`),
+        // tinted THE link-underline ink (the same muted rung the strike shares).
+        let link_underline_pipeline =
+            SpellUnderlinePipeline::new(device, format, link_underline_srgba_bytes());
 
         let mut me = Self {
             font_system,
@@ -395,6 +400,7 @@ impl TextPipeline {
             spell_pipeline,
             nit_pipeline,
             strike_pipeline,
+            link_underline_pipeline,
             caret: CaretAnim::new(),
             cursor_line: 0,
             cursor_col: 0,
