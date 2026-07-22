@@ -5,6 +5,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::super::*;
+use super::super::LINE_HEIGHT;
 use super::{headless_pipeline, view};
 
 /// The pure fit-to-column display-size math: never wider than the column,
@@ -453,14 +454,15 @@ fn inline_image_off_cursor_draws_one_quad_and_stays_drawn_when_revealed() {
     restore();
 }
 
-/// GPU DRAW (item 5a): the MIXED-line counterpart to the bare-line test above —
-/// OFF-cursor the image draws its one quad (offset to the row's bottom `dh`
-/// band per `image_row_offset`); ON-cursor (revealed, its raw source wrapping
-/// as plain text — see `mixed_list_image_reveal_wraps_as_plain_text_and_parks_
-/// the_image`) it draws NO quad at all — the caption model's "stays drawn,
-/// dimmed" only holds for a BARE line's fixed single-row geometry, not a mixed
-/// line's wrap-dependent reveal (see `compute_image_layout`'s doc comment for
-/// why). Fixture: `samples/photo.png`.
+/// GPU DRAW (item 5 rework): the MIXED-line counterpart to the bare-line test
+/// above — OFF-cursor the image draws its one quad (at the forced trailing
+/// row's own top, per `TextPipeline::image_draw_top`); ON-cursor (revealed,
+/// its raw source wrapping as plain text — see
+/// `mixed_list_image_reveal_wraps_as_plain_text_and_parks_the_image`) it draws
+/// NO quad at all — the caption model's "stays drawn, dimmed" only holds for a
+/// BARE line's fixed single-row geometry, not a mixed line's wrap-dependent
+/// reveal (see `compute_image_layout`'s doc comment for why). Fixture:
+/// `samples/photo.png`.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn mixed_list_image_draws_off_cursor_and_parks_when_revealed() {
@@ -493,6 +495,28 @@ fn mixed_list_image_draws_off_cursor_and_parks_when_revealed() {
         p.image_pipeline.instance_count(),
         1,
         "off-cursor: the mixed line's image draws its one quad"
+    );
+    // MARKER-STRAND REGRESSION GUARD (larger fixture — `photo.png` fits to a
+    // `dh` in the hundreds of px, so the prior round's `base_lh + 2*dh` bug
+    // would have produced the dramatic real-fixture void this item reworked):
+    // the caption row still stays at plain `base_lh`, and the image draws with
+    // NO gap directly below it.
+    let base_lh = p.metrics.line_height;
+    let rows0 = p.visual_rows(0);
+    assert!(
+        (rows0[0].line_height - base_lh).abs() < 1.0,
+        "the caption row is untouched even with a large dh: {} vs base_lh {base_lh}",
+        rows0[0].line_height
+    );
+    let dh = p.images_report()[0].display_h;
+    assert!(dh > base_lh * 3.0, "sanity: this fixture's dh is genuinely large: {dh}");
+    let rects = p.image_hit_rects();
+    assert_eq!(rects.len(), 1, "one image hit rect off-cursor: {rects:?}");
+    let row0_bottom = p.line_ornament_top(0) + rows0[0].line_height;
+    assert!(
+        (rects[0].1[1] - row0_bottom).abs() < 1.0,
+        "the image draws immediately below the caption row, no void: img_top={} row0_bottom={row0_bottom}",
+        rects[0].1[1]
     );
 
     // Caret ON the image line: the reveal wraps as plain text; the image parks.
@@ -617,29 +641,125 @@ fn no_image_buffer_draws_neither_quad_nor_placeholder() {
     crate::markdown::set_inline_images_on(prev);
 }
 
-/// ITEM 5a — LIST ITEM WITH TEXT AND AN IMAGE (`- caption text ![pic](p)`):
-/// STRATEGY DECIDED 2026-07-22 — the image gets its OWN row below the text row,
-/// no hybrid blend. cosmic-text centers a row's content around its own natural
-/// glyph height unconditionally (`buffer.rs`'s `centering_offset`, no per-span
-/// bias hook), so the only overlap-free way to give the caption text a clean
-/// `dh`-tall gap below it in ONE reserved document row is to reserve `base_lh +
-/// 2*dh` (see `TextPipeline::compute_image_layout`'s doc comment for the full
-/// derivation + the ruled-out alternatives) — the caption renders at its own
-/// normal list metrics (untouched), and the drawn image anchors to the row's
-/// BOTTOM `dh` band via `image_row_offset`, landing exactly at the reserved
-/// row's bottom edge with zero overlap. A bare `- ![pic](p)` (no other content)
-/// stays exactly `dh`, regression-guarded by
-/// `inline_image_reserves_tall_row_and_reveals_source_on_cursor` above. Fixture:
-/// `samples/tiny.png` (120x48 -> 48px `dh`).
+/// ITEM 5 REWORK REGRESSION GUARD — the forcing measurement MUST shape its
+/// isolated probe in the REAL document face (`TextPipeline::doc_attrs`), not a
+/// generic fallback. Caught live: measuring the "iA Writer Quattro S" world's
+/// (Mopoke) caption prefix with a blank `Attrs::new()` under-measured it
+/// against the font it ACTUALLY renders in, so the forcing glyph fired while
+/// the caption's own natural wrap still had a row left — stranding the image
+/// mid-text again (the exact bug this whole round fixed, just relocated). This
+/// combines the three conditions that exposed it: a non-default WORLD (its own
+/// display face, likely wider/narrower than the fallback), PAGE MODE at a
+/// REALISTIC measure (not the wide 1200px unpaged test default), and a caption
+/// long enough to wrap on ITS OWN even before the image markup — so the
+/// forcing measurement's font MUST match reality or this fails.
 #[test]
-fn mixed_list_image_reserves_a_combined_row_and_anchors_below_the_text() {
+fn mixed_list_image_forcing_measures_in_the_real_world_font_under_page_mode() {
+    let _w = crate::testlock::serial();
+    let _pg = crate::testlock::serial();
+    if std::fs::metadata("samples/photo.png").is_err() {
+        eprintln!("skipping: samples/photo.png fixture not present");
+        return;
+    }
+    let prev = crate::markdown::inline_images_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let prev_page = crate::page::page_on();
+    let prev_measure = crate::page::measure();
+    crate::page::set_page_on(true);
+    crate::page::set_measure(105);
+    let prev_theme = crate::theme::active().name;
+    crate::theme::set_active_by_name("Mopoke");
+    let restore = || {
+        crate::page::set_page_on(prev_page);
+        crate::page::set_measure(prev_measure);
+        crate::theme::set_active_by_name(&prev_theme);
+        crate::markdown::set_inline_images_on(prev);
+    };
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!(
+            "skipping mixed_list_image_forcing_measures_in_the_real_world_font_under_page_mode: no wgpu adapter"
+        );
+        restore();
+        return;
+    };
+    let text = "# Mixed list image\n\n- a caption sits before the image on this very same list line ![a soft gradient with a pale sun|300](samples/photo.png)\n- item two, plain text, no image at all\n- item three\n";
+    let mut v = view(text, 0, 0);
+    v.is_markdown = true;
+    p.set_view(&v);
+    let dh = p.images_report()[0].display_h;
+    let base_lh = p.metrics.line_height;
+
+    // The caption genuinely wraps on its own under these conditions (the
+    // scenario the bug needed) — sanity-check the setup itself is exercising
+    // the multi-row path, not silently degenerating to a single row.
+    let rows = p.visual_rows(2);
+    assert!(
+        rows.len() >= 2,
+        "sanity: the caption wraps on its own at this width/font: {} row(s)",
+        rows.len()
+    );
+    // Every row of the caption's own wrap stays at plain base_lh — the forcing
+    // glyph never lands ON one of them (which would inflate it to `dh`).
+    for (i, r) in rows[..rows.len() - 1].iter().enumerate() {
+        assert!(
+            (r.line_height - base_lh).abs() < 1.0,
+            "caption row {i} stays at base_lh, the forcing glyph didn't land here: {} vs base_lh {base_lh}",
+            r.line_height
+        );
+    }
+    // The LAST row is the forcing row, sized to dh.
+    let last = rows.last().unwrap();
+    assert!(
+        (last.line_height - dh).abs() < 1.0,
+        "the trailing forcing row is dh tall: {} vs dh {dh}",
+        last.line_height
+    );
+
+    // NO VOID: the image draws immediately after the caption's OWN last real
+    // row (not after row 0, which was the live bug — the image floated up
+    // over the caption's second wrapped row instead of below it).
+    let rects = p.image_hit_rects();
+    assert_eq!(rects.len(), 1, "one image hit rect: {rects:?}");
+    let caption_last_row_bottom = p.line_ornament_top(2) + (last.line_top - rows[0].line_top);
+    assert!(
+        (rects[0].1[1] - caption_last_row_bottom).abs() < 1.0,
+        "image draws directly below the caption's OWN last wrapped row, no void: img_top={} caption_last_row_bottom={caption_last_row_bottom}",
+        rects[0].1[1]
+    );
+
+    restore();
+}
+
+/// ITEM 5 REWORK (2026-07-22) — LIST ITEM WITH TEXT AND AN IMAGE
+/// (`- caption text ![pic](p)`): the PRIOR round's `base_lh + 2*dh` whole-row
+/// inflation is REJECTED — cosmic-text's unconditional row-centering rendered
+/// the caption glyphs ~`dh` px below its own list marker (a real fixture
+/// produced a ~200px void with nothing connecting marker to caption). The fix:
+/// the marker+caption row is NEVER touched (stays exactly `base_lh`, so the
+/// marker draws immediately adjacent to its own caption — same row, same
+/// normal metrics, like any other list item), and the image instead gets a
+/// GENUINE second cosmic-text visual row of the SAME logical line (a forced
+/// `Wrap::WordOrGlyph` break via a large `letter_spacing` on the concealed
+/// image markup's first byte — see `TextPipeline::image_force`'s field doc),
+/// sized to `dh`, directly after it — real layout, not a side table, so
+/// RowGeom/hit-test/scroll all agree with what's actually painted for free.
+/// THIS TEST is the direct regression guard for the marker-strand bug: it
+/// asserts the ADJACENCY property the prior round's tests never checked (they
+/// asserted the reserved height matched a formula, not that the marker and
+/// caption ended up next to each other). Fixture: `samples/tiny.png` (120x48 ->
+/// 48px `dh`).
+#[test]
+fn mixed_list_image_keeps_marker_adjacent_to_caption_and_draws_image_directly_below() {
     let _w = crate::testlock::serial();
     let _pg = crate::testlock::serial();
     let prev = crate::markdown::inline_images_on();
     crate::markdown::set_inline_images_on(true);
     crate::markdown::set_wysiwyg_on(true);
     let Some(mut p) = headless_pipeline() else {
-        eprintln!("skipping mixed_list_image_reserves_a_combined_row: no wgpu adapter");
+        eprintln!(
+            "skipping mixed_list_image_keeps_marker_adjacent_to_caption_and_draws_image_directly_below: no wgpu adapter"
+        );
         crate::markdown::set_inline_images_on(prev);
         return;
     };
@@ -653,50 +773,75 @@ fn mixed_list_image_reserves_a_combined_row_and_anchors_below_the_text() {
     let dh = report[0].display_h;
     assert!((dh - 48.0).abs() < 1.0, "fixture fit height: {dh}");
     let base_lh = p.metrics.line_height;
-    let row_h = p.visual_rows(0)[0].line_height;
-    let expected = base_lh + 2.0 * dh;
+
+    // MARKER ADJACENT TO CAPTION: the shared row is UNTOUCHED — exactly
+    // `base_lh`, never inflated by any multiple of `dh`. This is the direct
+    // fix: the row that draws the marker ornament (`line_ornament_top`) is the
+    // SAME row cosmic-text centres the caption glyphs within, and a `base_lh`
+    // row leaves only the normal, tiny body-text centring offset between them
+    // — nothing like the old `dh`-scale void.
+    let rows = p.visual_rows(0);
+    let row0_h = rows[0].line_height;
     assert!(
-        (row_h - expected).abs() < 1.0,
-        "mixed line reserves base_lh + 2*dh: {row_h} vs {expected} (base_lh={base_lh}, dh={dh})"
+        (row0_h - base_lh).abs() < 1.0,
+        "marker+caption row stays at base_lh, never inflated: {row0_h} vs base_lh {base_lh}"
     );
-    // The drawn image anchors to the row's BOTTOM dh band, not the row top (which
-    // would overlap the centred caption text).
+
+    // The forcing mechanism produces a genuine SECOND visual row of this SAME
+    // logical line (real cosmic-text layout — `RowGeom`/hit-test read it for
+    // free, no side table to keep in sync), sized to `dh`, immediately after.
+    assert!(
+        rows.len() >= 2,
+        "a trailing row exists for the image on this logical line: {} row(s)",
+        rows.len()
+    );
+    let row1_h = rows[1].line_height;
+    assert!(
+        (row1_h - dh).abs() < 1.0,
+        "the trailing row is exactly dh tall: {row1_h} vs dh {dh}"
+    );
+
+    // IMAGE DIRECTLY BELOW, NO VOID: the drawn quad's top sits EXACTLY at the
+    // caption row's own bottom edge — not offset by `dh`, not offset by any
+    // stray gap (the old bug's signature).
     let rects = p.image_hit_rects();
     assert_eq!(rects.len(), 1, "one image hit rect: {rects:?}");
     let img_top = rects[0].1[1];
-    let row_top = p.line_ornament_top(0);
-    let expected_offset = base_lh + dh; // reserved (base_lh + 2*dh) minus dh
+    let row0_top = p.line_ornament_top(0); // the marker's own draw y
     assert!(
-        (img_top - (row_top + expected_offset)).abs() < 1.0,
-        "image anchors to the bottom dh band: top={img_top} row_top={row_top} offset={expected_offset}"
+        (img_top - (row0_top + row0_h)).abs() < 1.0,
+        "image draws directly below the caption row, no void: img_top={img_top} row0_bottom={}",
+        row0_top + row0_h
     );
-    // The image's bottom edge lands exactly at the reserved row's bottom — no
-    // overflow into the following document line.
+
+    // NO OVERLAP: the image's bottom edge lands at (or before) the following
+    // document line's own row top — it never bleeds into "after".
     let img_bottom = img_top + rects[0].1[3];
+    let next_line_top = p.line_ornament_top(1);
     assert!(
-        (img_bottom - (row_top + row_h)).abs() < 1.0,
-        "image bottom == reserved row bottom: {img_bottom} vs {}",
-        row_top + row_h
+        img_bottom <= next_line_top + 1.0,
+        "image never overlaps the following document line: img_bottom={img_bottom} next_line_top={next_line_top}"
     );
+
     crate::markdown::set_inline_images_on(prev);
 }
 
-/// ITEM 5a — REVEALED MIXED LINE (caret ON the line), the case a straightforward
-/// "just apply the combined reservation always" implementation gets WRONG:
-/// unconcealed, the raw source (caption + `![alt](path)`) is long enough here
-/// to WRAP onto a second visual row. Empirically, cosmic-text's per-visual-row
-/// `line_height_opt` MAX (`buffer.rs`) is taken PER WRAPPED ROW, so a fixed
-/// per-LINE `base_lh + 2*dh` override (as used off-cursor) would inflate BOTH
-/// wrapped rows independently (confirmed while building this: two rows landed
-/// at 432px each, not the intended combined total once) and strand the image
-/// mid-text. `compute_image_layout` avoids this by reserving NOTHING for a
-/// revealed mixed line (plain, un-scaled rows — ordinary word wrap) and the
-/// draw side skips the image for that one frame (`image_row_reserved`). This
-/// asserts the OUTCOME: every wrapped row of the revealed line stays at the
-/// PLAIN base line height (no inflation, no matter how many rows it wraps
-/// onto), and no image hit-rect is armed while revealed. The image reappears
-/// the instant the caret leaves — covered by
-/// `mixed_list_image_reserves_a_combined_row_and_anchors_below_the_text`
+/// ITEM 5 REWORK — REVEALED MIXED LINE (caret ON the line): unconcealed, the
+/// raw source (caption + `![alt](path)`) is long enough here to WRAP onto a
+/// second visual row on its own. A per-LINE metrics override applied
+/// regardless of reveal state would inflate EVERY wrapped row independently
+/// (cosmic-text's per-visual-row `line_height_opt` MAX is taken PER ROW, not
+/// once per logical line — confirmed empirically while building the prior
+/// round: two wrapped rows landed at 432px EACH, not one combined total) and
+/// strand the image mid-text — so `compute_image_layout` reserves NOTHING at
+/// all for a revealed mixed line (plain, un-scaled rows — ordinary word wrap,
+/// no forcing `letter_spacing` either) and the draw side skips the image for
+/// that one frame (`image_row_reserved`). This asserts the OUTCOME: every
+/// wrapped row of the revealed line stays at the PLAIN base line height (no
+/// inflation, no matter how many rows it wraps onto), and no image hit-rect is
+/// armed while revealed. The image reappears the instant the caret leaves —
+/// covered by
+/// `mixed_list_image_keeps_marker_adjacent_to_caption_and_draws_image_directly_below`
 /// (caret off) above. Fixture: `samples/photo.png` (420x280).
 #[test]
 fn mixed_list_image_reveal_wraps_as_plain_text_and_parks_the_image() {
@@ -745,13 +890,13 @@ fn mixed_list_image_reveal_wraps_as_plain_text_and_parks_the_image() {
     crate::markdown::set_inline_images_on(prev);
 }
 
-/// ITEM 5a companion: a BARE list image (`- ![pic](p)`, no other caption text)
-/// keeps the pre-existing `dh`-only reservation and draws at the row TOP — the
-/// `image_row_offset` added for the mixed case is `0.0` here, so this is
-/// byte-identical to the images-v1 behavior. Guards against the mixed-line
-/// detector over-firing on the list marker itself (which conceals to its own
-/// bullet glyph and must NOT count as "other content"). Fixture:
-/// `samples/tiny.png`.
+/// ITEM 5 REWORK companion: a BARE list image (`- ![pic](p)`, no other caption
+/// text) keeps the pre-existing `dh`-only reservation and draws at the row TOP
+/// — `image_force` never fires for it (`image_draw_top` falls through to the
+/// plain row top there), so this is byte-identical to the images-v1 behavior.
+/// Guards against the mixed-line detector over-firing on the list marker
+/// itself (which conceals to its own bullet glyph and must NOT count as
+/// "other content"). Fixture: `samples/tiny.png`.
 #[test]
 fn bare_list_image_keeps_the_dh_only_row_and_draws_at_the_top() {
     let _w = crate::testlock::serial();
@@ -784,17 +929,21 @@ fn bare_list_image_keeps_the_dh_only_row_and_draws_at_the_top() {
     crate::markdown::set_inline_images_on(prev);
 }
 
-/// ITEM 5b — ROW GEOMETRY OWNS IMAGE HEIGHT (the core fix): the scroll<->pixel
-/// table (`RowGeom`, delegated via `TextPipeline::row_top_px`) must place the
-/// row AFTER an image at the image's REAL rendered height — not a constant
-/// `LINE_HEIGHT` — or scroll visibly JUMPS as the image enters/leaves view (the
-/// item's reported bug). `build_line_attrs` bakes the reserved height into the
-/// shaped row's `line_height` (an absolute `Attrs::metrics` override, the same
-/// seam headings use), and `RowGeom::ensure` reads it straight off
+/// ITEM 5b — ROW GEOMETRY OWNS IMAGE HEIGHT (the core fix, PRESERVED across the
+/// item-5 rework): the scroll<->pixel table (`RowGeom`, delegated via
+/// `TextPipeline::row_top_px`) must place the row AFTER an image at the
+/// image's REAL rendered height — not a constant `LINE_HEIGHT` — or scroll
+/// visibly JUMPS as the image enters/leaves view (the item's reported bug).
+/// `build_line_attrs` bakes the reserved height into the shaped row's
+/// `line_height` (an absolute `Attrs::metrics` override, the same seam
+/// headings use), and `RowGeom::ensure` reads it straight off
 /// `layout_runs()` — so this is the END-TO-END proof the mechanism holds for
-/// both the BARE image case (unchanged since images-v1) and the item-5a MIXED
-/// combined reservation (`base_lh + 2*dh`). Fixture: `samples/tiny.png` (120x48
-/// -> 48px `dh`).
+/// both the BARE image case (unchanged since images-v1) and the item-5-REWORK
+/// MIXED case, which now reserves `base_lh` (the untouched caption row) PLUS
+/// `dh` (the forced trailing row) — a genuine two-visual-row split of the same
+/// logical line, not a single inflated `base_lh + 2*dh` row (see
+/// `TextPipeline::image_force`'s field doc). Fixture: `samples/tiny.png`
+/// (120x48 -> 48px `dh`).
 #[test]
 fn row_geometry_places_the_row_after_an_image_at_its_real_height() {
     let _w = crate::testlock::serial();
@@ -835,19 +984,28 @@ fn row_geometry_places_the_row_after_an_image_at_its_real_height() {
         "total doc height matches the real cumulative row geometry: {doc_h} vs {expected_doc_h}"
     );
 
-    // MIXED case (item 5a): `- text ![pic](p)` reserves base_lh + 2*dh.
+    // MIXED case (item 5 rework): `- text ![pic](p)` reserves base_lh (the
+    // untouched caption row) + dh (the forced trailing row) — two REAL visual
+    // rows of the SAME logical line, so "after" lands at base_lh + dh, not the
+    // old base_lh + 2*dh single-row inflation.
     let mixed = "- text ![pic](samples/tiny.png)\nafter\n";
     let mut vm = view(mixed, 1, 0);
     vm.is_markdown = true;
     p.set_view(&vm);
     let dh2 = p.images_report()[0].display_h;
     let base_lh = p.metrics.line_height;
-    let expected2 = base_lh + 2.0 * dh2;
+    let rows0 = p.visual_rows(0);
+    assert!(
+        rows0.len() >= 2,
+        "the mixed line's own trailing row exists: {} row(s)",
+        rows0.len()
+    );
+    let expected2 = base_lh + dh2;
     let row1b = p.visual_row_of(1, 0);
     let top1b = p.row_top_px(row1b);
     assert!(
         (top1b - expected2).abs() < 1.0,
-        "mixed: the row after the image sits at base_lh + 2*dh ({expected2}): {top1b}"
+        "mixed: the row after the image sits at base_lh + dh ({expected2}): {top1b}"
     );
     crate::markdown::set_inline_images_on(prev);
 }

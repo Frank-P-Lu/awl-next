@@ -393,9 +393,13 @@ impl TextPipeline {
     /// missing/unreadable file reserves a placeholder-height row (the placeholder
     /// GLYPH is the next phase).
     /// Returns an all-`None` table when the feature is off / not markdown / on wasm,
-    /// so the render stays byte-identical (no tall row is ever reserved).
+    /// so the render stays byte-identical (no tall row is ever reserved). ALSO
+    /// populates [`Self::image_force`] (item 5 rework — see its field doc) for
+    /// MIXED off-cursor lines; that table is a separate, PARALLEL mechanism, never
+    /// a value in this returned `heights` table (a mixed line's OWN row is never
+    /// inflated any more — see the field doc for why).
     fn compute_image_layout(
-        &self,
+        &mut self,
         text: &str,
         md_spans: &[(std::ops::Range<usize>, crate::markdown::MdKind)],
     ) -> Vec<Option<f32>> {
@@ -404,12 +408,42 @@ impl TextPipeline {
         let line_count = text.split('\n').count().max(1);
         #[allow(unused_mut)]
         let mut heights = vec![None; line_count];
+        #[allow(unused_mut)]
+        let mut force: Vec<Option<(f32, f32)>> = vec![None; line_count];
         #[cfg(not(target_arch = "wasm32"))]
         if crate::markdown::inline_images_on() && self.md_enabled {
             use crate::markdown::{ConcealKind, MdKind};
             let wrap = self.text_wrap_width();
+            let base_fs = self.metrics.font_size;
             let base_lh = self.metrics.line_height;
             let cursor_line = self.cursor_line;
+            // The REAL document family/weight (see `Self::doc_attrs`'s doc) — the
+            // forcing measurement below MUST shape the prefix in the SAME face the
+            // caption itself renders in (a mono/serif/sans world's own display
+            // face), or it under/over-measures against a generic fallback and the
+            // forcing glyph lands at the WRONG remaining-space estimate (confirmed
+            // empirically: a plain `Attrs::new()` measurement under-measured a real
+            // theme's wider face, so the forcing glyph fired while the caption's
+            // OWN natural wrap still had a row left, stranding the image mid-text
+            // again — the very bug this round fixed).
+            let doc_attrs = self.doc_attrs();
+            // Collect the pure per-image facts (no `&mut self` needed) FIRST — the
+            // forcing measurement below needs `&mut self.font_system`, so it can't
+            // run interleaved with a borrow of `md_spans`/`text` inside the SAME
+            // loop as a method call on `&mut self` (the existing `self.resolve_
+            // image_path`/`self.image_preview` reads here are all `&self`, fine).
+            struct Found {
+                r: std::ops::Range<usize>,
+                img: crate::markdown::ImageRef,
+                line: usize,
+                dw: f32,
+                dh: f32,
+                missing: bool,
+                mixed: bool,
+                revealed_now: bool,
+                prefix: String,
+            }
+            let mut found = Vec::new();
             for (r, k) in md_spans {
                 if !matches!(k, MdKind::ConcealMarkup(ConcealKind::Image)) {
                     continue;
@@ -452,111 +486,170 @@ impl TextPipeline {
                         true,
                     ),
                 };
-                // ITEM 5a — "list item with text AND an image": a BARE image line
-                // (`- ![alt](p)`, list marker aside) reserves exactly `dh` — the image
-                // IS the row, unchanged since images-v1. A MIXED line
-                // (`- caption text ![alt](p)`) instead reserves `base_lh + 2*dh`: cosmic-
-                // text centers a row's content around its own natural glyph height
-                // (`buffer.rs`'s `centering_offset = (line_height - glyph_height) / 2`,
-                // unconditional — no per-span bias hook exists), so the ONLY way to give
-                // the caption text a clean `dh`-tall gap BELOW it with NO overlap, using
-                // one reserved document row (no forced cosmic-text wrap, no synthetic
-                // RowGeom row — see the doc comment above this fn for why those were
-                // ruled out), is to reserve TWO image-heights of "extra" so the even
-                // 50/50 split leaves a genuine `dh` band below the text. This costs a
-                // symmetric `dh`-tall gap ABOVE the text too (a logged, deliberate
-                // scope trim, not a bug) — the text itself renders at its own normal
-                // list metrics (untouched: this only changes the RESERVED height, never
-                // `build_line_attrs`'s per-span treatment of the leading text). The
-                // image quad then anchors to the row's bottom `dh` band via
-                // `image_row_offset` (`layers::prepare_images` / `image_hit_rects`),
-                // never the row top, so it never overlaps the caption.
-                //
-                // REVEALED MIXED LINE (caret on it): the fixed `base_lh + 2*dh`
-                // override is a PER-LINE `Attrs::metrics` base (`build_line_attrs`),
-                // and cosmic-text's `line_height_opt` is a MAX taken PER VISUAL ROW —
-                // so if the revealed raw source (caption text + `![alt](path)`, now
-                // fully unconcealed and often much longer) WRAPS, EVERY wrapped row
-                // inherits the SAME inflated height independently, not just the
-                // logical line once (confirmed empirically: a 2-row wrap produced two
-                // 432px rows, not one). That stacks the reservation per wrapped row
-                // and strands the image mid-text. Rather than chase that
-                // (wrap-count-dependent, unbounded) growth, a REVEALED mixed line
-                // reserves NOTHING here (`None` — the ordinary un-scaled row model,
-                // exactly like plain prose) and the draw side
-                // (`layers::prepare_images` / `image_hit_rects`) skips drawing the
-                // image entirely for that one frame — it reappears the instant the
-                // caret leaves. This is the SAME "reflow while actively editing is
-                // accepted" trade already priced into fence/rule conceal elsewhere
-                // (docs/markdown.md); scoped here to the one line being edited.
+                // ITEM 5 REWORK — "list item with text AND an image": a BARE image
+                // line (`- ![alt](p)`, list marker aside) reserves exactly `dh` —
+                // the image IS the row, unchanged since images-v1 (`heights[line]`
+                // below). A MIXED line (`- caption text ![alt](p)`) does NOT touch
+                // `heights[line]` at all any more — see [`Self::image_force`]'s
+                // field doc for the forced-trailing-row mechanism that replaces the
+                // prior round's `base_lh + 2*dh` whole-row inflation (which centred
+                // the caption away from its own marker — the reported bug).
                 let line_start = text[..r.start].rfind('\n').map(|i| i + 1).unwrap_or(0);
                 let line_end = text[r.end..].find('\n').map(|i| r.end + i).unwrap_or(text.len());
                 let local = (r.start - line_start)..(r.end - line_start);
                 let mixed =
                     super::spans::image_line_has_other_content(&text[line_start..line_end], local);
                 let revealed_now = line == cursor_line;
-                if mixed && revealed_now {
-                    // Leave `heights[line]` at its default `None` — no reservation,
-                    // no image draw (see the doc comment above).
-                } else {
-                    let reserved_h = if mixed { base_lh + 2.0 * dh } else { dh };
-                    if let Some(slot) = heights.get_mut(line) {
-                        *slot = Some(reserved_h);
+                if mixed {
+                    // REVEALED MIXED LINE (caret on it): reserves nothing at all —
+                    // the ordinary un-scaled row model, exactly like plain prose —
+                    // and the draw side parks the image for that one frame. Same
+                    // "reflow while actively editing is accepted" trade already
+                    // priced into fence/rule conceal elsewhere (docs/markdown.md).
+                    if !revealed_now {
+                        found.push(Found {
+                            r: r.clone(),
+                            img: img.clone(),
+                            line,
+                            dw,
+                            dh,
+                            missing,
+                            mixed: true,
+                            revealed_now,
+                            prefix: text[line_start..r.start].to_string(),
+                        });
+                        continue;
+                    }
+                } else if let Some(slot) = heights.get_mut(line) {
+                    *slot = Some(dh);
+                }
+                found.push(Found {
+                    r: r.clone(),
+                    img: img.clone(),
+                    line,
+                    dw,
+                    dh,
+                    missing,
+                    mixed,
+                    revealed_now,
+                    prefix: String::new(),
+                });
+            }
+            for f in found {
+                if f.mixed && !f.revealed_now {
+                    // The forcing span's target advance: enough to overflow the
+                    // marker+caption's own LAST wrapped row (so it lands on a
+                    // fresh trailing row of THIS line, never the caption's own —
+                    // see `Self::image_force`'s field doc), plus a small safety
+                    // margin so float/measurement drift can't leave it short. A
+                    // caption that already wraps on its own is handled too: we
+                    // measure the LAST row of ITS OWN natural wrap, not the whole
+                    // (unwrapped) text.
+                    let last_row_w = Self::measure_last_row_width(
+                        &mut self.font_system,
+                        &f.prefix,
+                        &doc_attrs,
+                        base_fs,
+                        wrap,
+                    );
+                    let remaining = (wrap - last_row_w).max(0.0);
+                    let target_advance = remaining + Self::IMAGE_FORCE_MARGIN_PX;
+                    if let Some(slot) = force.get_mut(f.line) {
+                        *slot = Some((f.dh, target_advance));
                     }
                 }
                 report.push(crate::render::ImageReport {
-                    range: (r.start, r.end),
-                    line,
-                    path: img.path,
-                    alt: img.alt,
-                    width_hint: img.width_hint,
-                    display_w: dw,
-                    display_h: dh,
-                    missing,
-                    revealed: line == cursor_line,
+                    range: (f.r.start, f.r.end),
+                    line: f.line,
+                    path: f.img.path,
+                    alt: f.img.alt,
+                    width_hint: f.img.width_hint,
+                    display_w: f.dw,
+                    display_h: f.dh,
+                    missing: f.missing,
+                    revealed: f.revealed_now,
                 });
             }
         }
         let _ = md_spans;
+        self.image_force = force;
         heights
     }
 
-    /// ITEM 5a companion to [`Self::compute_image_layout`]'s "mixed" reservation:
-    /// the extra top offset (px) an image's OWN drawn rect needs beyond its
-    /// logical line's row top. `0.0` for a bare image-only line (the reserved row
-    /// height IS `dh`, unchanged since images-v1 — this is a no-op there, so a
-    /// bare line's draw position is byte-identical). For a MIXED line the row
-    /// reserves `base_lh + 2*dh` (see that fn's doc comment), and this returns
-    /// `reserved - dh` so the image quad anchors to the row's BOTTOM `dh` band,
-    /// below the caption text, instead of overlapping it. Reads the cached
-    /// per-reshape `image_heights` table (never re-derives it), so draw and
-    /// layout can never disagree. `dh` is the image's own display height (already
-    /// in hand at every call site). NOT wasm-gated: `image_heights` itself is a
-    /// cross-platform field (tables use the same slot); this is a harmless
-    /// always-`0.0` no-op on wasm, where `image_hit_rects`'s `report` is always
-    /// empty anyway (inline-image decode is native-only).
-    pub(super) fn image_row_offset(&self, line: usize, dh: f32) -> f32 {
-        self.image_heights
-            .get(line)
-            .copied()
-            .flatten()
-            .map(|reserved| (reserved - dh).max(0.0))
-            .unwrap_or(0.0)
+    /// ITEM 5 REWORK: the safety margin (px) added on top of the measured
+    /// remaining space when sizing a mixed image line's forcing `letter_spacing`
+    /// (see [`Self::image_force`]'s field doc) — absorbs float rounding and the
+    /// small residual inaccuracy of measuring the prefix in ISOLATION (matched
+    /// family/weight via `doc_attrs`, but not per-span CJK/markdown overrides the
+    /// real line may also carry). Small relative to any real wrap column, so it
+    /// never itself risks overflowing a fresh row.
+    const IMAGE_FORCE_MARGIN_PX: f32 = 4.0;
+
+    /// ITEM 5 REWORK: the rendered pixel width of `text`'s own LAST visual row when
+    /// word-wrapped at `wrap_width` — i.e. how much of a fresh `wrap_width`-wide row
+    /// is already used by `text` (a mixed image line's marker+caption PREFIX, up to
+    /// but not including the image markup) if it were laid out alone. Shapes `text`
+    /// in an ISOLATED, throwaway `Buffer`, in the SAME `attrs` (family/weight — see
+    /// the call site's doc: MUST match the real document face, or this under/over-
+    /// measures) at `Wrap::WordOrGlyph` and the SAME wrap width the real line uses,
+    /// so a caption that wraps on its own is measured correctly too (the LAST run's
+    /// width, not the whole unwrapped sum). `0.0` for empty text. A one-line-shape
+    /// cost, paid once per mixed image line per RESHAPE (not per frame) —
+    /// comparable to `compute_image_layout`'s existing per-image disk read.
+    fn measure_last_row_width(
+        font_system: &mut FontSystem,
+        text: &str,
+        attrs: &Attrs<'static>,
+        font_size: f32,
+        wrap_width: f32,
+    ) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+        let mut buf = GlyphBuffer::new_empty(GlyphMetrics::new(font_size, font_size * 1.2));
+        buf.set_wrap(font_system, Wrap::WordOrGlyph);
+        buf.set_size(font_system, Some(wrap_width.max(1.0)), None);
+        let al = glyphon::cosmic_text::AttrsList::new(attrs);
+        buf.lines.push(glyphon::cosmic_text::BufferLine::new(
+            text,
+            glyphon::cosmic_text::LineEnding::None,
+            al,
+            Shaping::Advanced,
+        ));
+        buf.shape_until_scroll(font_system, false);
+        buf.layout_runs().last().map(|r| r.line_w).unwrap_or(0.0)
     }
 
-    /// ITEM 5a: true when logical `line` currently has a row-height RESERVATION
-    /// in `self.image_heights` — i.e. drawing its image at a position derived
-    /// from that reservation is well-defined. `false` for a REVEALED MIXED line
-    /// (`compute_image_layout` deliberately leaves its slot `None` while the
-    /// caret is on it — see that fn's doc comment), which is the caller's
+    /// ITEM 5 REWORK: the absolute screen y (px) at which THIS line's image quad
+    /// draws/hit-tests. A BARE image line (or any line without a current
+    /// [`Self::image_force`] entry) is byte-identical to before: the row top
+    /// ([`Self::line_ornament_top`], offset `0.0` — the image IS the row). A MIXED
+    /// OFF-CURSOR line instead reads its LAST visual row's own top — where the
+    /// forcing glyph actually landed (real cosmic-text layout, see
+    /// [`Self::image_force`]'s field doc) — so the quad sits directly below the
+    /// (untouched, base-height) marker+caption row, never overlapping it, with NO
+    /// separate offset arithmetic to keep in sync with the layout.
+    pub(super) fn image_draw_top(&self, line: usize) -> f32 {
+        if self.image_force.get(line).copied().flatten().is_some() {
+            let rows = self.visual_rows(line);
+            if let Some(last) = rows.last() {
+                return self.doc_top() + last.line_top;
+            }
+        }
+        self.line_ornament_top(line)
+    }
+
+    /// ITEM 5 REWORK: true when logical `line` currently has a well-defined image
+    /// draw position — a BARE line's `image_heights` reservation OR a MIXED
+    /// off-cursor line's [`Self::image_force`] entry. `false` for a REVEALED MIXED
+    /// line (both tables are `None` while the caret is on it — see
+    /// `compute_image_layout`'s doc comment), the caller's
     /// (`layers::prepare_images` / `Self::image_hit_rects`) signal to skip
-    /// drawing/arming the image for that one frame rather than draw it at a
-    /// stale or undefined offset. `true` for every OTHER line (bare images
-    /// always reserve `dh`; a mixed line reserves `base_lh + 2*dh` whenever it
-    /// is NOT the revealed one), so this is a no-op gate everywhere except that
-    /// one case. NOT wasm-gated for the same reason as `image_row_offset`.
+    /// drawing/arming the image for that one frame rather than draw it at an
+    /// undefined position.
     pub(super) fn image_row_reserved(&self, line: usize) -> bool {
         self.image_heights.get(line).copied().flatten().is_some()
+            || self.image_force.get(line).copied().flatten().is_some()
     }
 
     /// ITEM 5c (theme-switch slowdown probe): the running count of actual image
@@ -605,7 +698,7 @@ impl TextPipeline {
         let wrap = self.text_wrap_width();
         let mut out = Vec::new();
         for im in report.iter() {
-            // ITEM 5a: a REVEALED MIXED line has no row reservation this frame
+            // ITEM 5 REWORK: a REVEALED MIXED line has no reservation this frame
             // (`compute_image_layout`'s doc comment) — no well-defined position
             // to arm a handle at, so it's skipped like `im.missing`.
             if im.missing
@@ -616,7 +709,7 @@ impl TextPipeline {
             }
             let dw = im.display_w.max(1.0);
             let dh = im.display_h.max(1.0);
-            let top = self.line_ornament_top(im.line) + self.image_row_offset(im.line, dh);
+            let top = self.image_draw_top(im.line);
             let left = text_left + (wrap - dw).max(0.0) * 0.5;
             out.push((im.range, [left, top, dw, dh]));
         }
@@ -666,6 +759,13 @@ impl TextPipeline {
         // image's header dimensions. All-`None` (no tall rows) when the feature is
         // off / non-markdown / wasm, so the render below stays byte-identical.
         let mut image_heights = self.compute_image_layout(text, &md_spans);
+        // ITEM 5 REWORK: the forced-trailing-row table `compute_image_layout` just
+        // populated on `self` (see `Self::image_force`'s field doc) — pulled out to
+        // a local so the `line_attrs` closure below can capture it without also
+        // entangling a borrow of `self` (which the loop that calls it mutates
+        // elsewhere, e.g. `self.buffer.lines[..]`). A small per-line `Vec`, cloned
+        // once per reshape — the same cost class as `image_heights` itself.
+        let image_force = self.image_force.clone();
         // WRAP-NOT-CLIP TABLES: a too-wide GFM table wraps its cells and each grown
         // row RESERVES a tall document row here (the SAME `image_heights` slot the
         // images use, since a line is never both an image ref and a table row), so
@@ -723,6 +823,7 @@ impl TextPipeline {
                 &attrs, base_fs, base_lh, md, lt, start, &md_spans, &syn_spans, doc_lang,
                 cjk_priority, &fonts, conceal_off_cursor, cursor_byte,
                 image_heights.get(li).copied().flatten(),
+                image_force.get(li).copied().flatten(),
             )
         };
         // `split('\n')` on "a\n" yields ["a", ""] — exactly the trailing-empty-line
@@ -881,6 +982,10 @@ impl TextPipeline {
         // header is re-read on a pure restyle) — it re-fits on the next text
         // edit/reshape, exactly like the caret-driven conceal path below.
         let image_heights = std::mem::take(&mut self.image_heights);
+        // ITEM 5 REWORK: same "reuse the last reshape's table" treatment as
+        // `image_heights` above — a zoom/DPI restyle doesn't re-measure the
+        // forcing `letter_spacing` (no text/wrap change), it just re-applies it.
+        let image_force = std::mem::take(&mut self.image_force);
         // REVEAL-ON-CURSOR: conceal every hr line's `---` EXCEPT the caret's (mirrors
         // the incremental path so a zoom/DPI restyle keeps the same conceal/reveal).
         // `cursor_byte` additionally drives the WYSIWYG fence conceal's BLOCK scope.
@@ -894,6 +999,7 @@ impl TextPipeline {
                     &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans,
                     doc_lang, &cjk_priority, &fonts, li != cursor_line, cursor_byte,
                     image_heights.get(li).copied().flatten(),
+                    image_force.get(li).copied().flatten(),
                 );
                 line.set_attrs_list(al);
             }
@@ -902,6 +1008,7 @@ impl TextPipeline {
         self.md_spans = md_spans;
         self.syn_spans = syn_spans;
         self.image_heights = image_heights;
+        self.image_force = image_force;
         self.row_geom.invalidate();
         self.buffer.shape_until_scroll(&mut self.font_system, false);
         self.buffer.set_redraw(true);
@@ -950,6 +1057,12 @@ impl TextPipeline {
         // INLINE IMAGES: keep the image line's tall row when the caret enters/leaves
         // it (a pure conceal toggle must NOT collapse the reserved height).
         let mut image_heights = std::mem::take(&mut self.image_heights);
+        // ITEM 5 REWORK: the forced-trailing-row table (see `Self::image_force`'s
+        // field doc) is JUST as cursor-dependent as `image_heights` used to be for
+        // a mixed line — re-derived below alongside it.
+        let mut image_force = std::mem::take(&mut self.image_force);
+        let wrap = self.text_wrap_width();
+        let base_font_size = self.metrics.font_size;
         let mut changed = false;
         let mut start = 0usize;
         for li in 0..self.buffer.lines.len() {
@@ -971,21 +1084,20 @@ impl TextPipeline {
                     && r.start < start + tlen + 1
                     && r.end > start
             });
-            // ITEM 5a: a MIXED image line's row reservation is CURSOR-DEPENDENT
-            // (unlike a bare line's — the caption model deliberately holds THAT
-            // one fixed, see the field comment above `image_heights` in
-            // `compute_image_layout`'s doc comment for why a revealed mixed line
-            // reserves nothing at all). A pure cursor move (no text change, so
-            // `compute_image_layout` itself never re-runs) must still re-derive
-            // that decision here — otherwise entering/leaving the line via arrow
-            // keys would leave the STALE reservation from whichever cursor
-            // position last triggered a full reshape. `dh` is read back from the
-            // already-populated `image_report` (no re-decode: the image + its
-            // display size are unchanged by a cursor move). Gated on
-            // `is_concealable` (an image line always carries its own
-            // `ConcealMarkup(Image)` span, so this never runs the extra
-            // `image_report` scan on an ordinary line) and NOT wasm-gated: on
-            // wasm `image_report` is always empty (inline-image decode is
+            // ITEM 5 REWORK: a MIXED image line's forced-trailing-row entry is
+            // CURSOR-DEPENDENT (unlike a bare line's — the caption model
+            // deliberately holds THAT one fixed, see `Self::image_force`'s field
+            // doc for why a revealed mixed line reserves nothing at all). A pure
+            // cursor move (no text change, so `compute_image_layout` itself never
+            // re-runs) must still re-derive that decision here — otherwise
+            // entering/leaving the line via arrow keys would leave the STALE
+            // reservation from whichever cursor position last triggered a full
+            // reshape. `dh` is read back from the already-populated `image_report`
+            // (no re-decode: the image + its display size are unchanged by a
+            // cursor move). Gated on `is_concealable` (an image line always
+            // carries its own `ConcealMarkup(Image)` span, so this never runs the
+            // extra `image_report` scan on an ordinary line) and NOT wasm-gated:
+            // on wasm `image_report` is always empty (inline-image decode is
             // native-only), so it is a harmless no-op there.
             if is_concealable {
                 if let Some(dh) = self
@@ -1003,19 +1115,40 @@ impl TextPipeline {
                             .filter(|(s, e)| s < e)
                     }) {
                         let local_range = (img_start - start)..(img_end - start);
-                        let mixed =
-                            super::spans::image_line_has_other_content(&line_text, local_range);
-                        let want = if mixed {
-                            if li == cursor_line {
+                        let mixed = super::spans::image_line_has_other_content(
+                            &line_text,
+                            local_range.clone(),
+                        );
+                        if mixed {
+                            // `heights[line]` is never touched for a mixed line
+                            // (bare/table rows own that slot exclusively now).
+                            if let Some(slot) = image_heights.get_mut(li) {
+                                *slot = None;
+                            }
+                            let want = if li == cursor_line {
                                 None
                             } else {
-                                Some(base_lh + 2.0 * dh)
+                                let prefix = &line_text[..local_range.start];
+                                let last_row_w = Self::measure_last_row_width(
+                                    &mut self.font_system,
+                                    prefix,
+                                    &attrs,
+                                    base_font_size,
+                                    wrap,
+                                );
+                                let remaining = (wrap - last_row_w).max(0.0);
+                                Some((dh, remaining + Self::IMAGE_FORCE_MARGIN_PX))
+                            };
+                            if let Some(slot) = image_force.get_mut(li) {
+                                *slot = want;
                             }
                         } else {
-                            Some(dh)
-                        };
-                        if let Some(slot) = image_heights.get_mut(li) {
-                            *slot = want;
+                            if let Some(slot) = image_heights.get_mut(li) {
+                                *slot = Some(dh);
+                            }
+                            if let Some(slot) = image_force.get_mut(li) {
+                                *slot = None;
+                            }
                         }
                     }
                 }
@@ -1026,6 +1159,7 @@ impl TextPipeline {
                         &attrs, base_fs, base_lh, md, line.text(), start, &md_spans, &syn_spans,
                         doc_lang, &cjk_priority, &fonts, li != cursor_line, cursor_byte,
                         image_heights.get(li).copied().flatten(),
+                        image_force.get(li).copied().flatten(),
                     );
                     changed |= line.set_attrs_list(al);
                 }
@@ -1035,6 +1169,7 @@ impl TextPipeline {
         self.md_spans = md_spans;
         self.syn_spans = syn_spans;
         self.image_heights = image_heights;
+        self.image_force = image_force;
         if changed {
             // WYSIWYG v1.1: a reveal/conceal toggle can now change actual GLYPH
             // GEOMETRY, not just color (the zero-width metrics override — see

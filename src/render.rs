@@ -3005,6 +3005,35 @@ pub struct TextPipeline {
     /// variable-row-height machinery headings use. Empty when neither feature
     /// applies (off / no images-or-tables / non-markdown) → byte-identical.
     image_heights: Vec<Option<f32>>,
+    /// INLINE IMAGES (item 5 rework — "list item with text and an image", the
+    /// marker-strand fix): per LOGICAL LINE, `Some((dh, target_advance_px))` when
+    /// that line is a MIXED image line (`- caption text ![alt](p)`) currently
+    /// OFF-CURSOR — `None` for every other line (bare image lines, revealed mixed
+    /// lines, non-image lines). Unlike `image_heights` this NEVER inflates the
+    /// line's own shaped row (cosmic-text centers a row's content around its own
+    /// glyph height unconditionally — inflating the CAPTION's row is what stranded
+    /// the marker from the caption in the prior round); instead
+    /// [`add_wysiwyg_conceal_spans`] gives the concealed image markup's SECOND
+    /// byte (the `[` of `![alt](p)` — NEVER the leading `!`, see its doc comment
+    /// for the UAX14 LB13 tripwire that rules the `!` out) a large `letter_spacing`
+    /// (a pure position offset, never touching glyph rasterization — safe from
+    /// atlas blow-up, unlike a huge font-size) sized to `target_advance_px`,
+    /// forcing cosmic-text's own `Wrap::WordOrGlyph` engine to push it (and the
+    /// rest of the concealed markup, which trivially fits alongside it) onto a
+    /// GENUINE new visual row of THIS SAME logical line, with `dh` as that row's
+    /// `line_height_opt`. Because this is real cosmic-text layout (not a side
+    /// table), `RowGeom`/`hit_test`/`visual_rows` need no changes — they already
+    /// read whatever cosmic-text actually laid out. `target_advance_px` is
+    /// computed once per reshape by [`Self::measure_last_row_width`] (marker+
+    /// caption's own LAST wrapped row width at the real wrap width, so a caption
+    /// that already wraps on its own is handled too) plus a small safety margin,
+    /// so the forcing glyph overflows the caption's row but still fits — with
+    /// room for the near-zero-width remainder — on a fresh one.
+    /// [`Self::image_draw_top`] reads this table (via [`Self::visual_rows`]'s
+    /// LAST row) to place/hit-test the image quad directly below the caption,
+    /// never at the row top. Empty when the feature is off / non-markdown / on
+    /// wasm, matching `image_heights`.
+    image_force: Vec<Option<(f32, f32)>>,
     /// INLINE IMAGES: the deterministic per-image layout the LAST
     /// [`Self::rebuild_image_rows`] produced — the source for the capture
     /// `images` sidecar block and the GPU draw. Interior-mutable so the reshape
