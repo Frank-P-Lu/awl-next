@@ -28,7 +28,86 @@
 
 use super::*;
 
+/// TARGET-LINE-LOCAL caret glyph record (item 57) — the shaped glyph clusters of
+/// ONE logical line (the cursor line), read straight from that line's OWN
+/// [`cosmic_text::BufferLine::layout_opt`] rather than by filtering the whole
+/// document's `layout_runs()` stream.
+///
+/// The caret's per-frame glyph lookups (`cursor_glyph_key_at`, `cluster_char_span`
+/// and their consumers — the block ink box, the descender drop, the morph masks)
+/// used to walk `self.buffer.layout_runs()` from the document TOP, breaking once
+/// they passed the cursor line. That walk visits one run per visual row of the
+/// whole PREFIX before the caret — so its cost grew with the caret's document
+/// POSITION (top: a few runs; tail: every run in the file), re-paid every frame a
+/// caret animates. `--bench-caret` witnessed the prefix growth.
+///
+/// This record fixes it: the clusters come from `bline.layout_opt()` — O(the
+/// cursor line's OWN glyphs), independent of how far down the document the caret
+/// sits. It is a SINGLE slot (the caret is only ever on one line), rebuilt when
+/// the cursor moves to a different line or the shaped geometry changes (a new
+/// `RowGeom` generation), NOT a retained document-wide cache. The block / mask /
+/// descender / ink-box / cluster-span consumers all share this ONE record.
+pub(super) struct CaretLineGlyphs {
+    /// The logical line these clusters were shaped for.
+    line: usize,
+    /// The [`rowgeom::RowGeom`] generation at build time — bumped by every reshape /
+    /// zoom / restyle seam, so a stale record (different shaped runs) is rebuilt.
+    generation: u64,
+    /// `(start_byte, end_byte, CacheKey)` per shaped glyph, in layout (wrap) order —
+    /// the exact glyph objects `layout_runs()` would have yielded for this line, so
+    /// the key/span lookups are byte-identical to the old whole-doc walk.
+    clusters: Vec<(usize, usize, CacheKey)>,
+}
+
 impl TextPipeline {
+    /// Populate [`Self::caret_line_glyphs`] with `line`'s shaped glyph clusters if the
+    /// cached record is stale (a different line, or a newer shaped-geometry
+    /// generation). Reads ONLY that line's own `layout_opt()` — no whole-document
+    /// `layout_runs()` walk — so it is O(the line's glyphs), independent of the
+    /// line's position in the document. `&self` via the interior-mutable `RefCell`:
+    /// the shaped layout is already built, so collecting the clusters is a pure read.
+    fn ensure_caret_line_glyphs(&self, line: usize) {
+        let generation = self.row_geom.generation();
+        if let Some(rec) = self.caret_line_glyphs.borrow().as_ref() {
+            if rec.line == line && rec.generation == generation {
+                return;
+            }
+        }
+        let mut clusters: Vec<(usize, usize, CacheKey)> = Vec::new();
+        if let Some(bline) = self.buffer.lines.get(line) {
+            if let Some(layout) = bline.layout_opt() {
+                for lline in layout.iter() {
+                    for g in lline.glyphs.iter() {
+                        clusters.push((g.start, g.end, g.physical((0.0, 0.0), 1.0).cache_key));
+                    }
+                }
+            }
+        }
+        *self.caret_line_glyphs.borrow_mut() = Some(CaretLineGlyphs {
+            line,
+            generation,
+            clusters,
+        });
+    }
+
+    /// WITNESS (`--bench-caret`): the number of shaped glyph clusters the
+    /// target-line-local caret lookup visits for the CURRENT cursor line — the real
+    /// work the fixed path does. Nonzero on a non-blank line (proves the lookup ran),
+    /// and a function of the cursor LINE's own content ONLY, so it is IDENTICAL at
+    /// the document top / middle / tail (the position-independence the item asserts).
+    ///
+    /// (The prefix-run witness -- how many runs a whole-doc `layout_runs()` walk
+    /// would touch -- lives in `caretbench.rs`, NOT here, so this module stays free
+    /// of any `layout_runs()` call: `caret_no_whole_doc_walk_law` bans it.)
+    pub(super) fn caret_line_glyph_count(&self) -> usize {
+        self.ensure_caret_line_glyphs(self.cursor_line);
+        self.caret_line_glyphs
+            .borrow()
+            .as_ref()
+            .map(|r| r.clusters.len())
+            .unwrap_or(0)
+    }
+
     /// The char COLUMN the caret's geometry ANCHORS on this frame — the cell the
     /// caret visibly INHABITS. BLOCK and I-BEAM anchor on the cursor column
     /// itself: the cell AFTER the insertion point, the cell the next edit will
@@ -159,10 +238,13 @@ impl TextPipeline {
     /// empty). The MORPH caret uses this key both to capture the "from" glyph at a
     /// move and to rasterize the "to" glyph for the current cursor.
     ///
-    /// Walks the cursor line's shaped runs (same pattern as `line_glyph_xs`) and
-    /// picks the glyph cluster whose BYTE range covers the cursor column's byte;
-    /// `glyph.physical((0,0),1.0)` then yields the `CacheKey` (font + glyph id +
-    /// size + subpixel), which is exactly what the swash cache consumes.
+    /// Reads the cursor line's TARGET-LINE-LOCAL glyph record ([`CaretLineGlyphs`],
+    /// built from that line's own `layout_opt()`) and picks the glyph cluster whose
+    /// BYTE range covers the cursor column's byte — the same glyph
+    /// `self.buffer.layout_runs()` would have yielded for this line, so the returned
+    /// `CacheKey` (font + glyph id + size + subpixel) is byte-identical to the old
+    /// whole-document walk, now at O(the cursor line's glyphs) instead of O(the whole
+    /// prefix before the caret). `col` is always on the cursor line (every caller).
     pub(super) fn cursor_glyph_key_at(&self, line: usize, col: usize) -> Option<CacheKey> {
         let line_text = self.buffer.lines.get(line)?.text().to_string();
         // Byte offset of the cursor column on this logical line.
@@ -175,21 +257,12 @@ impl TextPipeline {
             // End of line: no glyph cell to silhouette.
             return None;
         }
-        for run in self.buffer.layout_runs() {
-            if run.line_i != line {
-                // Runs arrive in document order (non-decreasing `line_i`), so once we
-                // pass the target line no later run can own it — stop instead of
-                // walking the rest of the document's runs each frame. Byte-identical:
-                // only non-matching trailing runs are skipped.
-                if run.line_i > line {
-                    break;
-                }
-                continue;
-            }
-            for g in run.glyphs.iter() {
-                if cur_byte >= g.start && cur_byte < g.end {
-                    return Some(g.physical((0.0, 0.0), 1.0).cache_key);
-                }
+        self.ensure_caret_line_glyphs(line);
+        let rec = self.caret_line_glyphs.borrow();
+        let clusters = &rec.as_ref()?.clusters;
+        for &(start, end, key) in clusters {
+            if cur_byte >= start && cur_byte < end {
+                return Some(key);
             }
         }
         None
@@ -205,7 +278,8 @@ impl TextPipeline {
     /// box (a 1-char cluster IS that glyph, one-to-one) or must keep the CELL
     /// math's fair linear split (a multi-char cluster's cell already spreads one
     /// glyph's ink fairly across the chars it covers — no single column owns the
-    /// whole glyph). Walks the same run pattern as `cursor_glyph_key_at`.
+    /// whole glyph). Reads the SAME target-line-local glyph record as
+    /// [`Self::cursor_glyph_key_at`] (`layout_opt()`, not the whole-doc walk).
     fn cluster_char_span(&self, line: usize, col: usize) -> Option<usize> {
         let line_text = self.buffer.lines.get(line)?.text().to_string();
         let cur_byte = line_text
@@ -216,20 +290,15 @@ impl TextPipeline {
         if cur_byte >= line_text.len() {
             return None;
         }
-        for run in self.buffer.layout_runs() {
-            if run.line_i != line {
-                if run.line_i > line {
-                    break;
-                }
-                continue;
-            }
-            let clusters: Vec<(usize, usize)> =
-                run.glyphs.iter().map(|g| (g.start, g.end)).collect();
-            if let Some(span) = cluster_span_at(&line_text, &clusters, cur_byte) {
-                return Some(span);
-            }
-        }
-        None
+        self.ensure_caret_line_glyphs(line);
+        let rec = self.caret_line_glyphs.borrow();
+        let clusters: Vec<(usize, usize)> = rec
+            .as_ref()?
+            .clusters
+            .iter()
+            .map(|&(s, e, _)| (s, e))
+            .collect();
+        cluster_span_at(&line_text, &clusters, cur_byte)
     }
 
     /// The BLOCK caret's INK-ALIGNED box at the caret's ANCHOR cell this frame —
@@ -395,50 +464,48 @@ impl TextPipeline {
     /// `doc_top() + run.line_y`. A glyphless / empty line has no run, so it falls
     /// back to the metrics-derived ascent approximation (only ever used by the
     /// space/EOL case, which doesn't paint a glyph silhouette anyway).
+    ///
+    /// TARGET-LINE-LOCAL (item 57): the owning wrapped row is picked from the cursor
+    /// line's OWN memoized [`VisualRow`]s ([`Self::visual_rows`] — a single-slot memo,
+    /// O(1) warm, never a fresh whole-doc walk on the caret path), and the baseline
+    /// is reconstructed from that row's `line_top` plus the paired
+    /// [`cosmic_text::LayoutLine`]'s own centering — exactly cosmic-text's own
+    /// `line_y = line_top + (line_height - (max_ascent + max_descent))/2 + max_ascent`
+    /// — so the value is byte-identical to reading `run.line_y` off the whole-doc walk.
     pub(super) fn caret_baseline_y(&self) -> f32 {
-        // Find the shaped run that owns the caret's ANCHOR column (the cursor
-        // column in Block/I-beam; one back in Morph — at a soft-wrap boundary
-        // that is the PREVIOUS visual row's run) and read its real baseline.
-        // Match the run by char column span (same logic as `pick_row`): the run
-        // whose [start_col, end_col) contains the anchor column.
+        // Anchor column (the cursor column in Block/I-beam; one back in Morph — at a
+        // soft-wrap boundary that is the PREVIOUS visual row).
         let col = self.caret_anchor_col();
-        // At a SHARED wrap boundary an `Upstream` caret sits on the UPPER visual
-        // row: match that row's run (its `end_col == col`) instead of the lower run
-        // the default `col < end_col` picks, so the block's descender-aware BOTTOM
-        // extension measures against the row the caret actually renders on (else the
-        // block stretches from the upper row down to the lower row's baseline).
+        // At a SHARED wrap boundary an `Upstream` caret sits on the UPPER visual row:
+        // match that row (its `end_col == col`) instead of the lower row the default
+        // `col < end_col` picks, so the block's descender-aware BOTTOM extension
+        // measures against the row the caret actually renders on.
         let upstream = self.caret_affinity == crate::caret::Affinity::Upstream;
-        let line_text = self
-            .buffer
-            .lines
-            .get(self.cursor_line)
-            .map(|l| l.text().to_string())
-            .unwrap_or_default();
-        for run in self.buffer.layout_runs() {
-            if run.line_i != self.cursor_line {
-                // Document-ordered runs (non-decreasing `line_i`): once past the
-                // cursor line no later run can own it, so stop rather than walk every
-                // remaining run each frame. Byte-identical — only non-matching trailing
-                // runs are skipped (the same fallback fires when no run owns the col).
-                if run.line_i > self.cursor_line {
-                    break;
+        // The cursor line's shaped LayoutLines (one per wrapped visual row, in wrap
+        // order — the SAME order + count as `visual_rows`, so `rows[i]` pairs with
+        // `layout[i]`), read straight from that line's own layout — no doc walk.
+        if let Some(bline) = self.buffer.lines.get(self.cursor_line) {
+            if let Some(layout) = bline.layout_opt() {
+                if !layout.is_empty() {
+                    let rows = self.visual_rows(self.cursor_line);
+                    let n = rows.len().min(layout.len());
+                    for i in 0..n {
+                        let r = &rows[i];
+                        // Same predicate as the old run-column match: upstream owns the
+                        // trailing edge, otherwise the [start_col, end_col) container.
+                        let owns_upstream = upstream && r.end_col == col && r.start_col < col;
+                        if owns_upstream || (col >= r.start_col && col < r.end_col) {
+                            let ll = &layout[i];
+                            let line_height = ll.line_height_opt.unwrap_or(self.metrics.line_height);
+                            let glyph_height = ll.max_ascent + ll.max_descent;
+                            let centering = (line_height - glyph_height) / 2.0;
+                            // `r.line_top` is buffer-relative (== `run.line_top`); this
+                            // reconstructs `run.line_y` exactly.
+                            let line_y = r.line_top + centering + ll.max_ascent;
+                            return self.doc_top() + line_y;
+                        }
+                    }
                 }
-                continue;
-            }
-            let (mut bs, mut be) = (usize::MAX, 0usize);
-            for g in run.glyphs.iter() {
-                bs = bs.min(g.start);
-                be = be.max(g.end);
-            }
-            if bs == usize::MAX {
-                continue;
-            }
-            let start_col = byte_col(&line_text, bs);
-            let end_col = byte_col(&line_text, be);
-            // Upstream at a shared boundary: this run's TRAILING edge owns the col.
-            let owns_upstream = upstream && end_col == col && start_col < col;
-            if owns_upstream || (col >= start_col && col < end_col) {
-                return self.doc_top() + run.line_y;
             }
         }
         // Fallback (no run owns the column — glyphless/empty line): approximate the
