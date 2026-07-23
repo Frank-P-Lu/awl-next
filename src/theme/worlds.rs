@@ -1813,3 +1813,17 @@ const fn world_index(name: &str) -> usize {
 /// `Config::apply_sticky_globals` applies it over this constant unless the
 /// `--theme` CLI flag already set the global (see `config/apply.rs`).
 pub const DEFAULT_THEME: usize = world_index("Saltpan");
+
+/// The full roster of world NAMES, in [`THEMES`] cycle order — the ONE
+/// code-owned source every external consumer reads instead of hand-copying a
+/// name list that can silently drift out of sync with the real roster (item
+/// 68: `awl --help` once advertised only ten of the eighteen shipped worlds,
+/// and the unknown-`--theme` error built its own separate, independently
+/// drifting `Vec`). `--help`, the unknown-`--theme` error, and the CLI
+/// `--list-worlds` flag (in turn the one source `scripts/capture-worlds.sh`
+/// reads, rather than keeping its own shell-side name list) all resolve the
+/// roster through this one function — inserting or retiring a world in
+/// [`THEMES`] changes every one of them for free.
+pub fn world_names() -> Vec<&'static str> {
+    THEMES.iter().map(|t| t.name).collect()
+}

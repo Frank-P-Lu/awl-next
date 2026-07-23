@@ -746,8 +746,13 @@ pub(crate) fn parse_args() -> Result<Mode> {
                 // capture mode (the headless render reads the active theme). Order
                 // among flags is irrelevant since the active theme is global.
                 theme::set_active_by_name(&v).ok_or_else(|| {
-                    let names: Vec<&str> = theme::THEMES.iter().map(|t| t.name).collect();
-                    anyhow::anyhow!("unknown --theme {v:?}; choose one of {}", names.join(", "))
+                    // The roster comes from the one code-owned source
+                    // (`theme::world_names`, item 68) — never a hand-copied
+                    // list that can drift from the real `theme::THEMES`.
+                    anyhow::anyhow!(
+                        "unknown --theme {v:?}; choose one of {}",
+                        theme::world_names().join(", ")
+                    )
                 })?;
                 theme_flag = true;
             }
@@ -900,7 +905,23 @@ pub(crate) fn parse_args() -> Result<Mode> {
             "--wait" => {
                 wait_flag = true;
             }
+            "--list-worlds" => {
+                // Machine-readable roster dump — one world name per line, in
+                // `theme::THEMES` cycle order — read straight off the ONE
+                // code-owned source (item 68: `--help` once drifted to only
+                // ten of the eighteen shipped worlds; a script that shells
+                // out to THIS flag can never drift the same way, since it
+                // never keeps its own copy of the list). See
+                // `scripts/capture-worlds.sh`.
+                for name in theme::world_names() {
+                    println!("{name}");
+                }
+                std::process::exit(0);
+            }
             "-h" | "--help" => {
+                // Built from the same one-owner roster as `--theme`'s error
+                // and `--list-worlds` (item 68) — never a hand-copied list.
+                let world_names_csv = theme::world_names().join(", ");
                 println!(
                     "awl [file]\n\
                      awl --screenshot OUT.png [file]         caret at rest (rounded square)\n\
@@ -917,7 +938,8 @@ pub(crate) fn parse_args() -> Result<Mode> {
                      \x20 --preedit STR       render STR as an IME preedit at the caret\n\
                      \x20 --search STR        open isearch panel for STR + highlight hits\n\
                      \x20 --search-case       make --search case-sensitive\n\
-                     \x20 --theme NAME        set the active color theme (Tawny, Potoroo, Gumtree, Bilby, Saltpan, Quokka, Bombora, Mulga, Mangrove, Firetail)\n\
+                     \x20 --theme NAME        set the active color theme ({world_names_csv})\n\
+                     \x20 --list-worlds       print every theme name, one per line, then exit (the roster `--theme` accepts; see scripts/capture-worlds.sh)\n\
                      \x20 --caret-mode MODE   caret look: block, morph, ibeam, or auto (default: mono->block, proportional->morph)\n\
                      \x20 --capture-size WxH  physical canvas size for the capture (default 1200x800)\n\
                      \x20 --capture-dpi N      renderer scale factor (default 1.0); WxH at dpi N == (W/N)x(H/N) logical retina window\n\
