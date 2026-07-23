@@ -11,12 +11,12 @@ human collaborator all read and update the same files here.
 
 **Layout**
 - `queue.md` — the canonical execution queue. Siblings support it; never carry a second writable copy.
-- `handoffs/` — self-contained round handoffs an agent can cook straight from (e.g. `handoffs/2026-07-14-live-world.md`).
+- `handoffs/` — self-contained round handoffs an agent can cook straight from.
 - `reports/` — archived reports + superseded queues (`polish-queue.md`, the dated `*-REPORT` files), kept for reference, not active.
 
 **Compat symlinks** so every tool's path resolves to this one dir: `.claude/orchestrator` and `.codex/orchestrator` both → `../.orchestrator`. `CLAUDE.md` and `AGENTS.md` point at `.orchestrator/queue.md`.
 
-## Claiming protocol (multi-tool coordination, added 2026-07-15)
+## Claiming protocol (multi-tool coordination)
 
 The board only prevents double-work if claims are visible BEFORE work starts. Any tool (Codex, Claude Code, human) picking up an item:
 
@@ -27,7 +27,7 @@ The board only prevents double-work if claims are visible BEFORE work starts. An
 5. **Conflicts are normal, not a coordination failure.** If two branches collide on merge, reconcile via a merge pass (Claude dispatches a merge agent; Codex resolves inline) — never serialize the whole queue out of fear.
 6. **Stale claims:** an IN PROGRESS line older than ~a day with no branch activity may be reclaimed — note the takeover on the line.
 
-## Board writes are ORCHESTRATOR-ONLY (added 2026-07-15, user rule)
+## Board writes are ORCHESTRATOR-ONLY (user rule)
 
 Within each tool, the top-level ORCHESTRATOR session is the board's only
 writer. Delegated subagents / workflow workers NEVER edit anything under
@@ -41,8 +41,8 @@ translates those into board edits:
   knows its own slice, so letting it flip status invites premature or
   wrong-altitude entries; the orchestrator holds the cross-workstream truth.
 - **Why:** one writer serializes the shared file — no same-file races between
-  concurrent workers and the live session (the exact race dodged 2026-07-15:
-  a spec log held back because two merge-train agents had queue.md edits in
+  concurrent workers and the live session (the exact race this prevents: a
+  spec log held back because two merge-train agents had queue.md edits in
   flight); and the board keeps one consistent voice and altitude.
 - **Corollary:** board edits happen only in the MAIN working tree, never in a
   worktree — a worktree's `queue.md` edit dumps a guaranteed conflict on the
@@ -50,12 +50,12 @@ translates those into board edits:
 - Worker briefs must therefore NOT include "edit the board / flip the claim"
   steps; they report shas + outcomes instead.
 
-## Design sessions → decisions → the board (added 2026-07-22, user rule)
+## Design sessions → decisions → the board (user rule)
 
 How a brainstorm/interview session ("awl design"-type) turns talk into work:
 
 1. **Brainstorm read-only.** During discussion the orchestrator changes nothing.
-   **Interview ruthlessly (user rule 2026-07-23):** when a note or an answer is
+   **Interview ruthlessly (user rule):** when a note or an answer is
    ambiguous, the designer asks until the intent is unambiguous — a guess never
    gets built into a queue item.
 2. **Decisions land as queue items.** Each crystallized decision becomes a
@@ -75,7 +75,7 @@ How a brainstorm/interview session ("awl design"-type) turns talk into work:
    Agents READ questionnaires and notes there when directed; they NEVER write
    there. The machine-side record lives in this repo.
 
-## Cooking: parallelize by clash, run unattended (user rule, 2026-07-23)
+## Cooking: parallelize by clash, run unattended (user rule)
 
 When the orchestrator is cooking a queue, the default is throughput within the
 active quota budget, not raw fan-out:
@@ -99,7 +99,7 @@ active quota budget, not raw fan-out:
    left out of main, and FLAGGED for the user; it never blocks the rest. Only
    genuinely user-gated items (a permission grant, an approval, a taste call the
    user reserved) wait; everything else proceeds. "If you get stuck, do
-   everything else before pausing to wait for my say" (user, 2026-07-23).
+   everything else before pausing to wait for my say" (user).
 
 ## Execution hygiene
 
@@ -122,7 +122,7 @@ These are orchestration rules, not live queue state:
 - Background model/effort routing follows the Brew skill and any narrower
   repository rule; record any launcher substitution.
 
-## Blocked items PARK; never stall the queue on them (user rule, 2026-07-23)
+## Blocked items PARK; never stall the queue on them (user rule)
 
 When an item hits a blocker only the user can clear — a taste/product fork, a
 permission grant, an approval — the orchestrator NOTES it blocked on the board
@@ -139,7 +139,7 @@ and move on"; "just note that it's blocked and churn through everything else.")
 The failure this kills: asking a question and then idling the whole queue until
 it's answered.
 
-## Quota-aware model routing (user rule, 2026-07-24)
+## Quota-aware model routing (user rule)
 
 The shared subscription allowance is a weekly compute budget. Choose a model by
 failure cost and task phase, not by a blanket "coding = strongest model" rule:
