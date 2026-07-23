@@ -3761,6 +3761,17 @@ pub struct TextPipeline {
     /// longer suggestions overflow. Measured with a `&mut FontSystem` in
     /// [`Self::measure_spell_content_w`]; read by the `&self` `spell_overlay_geometry`.
     overlay_spell_w: f32,
+    /// ITEM 51 — the RIGHT-ANCHORED takeover card's measured CONTENT width (device
+    /// px, INCLUDING the card's `2 * hpad` side padding), measured whenever a
+    /// right-anchored (`CardAnchor::mirrors_growth`) picker syncs; `0.0` for a
+    /// left/center card, the spell popup, or a closed overlay. A right-anchored
+    /// card shrinks to hug THIS (clamped to a floor and the wide cap) instead of
+    /// sprawling to the fixed `CARD_MAX_W` and leaving a dead middle between the
+    /// left-aligned labels and the remote right edge — so the whole content group
+    /// hugs the right window edge as ONE compact block. Measured with a `&mut
+    /// FontSystem` in [`Self::measure_overlay_content_w`]; read by the `&self`
+    /// [`Self::overlay_desired_w`]. Left/center cards keep `0.0` → byte-identical.
+    overlay_content_w: f32,
     /// CARET-STYLE PICKER preview look (mirrored from the view): `Some(look)` while
     /// that picker is open, `None` otherwise. The preview caret loops in this look
     /// while `Some`; going `None` halts it (idle). See [`crate::caret::CaretDemo`].

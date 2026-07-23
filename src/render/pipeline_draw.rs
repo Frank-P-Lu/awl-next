@@ -577,6 +577,7 @@ impl TextPipeline {
             diff_panel: false,
             diff_panel_focus: false,
             overlay_spell_w: 0.0,
+            overlay_content_w: 0.0,
             caret_preview: None,
             caret_demo: crate::caret::CaretDemo::new(),
             caret_preview_mask_to: None,

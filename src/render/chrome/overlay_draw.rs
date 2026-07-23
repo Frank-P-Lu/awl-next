@@ -209,7 +209,7 @@ impl TextPipeline {
     /// name's row) but a smaller LABEL FONT SIZE on top — the type system's recessive
     /// rung (ink × size), so the secondary key-chord reads quieter than the name it
     /// annotates, not the same grey/size.
-    fn overlay_remetric(&mut self) {
+    pub(in crate::render) fn overlay_remetric(&mut self) {
         let m = self.metrics;
         let name_metrics = self.overlay_metrics();
         let lh = self.overlay_lh();

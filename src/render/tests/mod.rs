@@ -37,6 +37,7 @@ mod oracle;
 mod outline;
 mod overlay_align_law;
 mod overlay_personality;
+mod overlay_right_hug_law;
 mod page_frame;
 mod folds;
 mod pixeldiff;

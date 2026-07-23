@@ -594,6 +594,18 @@ impl TextPipeline {
         } else {
             0.0
         };
+        // ITEM 51 — a RIGHT-ANCHORED takeover card shrinks to hug its content, so
+        // measure the widest visible primary (+ optional secondary column, query
+        // line, lens strip and footer) NOW, with a `&mut FontSystem` in hand. Gated
+        // to the right-anchored takeover cards (the frozen anchor mirrors growth):
+        // a left/center card, the contextual spell popup, or a closed overlay leaves
+        // the cache `0.0`, so `overlay_desired_w` falls back to the fixed wide cap —
+        // byte-identical. Reset FIRST so the provisional geometry the measurement
+        // shapes into uses the wide cap (not last frame's hug width).
+        self.overlay_content_w = 0.0;
+        if self.overlay_active && self.overlay_spell.is_none() && self.overlay_right_anchored() {
+            self.overlay_content_w = self.measure_overlay_content_w();
+        }
         // CARET-STYLE PICKER preview: mirror which look the picker highlights (None
         // when it is closed). Keep the preview animator's look in step with it so the
         // SAME loop animates in whatever style the highlighted row selects; the loop
