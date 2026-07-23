@@ -37,6 +37,13 @@ pub(in crate::render) const CARD_MAX_W: f32 = 520.0;
 /// The FACETED card's width cap — a touch wider than the flat cap so the whole
 /// lens strip (Time … All) never clips, still tighter than the old 0.58×window.
 pub(in crate::render) const CARD_MAX_W_FACETED: f32 = 600.0;
+/// ITEM 51 — the FLOOR a content-hugging RIGHT-ANCHORED card never shrinks below
+/// (device px at the 1:1 canvas, grown with zoom like the caps). A sparse picker
+/// (one short row, no secondary) would otherwise hug down to a sliver that reads
+/// as an accident rather than a placed card; the measured content already folds
+/// in the query line + foot hint, so this floor rarely bites — it is the calm
+/// backstop, mirroring the spell popup's own `140` min-width.
+pub(in crate::render) const CARD_CONTENT_MIN_W: f32 = 160.0;
 
 /// The QUERY-INPUT BEAT (item 4), as a fraction of the overlay row height — the
 /// clear breath between the input line and the first result row. A single dial
@@ -274,6 +281,41 @@ impl TextPipeline {
         base * self.overlay_pixel_scale().max(1.0)
     }
 
+    /// Whether the summoned card's FROZEN alignment (item 45) is the right rail —
+    /// [`theme::CardAnchor::mirrors_growth`], i.e. `TopRight`. Read through the ONE
+    /// frozen-anchor owner ([`crate::render::resolve_overlay_anchor`]), never the
+    /// live world anchor, so an open card's content-hug can't flip mid-preview.
+    /// The ONE reader both the sync-time measurement gate and [`Self::overlay_desired_w`]
+    /// consult, so "is this card content-hugging?" is decided in exactly one place.
+    pub(in crate::render) fn overlay_right_anchored(&self) -> bool {
+        crate::render::resolve_overlay_anchor(self.overlay_align).mirrors_growth()
+    }
+
+    /// THE ONE OWNER of the summoned card's WIDE desired width for a placement —
+    /// the base cap grown to zoom by [`Self::overlay_card_desired_w`] for a
+    /// left/center card, OR (ITEM 51) the measured CONTENT width for a
+    /// RIGHT-ANCHORED card, so the whole content group hugs the right window edge
+    /// as one compact block instead of sprawling to `CARD_MAX_W` with a dead middle
+    /// between the left-aligned labels and the remote right edge.
+    ///
+    /// The content width ([`Self::measure_overlay_content_w`], cached in
+    /// `overlay_content_w` at sync) already folds in the card's `2 * hpad` side
+    /// padding; here it is CLAMPED to `[floor, wide cap]` — never below a small
+    /// floor (so a sparse picker isn't a sliver) and never past the SAME wide cap a
+    /// left/center card would hold (so a long corpus tops out exactly where the
+    /// sprawling card did, then relies on rowlayout elision, never overrunning). A
+    /// left/center card, the spell popup, or a frame before the first measurement
+    /// keeps `overlay_content_w == 0.0` → the fixed wide cap, byte-identical.
+    pub(in crate::render) fn overlay_desired_w(&self, base_cap: f32) -> f32 {
+        let scaled = self.overlay_card_desired_w(base_cap);
+        if self.overlay_right_anchored() && self.overlay_content_w > 0.0 {
+            let floor = (CARD_CONTENT_MIN_W * self.overlay_pixel_scale().max(1.0)).min(scaled);
+            self.overlay_content_w.clamp(floor, scaled)
+        } else {
+            scaled
+        }
+    }
+
     /// TEST HOOK (zoom-aware card width) — the currently-set overlay's candidate
     /// items that the card's REAL width would ELIDE at window `width`, at the
     /// current zoom. Reconstructs the shaper's own decision from the live
@@ -500,7 +542,10 @@ impl TextPipeline {
         // bug), then placed with the edge-inset rhythm (item 2) + the
         // narrow-window collapse/fill fallback (item 7). The box narrows the width
         // only in the fill regime, so the text column can never starve.
-        let desired_w = self.overlay_card_desired_w(CARD_MAX_W);
+        // ITEM 51: the desired width is the wide cap for a left/center card, OR the
+        // measured content width for a RIGHT-ANCHORED card (so it hugs the right
+        // edge as one compact block, no dead middle) — the ONE owner decides.
+        let desired_w = self.overlay_desired_w(CARD_MAX_W);
         let (card_x, card_w) = self.overlay_card_box(width, desired_w);
         // item 4 (NARROW FOLD): the placard folds to InlinePrefix once even the
         // floor inset can't seat the flat card's desired width — reads the SAME

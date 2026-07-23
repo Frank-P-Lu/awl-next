@@ -567,6 +567,51 @@ impl TextPipeline {
         false
     }
 
+    /// ITEM 51 — measure the RIGHT-ANCHORED card's CONTENT WIDTH (device px,
+    /// INCLUDING the `2 * hpad` side padding) for the currently-synced overlay, so a
+    /// content-hugging card can shrink to it. Called from `sync_view_fields` with a
+    /// `&mut FontSystem` in hand (like [`Self::measure_spell_content_w`]), the result
+    /// cached in `overlay_content_w`; the buffers it shapes here are RE-SHAPED by
+    /// `overlay_shape_text` before the card draws, so borrowing them for a
+    /// measurement is harmless.
+    ///
+    /// It shapes the overlay through the REAL shaper ([`Self::overlay_shape_text`])
+    /// against a PROVISIONAL WIDE geometry — the caller reset `overlay_content_w` to
+    /// `0.0` first, so [`Self::overlay_geometry`] uses the fixed wide cap here and
+    /// nothing elides that a narrower card wouldn't — then reads the widest shaped
+    /// run, so the measurement can NEVER disagree with what the draw path shapes. The
+    /// content the card must hold is the WIDEST of: any single LEFT-side line (the
+    /// query line, the lens strip, a bare primary, the footer hint) AND a candidate
+    /// row's PRIMARY + gap + right-aligned SECONDARY (which sit side by side, in two
+    /// buffers). The standard cell gap is charged ONLY when a secondary column is
+    /// actually shown, so the label-to-shortcut gap stays content-bounded — the
+    /// scanning column begins right after the widest primary, never at a remote edge.
+    pub(in crate::render) fn measure_overlay_content_w(&mut self) -> f32 {
+        let ink = theme::base_content().to_glyphon();
+        let muted = theme::muted().to_glyphon();
+        // The provisional WIDE geometry (right-anchored, `overlay_content_w == 0.0`
+        // → the fixed wide cap), shaped through the REAL shaper so the measured
+        // widths are exactly the ones the draw path will lay out.
+        let geom = self.overlay_geometry(self.window_w as u32);
+        self.overlay_remetric();
+        let has_right = self.overlay_shape_text(&geom, ink, muted, None, None);
+        // The widest LEFT-side element (query / lens strip / bare primary / footer).
+        let mut left = 0.0_f32;
+        for run in self.panel_buffer.layout_runs() {
+            left = left.max(run.line_w);
+        }
+        // A candidate row's own content: primary + gap + right-aligned secondary.
+        let primary = self.widest_candidate_px(&geom);
+        let secondary = if has_right { self.widest_right_px() } else { 0.0 };
+        let gap = if secondary > 0.0 {
+            rowlayout::GAP_CHARS as f32 * self.metrics.char_width
+        } else {
+            0.0
+        };
+        let content_text = left.max(primary + gap + secondary);
+        content_text + 2.0 * self.overlay_text_hpad()
+    }
+
     /// FACETED (lens-strip) card shaping: the section-grouped NAME column
     /// ([`Self::overlay_shape_theme`], which also records the active-lens
     /// underline), then — REUSING the SAME right-column owner the flat path uses

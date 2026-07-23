@@ -138,7 +138,9 @@ impl TextPipeline {
         // faceted card (the Cmd-P palette) grows WITH the glyphs like the flat one —
         // otherwise the 600 cap stayed unzoomed while the text doubled and every row
         // elided (the zoom-blind card bug).
-        let desired_w = self.overlay_card_desired_w(super::overlay::CARD_MAX_W_FACETED);
+        // ITEM 51: content-hug for a RIGHT-ANCHORED faceted card (via the ONE
+        // `overlay_desired_w` owner), the wide `CARD_MAX_W_FACETED` cap otherwise.
+        let desired_w = self.overlay_desired_w(super::overlay::CARD_MAX_W_FACETED);
         let (card_x, card_w) = self.overlay_card_box(width, desired_w);
         // item 4 (NARROW FOLD): the placard folds to InlinePrefix once even the
         // floor inset can't seat the faceted card's desired width — reads the SAME
