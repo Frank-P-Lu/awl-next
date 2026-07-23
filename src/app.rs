@@ -1648,6 +1648,13 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     fn drive_gpu_soak(&mut self, event_loop: &ActiveEventLoop) {
         if self.soak.is_none() { return; }
+        // Report EXACTLY ONCE. `event_loop.exit()` is a request, not an instant
+        // teardown: winit still drains the redraw requests this driver queues
+        // each tick and calls `about_to_wait` again before it stops. Without
+        // this guard those extra ticks re-hit the `finished` branch and reprint
+        // the identical report (item 53 added the every-tick redraw that made
+        // the backlog visible). `soak_passed` is set the moment we report.
+        if self.soak_passed.is_some() { return; }
         let now = self.clock.now();
         let metal = self.gpu.as_ref().and_then(Gpu::current_gpu_bytes);
         let (finished, stimuli) = {

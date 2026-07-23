@@ -134,12 +134,21 @@ jobs:
   # GATING (eyes-open, user decision 2026-07-22): the earlier three
   # failure-swallowing layers are GONE — the job-level and step-level
   # `continue-on-error: true`, and `scripts/ci-live-probe.sh`'s terminal
-  # always-`exit 0`. The probe now propagates a non-zero exit when the soak
-  # fails its verification contract (`awl` bails on presents=0 / faults<3 / a
-  # non-recovered fault) OR the presents floor (>=100 per 25s run) isn't met,
-  # and that exit reds the run. Still NOT run on pull_request (fires on push to
-  # main and on manual workflow_dispatch) — a SEPARATE job from the gating `mac`
-  # job, so it gates independently.
+  # always-`exit 0`. The probe propagates a non-zero exit when the soak fails
+  # its verification contract, and that exit reds the run. Still NOT run on
+  # pull_request (fires on push to main and on manual workflow_dispatch) — a
+  # SEPARATE job from the gating `mac` job, so it gates independently.
+  #
+  # ONE VERDICT (item 53, 2026-07-23): the soak BINARY's exit status is the sole
+  # oracle. `report.passed()` owns every hard gate — a real surface, the
+  # presents FLOOR (>=100), the absolute cycle contract (300/300/150), all three
+  # faults recovered, and live memory samples — and `awl` bails nonzero on any
+  # miss. `ci-live-probe.sh` only launches it and tails the report for humans;
+  # it no longer re-derives a second, script-side pass/fail that could disagree
+  # with the process exit. And the soak now RUNS TO SCHEDULE COMPLETION (bounded
+  # by a 2x-duration grace), so a slightly-slow shared VM that walks the last
+  # ~5% of the schedule late still PASSES instead of being guillotined at the
+  # nominal 25s — the false-red that made every main push fail.
   mac-live-probe:
     name: mac live-probe (free mac-VM tier — gating)
     runs-on: macos-latest
@@ -152,8 +161,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # Launches a SHORT headful --soak-gpu, greps `presents=N`/`faults=N` from
-      # the report line, and asserts the contract. A soak-contract failure or a
-      # sub-floor presents count exits non-zero and fails this (gating) job.
+      # Launches a SHORT headful --soak-gpu and propagates the binary's exit
+      # status — the single verdict (presents floor / cycle contract / faults /
+      # recovery / memory all live in report.passed()). A soak-contract failure
+      # exits non-zero and fails this (gating) job; the script only tails the
+      # report for humans.
       - name: live-probe (does the mac VM present frames?)
         run: scripts/ci-live-probe.sh 25
