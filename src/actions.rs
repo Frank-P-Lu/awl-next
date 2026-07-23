@@ -39,8 +39,10 @@ use rebind::*;
 
 // The overlay live-preview seam is shared with `app/input/mouse.rs`, where a HOVER over a
 // picker row previews it exactly like a keyboard move (Theme re-tints, Caret swaps
-// the look). Re-exported so the mouse path applies the identical preview.
-pub(crate) use overlay_nav::preview_overlay;
+// the look). Re-exported so the mouse path applies the identical preview. `preview_move`
+// (item 52) is the deliberate-crossing variant that ALSO re-anchors — the wheel path uses
+// it; passive hover keeps the bare `preview_overlay` (no spatial chase).
+pub(crate) use overlay_nav::{preview_move, preview_overlay};
 
 // The palette/menu re-dispatch BREADCRUMB stamp is shared by both re-dispatch seams
 // — the live `App::apply` `RunAction` handler and the headless `replay_keys` worklist

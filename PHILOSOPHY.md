@@ -113,6 +113,22 @@ Two rules follow:
   to show where*, this is the decision procedure: show detail where presence is,
   preview everywhere else. One law, many surfaces — not a per-feature convention.
 
+  **Amendment (settled 2026-07-23, the theme picker is a full-immersion audition —
+  item 52, superseding item 45's summon-time freeze):** the WYSIWYG ethos reaches
+  the theme picker itself. Highlighting a world doesn't show a swatch or a
+  thumbnail — it **drops you INSIDE the complete destination world**: every
+  theme-owned property changes at once (palette, background/ambient, Pane/Bars
+  surfaces, chrome face, motion, *and* the card's own left/center/right anchor),
+  so the picker you're looking at IS that world's picker. Only the **interaction
+  state survives the crossing** — your query, the filtered list, the selected
+  world, the scroll, the focus — because that is *yours*, not the room's. The one
+  refinement of §1's "chrome holds still under your hands": the audition card
+  **snaps** into the destination world's rail on a **deliberate** choice (a
+  keyboard move or a click — you asked to go there), but a **passive pointer
+  hover** re-tints the world without moving the card (no dance under a wandering
+  mouse). Choosing a world means *trying it on*, whole — the same honesty as
+  showing the styled line instead of a formatting dialog.
+
 **Amendment (retired 2026-07-09, focus mode removed):** *focus mode* — the
 iA-Writer paragraph/sentence dimming (full ink where you write, the rest dimmed)
 that once stood beside reveal-on-cursor as an example of "Detail follows presence"

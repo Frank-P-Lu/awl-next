@@ -818,6 +818,106 @@ fn theme_move_previews_live() {
     crate::theme::set_active(0);
 }
 
+/// ITEM 52 — a DELIBERATE keyboard crossing RE-ANCHORS the theme picker's card into
+/// the destination world's own rail (choosing a world drops you inside it). The
+/// keyboard-nav path routes through `preview_move` (preview + `reanchor`), so after
+/// each `NextLine` the overlay's frozen `align` re-stamps to the newly-active world's
+/// `card_anchor`. Swept across the whole roster so the crossing genuinely spans
+/// left / center / right rails, proving the wiring (not just the owner).
+#[test]
+fn theme_keyboard_crossing_reanchors_to_destination_world() {
+    let _g = crate::testlock::serial();
+    crate::render::set_card_anchor_test_override(None); // world data drives the anchor
+    crate::theme::set_active(0); // Tawny (TopCenter)
+    let mut overlay = theme_overlay();
+    let mut accept = None;
+
+    // At summon the frozen alignment == the opening world's own rail.
+    assert_eq!(
+        overlay.as_ref().unwrap().align,
+        crate::theme::active().render_caps.card_anchor,
+        "the card freezes the opening world's rail at summon"
+    );
+
+    let mut seen: Vec<crate::theme::CardAnchor> = Vec::new();
+    for _ in 0..crate::theme::THEMES.len().saturating_sub(1) {
+        drive(&mut overlay, &mut accept, &Action::NextLine);
+        let world = crate::theme::active();
+        // Each keyboard crossing snaps the card into the destination world's rail.
+        assert_eq!(
+            overlay.as_ref().unwrap().align,
+            world.render_caps.card_anchor,
+            "a keyboard crossing re-anchors the card into {}'s rail",
+            world.name
+        );
+        if !seen.contains(&world.render_caps.card_anchor) {
+            seen.push(world.render_caps.card_anchor);
+        }
+    }
+    // The sweep genuinely spanned all three rails.
+    assert!(seen.contains(&crate::theme::CardAnchor::TopLeft), "spanned a LEFT rail");
+    assert!(seen.contains(&crate::theme::CardAnchor::TopCenter), "spanned a CENTER rail");
+    assert!(seen.contains(&crate::theme::CardAnchor::TopRight), "spanned a RIGHT rail");
+
+    crate::theme::set_active(0);
+    crate::render::set_card_anchor_test_override(None);
+}
+
+/// ITEM 52 — the PASSIVE-HOVER exception: a hover re-tints the world (the live
+/// preview) but must NOT re-anchor the card (no spatial chase under a wandering
+/// pointer — the item-45 freeze still holds). The mouse hover path runs the BARE
+/// `preview_overlay` (not `preview_move`), so the frozen `align` is untouched even
+/// though a world with a DIFFERENT rail becomes active — then a deliberate move
+/// snaps it (the contrast).
+#[test]
+fn theme_hover_previews_world_but_does_not_reanchor_the_card() {
+    let _g = crate::testlock::serial();
+    crate::render::set_card_anchor_test_override(None);
+    crate::theme::set_active(0); // Tawny (TopCenter)
+    let mut overlay = theme_overlay();
+    let frozen = overlay.as_ref().unwrap().align;
+
+    // Find a world whose rail DIFFERS from the frozen one (a real crossing).
+    let ov = overlay.as_mut().unwrap();
+    let target_ci = ov
+        .corpus
+        .iter()
+        .position(|name| {
+            crate::theme::THEMES
+                .iter()
+                .find(|t| &t.name == name)
+                .map(|t| t.render_caps.card_anchor != frozen)
+                .unwrap_or(false)
+        })
+        .expect("some world carries a different rail than the opening one");
+    let pos = ov.items.iter().position(|&i| i == target_ci).unwrap();
+
+    // A PASSIVE hover: re-highlight + the exact BARE `preview_overlay` the mouse
+    // hover path runs (no re-anchor).
+    ov.selected = pos;
+    crate::actions::preview_overlay(ov);
+    assert_ne!(
+        crate::theme::active().render_caps.card_anchor, frozen,
+        "the hover crossed to a world with a DIFFERENT rail"
+    );
+    assert_eq!(
+        overlay.as_ref().unwrap().align, frozen,
+        "a passive hover must NOT re-anchor the card (item 52 — no spatial chase)"
+    );
+
+    // THE CONTRAST — a deliberate keyboard move from here DOES re-anchor.
+    let mut accept = None;
+    drive(&mut overlay, &mut accept, &Action::PreviousLine);
+    assert_eq!(
+        overlay.as_ref().unwrap().align,
+        crate::theme::active().render_caps.card_anchor,
+        "a deliberate keyboard move re-anchors (the contrast to hover)"
+    );
+
+    crate::theme::set_active(0);
+    crate::render::set_card_anchor_test_override(None);
+}
+
 /// LAW (a) — JUMP-TO-ENDS, no-wildcard over every OverlayKind. While a modal picker
 /// is open it OWNS Home/End (which the document keymap resolves to LineStart/LineEnd)
 /// and the very-start/end pair Cmd-↑/↓ + Ctrl-Home/End (BufferStart/BufferEnd): each

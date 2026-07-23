@@ -30,15 +30,21 @@ pub fn add_to_dictionary_label(word: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct OverlayState {
     pub kind: OverlayKind,
-    /// ITEM 45 (overlay ALIGNMENT as personality data) — the horizontal alignment
-    /// FROZEN the instant this overlay was constructed, captured from
-    /// [`crate::render::effective_card_anchor`] (the ONE resolver: the
-    /// `AWL_OVERLAY_ALIGN` capture knob, else the active world's own
-    /// `render_caps.card_anchor`). It is NEVER recomputed while the overlay lives, so
-    /// a theme-preview crossing that changes which world is active leaves this — and
-    /// therefore the drawn card's placement — exactly where it was at summon (the
-    /// HARD RULE: an open overlay never relocates). Threaded to the render path
-    /// through `ViewState::overlay_align` → `resolve_overlay_anchor`.
+    /// ITEM 45 → ITEM 52 (overlay ALIGNMENT as personality data) — the horizontal
+    /// alignment the card draws at, captured from [`crate::render::effective_card_anchor`]
+    /// (the ONE resolver: the `AWL_OVERLAY_ALIGN` capture knob, else the active world's
+    /// own `render_caps.card_anchor`) at summon and RE-STAMPED on a deliberate crossing.
+    ///
+    /// ITEM 45 froze it at summon so a theme-preview crossing never moved the open card.
+    /// ITEM 52 SUPERSEDES that for a DELIBERATE selection movement: choosing a world drops
+    /// you INSIDE it, so the theme picker's card SNAPS into the destination world's own
+    /// rail. [`Self::reanchor`] re-reads [`crate::render::effective_card_anchor`] after a
+    /// keyboard nav / wheel / page/jump move applies the highlighted world — but PASSIVE
+    /// pointer hover leaves it untouched (no spatial chase; the freeze still holds an open
+    /// card put under a hovering pointer). Threaded to the render path through
+    /// `ViewState::overlay_align` → `resolve_overlay_anchor`, which the render CONSUMERS
+    /// read instead of the live world — so an unfrozen live read still can't relocate the
+    /// card (the alignment-is-data grep-law), only a deliberate `reanchor` can.
     pub align: crate::theme::CardAnchor,
     pub query: String,
     /// The full unfiltered candidate corpus (stable order), RAW accept values.

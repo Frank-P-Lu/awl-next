@@ -769,7 +769,7 @@ RenderCaps`):
 | `highlight_texture` | `Wash` \| `Stipple { color, density }` | THE ONE emphasis texture `==highlight==` spans and search matches share (`highlight_wash`, `wagtail_dither_density`) — a hue-derived translucent wash vs. a fixed-color Bayer-ordered dither stipple at `density`. | Wagtail (`Stipple { white, 0.25 }`) |
 | `title_style` | `InlinePrefix` \| `Placard { corner, scale, ink }` | How a summoned overlay card announces its title: the quiet inline `"<title> › "` prefix, or a large corner-anchored dim WORDMARK behind the rows (the P3R watermark; **bleed is the contract** — it anchors to the CANVAS corner and may bleed past the card; rows always composite over it; the inline prefix is suppressed so titles never double). `ink` ∈ Faint / Ghost / **Stipple** (Bayer pixel-stipple of the wordmark — see the personality section below). | Galah, Magpie (`BL 3.0 Ghost` — the gallery reference), Mangrove (`BL 3.0 Stipple` — the dither is its own language), Firetail (`BL 3.0 Faint`, deliberately smooth — the foil) |
 | `page_frame` | `None` \| `Line { weight_px }` | A thin FRAME around the WRITING COLUMN (distinct from the card border) — four hard-edged quads straddling the column boundary over the document's vertical extent, ink always `theme::page_frame_ink()` = the world's own `base_content` (the "dark-line page-frame" idea, recorded in the roster-decisions note below; graduated from the `AWL_PAGE_BORDER` probe). | Wagtail (`Line { 2.0 }`, its ladder white — the 2px pick from the probe gallery); Bilby (`Line { 1.0 }`, its night-violet ink — the DAWN round's light-pole assignment, the reserved dark-line-on-light variant landed) |
-| `card_anchor` | `TopLeft` \| `TopCenter` \| `Inset { x_frac }` \| `TopRight` | Where the summoned overlay card anchors horizontally (one owner `render::effective_card_anchor` → `overlay_card_x`). `TopRight` is more than placement — it also mirrors the selected-BAR growth direction toward the anchored edge under `Bars` (never text alignment). | Currawong, Galah, Magpie, Wagtail, Firetail (`TopLeft`); Cassowary, Mangrove (`TopRight` — the item-45 overlay-alignment fable picks: a terminal readout and a tidal margin); the GLOBAL DEFAULT is `TopCenter` |
+| `card_anchor` | `TopLeft` \| `TopCenter` \| `Inset { x_frac }` \| `TopRight` | Where the summoned overlay card anchors horizontally (one owner `render::effective_card_anchor` → `overlay_card_x`). `TopRight` is more than placement — it also mirrors the selected-BAR growth direction toward the anchored edge under `Bars` (never text alignment). **The card anchor is theme-owned appearance, so the theme picker CROSSES it like any other property (item 52):** a deliberate selection move re-stamps the open picker's frozen `overlay_align` to the highlighted world's anchor (`OverlayState::reanchor`), snapping the card into that world's rail; a passive hover does not (see the crossing law below). | Currawong, Galah, Magpie, Wagtail, Firetail (`TopLeft`); Cassowary, Mangrove (`TopRight` — the item-45 overlay-alignment fable picks: a terminal readout and a tidal margin); the GLOBAL DEFAULT is `TopCenter` |
 | `chrome_face` | `Body` \| `Named(family)` | Which FACE the overlay chrome (placard wordmark / title prefix / strip labels) shapes in — `Body` (the world's own display face) everywhere, byte-identical, until a world names another family. | Firetail (`Named("Archivo Black")`) |
 | `motion` | `MotionJuice { entrance, band }` | Live-only overlay ENTRANCE + selection-band response. `CALM` (zero animators, settled state byte-identical in capture) on every world today. | none ship non-`CALM` yet |
 | `list_style` | `Pane` \| `Bars { radius, gap, grow_px, extent, coverage }` | How a summoned picker draws the surfaces behind its candidate rows — one pane (default) vs. per-row plates that grow under the selection. | Mangrove, Galah, Magpie, Firetail (`Bars`, the poster worlds) |
@@ -799,6 +799,36 @@ walks every non-test `.rs` file under `src/render/` and fails if either
 pattern reappears. A future theme wanting inverse-video selection, or a
 bordered card, or the dither stipple, sets the matching `render_caps` field —
 it can never again need a bespoke branch in the renderer.
+
+### Theme-owned appearance crosses COMPLETELY (the crossing law, item 52, 2026-07-23)
+
+Every field in the table above is **theme-owned appearance**, and the theme
+picker is where a user tries worlds on. So the standing law: **highlighting a
+world applies EVERY theme-owned visible property to the real open picker at
+once** — world palette/type, background/ambient treatment, `Pane`/`Bars`
+surfaces + facets, `title_style`/`chrome_face`, `motion`, **and** `card_anchor`
+(the card's own left/center/right rail). What you preview is not a swatch; it
+**is** the destination world's picker. **Only the interaction state survives the
+crossing** — the query, the filtered corpus, the selected world, the row
+window/scroll, and the input focus — because that belongs to the user, not the
+room. Choosing a world drops you inside it, whole.
+
+All but one of those properties already re-applied live off `theme::active()`
+the instant a preview crossed (the readers are the `effective_*` owners). The
+one that didn't was `card_anchor`: item 45 FROZE it at summon
+(`OverlayState::align` → `ViewState::overlay_align` → `resolve_overlay_anchor`)
+so an open card never relocated. Item 52 SUPERSEDES that freeze **for a
+deliberate move only**: `OverlayState::reanchor` re-stamps the frozen anchor to
+the highlighted world's rail on a **keyboard nav / wheel / click** crossing (the
+card SNAPS — a hard cut, no new glide animator), while a **passive pointer
+hover** leaves it put (the item-45 freeze still holds — no spatial chase under a
+wandering mouse). The anchor stays **data through one resolver**: the render
+consumers never read the live world (`render::tests::overlay_align_law`'s
+alignment-is-data grep-law), only the upstream `reanchor` moves the card. Laws:
+`render::tests::reanchor_crossing_law` (deliberate crossing snaps to the
+destination rail across left↔center↔right + `Pane`↔`Bars`; passive hover
+re-tints without relocating), `actions::tests::pickers_nav::theme_keyboard_
+crossing_reanchors_to_destination_world` (the keyboard-path wiring).
 
 ### Overlay personality + page frame (the PERSONALITY-ASSIGNMENT round, 2026-07-15)
 
