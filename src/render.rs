@@ -1142,8 +1142,6 @@ fn chrome_attrs() -> Attrs<'static> {
 /// top-left margin the outline now owns), or the bottom-center calm notice.
 #[derive(Clone, Copy)]
 enum CornerAnchor {
-    #[allow(dead_code)]
-    TopLeft,
     /// Right-aligned to the CANVAS's right edge (not the writing column): the stacked
     /// DEBUG panel, moved out of the top-left corner the persistent margin outline
     /// took over. A small 8px inset from the right + top edges.
