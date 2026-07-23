@@ -110,8 +110,8 @@ pub use headings::{
 };
 #[allow(unused_imports)] // ImageRef: public API surface, no in-crate caller outside tests
 pub use refs::{
-    image_refs, image_width_hint_edit, link_at, link_at_full, parse_image_source, split_alt_hint,
-    ImageRef, LinkAt,
+    destination_ranges, image_refs, image_width_hint_edit, label_destination_range, link_at,
+    link_at_full, parse_image_source, split_alt_hint, ImageRef, LinkAt,
 };
 #[allow(unused_imports)] // ListItem/READING_WPM: public API surface, no in-crate caller today
 pub use spans::{

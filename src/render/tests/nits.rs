@@ -740,6 +740,151 @@ fn off_cursor_image_conceal_emits_no_spell_or_nit_underline() {
     crate::nits::set_nits_on(true);
 }
 
+/// QUEUE ITEM 60 — REVEALED image: on the caret's OWN line (full raw
+/// `![alt](path)` source visible, real glyph widths — the opposite of item
+/// 25's OFF-cursor near-zero-collapse guard) a misspelling INSIDE the
+/// DESTINATION never squiggles, while a misspelling in the ALT text still
+/// does. Fixture `![wrold](assets/pasted-18.png)`: alt "wrold" cols 2..7,
+/// destination "pasted" cols 16..22 (inside the `(...)`).
+#[test]
+fn revealed_image_destination_never_squiggles_but_alt_text_still_does_item_60() {
+    let _g = crate::testlock::serial();
+    let prev_img = crate::markdown::inline_images_on();
+    crate::markdown::set_inline_images_on(true);
+    crate::markdown::set_wysiwyg_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!(
+            "skipping revealed_image_destination_never_squiggles_but_alt_text_still_does_item_60: no wgpu adapter"
+        );
+        crate::markdown::set_inline_images_on(prev_img);
+        return;
+    };
+    let text = "![wrold](assets/pasted-18.png)\nprose here\n";
+    // Caret ON the image's own line (col 0 — nowhere near either flagged
+    // span, so `word_at_caret` reveal-on-cursor doesn't touch either one):
+    // the source reveals at real glyph width.
+    let mut v = view(text, 0, 0);
+    v.is_markdown = true;
+    v.misspelled = vec![
+        crate::spell::Misspelling { line: 0, start_col: 2, end_col: 7 }, // alt "wrold"
+        crate::spell::Misspelling { line: 0, start_col: 16, end_col: 22 }, // dest "pasted"
+    ];
+    p.set_view(&v);
+
+    // Sanity: the line really is revealed (real width, not the ~0 collapse).
+    assert!(p.images_report()[0].revealed, "caret on the image line reveals it");
+    let xs = &p.visual_rows(0)[0].xs;
+    let total = xs.last().copied().unwrap_or(0.0) - xs.first().copied().unwrap_or(0.0);
+    assert!(total > 20.0, "revealed: real glyph width, not the ~0 collapse: {total}");
+
+    let s = p.spell_squiggles();
+    assert_eq!(s.len(), 1, "only the ALT-text misspelling squiggles: {s:?}");
+    // GEOMETRY (not the sidecar): the surviving squiggle sits at the ALT
+    // word's x, nowhere near the destination's x.
+    let alt_x = p.text_left() + xs.get(2).copied().unwrap_or(0.0);
+    let dest_x = p.text_left() + xs.get(16).copied().unwrap_or(0.0);
+    assert!(
+        (s[0].x - alt_x).abs() < 2.0,
+        "surviving squiggle is the alt word (x={}, expected ~{alt_x}, dest was at ~{dest_x})",
+        s[0].x
+    );
+
+    crate::markdown::set_inline_images_on(prev_img);
+}
+
+/// QUEUE ITEM 60 — an ordinary LINK (never guarded before this item, unlike
+/// item 25's image-only near-zero-advance rule): OFF-cursor (WYSIWYG-
+/// concealed) a misspelling inside the URL never squiggles, while the SAME
+/// line's visible label text (never concealed — `MdKind::LinkText` stays
+/// full width even off-cursor) still does. Fixture
+/// `See [wrold](https://example.com/pasted18) end.`: label "wrold" cols
+/// 5..10, destination word "pasted18" cols 32..40.
+#[test]
+fn off_cursor_link_destination_never_squiggles_but_label_text_still_does_item_60() {
+    let _g = crate::testlock::serial();
+    crate::markdown::set_wysiwyg_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!(
+            "skipping off_cursor_link_destination_never_squiggles_but_label_text_still_does_item_60: no wgpu adapter"
+        );
+        return;
+    };
+    let text = "See [wrold](https://example.com/pasted18) end.\nprose here\n";
+    // Caret on line 1 (prose) — OFF the link's own line, so its `](url)`
+    // plumbing conceals to ~0 width; the label stays real-width regardless.
+    let mut v = view(text, 1, 0);
+    v.is_markdown = true;
+    v.misspelled = vec![
+        crate::spell::Misspelling { line: 0, start_col: 5, end_col: 10 }, // label "wrold"
+        crate::spell::Misspelling { line: 0, start_col: 32, end_col: 40 }, // dest "pasted18"
+    ];
+    p.set_view(&v);
+
+    let s = p.spell_squiggles();
+    assert_eq!(s.len(), 1, "only the label misspelling squiggles: {s:?}");
+    let xs = &p.visual_rows(0)[0].xs;
+    let label_x = p.text_left() + xs.get(5).copied().unwrap_or(0.0);
+    assert!(
+        (s[0].x - label_x).abs() < 2.0,
+        "surviving squiggle is the label word (x={}, expected ~{label_x})",
+        s[0].x
+    );
+}
+
+/// QUEUE ITEM 60 — writing-nits, LINK, REVEALED via a SELECTION touching its
+/// line while the caret sits elsewhere (so the per-LINE caret-reveal
+/// suppression `nit_underlines` applies to its OWN line doesn't mask the
+/// destination exclusion under test). A double-space nit inside the label
+/// survives; the SAME shape inside the destination (angle-bracketed, since a
+/// bare CommonMark destination can't hold a literal space) does not. Counts
+/// are derived from the REAL `nits::line_nits` + `markdown::destination_ranges`
+/// (never hand-counted columns), so the test can't silently drift from the
+/// scanner's own rules.
+#[test]
+fn revealed_via_selection_link_destination_nit_dropped_label_nit_kept_item_60() {
+    let _g = crate::testlock::serial();
+    crate::markdown::set_wysiwyg_on(true);
+    crate::nits::set_nits_on(true);
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!(
+            "skipping revealed_via_selection_link_destination_nit_dropped_label_nit_kept_item_60: no wgpu adapter"
+        );
+        return;
+    };
+    let line0 = "See [wrold  x](<assets/pasted  18.png>) end.";
+    let text = format!("{line0}\nprose\n");
+
+    // Independently derive the expected surviving count from the SAME real
+    // functions the pipeline calls — never a hand-picked column.
+    let raw = crate::nits::line_nits(line0);
+    assert!(raw.len() >= 2, "sanity: both the label AND destination double-spaces nit raw: {raw:?}");
+    let md = crate::markdown::spans(&text);
+    let dests = crate::markdown::destination_ranges(&text, &md);
+    assert!(!dests.is_empty(), "sanity: the link destination span was found: {md:?}");
+    let expected_surviving = raw
+        .iter()
+        .filter(|&&(s, e)| !crate::nits::span_in_prose_ranges(line0, 0, s, e, &dests))
+        .count();
+    assert!(expected_surviving >= 1, "sanity: the label nit is NOT inside the destination");
+    assert!(expected_surviving < raw.len(), "sanity: at least one raw nit IS inside the destination");
+
+    // Caret on line 1 (prose); a selection spanning line 0 through line 1
+    // reveals line 0's raw source without triggering the per-caret-line nit
+    // suppression (keyed on `cursor_line`, selection-agnostic).
+    let mut v = view(&text, 1, 0);
+    v.is_markdown = true;
+    v.selection = Some(((0, 0), (1, 0)));
+    p.set_view(&v);
+    assert!(!p.concealed_at(0, 0), "sanity: the selection reveals line 0's raw source");
+
+    let ul = p.nit_underlines();
+    assert_eq!(
+        ul.len(),
+        expected_surviving,
+        "only the non-destination nit(s) survive: {ul:?} vs raw {raw:?} dests {dests:?}"
+    );
+}
+
 /// SQUIGGLE PHASE (item 38): the wave BEGINS AT ITS TOP (crest) under the word's
 /// FIRST glyph — a cosine start (`-cos`), not the old sine zero-crossing that
 /// dived DOWN first. This is a shader-level fact (the `wave_y` phase in
