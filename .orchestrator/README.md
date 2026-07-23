@@ -105,9 +105,14 @@ When the orchestrator is cooking a queue, the default is throughput, not caution
 When an item hits a blocker only the user can clear — a taste/product fork, a
 permission grant, an approval — the orchestrator NOTES it blocked on the board
 (a one-line status naming exactly what's needed) and IMMEDIATELY moves on:
-every non-blocked item keeps cooking in parallel. Do NOT hold independent work
-waiting on the answer — surface the question in passing and let it be answered
-whenever; the blocked item resumes the moment its input arrives. (User's word:
-"pause on the ones that are blocked… just note that it's blocked and churn
-through everything else.") The failure this kills: asking a question and then
-idling the whole queue until it's answered.
+every non-blocked item keeps cooking in parallel. The blocker note IS the
+channel: WRITE the decision straight into the queue item — the specific fork,
+the options, and your recommendation — mark it blocked, and move on. The user
+resolves it by EDITING THE QUEUE on their own time (exactly how items 48–52 and
+the frost rework landed). Do NOT reach for an interactive prompt that stalls the
+turn for a decision that could just be a queue note, and do NOT idle other work
+waiting on the answer. The blocked item resumes the moment the user's queue edit
+lands. (User's word: "you can just write down the blocking decision in the queue
+and move on"; "just note that it's blocked and churn through everything else.")
+The failure this kills: asking a question and then idling the whole queue until
+it's answered.
