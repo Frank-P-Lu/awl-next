@@ -95,7 +95,14 @@ fn spell_panel_floats_at_the_word_not_center_screen() {
     );
     set_card_anchor_test_override(None);
     assert_eq!(p.float_card.instance_count(), 0, "a takeover overlay parks the float card");
-    assert_eq!(p.panel_card.instance_count(), 1, "a takeover overlay uses the flat card");
+    // A takeover overlay uses the flat `panel_card` pipeline (NOT the float
+    // primitive). A default (Pane) world SPLITS its card into two surfaces
+    // (SPLIT-PANE round), so this is >= 1 fill quad, never the float card.
+    assert!(
+        p.panel_card.instance_count() >= 1,
+        "a takeover overlay uses the flat card ({} fill quads)",
+        p.panel_card.instance_count()
+    );
 }
 
 /// SPELL PANEL WIDTH is CONTENT-driven, not word-driven: the card sizes to the

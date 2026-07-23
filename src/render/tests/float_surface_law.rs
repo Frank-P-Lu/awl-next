@@ -90,18 +90,21 @@ fn float_surface_primitive_has_no_bypass_among_the_unified_family() {
     );
 
     // NON-VACUOUS: the owner file itself still carries the expected hits — the
-    // fn's own `fn set_float_quads(` definition, plus its three IN-MODULE
-    // callers (`prepare_float_panel`, and the unrelated `prepare_diff_panel` /
-    // `prepare_panel_card_elevation`, which own their OWN dedicated buffer
-    // trios and are out of this round's scope) — if `prepare_float_panel`
-    // were ever deleted outright this count would drop and the law would go
-    // quiet without ever having exercised its ban.
+    // fn's own `fn set_float_quads(` definition, plus its two IN-MODULE
+    // callers (`prepare_float_panel`, and the unrelated `prepare_diff_panel`,
+    // which owns its OWN dedicated buffer trio, out of this round's scope) — if
+    // `prepare_float_panel` were ever deleted outright this count would drop and
+    // the law would go quiet without ever having exercised its ban. (The
+    // SPLIT-PANE round routed `prepare_panel_card_elevation` — the former third
+    // in-module caller — through the multi-rect owner `set_float_quads_rects`
+    // instead, so it no longer matches the single-rect `set_float_quads(`
+    // pattern; both remain in-module, no external bypass.)
     let owner = render_root.join("chrome/mod.rs");
     let text = std::fs::read_to_string(&owner).expect("chrome/mod.rs must exist");
     let real_hits = text.lines().filter(|l| line_violates(l)).count();
     assert_eq!(
-        real_hits, 4,
-        "expected the fn definition + its three in-module callers; found {real_hits}"
+        real_hits, 3,
+        "expected the fn definition + its two in-module callers; found {real_hits}"
     );
 
     // NON-VACUOUS (the popover-specific regression): `chrome/popover.rs` — the

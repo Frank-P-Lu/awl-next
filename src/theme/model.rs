@@ -496,6 +496,29 @@ pub enum ListBacking {
     BarePlates,
 }
 
+/// THE SPLIT-PANE COMPOSITION round's capability: how a [`ListStyle::Pane`]
+/// world's summoned takeover card composes its ONE opaque room. A `Split` world
+/// draws TWO surfaces — the title/query INPUT on the upper surface, a visible
+/// strip of the world's own background BETWEEN, then ONE lower surface owning the
+/// facets/section-headers + candidate rows + footer — so the picker reads as an
+/// input above a result room, not one undifferentiated slab. `Unified` keeps the
+/// historical single card (byte-identical). The DEFAULT is `Split` — every Pane
+/// world gets the two-surface composition unless it opts back to `Unified` as
+/// one-line DATA (Cassowary). This is inert on a [`ListStyle::Bars`] world (which
+/// draws [`ListBacking::BarePlates`], never a card) and on the contextual spell
+/// popup (a small floating word-anchored card, never split). A two-way,
+/// no-wildcard token; the ONE runtime reader is `overlay_draw_card`'s Card arm
+/// (via [`crate::render::effective_pane_split`]) — NEVER a per-world code branch
+/// (the `theme_caps_law` grep-law bans a world name in `src/render/`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PaneSplit {
+    /// The historical single opaque room (byte-identical) — Cassowary.
+    Unified,
+    /// Two surfaces (query input / result room) with the world's background
+    /// showing between them — the DEFAULT for every Pane world.
+    Split,
+}
+
 /// V6 P5 round — the BAR-EXTENT axis (see [`ListStyle::Bars`]). `FullWidth` is
 /// the shipped v5 bar (edge-to-edge, inset from the card). `HugText` sizes each
 /// bar to its own row's text width + a symmetric pad, so the right edges go
@@ -852,6 +875,14 @@ pub struct RenderCaps {
     /// its labels. [`FacetStyle::Text`] everywhere (byte-identical) until a
     /// world flips to `Band`.
     pub facet_style: FacetStyle,
+    /// THE SPLIT-PANE COMPOSITION round's capability (see [`PaneSplit`]'s own
+    /// doc): whether a [`ListStyle::Pane`] world's takeover card composes as TWO
+    /// surfaces (query input above, result room below, the world's background
+    /// showing between) or the historical single room. [`PaneSplit::Split`] is
+    /// the DEFAULT — every Pane world gets the two-surface composition unless it
+    /// opts back to `Unified` (Cassowary). Inert on a `Bars` world / the spell
+    /// popup.
+    pub pane_split: PaneSplit,
     /// THE TWINKLING-STARS round's ambient page-ground capability (see
     /// [`AmbientStyle`]'s own doc): tiny individually-phased twinkling points
     /// in the page-mode margins. [`AmbientStyle::None`] everywhere
@@ -955,6 +986,12 @@ impl RenderCaps {
         // one-line DATA in the later flip round after the user's gallery pick.
         list_style: ListStyle::Pane,
         facet_style: FacetStyle::Text,
+        // SPLIT-PANE COMPOSITION round: the DEFAULT is the two-surface split —
+        // every Pane world composes its takeover card as a query INPUT above a
+        // result ROOM with the world's background showing between (Cassowary opts
+        // back to the historical single room as one-line DATA). Inert on a Bars
+        // world (bare plates, no card) and the spell popup.
+        pane_split: PaneSplit::Split,
         // TWINKLING-STARS round: the ambient layer lands as data with NO
         // default life — every world is byte-identical until it opts in
         // (Currawong is the one assignment).

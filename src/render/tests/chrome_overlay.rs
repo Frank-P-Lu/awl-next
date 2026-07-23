@@ -762,8 +762,16 @@ fn closed_overlay_parks_text_and_quads_even_while_the_hud_is_held() {
     v.overlay_hint = "↵ run  ←/→ lens".to_string();
     p.set_view(&v);
     p.prepare(&device, &queue, 1200, 800).unwrap();
-    // The overlay is drawn: the card + a selected-row band + real glyphs.
-    assert_eq!(p.panel_card.instance_count(), 1, "the overlay card is drawn while open");
+    // The overlay is drawn: the card + a selected-row band + real glyphs. The
+    // default (Pane) world SPLITS its card into two surfaces (SPLIT-PANE round),
+    // so the fill quad count is the pane-fill count (2 split / 1 unified), not a
+    // fixed 1 — either way non-zero while open, parked to 0 on close below.
+    assert_eq!(
+        p.panel_card.instance_count() as usize,
+        p.overlay_pane_fills_probe().len(),
+        "the overlay card fill(s) are drawn while open"
+    );
+    assert!(p.panel_card.instance_count() >= 1, "at least one card surface is drawn");
     assert_eq!(p.overlay_rows.instance_count(), 1, "the selected-row band is drawn");
     assert!(
         p.overlay_text_glyph_count() > 0,

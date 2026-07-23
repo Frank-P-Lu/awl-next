@@ -45,6 +45,7 @@ mod stars;
 mod syntax_ligatures;
 mod syntax_roles;
 mod tables;
+mod split_pane;
 mod theme;
 mod theme_caps_law;
 mod washes;

@@ -11,8 +11,8 @@ use super::color::Srgb;
 use super::model::{
     AmbientStyle, Backdrop, Background, CardAnchor, CaretBlockStyle, ChipVariant, ChromeFace,
     DecorativeWash, Elevation, FacetStyle, Frost, HighlightTexture, ImageReveal, LavaEdge, ListStyle,
-    MotionJuice, PageFrame, PlacardCorner, PlacardInk, RenderCaps, RoleOverrides, SelectionStyle,
-    SPELL_UNDERLINE_GAP_DEFAULT, Theme, ThemeTags, TitleStyle, WashOverride,
+    MotionJuice, PageFrame, PaneSplit, PlacardCorner, PlacardInk, RenderCaps, RoleOverrides,
+    SelectionStyle, SPELL_UNDERLINE_GAP_DEFAULT, Theme, ThemeTags, TitleStyle, WashOverride,
 };
 use super::ornament::{
     Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, LIST_INDENT_SCALE_PLAIN,
@@ -1352,6 +1352,13 @@ pub const WAGTAIL: Theme = Theme {
         // because this literal names every field (no `..DEFAULT` spread).
         list_style: ListStyle::Pane,
         facet_style: FacetStyle::Text,
+        // SPLIT-PANE COMPOSITION round: the silent pole takes the DEFAULT split
+        // like every other Pane world (only Cassowary opts back to `Unified`).
+        // On the 1-bit ground the two surfaces read by their crisp white
+        // `Bordered` rims (base_300 == base_100 = black), a stacked-panel
+        // composition rather than a colour step. Listed explicitly because this
+        // literal names every field (no `..DEFAULT` spread).
+        pane_split: PaneSplit::Split,
         // TWINKLING-STARS round: NO ambient life — a fractional-alpha star
         // breath is structurally illegal on a true 1-bit world (any
         // intermediate composite is a forbidden third value; the theme-side
@@ -1646,6 +1653,12 @@ pub const CASSOWARY: Theme = Theme {
         elevation: Elevation::Bordered,
         list_style: POSTER_BARS,
         facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+        // THE SPLIT-PANE EXCEPTION (as one-line DATA, never a code branch): the
+        // NERV console stays a UNIFIED room. It ships the poster Bars list today,
+        // so this is dormant — but it records the identity so that were the
+        // console ever a Pane world it would keep its single hard-edged slab, not
+        // the two-surface split every other Pane world takes by default.
+        pane_split: PaneSplit::Unified,
         ..RenderCaps::DEFAULT
     },
 };
@@ -1720,6 +1733,9 @@ pub const CASSOWARY_LIGHT: Theme = Theme {
         elevation: Elevation::Bordered,
         list_style: POSTER_BARS,
         facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+        // The SPLIT-PANE EXCEPTION (see the dark `CASSOWARY`): the console family
+        // stays UNIFIED as DATA. Dormant under the poster Bars list.
+        pane_split: PaneSplit::Unified,
         ..RenderCaps::DEFAULT
     },
 };

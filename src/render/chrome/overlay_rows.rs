@@ -263,6 +263,56 @@ impl TextPipeline {
         }
     }
 
+    /// SPLIT-PANE COMPOSITION — the takeover card's opaque FILL rect(s): ONE
+    /// unified room, or the split PAIR (upper query surface + lower result room,
+    /// the world's background showing through the gap between). Gated on the
+    /// `pane_split` cap DATA through the ONE owner
+    /// [`crate::render::effective_pane_split`] (never a world branch); the gap
+    /// rides the ONE [`super::overlay_split_bounds`] owner (carved from the query
+    /// beat, so no glyph falls in it and no text moves — a pure fill change). Read
+    /// by [`Self::overlay_draw_card`] (the fill) AND the split-outcome law, so the
+    /// pixels and the assertion can never disagree. A degenerate card (a
+    /// pathologically short window where a surface would collapse) falls back to
+    /// the unified room — always at least one valid, unclipped surface.
+    pub(in crate::render) fn overlay_pane_fills(&self, geom: &OverlayGeom) -> Vec<[f32; 4]> {
+        let full = [geom.card_x, geom.card_y, geom.card_w, geom.card_h];
+        if !matches!(
+            crate::render::effective_pane_split(),
+            theme::PaneSplit::Split
+        ) {
+            return vec![full];
+        }
+        let Some((gap_top, gap_bottom)) = super::overlay_split_bounds(
+            geom.text_top,
+            geom.header_rows,
+            geom.header_gap,
+            self.overlay_lh(),
+        ) else {
+            return vec![full];
+        };
+        let card_bottom = geom.card_y + geom.card_h;
+        // Both surfaces must be non-degenerate AND sit inside the card; otherwise
+        // a tiny/short card stays unified (never a zero-height or inverted fill).
+        if gap_top > geom.card_y && gap_bottom < card_bottom && gap_bottom > gap_top {
+            vec![
+                [geom.card_x, geom.card_y, geom.card_w, gap_top - geom.card_y],
+                [geom.card_x, gap_bottom, geom.card_w, card_bottom - gap_bottom],
+            ]
+        } else {
+            vec![full]
+        }
+    }
+
+    /// TEST HOOK — the takeover card's fill rect(s) for the currently-open
+    /// overlay, from the SAME [`Self::overlay_pane_fills`] owner the draw path
+    /// reads (so the split-outcome law samples exactly the drawn surfaces). `1`
+    /// rect unified, `2` split.
+    #[cfg(test)]
+    pub(in crate::render) fn overlay_pane_fills_probe(&self) -> Vec<[f32; 4]> {
+        let geom = self.overlay_geometry(self.window_w as u32);
+        self.overlay_pane_fills(&geom)
+    }
+
     /// Upload the card behind everything + the muted selected-row highlight quad
     /// positioned over the chosen candidate.
     ///
@@ -328,9 +378,17 @@ impl TextPipeline {
                 self.panel_border.prepare(device, queue, width, height, &[]);
             }
             theme::ListBacking::Card => {
-                // Centered PANE picker: the flat opaque card, ELEVATED (bordered) only
-                // on a true 1-bit world — see `prepare_panel_card_elevation`'s doc.
-                self.prepare_panel_card_elevation(device, queue, width, height, Some(card_rect));
+                // Centered PANE picker. SPLIT-PANE COMPOSITION: a `Split` world
+                // (the DEFAULT) draws TWO surfaces — the query INPUT above, a
+                // visible strip of the world's own background between, then ONE
+                // lower result ROOM (facets/headers + candidate rows + footer);
+                // `Unified` (Cassowary, as DATA) keeps the historical single
+                // room. The fill rect(s) ride the ONE `overlay_pane_fills` owner
+                // (gated on the `pane_split` cap DATA, never a world branch), each
+                // ELEVATED (bordered) only on a true 1-bit world — see
+                // `prepare_panel_card_elevation`'s doc.
+                let fills = self.overlay_pane_fills(geom);
+                self.prepare_panel_card_elevation(device, queue, width, height, &fills);
             }
         }
 

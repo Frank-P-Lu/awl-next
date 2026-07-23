@@ -391,12 +391,17 @@ fn bars_float_bounded_plates_pane_keeps_its_card() {
     v.overlay_items = (0..8).map(|i| format!("Command {i}")).collect();
     v.overlay_selected = 2;
 
-    // PANE (default): the card fill draws its one instance; no bars.
+    // PANE (default): the card fill draws its instance(s); no bars. Pin
+    // `Unified` so this Pane-vs-Bars mechanism check reads the single historical
+    // card fill — the two-surface SPLIT (the DEFAULT) is its own law
+    // (`split_pane.rs`).
+    set_pane_split_test_override(Some(theme::PaneSplit::Unified));
     set_list_style_test_override(Some(theme::ListStyle::Pane));
     p.set_view(&v);
     p.prepare(&device, &queue, 1200, 800).unwrap();
     assert_eq!(p.panel_card.instance_count(), 1, "Pane draws the card fill");
     assert_eq!(p.overlay_bars.instance_count(), 0, "Pane draws no bars");
+    set_pane_split_test_override(None);
 
     // BARS: the boxed pane vanishes — shadow + border park empty (no elevation) —
     // and `panel_card` carries only one local scrim per bar plate.

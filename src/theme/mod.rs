@@ -78,8 +78,8 @@ pub use model::{Lens, RoleOverrides, ThemeTags};
 pub use model::{
     AmbientStyle, Backdrop, BandResponse, BarCoverage, BarExtent, CardAnchor, CaretBlockStyle,
     ChipVariant, ChromeFace, DecorativeWash, Elevation, FacetStyle, Frost, HighlightTexture, HighlightTreatment,
-    ImageReveal, ListBacking, ListStyle, MotionJuice, OverlayEntrance, PageFrame, PlacardCorner, PlacardInk,
-    RenderCaps, SelectionStyle, TitleStyle,
+    ImageReveal, ListBacking, ListStyle, MotionJuice, OverlayEntrance, PageFrame, PaneSplit,
+    PlacardCorner, PlacardInk, RenderCaps, SelectionStyle, TitleStyle,
 };
 #[allow(unused_imports)] // the per-world ornament/bullet data: public API
 // surface, no NON-TEST in-crate caller today.

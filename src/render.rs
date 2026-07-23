@@ -2364,6 +2364,61 @@ pub(crate) fn effective_facet_style() -> theme::FacetStyle {
     }
 }
 
+/// `AWL_PANE_SPLIT_FORCE` grammar (SPLIT-PANE COMPOSITION round): `"unified"` /
+/// `"split"`, the gallery A/B for the two-surface takeover card. Malformed → the
+/// world's own `render_caps.pane_split` (a SET-but-unrecognized value is reported
+/// to stderr by [`read_forced_knob`] before it falls back).
+fn parse_pane_split_force(s: &str) -> Option<theme::PaneSplit> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "unified" => Some(theme::PaneSplit::Unified),
+        "split" => Some(theme::PaneSplit::Split),
+        _ => None,
+    }
+}
+
+/// The `AWL_PANE_SPLIT_FORCE` dev knob, read ONCE and memoized.
+fn awl_pane_split_force() -> &'static Option<theme::PaneSplit> {
+    static ONCE: std::sync::OnceLock<Option<theme::PaneSplit>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| {
+        read_forced_knob(
+            "AWL_PANE_SPLIT_FORCE",
+            "unified | split",
+            parse_pane_split_force,
+        )
+    })
+}
+
+/// TEST-ONLY escape hatch for the pane-split composition (mirrors
+/// [`set_list_style_test_override`]; `serial()`-guarded at call sites).
+#[cfg(test)]
+static PANE_SPLIT_TEST_OVERRIDE: std::sync::Mutex<Option<theme::PaneSplit>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_pane_split_test_override(s: Option<theme::PaneSplit>) {
+    *PANE_SPLIT_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = s;
+}
+
+/// The EFFECTIVE [`theme::PaneSplit`] for this frame: a `cfg(test)` override if
+/// set, else the `AWL_PANE_SPLIT_FORCE` dev probe if set, else the active world's
+/// own `render_caps.pane_split` — `Split` on every Pane world except Cassowary's
+/// `Unified`. THE ONE owner the summoned takeover card's Card arm consults
+/// ([`TextPipeline::overlay_draw_card`]) to decide between the two-surface split
+/// and the historical single room — never a per-world code branch (the
+/// `theme_caps_law` grep-law bans a world name in `src/render/`).
+pub(crate) fn effective_pane_split() -> theme::PaneSplit {
+    #[cfg(test)]
+    {
+        if let Some(s) = *PANE_SPLIT_TEST_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) {
+            return s;
+        }
+    }
+    match awl_pane_split_force() {
+        Some(s) => *s,
+        None => theme::active().render_caps.pane_split,
+    }
+}
+
 // --- THE OVERLAY-EXPLORATION round's dev probes ------------------------------
 //
 // INERT dials for the per-world summoned-menu personality exploration, each
