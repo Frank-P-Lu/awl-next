@@ -73,6 +73,56 @@ fn hidden_count_is_the_section_length() {
 }
 
 #[test]
+fn fold_tails_reports_visible_headings_with_their_hidden_counts() {
+    let levels = heading_levels(OUTLINE, true);
+    // Fold ## A.1 (line 2, hides line 3) and # B (line 6, hides line 7): both
+    // headings are still visible, so both get a tail with their own count.
+    let tails = fold_tails(&levels, &folds(&[2, 6]));
+    assert_eq!(tails, vec![(2, 1), (6, 1)]);
+    // Nothing folded → no tails.
+    assert!(fold_tails(&levels, &BTreeSet::new()).is_empty());
+}
+
+#[test]
+fn fold_tails_suppresses_a_heading_hidden_by_a_folded_parent() {
+    let levels = heading_levels(OUTLINE, true);
+    // Fold # A (line 0, hides lines 1..=5) AND its child ## A.1 (line 2). The child
+    // is itself HIDDEN inside # A's section, so it contributes NO tail — only the
+    // visible parent's tail shows, counting its whole subtree (5 lines).
+    let tails = fold_tails(&levels, &folds(&[0, 2]));
+    assert_eq!(tails, vec![(0, 5)], "the nested child's tail is suppressed");
+}
+
+#[test]
+fn visible_to_full_inverts_the_fold_filter() {
+    // Fold # A of "# A\na1\na2\n# B\nb1": hidden = [F,T,T,F,F].
+    let hidden = [false, true, true, false, false];
+    assert_eq!(visible_to_full(&hidden, 0), 0); // # A
+    assert_eq!(visible_to_full(&hidden, 1), 3); // # B — two hidden lines skipped
+    assert_eq!(visible_to_full(&hidden, 2), 4); // b1
+    // Identity when nothing is hidden.
+    let none = [false, false, false];
+    assert_eq!(visible_to_full(&none, 2), 2);
+    // Exact round-trip against Filter::line (the other direction) on every visible line.
+    let f = Filter::new("# A\na1\na2\n# B\nb1", &hidden);
+    for full in [0usize, 3, 4] {
+        assert_eq!(visible_to_full(&hidden, f.line(full)), full);
+    }
+}
+
+#[test]
+fn chevron_reveals_only_on_the_caret_or_hovered_heading() {
+    // The caret ON the heading's row reveals its chevron; a different caret row does not.
+    assert!(chevron_revealed(2, 2, None));
+    assert!(!chevron_revealed(2, 5, None));
+    // HOVER (live only) reveals it; hovering a different row does not.
+    assert!(chevron_revealed(2, 5, Some(2)));
+    assert!(!chevron_revealed(2, 5, Some(3)));
+    // Either arm alone suffices.
+    assert!(chevron_revealed(2, 2, Some(9)));
+}
+
+#[test]
 fn enclosing_heading_reads_the_innermost_section() {
     let levels = heading_levels(OUTLINE, true);
     assert_eq!(enclosing_heading(&levels, 0), Some(0)); // on # A itself

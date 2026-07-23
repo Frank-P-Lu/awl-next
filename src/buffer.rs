@@ -584,6 +584,66 @@ impl Buffer {
         crate::fold::heading_levels(&self.text(), self.is_markdown())
     }
 
+    /// The "… N lines" TAIL data for the current fold set — one
+    /// `(full-doc heading line, hidden line count)` per VISIBLE folded heading,
+    /// ascending ([`crate::fold::fold_tails`]). Empty when nothing is folded. The
+    /// render remaps each heading into filtered space to hang its quiet tail glyph.
+    pub fn fold_tails(&self) -> Vec<(usize, usize)> {
+        if self.folds.is_empty() {
+            return Vec::new();
+        }
+        let levels = self.heading_levels();
+        crate::fold::fold_tails(&levels, &self.folds)
+    }
+
+    /// Map a VISIBLE (fold-filtered) line index — what a pointer hit-test returns,
+    /// since the render shapes the filtered document — back to its FULL-document line.
+    /// The IDENTITY when nothing is folded, so every unfolded click is byte-identical.
+    /// ([`crate::fold::visible_to_full`].)
+    pub fn visible_line_to_full(&self, visible_line: usize) -> usize {
+        if self.folds.is_empty() {
+            return visible_line;
+        }
+        let levels = self.heading_levels();
+        let hidden = crate::fold::hidden_lines(&levels, &self.folds);
+        crate::fold::visible_to_full(&hidden, visible_line)
+    }
+
+    /// CLICK-TO-EXPAND hit test: given a pointer's VISIBLE `(line, col)` (as the
+    /// render's hit-test yields), return the FULL-document heading line to EXPAND when
+    /// the click landed on a collapsed heading's affordance — the "… N lines" tail /
+    /// chevron cluster, which hangs to the RIGHT of the heading text (so `col` at or
+    /// past the heading's own character length). `None` when nothing is folded, the
+    /// clicked visible line is not a collapsed heading, or the click is ON the heading
+    /// text (which places the caret for editing, unchanged). The affordance region is
+    /// "past the heading text" — the tail + chevron both live there, so one rule covers
+    /// both without pixel geometry.
+    pub fn fold_tail_hit(&self, visible_line: usize, col: usize) -> Option<usize> {
+        if self.folds.is_empty() {
+            return None;
+        }
+        let full = self.visible_line_to_full(visible_line);
+        if !self.folds.contains(&full) {
+            return None; // not a collapsed heading's row
+        }
+        // The affordance sits past the heading's own text. `col` is a CHAR column on
+        // the logical line; a click to the right of the last glyph maps to the line's
+        // char length (the tail/chevron region), so `col >= len` is the hit.
+        (col >= self.line_len(full)).then_some(full)
+    }
+
+    /// Expand (unfold) the section headed by `heading_line`, parking the caret on that
+    /// heading — the click-to-expand affordance's action. Returns `true` when that line
+    /// was folded (and is now open), `false` (no-op) otherwise.
+    pub fn unfold_at(&mut self, heading_line: usize) -> bool {
+        if self.folds.remove(&heading_line) {
+            self.set_cursor(self.line_start(heading_line));
+            true
+        } else {
+            false
+        }
+    }
+
     /// Toggle the fold on the heading enclosing the caret (fold ⇄ unfold). No-op on
     /// a non-markdown buffer or a caret with no enclosing heading. Returns the
     /// toggled heading line, or `None` when nothing was toggled. On a FOLD (not an

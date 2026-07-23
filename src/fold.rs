@@ -85,12 +85,67 @@ pub fn hidden_lines(levels: &[u8], folds: &BTreeSet<usize>) -> Vec<bool> {
 }
 
 /// The number of LINES a folded heading at `h` hides (its section length) — the
-/// count shown in the quiet "... N lines" tail on a collapsed heading. `0` when `h`
+/// count shown in the quiet "… N lines" tail on a collapsed heading. `0` when `h`
 /// is not a folded-worthy heading or its section is empty.
-#[allow(dead_code)] // consumed by the render increment (the "... N lines" tail)
 pub fn hidden_count(levels: &[u8], h: usize) -> usize {
     let (s, e) = section_range(levels, h);
     e.saturating_sub(s)
+}
+
+/// The "… N lines" TAIL data for every folded heading that is ITSELF still
+/// VISIBLE — one `(heading_line, hidden_count)` per collapsed section whose
+/// heading a reviewer / the render can see, ascending. A folded heading nested
+/// inside another folded parent is HIDDEN (its own line collapses into the
+/// parent's section), so it contributes NO tail — the parent's tail already
+/// accounts for it in its own count. Empty when nothing is folded. PURE
+/// (`heading_line` is a FULL-document line; the render remaps it into filtered
+/// space via [`Filter::line`]).
+pub fn fold_tails(levels: &[u8], folds: &BTreeSet<usize>) -> Vec<(usize, usize)> {
+    if folds.is_empty() {
+        return Vec::new();
+    }
+    let hidden = hidden_lines(levels, folds);
+    folds
+        .iter()
+        .filter(|&&h| !hidden.get(h).copied().unwrap_or(false)) // the heading itself is visible
+        .filter_map(|&h| {
+            let n = hidden_count(levels, h);
+            (n > 0).then_some((h, n))
+        })
+        .collect()
+}
+
+/// Whether a collapsed heading on FILTERED row `line` should reveal its small expand
+/// CHEVRON: only when the caret is ON that heading (`cursor_line`) OR the pointer is
+/// hovering it (`hover_line`). The "… N lines" TAIL is always shown; the chevron is
+/// the quiet, SUMMONED affordance (DESIGN.md — summoned over persistent chrome). In a
+/// headless capture `hover_line` is `None` (no pointer), so only the caret-on-heading
+/// arm fires there — the reachable, tested path; the hover arm is live-only.
+pub fn chevron_revealed(line: usize, cursor_line: usize, hover_line: Option<usize>) -> bool {
+    line == cursor_line || hover_line == Some(line)
+}
+
+/// Invert the fold filter: map a VISIBLE (fold-filtered) line index back to its
+/// FULL-document line. `hidden` is the per-full-line mask ([`hidden_lines`]); the
+/// `k`-th visible line is the `k`-th `false` entry. A `visible_line` past the last
+/// visible row extends one full line per overshoot row (the caller then clamps to the
+/// buffer). The IDENTITY when nothing is hidden. This is the click/hit-test seam's
+/// counterpart to [`Filter::line`] (which maps the other direction): the render
+/// pipeline hit-tests the SHAPED, already-filtered buffer, so a click's filtered
+/// (line, col) resolves to the right FULL-document line under a fold.
+pub fn visible_to_full(hidden: &[bool], visible_line: usize) -> usize {
+    let mut seen = 0usize;
+    for (i, &h) in hidden.iter().enumerate() {
+        if !h {
+            if seen == visible_line {
+                return i;
+            }
+            seen += 1;
+        }
+    }
+    // Past the last visible line: extend by however many rows overshoot the last
+    // visible one (each maps to a distinct full line beyond the mask).
+    hidden.len() + (visible_line - seen)
 }
 
 /// The innermost heading whose SECTION contains `line` — i.e. the nearest heading
@@ -289,11 +344,27 @@ impl Filter {
 /// lines, so those remaps are exact. A no-op when the mask hides nothing (the text
 /// and every coordinate stay byte-identical). Shared by the live `sync_view` and
 /// the headless capture builder so the two flows cannot drift.
-pub fn apply_to_view(view: &mut crate::render::ViewState, hidden: &[bool]) {
+///
+/// `tails` is the FULL-document `(heading_line, hidden_count)` list ([`fold_tails`]);
+/// each entry's heading is remapped into filtered space here and recorded as a
+/// [`crate::render::FoldTail`] so the render can hang the quiet "… N lines" glyph on
+/// the collapsed heading's own row (the count is fold-derived, not re-shaped).
+pub fn apply_to_view(
+    view: &mut crate::render::ViewState,
+    hidden: &[bool],
+    tails: &[(usize, usize)],
+) {
     let filter = Filter::new(&view.text, hidden);
     if !filter.any_hidden() {
         return;
     }
+    view.fold_tails = tails
+        .iter()
+        .map(|&(h, n)| crate::render::FoldTail {
+            line: filter.line(h),
+            hidden: n,
+        })
+        .collect();
     view.cursor_line = filter.line(view.cursor_line);
     view.selection = view
         .selection

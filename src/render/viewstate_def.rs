@@ -265,6 +265,26 @@ pub struct ViewState {
     /// and a future tail/chevron pass can find each collapsed heading. Empty when
     /// nothing is folded, so a default capture is byte-identical.
     pub folds: Vec<usize>,
+    /// COLLAPSED-HEADING TAILS: one [`FoldTail`] per VISIBLE folded heading — its
+    /// FILTERED row (where the heading shapes, since `text` is already filtered) plus
+    /// the number of lines that heading hides. The render hangs the quiet "… N lines"
+    /// glyph (+ the caret/hover chevron) on that row alone — it rides the heading's
+    /// existing row, adds NO row, and never perturbs the zero-height hidden-row law.
+    /// Filled by [`crate::fold::apply_to_view`] from [`crate::fold::fold_tails`], so a
+    /// heading nested inside another fold (itself hidden) carries no tail. Empty when
+    /// nothing is folded, so a default capture is byte-identical.
+    pub fold_tails: Vec<FoldTail>,
+}
+
+/// One collapsed heading's "… N lines" tail: the FILTERED row it renders on and the
+/// `hidden` line count that row's fold conceals. VIEW data (built at the fold seam),
+/// not shaped text — the render synthesizes the glyph and hangs it on `line`'s row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FoldTail {
+    /// The heading's row in the FOLD-FILTERED document (what the pipeline shapes).
+    pub line: usize,
+    /// Lines this heading's fold hides (the "N" in "… N lines").
+    pub hidden: usize,
 }
 
 impl ViewState {
@@ -335,6 +355,7 @@ impl ViewState {
             diff_panel: false,
             diff_panel_focus: false,
             folds: Vec::new(),
+            fold_tails: Vec::new(),
         }
     }
 }

@@ -166,7 +166,7 @@ pub mod benchsuite;
 /// home (pure data, no `&self`, no GPU types — see the module doc). Re-exported
 /// here so `crate::render::ViewState` resolves unchanged for every caller.
 mod viewstate_def;
-pub use viewstate_def::ViewState;
+pub use viewstate_def::{FoldTail, ViewState};
 
 /// PIPELINE IMPL — the giant `impl TextPipeline` from `render.rs`, split by
 /// frame-pipeline STAGE into three physical homes (each an `impl TextPipeline`
@@ -3003,6 +3003,16 @@ pub struct TextPipeline {
     window_h: f32,
     /// Active selection endpoints (ordered), or `None`.
     selection: Option<((usize, usize), (usize, usize))>,
+    /// COLLAPSED-HEADING TAILS mirrored from the view (see [`ViewState::fold_tails`]):
+    /// each VISIBLE folded heading's FILTERED row + hidden line count. The ornament
+    /// pass hangs a quiet "… N lines" glyph on that row (and, when the caret is on it
+    /// or it is hovered, a small expand CHEVRON). Empty unless something is folded.
+    fold_tails: Vec<FoldTail>,
+    /// The FILTERED document row the pointer is hovering, or `None`. LIVE only — set
+    /// by `set_hover_line` from the app's pointer, never carried on the view — so a
+    /// headless capture (no pointer) leaves it `None` and only the caret-on-heading
+    /// chevron reveal fires there. Drives the fold-tail chevron's HOVER reveal.
+    hover_line: Option<usize>,
     /// Active IME composition string (empty = none). When non-empty it is
     /// spliced into the shaped buffer at the cursor so it renders with real
     /// (Advanced-shaped) glyphs, the caret is moved to its end, and an underline

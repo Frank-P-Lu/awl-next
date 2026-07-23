@@ -313,3 +313,91 @@ fn release_disarms_so_the_next_press_is_slop_gated_again() {
         "the new gesture is slop-gated again, not still armed"
     );
 }
+
+// --- ITEM 47c: click-to-expand on a collapsed heading's tail / chevron ---------
+//
+// The hermetic (GPU-less) press path drives `render::hit_test`'s fixed-pitch
+// fallback — the exact math a real click runs — so a synthesized press at the tail
+// region exercises the true affordance seam. A pathless hermetic buffer is markdown
+// (so headings + folds are live), and folding parks the caret on the heading.
+
+/// A small nested-free markdown doc (no soft-wrap): row 0 # A hides a1,a2 when
+/// folded; # B / b1 stay visible.
+const FOLD_DOC: &str = "# A\na1\na2\n# B\nb1";
+
+/// Synthesize a press at a VISUAL row + char column (fixed-pitch fallback geometry),
+/// landing mid-row so the y floors to `row`. Drives the real `on_press`.
+fn press_at_row_col(app: &mut App, row: usize, col: usize, shift: bool) {
+    let m = Metrics::with_dpi(app.zoom, app.dpi);
+    app.cursor_px = (
+        TEXT_LEFT + col as f32 * m.char_width,
+        TEXT_TOP + (row as f32 + 0.5) * m.line_height,
+    );
+    app.on_press(shift, true);
+}
+
+fn folded_app() -> App {
+    let mut app = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+    app.buffer.set_text(FOLD_DOC);
+    app.buffer.set_cursor(0); // on # A
+    app.buffer.toggle_fold_at_cursor(); // fold # A -> hides a1,a2 (filtered: 0 # A / 1 # B / 2 b1)
+    assert!(app.buffer.folds().contains(&0), "precondition: # A is folded");
+    app
+}
+
+#[test]
+fn clicking_the_collapsed_heading_tail_expands_the_fold() {
+    let mut app = folded_app();
+    // Press PAST the heading text on its own row (col 20 ≫ "# A".len() == 3): the
+    // "… N lines" tail / chevron region. It expands the fold, parks the caret on the
+    // heading, and starts NO drag.
+    press_at_row_col(&mut app, 0, 20, false);
+    assert!(
+        app.buffer.folds().is_empty(),
+        "a click on the tail affordance expanded the fold"
+    );
+    assert_eq!(app.buffer.cursor_line_col().0, 0, "caret parked on the heading");
+    assert!(!app.dragging, "an expand click never starts a text-selection drag");
+    assert!(!app.buffer.has_selection());
+}
+
+#[test]
+fn clicking_the_heading_text_places_the_caret_without_expanding() {
+    let mut app = folded_app();
+    // Press ON the heading text (col 1, inside "# A"): the caret lands, the fold STAYS
+    // collapsed — the affordance is the tail region past the text, not the text itself.
+    press_at_row_col(&mut app, 0, 1, false);
+    assert!(
+        app.buffer.folds().contains(&0),
+        "clicking the heading text does not expand the fold"
+    );
+    assert_eq!(app.buffer.cursor_line_col().0, 0, "caret is on the heading line");
+}
+
+#[test]
+fn a_shift_click_on_the_tail_never_expands() {
+    let mut app = folded_app();
+    // Shift-click is a selection-extend gesture everywhere; it must not hijack into an
+    // expand, even over the tail region.
+    press_at_row_col(&mut app, 0, 20, true);
+    assert!(
+        app.buffer.folds().contains(&0),
+        "a shift-click extends a selection, it never expands a fold"
+    );
+}
+
+#[test]
+fn a_click_below_a_collapsed_section_lands_on_the_right_full_document_line() {
+    // THE FOLD HIT-TEST REMAP: with # A folded, the render shapes "# A\n# B\nb1", so a
+    // click on the 2nd VISIBLE row hit-tests to filtered line 1 — which must resolve to
+    // FULL-document line 3 (# B), not rope line 1 (a1, hidden inside the fold). Without
+    // the visible→full remap the caret would land on the wrong (hidden) line.
+    let mut app = folded_app();
+    press_at_row_col(&mut app, 1, 0, false);
+    assert_eq!(
+        app.buffer.cursor_line_col().0,
+        3,
+        "click on filtered row 1 lands on full line 3 (# B), not the hidden a1"
+    );
+    assert!(app.buffer.folds().contains(&0), "clicking # B does not disturb the fold");
+}

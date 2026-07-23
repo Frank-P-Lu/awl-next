@@ -358,6 +358,10 @@ impl App {
             // hidden lines are dropped from `text` + coordinates remapped. Kept as
             // the conscious render decision this exhaustive site forces.
             folds: Vec::new(),
+            // COLLAPSED-HEADING TAILS: filled just below by `apply_to_view` from the
+            // buffer's fold set (the "… N lines" glyph rides each folded heading's own
+            // row). Empty here / when nothing is folded.
+            fold_tails: Vec::new(),
         };
         // HISTORY PREVIEW geometry safety: the pushed text is a DIFFERENT (possibly
         // shorter) version than the buffer, so every field whose line/col spans
@@ -403,7 +407,11 @@ impl App {
         // the caret + any selection on visible lines.
         view.folds = self.buffer.folds().iter().copied().collect();
         if preview.is_none() && self.buffer.has_folds() {
-            crate::fold::apply_to_view(&mut view, &self.buffer.hidden_lines());
+            crate::fold::apply_to_view(
+                &mut view,
+                &self.buffer.hidden_lines(),
+                &self.buffer.fold_tails(),
+            );
         }
         {
             let gpu = self.gpu.as_mut().unwrap();

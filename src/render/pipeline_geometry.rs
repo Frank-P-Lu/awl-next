@@ -453,6 +453,18 @@ impl TextPipeline {
         self.set_caret_target(view.is_edit_move, view.held);
     }
 
+    /// Set the FILTERED document row the pointer is hovering (LIVE only — the app
+    /// derives it from the pointer; the headless capture never calls this, so hover
+    /// stays `None` there). Returns whether it CHANGED, so the caller can schedule a
+    /// redraw only when a collapsed heading's chevron reveal actually flips.
+    pub fn set_hover_line(&mut self, line: Option<usize>) -> bool {
+        if self.hover_line == line {
+            return false;
+        }
+        self.hover_line = line;
+        true
+    }
+
     /// Copy the plain (non-metric, non-caret-latch) editor view fields — scroll,
     /// selection/preedit, spell, search, overlay, and project status — into the
     /// renderer's mirror of the view snapshot.
@@ -460,6 +472,10 @@ impl TextPipeline {
         self.scroll_lines = view.scroll_lines;
         self.image_base_dir = view.doc_dir.clone();
         self.selection = view.selection;
+        // COLLAPSED-HEADING TAILS: mirror the fold-tail rows so the ornament pass can
+        // hang each "… N lines" glyph (+ caret/hover chevron). `hover_line` is a
+        // pointer fact set separately (live only), NOT carried on the view.
+        self.fold_tails = view.fold_tails.clone();
         self.preedit = view.preedit.clone();
         // Mirror the spell list ONLY when it actually changed (a rescan landing),
         // bumping its version so the cached squiggle protos rebuild; the common
