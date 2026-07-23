@@ -100,6 +100,27 @@ When the orchestrator is cooking a queue, the default is throughput, not caution
    user reserved) wait; everything else proceeds. "If you get stuck, do
    everything else before pausing to wait for my say" (user, 2026-07-23).
 
+## Execution hygiene
+
+These are orchestration rules, not live queue state:
+
+- **Durable worktrees only.** Never create a worktree under `/private/tmp`;
+  use `.claude/worktrees/` or another durable path. Commit work in progress
+  before any pause.
+- **Clean up after every landed wave.** Once a worktree is clean and its patch
+  is merged (or patch-equivalent on main), remove the worktree and prune stale
+  registrations. Leave dirty, unmerged, locked, or differently-owned
+  worktrees alone unless their owner explicitly hands them back.
+- **Preserve gate truth.** Never pipe a build/test gate through `head`, `tail`,
+  or anything else that can hide its exit status. Run the wasm gate on every
+  train as required by `AGENTS.md`.
+- **Treat suspicious incremental failures as suspect first.** Retry with
+  `CARGO_INCREMENTAL=0` before diagnosing product code.
+- **Terminate only owned processes.** Never kill `awl` by a bare process name;
+  stop only the exact PID created by the current run.
+- Background model/effort routing follows the Brew skill and any narrower
+  repository rule; record any launcher substitution.
+
 ## Blocked items PARK; never stall the queue on them (user rule, 2026-07-23)
 
 When an item hits a blocker only the user can clear — a taste/product fork, a
