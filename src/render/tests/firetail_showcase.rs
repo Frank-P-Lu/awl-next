@@ -393,23 +393,22 @@ fn band_slide_snaps_by_default_slides_when_asked_and_folds_under_reduce_motion()
     set_motion_test_override(None);
 }
 
-/// THE SELECTION-DESYNC REGRESSION (2026-07-22 user report): the living-band
-/// choreography (`living_band_phase`, shipped ON by default — see
-/// `render/livingband.rs`) used to point its "from" anchor at the STALE
-/// previous TARGET on every re-target, instead of the band's true in-flight
-/// position — `Self::retarget_band`'s doc names the bug in full. A held-down
-/// or fast-repeat Down (arrow-key auto-repeat easily outruns the ~110ms
-/// slide) then popped the visual band to each stale intermediate target
-/// instead of chasing continuously, which is exactly what reads as "the
-/// highlighted row doesn't match what Enter would run" — the row a screenshot
-/// catches mid-glide can visibly lag or jump relative to the instantly-updated
-/// logical selection. This proves the SAME chase formula
-/// `overlay_band_drawn` has always used now drives `living_band_phase` too.
+/// THE SELECTION-DESYNC REGRESSION (2026-07-22 user report), now under the
+/// ITEM 48 HYBRID: the living-band choreography (`living_band_phase`, shipped
+/// ON by default — see `render/livingband.rs`) must never draw a band that
+/// lags the logical selection under arrow-key auto-repeat ("the highlighted row
+/// doesn't match what Enter would run"). A held-down / fast-repeat Down easily
+/// outruns the ~110ms slide, so a new re-target arrives mid-glide. The user's
+/// decision (item 48) is that such an IN-FLIGHT re-target SNAPS the band
+/// straight onto the freshest selection (`TextPipeline::chase_or_snap`) — an
+/// even stronger anti-desync guarantee than the earlier "chase from the true
+/// in-flight position": the band == the selection THIS frame, not an eased
+/// intermediate. A single deliberate move (from a SETTLED band) still glides.
 #[test]
-fn living_band_phase_chains_from_the_actual_drawn_position_not_the_stale_target() {
+fn living_band_phase_snaps_onto_the_selection_when_a_move_outruns_the_glide() {
     let Some(mut p) = headless_pipeline() else {
         eprintln!(
-            "skipping living_band_phase_chains_from_the_actual_drawn_position_not_the_stale_target: no wgpu adapter"
+            "skipping living_band_phase_snaps_onto_the_selection_when_a_move_outruns_the_glide: no wgpu adapter"
         );
         return;
     };
@@ -427,8 +426,8 @@ fn living_band_phase_chains_from_the_actual_drawn_position_not_the_stale_target(
     // A fresh overlay settles exactly on its first row.
     assert_eq!(p.living_band_phase(force, 0.0, lh), (0.0, 0.0, 1.0));
 
-    // Row 0 -> row 1: the first frame of the ease starts exactly at the old
-    // (settled) target, t = 0.
+    // Row 0 -> row 1 from a SETTLED band: a single deliberate move GLIDES — the
+    // first frame of the ease starts exactly at the old (settled) target, t = 0.
     let (from1, to1, t1) = p.living_band_phase(force, lh, lh);
     assert_eq!((from1, to1, t1), (0.0, lh, 0.0));
 
@@ -439,24 +438,27 @@ fn living_band_phase_chains_from_the_actual_drawn_position_not_the_stale_target(
     let expected_t = (dt * 1000.0 / crate::render::OVERLAY_BAND_SLIDE_MS).min(1.0);
     assert!(expected_t > 0.0 && expected_t < 1.0, "the probe must land mid-flight");
 
-    // A SECOND re-target arrives before the first settled. THE BUG: the old
-    // code jumped `overlay_band_from` straight to the stale previous TARGET
-    // (`lh`) here, discarding the in-flight interpolation — a visible pop.
+    // A SECOND re-target arrives before the first settled (input outran the
+    // glide). THE HYBRID: SNAP straight onto the freshest selection — the drawn
+    // band is the exact target rect (`from == to == target`), never a lagging
+    // eased intermediate. `t` re-zeros (the in-flight clock keeps running so
+    // sustained repeat stays in the snap regime), and the band sits nowhere near
+    // the stale previous target.
     let (from2, to2, t2) = p.living_band_phase(force, 2.0 * lh, lh);
     assert_eq!(to2, 2.0 * lh, "the travel always targets the freshest selection");
-    assert_eq!(t2, 0.0, "a genuine re-target restarts the ease from t=0");
-
-    // The new anchor must be the band's TRUE in-flight position — the exact
-    // same eased formula `overlay_band_drawn` (the sibling seam) has always
-    // used — never the raw stale target.
-    let expected_from2 = (lh - 0.0) * crate::ease::out_back(expected_t);
+    assert_eq!(from2, 2.0 * lh, "the band SNAPS onto the fresh target (from == to)");
+    assert_eq!(t2, 0.0, "the snap re-zeros the in-flight clock (sustained repeat keeps snapping)");
+    // The drawn morph rect is exactly the target row — no trail.
+    let drawn = crate::render::livingband::morph_band(from2, to2, lh, t2, &force.choreo.params());
     assert!(
-        (from2 - expected_from2).abs() < 0.01,
-        "the new anchor must be the actual eased in-flight position ({expected_from2}), not the stale target ({lh}); got {from2}"
+        (drawn.top - 2.0 * lh).abs() < 0.01,
+        "the drawn band sits ON the selection ({}), not a lagging intermediate ({})",
+        2.0 * lh,
+        drawn.top
     );
     assert!(
         (from2 - lh).abs() > 0.5,
-        "regression guard: the old bug set the anchor to EXACTLY the stale target ({lh}); got {from2}"
+        "regression guard: the band is never at the stale previous target ({lh}); got {from2}"
     );
 
     crate::motion::set_reduced(saved_reduced);
