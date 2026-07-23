@@ -10,7 +10,7 @@ use super::cjk::{
 use super::color::Srgb;
 use super::model::{
     AmbientStyle, Backdrop, Background, CardAnchor, CaretBlockStyle, ChipVariant, ChromeFace,
-    DecorativeWash, Elevation, FacetStyle, Frost, HighlightTexture, ImageReveal, LavaEdge, ListStyle,
+    DecorativeWash, Elevation, FacetStyle, FoldAfford, Frost, HighlightTexture, ImageReveal, LavaEdge, ListStyle,
     MotionJuice, PageFrame, PaneSplit, PlacardCorner, PlacardInk, RenderCaps, RoleOverrides,
     SelectionStyle, SPELL_UNDERLINE_GAP_DEFAULT, Theme, ThemeTags, TitleStyle, WashOverride,
 };
@@ -842,6 +842,19 @@ pub const MANGROVE: Theme = Theme {
         // technical/cool voice's own frame; user's confirmed chip map 2026-07-17).
         list_style: POSTER_BARS,
         facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+        // ITEM 65 taste correction (Fable's audit): `LavaEdge::Glow`'s own
+        // "soft light-spill under the column" lifts the WHOLE writing column
+        // off flat `base_100` — the fold chevron/tail's bare `muted`/`faint`
+        // rung measured only ~1.5:1 / ~1.4:1 against the ACTUAL rendered
+        // ground (a screenshot pixel probe: `(0x49,0x6D,0x68)` at rest, far
+        // brighter than `base_100` `(0x11,0x27,0x23)`). Both lifted toward
+        // `base_content` — chevron 0.60 (→ ~3.0:1), tail 0.75 (→ ~3.1:1; a
+        // shallower lift dips BELOW 1:1 first — `faint` and the lit ground
+        // start almost EQUAL in luminance, so the lerp crosses a near-
+        // invisible trough before climbing back out the other side; 0.75
+        // clears it) — calibrated against the real rendered ground, not
+        // theoretical `base_100`. See [`theme::model::FoldAfford`]'s own doc.
+        fold_afford: FoldAfford { chevron_lift: 0.60, tail_lift: 0.75 },
         ..RenderCaps::DEFAULT
     },
 };
@@ -1388,6 +1401,13 @@ pub const WAGTAIL: Theme = Theme {
         // capability, so the 1-bit exclusion stays structural, not a world name).
         // Listed explicitly because this literal names every field (no `..DEFAULT`).
         frost: Frost::DEFAULT,
+        // ITEM 65: the silent 1-bit pole carries no lava ground (its column
+        // stays flat), so both lifts are inert DATA — `0.0`/`0.0`, the bare
+        // ladder rung, which is already 1-bit-legal (`faint`/`muted` collapse
+        // to `base_content` on a true 1-bit world — `Theme::is_one_bit`'s own
+        // doc). Listed explicitly because this literal names every field (no
+        // `..DEFAULT` spread).
+        fold_afford: FoldAfford::DEFAULT,
     },
 };
 
@@ -1502,6 +1522,14 @@ pub const FIRETAIL: Theme = Theme {
         // world; user's confirmed chip map 2026-07-17).
         list_style: POSTER_BARS,
         facet_style: FacetStyle::Chips(ChipVariant::FilledActive),
+        // ITEM 65 taste correction (Fable's audit): Firetail's own CHEVRON
+        // already reads fine at `muted`'s bare rung against the glow-lit
+        // column (measured ~2.9:1) — left at `0.0`, untouched. Its TAIL did
+        // not (measured ~1.3:1 against the real rendered ground, a
+        // screenshot pixel probe: `(0x55,0x35,0x3D)`, far brighter than
+        // `base_100` `(0x17,0x09,0x0C)`) — lifted 0.40 toward `base_content`
+        // (→ ~3.2:1). See [`theme::model::FoldAfford`]'s own doc.
+        fold_afford: FoldAfford { chevron_lift: 0.0, tail_lift: 0.40 },
         ..RenderCaps::DEFAULT
     },
 };

@@ -1242,13 +1242,22 @@ impl TextPipeline {
         // on the heading's REAL shaped baseline (`fold_mark_line_y`, below) —
         // BASELINE-ALIGNED, not merely centered in the tall row (the old approach,
         // which read as the tail "floating" above a big heading's ink). FAINT ink
-        // for the quiet tail, MUTED for the summoned chevron; never amber (DESIGN §3).
-        let faint = theme::faint().to_glyphon();
+        // for the quiet tail, MUTED for the summoned chevron; never amber (DESIGN
+        // §3) — each lifted toward `base_content` by the active theme's own
+        // [`theme::FoldAfford`] dial (item 65 taste correction: a `Background::
+        // Lava` world's `LavaEdge::Glow` lifts the WHOLE writing column off flat
+        // `base_100`, not just its margin edge, so the bare ladder rung reads too
+        // faint there; every other world's dial is `0.0` — byte-identical to the
+        // bare rung). See `theme::derive::fold_afford_chevron_ink`/
+        // `fold_afford_tail_ink` — the ONE pair of consumers; no per-world branch
+        // lives here or there, only the theme's own dial does.
+        let fold_tail_ink = theme::fold_afford_tail_ink().to_glyphon();
+        let fold_chevron_ink = theme::fold_afford_chevron_ink().to_glyphon();
         let fold_tail_marks = self.fold_tail_marks();
         let fold_chevron_marks = self.fold_chevron_marks();
         let fold_label_scale = crate::markdown::type_scale::LABEL;
-        let fold_tail_attrs = panel_attrs().color(faint);
-        let fold_chevron_attrs = panel_attrs().color(muted);
+        let fold_tail_attrs = panel_attrs().color(fold_tail_ink);
+        let fold_chevron_attrs = panel_attrs().color(fold_chevron_ink);
         // The NATURAL (unstretched) box every fold-affordance glyph shapes in —
         // shared by the tail and the chevron so they read as ONE quiet family.
         let fold_mark_h = m.line_height * fold_label_scale;
@@ -1369,7 +1378,7 @@ impl TextPipeline {
                 top,
                 scale: 1.0,
                 bounds,
-                default_color: faint,
+                default_color: fold_tail_ink,
                 custom_glyphs: &[],
             });
         }
@@ -1381,7 +1390,7 @@ impl TextPipeline {
                 top,
                 scale: 1.0,
                 bounds,
-                default_color: muted,
+                default_color: fold_chevron_ink,
                 custom_glyphs: &[],
             });
         }
