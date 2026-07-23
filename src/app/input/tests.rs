@@ -387,6 +387,66 @@ fn a_shift_click_on_the_tail_never_expands() {
 }
 
 #[test]
+fn a_heading_jump_onto_a_hidden_line_reveals_its_fold() {
+    // REVEALED PLACEMENT (folds): a Go-to-heading / margin-outline jump targeting a
+    // line hidden inside a collapsed section must reveal it — the caret can never be
+    // left logically inside a fold. `jump_to_line` routes through the placement owner.
+    let mut app = folded_app(); // # A folded, hiding a1 (line 1) and a2 (line 2)
+    app.jump_to_line(1); // jump onto the hidden a1
+    assert!(
+        app.buffer.folds().is_empty(),
+        "a jump onto a hidden line revealed the fold"
+    );
+    assert_eq!(app.buffer.cursor_line_col().0, 1, "caret parked on the now-visible line");
+}
+
+#[test]
+fn a_shift_click_across_a_collapsed_section_reveals_the_fold_it_spans() {
+    // THE DRAG/SHIFT-CLICK REVEAL (Wave-4 neighbourhood): with # A folded, the caret
+    // parks on # A (char 0). A shift-click on the b1 row (filtered row 2 -> full line
+    // 4) drops the mark at char 0 and moves the cursor to line 4 — a selection that
+    // spans the hidden a1/a2. It must never span a fold invisibly: the placement
+    // owner reveals # A before the selection is shown.
+    let mut app = folded_app();
+    assert_eq!(app.buffer.cursor_char(), 0, "precondition: caret on # A");
+    press_at_row_col(&mut app, 2, 0, true);
+    assert!(
+        app.buffer.folds().is_empty(),
+        "a shift-click whose selection spans the fold reveals it"
+    );
+    assert!(app.buffer.has_selection(), "the shift-click built a selection");
+    let (start, end) = app.buffer.selection_range().unwrap();
+    assert_eq!(start, 0, "mark stayed at the prior caret");
+    // The far endpoint is the START of b1 — full line 4, now that the fold is open.
+    assert_eq!(end, app.buffer.line_col_to_char(4, 0), "selection reaches b1");
+}
+
+#[test]
+fn a_drag_across_a_collapsed_section_reveals_every_fold_it_crosses() {
+    // A plain press on # A (its heading text, not the tail) places the caret and arms
+    // a char drag; dragging DOWN past the hidden a1/a2 onto b1 must reveal # A so the
+    // growing selection never crosses hidden lines. Drives the real
+    // on_press -> on_cursor_moved(drag) seam.
+    let mut app = folded_app();
+    press_at_row_col(&mut app, 0, 0, false); // caret on # A, drag armed on next travel
+    assert!(app.dragging, "a press on the heading text arms a text drag");
+    assert!(app.buffer.folds().contains(&0), "the press alone does not reveal");
+    let m = Metrics::with_dpi(app.zoom, app.dpi);
+    // Travel two visible rows down (well past the slop) onto the b1 row.
+    move_by(&mut app, 0.0, 2.0 * m.line_height);
+    assert!(
+        app.buffer.folds().is_empty(),
+        "the drag crossing the fold revealed it"
+    );
+    assert!(app.buffer.has_selection(), "the drag extended a real selection");
+    assert_eq!(
+        app.buffer.selection_range().unwrap(),
+        (0, app.buffer.line_col_to_char(4, 0)),
+        "selection runs from # A to b1 with nothing hidden inside it"
+    );
+}
+
+#[test]
 fn a_click_below_a_collapsed_section_lands_on_the_right_full_document_line() {
     // THE FOLD HIT-TEST REMAP: with # A folded, the render shapes "# A\n# B\nb1", so a
     // click on the 2nd VISIBLE row hit-tests to filtered line 1 — which must resolve to

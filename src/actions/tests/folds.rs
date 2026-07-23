@@ -49,6 +49,37 @@ fn collapse_other_sections_keeps_only_the_caret_chain_open() {
     assert_eq!(folds, vec![4, 6]);
 }
 
+// The deeper nested outline (H1 -> H2 -> H3) the pure `fold::tests` antichain laws
+// use — a sibling # Beta section that itself nests two more levels:
+//   0 # Alpha / 1 a / 2 # Beta / 3 b / 4 ## Beta one / 5 c / 6 ### Beta one a / 7 d /
+//   8 # Gamma / 9 e
+const NEST: &str = "# Alpha\na\n# Beta\nb\n## Beta one\nc\n### Beta one a\nd\n# Gamma\ne";
+
+#[test]
+fn collapse_others_over_a_nested_sibling_stores_only_the_shallowest_roots() {
+    // THE WAVE-4 BUG through the action seam: collapsing from # Alpha must fold the
+    // sibling # Beta as ONE root that subsumes its whole subtree — never a separate
+    // fold for the already-hidden ## Beta one / ### Beta one a (the old accordion).
+    let mut buffer = Buffer::from_str(NEST);
+    buffer.set_cursor(buffer.line_col_to_char(1, 0)); // # Alpha's body
+    drive_act(&mut buffer, &Action::CollapseOtherSections);
+    let folds: Vec<usize> = buffer.folds().iter().copied().collect();
+    assert_eq!(folds, vec![2, 8], "only # Beta + # Gamma roots, no buried folds");
+    // Clicking # Beta open (the caller's unfold-at) reveals its ENTIRE subtree in one
+    // gesture, parking the caret on # Beta — not a partly-collapsed accordion.
+    assert!(buffer.unfold_at(2), "# Beta was the single stored root");
+    assert_eq!(buffer.cursor_line_col().0, 2, "caret parked on the reopened heading");
+    let hidden = buffer.hidden_lines();
+    for line in 3..=7 {
+        assert!(!hidden[line], "# Beta's subtree line {line} is now fully visible");
+    }
+    // Repeating collapse-others from the same caret is idempotent (no accretion).
+    buffer.set_cursor(buffer.line_col_to_char(1, 0));
+    drive_act(&mut buffer, &Action::CollapseOtherSections);
+    let again: Vec<usize> = buffer.folds().iter().copied().collect();
+    assert_eq!(again, vec![2, 8]);
+}
+
 #[test]
 fn auto_expand_when_a_motion_lands_inside_a_fold() {
     let mut buffer = Buffer::from_str(OUTLINE);

@@ -1180,14 +1180,15 @@ pub fn apply_core(ctx: &mut ActionCtx, action: &Action, shift: bool) -> Effect {
     }
 
     // AUTO-EXPAND (folds): any edit / motion that lands the caret INSIDE a collapsed
-    // section reveals it, and a selection never spans a fold invisibly. Both are a
-    // cheap no-op when nothing is folded (the common case), so this runs after every
-    // action without a measurable cost. The two fold GESTURES above leave the caret
-    // on the still-visible heading line, so they are unaffected. Search-hit and
-    // goto-heading landings reveal at their own seams (they never reach here — the
-    // search guard + overlay accept return early).
-    ctx.buffer.reveal_cursor();
-    ctx.buffer.reveal_selection();
+    // section reveals it, and a selection never spans a fold invisibly. This is the
+    // action-motion ingress into the ONE revealed-placement owner
+    // (`Buffer::reveal_placement`); the mouse click/drag, search step, and heading/
+    // line jump ingresses call the same owner at their own seams (the search guard +
+    // overlay accept return before reaching here). A cheap no-op when nothing is
+    // folded (the common case), so this runs after every action without measurable
+    // cost. The two fold GESTURES above leave the caret on the still-visible heading
+    // line, so they are unaffected.
+    ctx.buffer.reveal_placement();
 
     // RECOIL PRIMITIVE — if the action produced no other effect, see whether it was
     // BLOCKED (couldn't proceed) and, if so, arm a caret bump away from the wall.

@@ -677,11 +677,33 @@ impl Buffer {
         self.folds.clear();
     }
 
+    /// THE ONE REVEALED CARET/SELECTION PLACEMENT OWNER. Every gesture that PLACES
+    /// the caret or a selection directly — action motion, single / shift / double /
+    /// triple click and drag endpoints, search next/previous, heading & line jumps,
+    /// and their headless-replay twins — routes through here (never through the two
+    /// private halves below) so a caret or selection can never be left logically
+    /// inside a hidden row. It reveals every fold hiding the caret line, every fold
+    /// the selection would span invisibly, and prunes stale entries. Idempotent; a
+    /// cheap no-op when nothing is folded. Deliberate NON-revealing setup seams — the
+    /// low-level [`Buffer::set_cursor`], and the fold gestures that park the caret on
+    /// a still-visible heading ([`Buffer::toggle_fold_at_cursor`] /
+    /// [`Buffer::collapse_other_sections`] / [`Buffer::unfold_at`]) — do NOT call
+    /// this. Returns true when the fold set changed.
+    pub fn reveal_placement(&mut self) -> bool {
+        if self.folds.is_empty() {
+            return false;
+        }
+        let mut changed = self.reveal_cursor();
+        changed |= self.reveal_selection();
+        changed
+    }
+
     /// AUTO-EXPAND: reveal any fold that hides the caret line (and prune stale
-    /// entries whose heading was edited away). Cheap no-op when nothing is folded,
-    /// so it is safe to call after every action. Returns true when the fold set
-    /// changed. See [`crate::fold::expand_containing`].
-    pub fn reveal_cursor(&mut self) -> bool {
+    /// entries whose heading was edited away). Cheap no-op when nothing is folded.
+    /// PRIVATE — one half of [`Buffer::reveal_placement`], the single door every
+    /// placement seam routes through; call that, never this. Returns true when the
+    /// fold set changed. See [`crate::fold::expand_containing`].
+    fn reveal_cursor(&mut self) -> bool {
         if self.folds.is_empty() {
             return false;
         }
@@ -694,8 +716,9 @@ impl Buffer {
 
     /// AUTO-EXPAND: reveal any fold the active selection would span INVISIBLY, so a
     /// selection never crosses hidden lines. No-op when nothing is folded or there
-    /// is no selection. See [`crate::fold::expand_range`].
-    pub fn reveal_selection(&mut self) -> bool {
+    /// is no selection. PRIVATE — the other half of [`Buffer::reveal_placement`];
+    /// route through that. See [`crate::fold::expand_range`].
+    fn reveal_selection(&mut self) -> bool {
         if self.folds.is_empty() {
             return false;
         }

@@ -1248,6 +1248,11 @@ impl App {
         let idx = self.buffer.line_col_to_char(line, 0);
         self.buffer.clear_mark();
         self.buffer.set_cursor(idx);
+        // REVEALED PLACEMENT (folds): a heading Go-to / margin-outline jump may target
+        // a line hidden inside a collapsed section — route through the ONE placement
+        // owner so the landing line is revealed, never left inside a fold. A cheap
+        // no-op unless a section is folded.
+        self.buffer.reveal_placement();
         self.shift_selecting = false;
         self.sync_view(true);
         if let Some(gpu) = self.gpu.as_ref() {

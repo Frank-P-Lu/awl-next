@@ -237,6 +237,12 @@ fn jump_to_current(search: &Option<SearchState>, buffer: &mut Buffer) {
     if let Some(st) = search.as_ref() {
         if let Some(m) = st.current_match() {
             buffer.set_cursor(m.start);
+            // REVEALED PLACEMENT (folds): a match on a collapsed line must not leave
+            // the caret logically inside a hidden row — route through the ONE
+            // placement owner so the found line reveals. Shared by the live panel and
+            // the headless `--keys` replay (both call `intercept`), so search-next /
+            // previous can never drift on reveal. A cheap no-op unless folded.
+            buffer.reveal_placement();
         }
     }
 }
@@ -336,6 +342,26 @@ mod tests {
         type_str(&mut search, &mut buffer, " a");
         assert_eq!(search.as_ref().unwrap().query(), "beta a");
         assert_eq!(buffer.text(), "alpha beta alpha");
+    }
+
+    #[test]
+    fn a_search_hit_on_a_hidden_line_reveals_its_fold() {
+        // REVEALED PLACEMENT (folds): a match inside a collapsed section must not
+        // leave the caret logically inside a hidden row. Fold # A (hiding "needle" on
+        // line 1), then search for it — `jump_to_current` places the caret on the
+        // match AND routes through the placement owner, which reveals the fold. Shared
+        // by the live panel and the headless replay (both call `intercept`).
+        let mut buffer = Buffer::from_str("# A\nneedle\n# B\nb");
+        buffer.set_cursor(0);
+        buffer.toggle_fold_at_cursor(); // fold # A -> hides line 1 ("needle")
+        assert!(buffer.folds().contains(&0), "precondition: # A folded, needle hidden");
+        let mut search = Some(SearchState::start(0, Direction::Forward));
+        type_str(&mut search, &mut buffer, "needle");
+        assert!(
+            buffer.folds().is_empty(),
+            "landing a search hit on a hidden line revealed the fold"
+        );
+        assert_eq!(buffer.cursor_line_col().0, 1, "caret sits on the found (now visible) line");
     }
 
     #[test]
