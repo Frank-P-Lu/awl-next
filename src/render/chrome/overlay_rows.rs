@@ -607,6 +607,42 @@ impl TextPipeline {
                         footer_hug,
                     ));
                 }
+                // ITEM 46 — the faceted grouped-lens SECTION HEADERS sit on a plate
+                // too. The theme picker's section-header plan lines
+                // ([`ThemeLine::Header`], e.g. "FILE"/"RECENT") were the ONE
+                // candidate-area line the bar draw skipped ("a header is a label"), so
+                // on a Bars world they floated BARE over the blurred backdrop while
+                // every item row sat on a plate — the wave-2 "floating commands" class,
+                // header edition. A header is CHROME (like the footer plate, laid
+                // regardless of `coverage`): give each its own QUIET plate hugging the
+                // header label, through the SAME `span_of` extent + `bar_off`/`bar_h`
+                // the unselected rows use (so the header plate and a row plate can't
+                // diverge) at the quiet `overlay_bar_unselected` value.
+                if geom.theme {
+                    for (k, line) in geom.plan.iter().enumerate() {
+                        if !matches!(line, ThemeLine::Header(_)) {
+                            continue;
+                        }
+                        let top = overlay_row_top(
+                            geom.text_top,
+                            geom.header_rows,
+                            geom.header_gap,
+                            k,
+                            lh,
+                        );
+                        let (x, w) = span_of(k);
+                        unsel.push([x, top + bar_off, w, bar_h]);
+                    }
+                    // ITEM 46 — the lens-strip TAB plates. Each drawn tab label gets a
+                    // QUIET plate (recorded during shaping into `overlay_strip_tab_plates`,
+                    // gated on Bars, using the SAME `pill_px` geometry the facet marks
+                    // read) so no tab floats bare over the backdrop. The active-lens mark
+                    // (underline / band / bracket / chip fill) draws in a LATER pass
+                    // (`overlay_facet_ghost` / `overlay_lens_underline`), ON TOP of these,
+                    // so the active tab still reads while every inactive tab sits on the
+                    // quiet plate.
+                    unsel.extend(self.overlay_strip_tab_plates.iter().copied());
+                }
                 // The SELECTED bar: its natural span (full or hugged), grown
                 // `grow_px` toward the open margin — RIGHT by default, mirrored
                 // LEFT under a right-anchored (`TopRight`) card. `grow_span` is the

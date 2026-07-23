@@ -1812,3 +1812,277 @@ fn facet_chips_leave_a_breathing_gap_between_pills() {
         );
     }
 }
+
+/// ITEM 46 — the faceted grouped-lens SECTION HEADERS sit on a plate (the wave-2
+/// "floating commands" class, header edition). Item 35 plated the bare shortcut
+/// chords; the section-header plan lines ([`ThemeLine::Header`], e.g. "FILE") were
+/// still the ONE candidate-area line the Bars draw skipped ("a header is a label"),
+/// so on a Bars world a header floated BARE over the blurred backdrop while every
+/// item row sat on a plate. This is the OUTCOME proof over REAL pixels, swept across
+/// EVERY Bars world: the section header's BACKGROUND (its plate interior, sampled in
+/// the left inset LEFT of the header glyphs) must MATCH the quiet unselected item-row
+/// plate wash — the SAME `overlay_bar_unselected` value — and thus sit a full value
+/// step off the bare backdrop the defect left it floating over.
+///
+/// Non-vacuous: the witness asserts the item-row plate wash is itself a full step off
+/// the bare backdrop (redmean ≥ 15 — a real surface), so "header ≈ wash" is a genuine
+/// constraint, not trivially satisfiable. Before the fix the header BACKGROUND WAS that
+/// bare backdrop, a full step from the wash, so the "header ≈ wash" match would fail.
+#[test]
+fn faceted_section_header_sits_on_a_plate_on_every_bars_world() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping faceted_section_header_sits_on_a_plate_on_every_bars_world: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let bars_worlds: Vec<&theme::Theme> = theme::THEMES
+        .iter()
+        .filter(|t| matches!(t.render_caps.list_style, theme::ListStyle::Bars { .. }))
+        .collect();
+    assert!(
+        !bars_worlds.is_empty(),
+        "expected at least one Bars world (Firetail/Galah/Magpie/Mangrove)"
+    );
+
+    for th in &bars_worlds {
+        theme::set_active_by_name(th.name).unwrap();
+        p.sync_theme();
+
+        // A faceted (grouped) palette: three commands under ONE section "File" +
+        // a lens strip with File active. `theme_plan` emits a "FILE" header before
+        // row 0, so the plan is [Header(0), Item0(1), Item1(2), Item2(3)]. Select
+        // row 2 so rows 0/1 are QUIET unselected plates (the wash reference), never
+        // the bright selected band.
+        let mut v = view("hello world\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec![
+            "Switch project".into(),
+            "Recent projects".into(),
+            "Browse files".into(),
+        ];
+        v.overlay_sections = vec!["File".into(), "File".into(), "File".into()];
+        v.overlay_lens = vec![
+            ("All".into(), false),
+            ("File".into(), true),
+            ("Edit".into(), false),
+            ("View".into(), false),
+        ];
+        v.overlay_selected = 2;
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+
+        let rect = p
+            .overlay_card_rect()
+            .expect("the faceted Bars picker must have a card");
+        let (card_x, card_y, card_w) = (rect[0], rect[1], rect[2]);
+        let text_top = card_y + 12.0; // `theme_overlay_geometry`'s inner vertical pad
+        let lh = p.overlay_lh();
+        let hg = p.overlay_header_gap();
+        let gap = p.overlay_row_gap();
+        let bar_off = gap * 0.5;
+        let bar_h = (lh - gap).max(1.0);
+        // Sample column: inside the plate's left inset (BAR_SIDE_INSET = 8) but LEFT
+        // of `text_left` (the Bars hpad) — pure surface, no glyphs.
+        let sx = (card_x + 9.0) as i64;
+        let (wi, hi) = (w as i64, h as i64);
+        let px = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+        let sample = |top: f32| {
+            avg(
+                &px,
+                wi,
+                hi,
+                sx,
+                (top + bar_off + 2.0) as i64,
+                2,
+                (bar_h - 4.0).max(1.0) as i64,
+            )
+        };
+        // The faceted card carries two header lines (query + strip), so the plan
+        // begins on display line 2 — `overlay_row_top` folds that in for plan line k.
+        let row_top = |plan_line: usize| chrome::overlay_row_top(text_top, 2, hg, plan_line, lh);
+        let header = sample(row_top(0)); // the section-header plate (plan line 0)
+        let wash = sample(row_top(1)); // an unselected item-row plate (Item0, plan line 1)
+        // A bare backdrop AT THE HEADER'S OWN Y: the header plate hugs only the short
+        // "FILE" label on the left, so the card's horizontal MIDDLE at that row is the
+        // bare blurred page — exactly the ground the header floated over before the fix.
+        let back = avg(
+            &px,
+            wi,
+            hi,
+            (card_x + card_w * 0.5) as i64,
+            (row_top(0) + bar_off + 2.0) as i64,
+            20,
+            (bar_h - 4.0).max(1.0) as i64,
+        );
+
+        let d_wash_back = redmean(wash, back);
+        let d_header_wash = redmean(header, wash);
+        assert!(
+            d_wash_back >= 15.0,
+            "{}: the item-row plate wash {wash:?} must be a real surface step off the bare \
+             backdrop {back:?} (redmean {d_wash_back:.1}) — the non-vacuity witness",
+            th.name
+        );
+        assert!(
+            d_header_wash < 12.0,
+            "{}: the section-header BACKGROUND {header:?} must MATCH the quiet item-row plate \
+             wash {wash:?} (redmean {d_header_wash:.1} < 12) — the header is floating BARE over \
+             the backdrop, not on a plate",
+            th.name
+        );
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
+/// ITEM 46 — the faceted lens-strip TABS sit on a plate (the wave-2 "floating
+/// commands" class, strip edition). Item 35 plated the chords; the strip's ACTIVE
+/// tab already carried its facet mark (underline / band / bracket / chip), but the
+/// INACTIVE tabs — and a bracket/underline active tab, which has no fill — floated
+/// BARE, crisp text over the blurred backdrop. Now every drawn tab gets a quiet
+/// plate. This is the OUTCOME proof over REAL pixels, swept across EVERY Bars world:
+/// EACH tab's plate interior (its glyph-free left pad) must sit a full value step off
+/// the bare backdrop (it is a real surface, not floating), and at least the TWO
+/// inactive tabs must MATCH the quiet item-row plate wash — the same
+/// `overlay_bar_unselected` value the section headers + unselected rows use.
+///
+/// The tab plate rects come from the shaping owner (`overlay_strip_tab_plates`) for
+/// LOCATION only; the appearance is asserted over the PIXELS there — the Wagtail
+/// tripwire: a recorded-but-undrawn plate leaves the backdrop showing and fails
+/// "step off backdrop". Non-vacuous: before the fix an inactive tab's interior WAS
+/// the bare backdrop (redmean ~0 from it), so "step off backdrop" would fail.
+#[test]
+fn faceted_lens_strip_tabs_sit_on_plates_on_every_bars_world() {
+    let (w, h) = (1200u32, 800u32);
+    let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+        eprintln!("skipping faceted_lens_strip_tabs_sit_on_plates_on_every_bars_world: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let bars_worlds: Vec<&theme::Theme> = theme::THEMES
+        .iter()
+        .filter(|t| matches!(t.render_caps.list_style, theme::ListStyle::Bars { .. }))
+        .collect();
+    assert!(
+        !bars_worlds.is_empty(),
+        "expected at least one Bars world (Firetail/Galah/Magpie/Mangrove)"
+    );
+
+    for th in &bars_worlds {
+        theme::set_active_by_name(th.name).unwrap();
+        p.sync_theme();
+
+        // A faceted palette: File ACTIVE + Edit/View inactive (TWO inactive tabs are
+        // drawn — the `All` home at strip index 0 is never a label), three commands
+        // under section "File". Select row 2 so rows 0/1 are quiet plates.
+        let mut v = view("hello world\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_items = vec![
+            "Switch project".into(),
+            "Recent projects".into(),
+            "Browse files".into(),
+        ];
+        v.overlay_sections = vec!["File".into(), "File".into(), "File".into()];
+        v.overlay_lens = vec![
+            ("All".into(), false),
+            ("File".into(), true),
+            ("Edit".into(), false),
+            ("View".into(), false),
+        ];
+        v.overlay_selected = 2;
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+
+        let rect = p
+            .overlay_card_rect()
+            .expect("the faceted Bars picker must have a card");
+        let (card_x, card_y, card_w) = (rect[0], rect[1], rect[2]);
+        let text_top = card_y + 12.0;
+        let lh = p.overlay_lh();
+        let hg = p.overlay_header_gap();
+        let gap = p.overlay_row_gap();
+        let bar_off = gap * 0.5;
+        let bar_h = (lh - gap).max(1.0);
+        let (wi, hi) = (w as i64, h as i64);
+        let sx = (card_x + 9.0) as i64;
+        let row_top = |plan_line: usize| chrome::overlay_row_top(text_top, 2, hg, plan_line, lh);
+
+        // The recorded tab plate rects — LOCATION only; the pixels below prove they
+        // are truly drawn (the recorded-but-undrawn tripwire).
+        let tabs: Vec<[f32; 4]> = p.overlay_strip_tab_plates.clone();
+
+        let px = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+        // The quiet unselected item-row plate wash (Item0, plan line 1).
+        let wash = avg(
+            &px,
+            wi,
+            hi,
+            sx,
+            (row_top(1) + bar_off + 2.0) as i64,
+            2,
+            (bar_h - 4.0).max(1.0) as i64,
+        );
+        // A bare backdrop: the card's horizontal MIDDLE at the header row's y — proven
+        // bare in `faceted_section_header_sits_on_a_plate_on_every_bars_world` (the
+        // header plate hugs only the short "FILE", so the middle is the blurred page).
+        let back = avg(
+            &px,
+            wi,
+            hi,
+            (card_x + card_w * 0.5) as i64,
+            (row_top(0) + bar_off + 2.0) as i64,
+            20,
+            (bar_h - 4.0).max(1.0) as i64,
+        );
+
+        assert_eq!(
+            tabs.len(),
+            3,
+            "{}: File/Edit/View draw 3 tab plates (the All home is not a label), got {}",
+            th.name,
+            tabs.len()
+        );
+        // Non-vacuity witness: the quiet wash is itself a real step off the backdrop,
+        // so "tab interior steps off the backdrop" is a genuine constraint.
+        let d_wash_back = redmean(wash, back);
+        assert!(
+            d_wash_back >= 15.0,
+            "{}: the item-row plate wash {wash:?} must be a real surface step off the bare \
+             backdrop {back:?} (redmean {d_wash_back:.1}) — the non-vacuity witness",
+            th.name
+        );
+
+        let mut matches_wash = 0;
+        for (i, t) in tabs.iter().enumerate() {
+            let [tx, ty, _tw, thh] = *t;
+            // The tab plate's glyph-free LEFT PAD (the CHIP_HPAD before the first
+            // glyph), vertical middle — pure surface, clear of the rounded corners.
+            let interior = avg(&px, wi, hi, (tx + 3.0) as i64, (ty + thh * 0.5 - 1.0) as i64, 2, 3);
+            let d_back = redmean(interior, back);
+            assert!(
+                d_back >= 15.0,
+                "{}: lens-strip tab {i} interior {interior:?} must sit a full step off the bare \
+                 backdrop {back:?} (redmean {d_back:.1}) — the tab is floating BARE over the \
+                 blurred page, not on a plate",
+                th.name
+            );
+            if redmean(interior, wash) < 12.0 {
+                matches_wash += 1;
+            }
+        }
+        // The TWO inactive tabs (Edit, View) ride the quiet item-row plate wash; the
+        // active tab may carry a brighter facet fill (Band / FilledActive), so only
+        // the inactive pair is required to match — but on a bracket/underline world the
+        // active tab is ALSO the quiet plate, so `>= 2` holds everywhere.
+        assert!(
+            matches_wash >= 2,
+            "{}: at least the two INACTIVE tabs must match the quiet item-row plate wash \
+             {wash:?} (got {matches_wash} of {} tabs)",
+            th.name,
+            tabs.len()
+        );
+    }
+    theme::set_active(theme::DEFAULT_THEME);
+}

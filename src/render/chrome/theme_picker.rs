@@ -491,6 +491,30 @@ impl TextPipeline {
         // Cleared for `Text`/`Band` (byte-identical); carries the inactive ghost
         // pills or the active corner ticks under the chip skins that draw them.
         self.overlay_theme_facet_ghosts = ghosts;
+        // ITEM 46 — under a Bars world every lens-strip TAB sits on a plate (not
+        // only the active one the facet mark already surfaces). Record a QUIET plate
+        // hugging EACH drawn tab label — the SAME `pill_px` geometry (and the SAME
+        // shaped glyph spans) the active/ghost facet pills read, so plate and mark
+        // can't disagree — consumed by `overlay_draw_card` into `overlay_bars`. So no
+        // inactive tab (nor a bracket/underline active tab, which carries no fill)
+        // floats BARE over the blurred backdrop: the wave-2 "floating commands"
+        // class, strip edition (item 35 plated the chords). EMPTY on a `Pane` world
+        // (byte-identical) — the field is read only in the Bars draw branch.
+        let bars = matches!(
+            crate::render::effective_list_style(),
+            theme::ListStyle::Bars { .. }
+        );
+        self.overlay_strip_tab_plates = if bars {
+            label_ranges
+                .iter()
+                .filter_map(|(r, _active)| {
+                    span_of(&self.panel_buffer, r)
+                        .map(|(min_x, max_x, _)| pill_px(min_x - CHIP_HPAD, max_x + CHIP_HPAD))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         false
     }
 
