@@ -562,6 +562,7 @@ impl TextPipeline {
             overlay_crisp: false,
             overlay_query: String::new(),
             overlay_title: "",
+            overlay_row_path_splits: false,
             overlay_items: Vec::new(),
             overlay_empty: None,
             overlay_bindings: Vec::new(),

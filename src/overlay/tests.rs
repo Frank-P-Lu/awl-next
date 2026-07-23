@@ -662,6 +662,34 @@ fn date_picker_lists_five_examples_with_names_and_maps_by_index() {
     assert_eq!(OverlayKind::Date.hint(), "type to filter   \u{21B5} apply");
 }
 
+/// ITEM 66 — the Date picker's row content must NOT get the muted-directory/
+/// content-filename figure/ground split (`OverlayKind::row_path_splits`):
+/// three of the five example dates (`DD/MM/YY`, `MM/DD/YY`, `YYYY/MM/DD`) use
+/// `/` as a DATE separator, and `row_split` would otherwise mistake it for a
+/// path boundary and mute part of the date's own glyphs. Only `InsertLink`'s
+/// row content is a genuine URL/path — exhaustive over every kind so a future
+/// variant must consciously decide (no-wildcard match in the fn under test).
+#[test]
+fn only_insert_link_rows_get_the_path_figure_ground_split() {
+    for kind in OverlayKind::ALL {
+        let expect = matches!(kind, OverlayKind::InsertLink);
+        assert_eq!(
+            kind.row_path_splits(),
+            expect,
+            "{kind:?}.row_path_splits() should be {expect}"
+        );
+    }
+    // The concrete regression: every example date this picker shows contains a
+    // literal `/` in three of its five formats, yet must render splitless.
+    assert!(!OverlayKind::Date.row_path_splits());
+    let today = crate::dateformat::CAPTURE_PLACEHOLDER_YMD;
+    let ov = OverlayState::new_date(crate::dateformat::DateFormat::DdMmYy, today);
+    assert!(
+        ov.item_strings().iter().any(|s| s.contains('/')),
+        "at least one example date must contain '/' for this law to bite"
+    );
+}
+
 /// `original_caret_was_auto`: the field the Caret-style picker's auto-aware
 /// Cancel relies on (see `actions::overlay_nav`'s Cancel arm). It reads the
 /// LIVE `crate::caret::is_auto()` global at construction, independent of
