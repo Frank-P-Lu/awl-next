@@ -99,3 +99,15 @@ When the orchestrator is cooking a queue, the default is throughput, not caution
    genuinely user-gated items (a permission grant, an approval, a taste call the
    user reserved) wait; everything else proceeds. "If you get stuck, do
    everything else before pausing to wait for my say" (user, 2026-07-23).
+
+## Blocked items PARK; never stall the queue on them (user rule, 2026-07-23)
+
+When an item hits a blocker only the user can clear — a taste/product fork, a
+permission grant, an approval — the orchestrator NOTES it blocked on the board
+(a one-line status naming exactly what's needed) and IMMEDIATELY moves on:
+every non-blocked item keeps cooking in parallel. Do NOT hold independent work
+waiting on the answer — surface the question in passing and let it be answered
+whenever; the blocked item resumes the moment its input arrives. (User's word:
+"pause on the ones that are blocked… just note that it's blocked and churn
+through everything else.") The failure this kills: asking a question and then
+idling the whole queue until it's answered.
