@@ -117,13 +117,21 @@ impl ImageCache {
     ) -> &ImageState {
         let key = std::fs::canonicalize(resolved).unwrap_or_else(|_| resolved.to_path_buf());
         let now = mtime_ns(&key);
-        let fresh = self.map.get(&key).is_some_and(|e| e.mtime_ns == now);
-        if !fresh {
-            let state = decode_upload(device, queue, resolved, display_w, max_dim);
-            self.map.insert(key.clone(), Entry { mtime_ns: now, state });
+        // One lookup/insert: the Entry API hands back the same slot it resolved, so a
+        // hit needs no second `get`. A hit at the SAME mtime is served as-is (no
+        // fs/decode work); a stale or absent entry (re)decodes in place.
+        let entry = self.map.entry(key);
+        let needs_decode = match &entry {
+            std::collections::hash_map::Entry::Occupied(e) => e.get().mtime_ns != now,
+            std::collections::hash_map::Entry::Vacant(_) => true,
+        };
+        let slot = entry.or_insert_with(|| Entry { mtime_ns: now, state: ImageState::Missing });
+        if needs_decode {
+            slot.state = decode_upload(device, queue, resolved, display_w, max_dim);
+            slot.mtime_ns = now;
             self.decodes += 1;
         }
-        &self.map.get(&key).expect("just inserted").state
+        &slot.state
     }
 
     /// The running count of actual DECODES since this cache was created (see the
@@ -310,10 +318,42 @@ mod tests {
             }
             ImageState::Missing => panic!("bundled fixture must decode Ready"),
         }
-        // A second ensure at the same mtime is a cache HIT (no re-decode / no panic).
+        assert_eq!(cache.decode_count(), 1, "the first ensure decodes exactly once");
+        // A second ensure at the same mtime is a FRESH HIT: served from the same slot
+        // the Entry API resolved, with NO re-decode.
         assert!(matches!(
             cache.ensure(&device, &queue, path, 300.0, 16384),
             ImageState::Ready { .. }
         ));
+        assert_eq!(cache.decode_count(), 1, "a same-mtime hit skips decode_upload entirely");
+    }
+
+    /// STALE-MISS: an entry whose stored mtime no longer matches the file's is
+    /// re-decoded in place (the Entry-API `needs_decode` branch), bumping the decode
+    /// count — the freshness compare, not just presence, gates the skip. Forced
+    /// deterministically by aging the stored `mtime_ns` (no sleep / no fs touch).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stale_mtime_forces_a_redecode() {
+        let Some((device, queue)) = try_device() else {
+            eprintln!("skipping stale_mtime_forces_a_redecode: no wgpu adapter");
+            return;
+        };
+        let path = std::path::Path::new("samples/tiny.png");
+        if std::fs::metadata(path).is_err() {
+            eprintln!("skipping: samples/tiny.png fixture not present");
+            return;
+        }
+        let mut cache = ImageCache::default();
+        cache.ensure(&device, &queue, path, 300.0, 16384);
+        assert_eq!(cache.decode_count(), 1, "first ensure decodes once");
+        // Age the stored entry's mtime so the next ensure sees it as stale.
+        let key = ImageCache::canonical_key(path);
+        cache.map.get_mut(&key).expect("entry present").mtime_ns ^= 1;
+        cache.ensure(&device, &queue, path, 300.0, 16384);
+        assert_eq!(cache.decode_count(), 2, "a stale mtime re-decodes");
+        // And now fresh again: no further decode.
+        cache.ensure(&device, &queue, path, 300.0, 16384);
+        assert_eq!(cache.decode_count(), 2, "back to a fresh hit — no extra decode");
     }
 }
