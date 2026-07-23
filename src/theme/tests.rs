@@ -877,6 +877,61 @@ fn frost_recipe_is_a_per_world_capability_defaulting_to_the_shipped_lava_values(
     assert!(saw_lava, "a lava world ships (the frost capability has a live consumer)");
 }
 
+/// ITEM 65's FOLD-AFFORDANCE CAPABILITY law (mirrors
+/// `frost_recipe_is_a_per_world_capability_defaulting_to_the_shipped_lava_
+/// values` immediately above — same shape, same reasoning): [`model::FoldAfford`]
+/// is data, never a per-world code path.
+///
+/// (1) DEFAULT IS INERT: `RenderCaps::DEFAULT.fold_afford` is `FoldAfford::
+///     DEFAULT` (`0.0`/`0.0`) — the bare `faint`/`muted` ladder rung,
+///     byte-identical to every render before this capability existed.
+/// (2) WELL-FORMED PER WORLD: every world's two lifts sit in `[0.0, 1.0]` (a
+///     [`Srgb::lerp`] factor — out of range is meaningless, not merely ugly).
+/// (3) ONLY A LAVA WORLD DIALS OFF-DEFAULT: a non-lava world has no glow-lit
+///     column to compensate for, so it MUST stay at `FoldAfford::DEFAULT` — a
+///     static-ground world quietly picking up a lift would be undetectable
+///     drift, not a conscious taste call. At least one lava world DOES dial
+///     off-default (the capability has a live consumer, not vacuous data).
+#[test]
+fn fold_afford_is_a_per_world_capability_inert_off_the_lava_worlds() {
+    use crate::theme::FoldAfford;
+    assert_eq!(
+        RenderCaps::DEFAULT.fold_afford,
+        FoldAfford::DEFAULT,
+        "the DEFAULT caps carry the inert (0.0/0.0) fold-afford lift"
+    );
+    let mut saw_dialed = false;
+    for t in THEMES.iter() {
+        let f = t.render_caps.fold_afford;
+        assert!(
+            (0.0..=1.0).contains(&f.chevron_lift),
+            "{}: fold_afford.chevron_lift {} out of [0,1]",
+            t.name,
+            f.chevron_lift
+        );
+        assert!(
+            (0.0..=1.0).contains(&f.tail_lift),
+            "{}: fold_afford.tail_lift {} out of [0,1]",
+            t.name,
+            f.tail_lift
+        );
+        if t.background.is_lava() {
+            if f != FoldAfford::DEFAULT {
+                saw_dialed = true;
+            }
+        } else {
+            assert_eq!(
+                f,
+                FoldAfford::DEFAULT,
+                "{}: a non-lava world has no glow-lit column to compensate for — \
+                 fold_afford must stay the inert default",
+                t.name
+            );
+        }
+    }
+    assert!(saw_dialed, "a lava world dials its own fold-afford lift (the capability has a live consumer)");
+}
+
 /// FIRETAIL PALETTE CHARACTER law: the sixteenth world is an ORIGINAL deep
 /// oxblood-charcoal + wine-lava + ember-gold system, not Potoroo's rust palette
 /// copied under a moving ground. Hue arithmetic pins the authored direction:
@@ -2336,6 +2391,9 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 // Mangrove wears BRACKET chips (user's confirmed chip map).
                 list_style: poster_bars,
                 facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+                // ITEM 65 (Fable adjustment): both marks lifted — see
+                // `worlds::MANGROVE`'s own doc.
+                fold_afford: model::FoldAfford { chevron_lift: 0.60, tail_lift: 0.75 },
                 ..RenderCaps::DEFAULT
             },
             // CHROME-VOICES FLIP (2026-07-16): the loud-end world's own loud
@@ -2357,6 +2415,9 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 // confirmed chip map).
                 list_style: poster_bars,
                 facet_style: FacetStyle::Chips(ChipVariant::FilledActive),
+                // ITEM 65 (Fable adjustment): the tail alone is lifted — the
+                // chevron already read fine — see `worlds::FIRETAIL`'s own doc.
+                fold_afford: model::FoldAfford { chevron_lift: 0.0, tail_lift: 0.40 },
                 ..RenderCaps::DEFAULT
             },
             // C2: the iconic dark-technical statement world anchors TopLeft.
@@ -2419,6 +2480,9 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 spell_underline_gap: model::SPELL_UNDERLINE_GAP_DEFAULT,
                 // FROST-AS-CAPABILITY round: dormant default (no lava ground).
                 frost: model::Frost::DEFAULT,
+                // ITEM 65: dormant default (no lava ground — the silent pole's
+                // column stays flat).
+                fold_afford: model::FoldAfford::DEFAULT,
             },
             // DAWN ROUND (2026-07-18): Bilby is the LIGHT POLE — the roster
             // decision ("the dark-line-on-light page frame is reserved for a
@@ -2792,4 +2856,95 @@ fn streaks_heatmap_levels_are_distinguishable_every_world() {
         }
     }
     set_active(DEFAULT_THEME);
+}
+
+/// WCAG relative-contrast ratio between two opaque colors, gamma-correct Rec.709
+/// — a small, deliberate duplication of `render::tests::distinguishability`'s own
+/// copy (the accepted shape this codebase already carries for a tiny pure-math
+/// helper needed at two test seams; see that file's `redmean`/`srgba_u8_to_linear`
+/// precedent doc).
+fn wcag_contrast(a: Srgb, b: Srgb) -> f32 {
+    fn rel_lum(c: Srgb) -> f32 {
+        fn lin(u: u8) -> f32 {
+            let s = u as f32 / 255.0;
+            if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        }
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    let (la, lb) = (rel_lum(a), rel_lum(b));
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// item 65 NAMED TAIL CONTRAST FLOOR: the bare `theme::faint()` LADDER TOKEN
+/// (before any [`super::model::FoldAfford`] lift — see that capability's own
+/// doc) must be QUIET but PLAINLY READABLE against the FLAT `base_100` ground —
+/// two bounds, on EVERY world:
+///
+/// (a) READABLE FLOOR — `faint` clears [`FOLD_TAIL_READABLE_FLOOR`] WCAG contrast
+///     against `base_100`. The floor (1.8:1) is set just below every world's OWN
+///     existing `faint`-vs-`base_100` contrast (empirically probed: 1.97:1 on
+///     Mangrove, the global minimum among the 17 non-1-bit worlds, up to 3.20:1
+///     on Potoroo) — a REGRESSION guard on the ink `faint` already ships with,
+///     not a new design target this round invents; well below WCAG's own 3:1
+///     "UI component" floor because `faint` is deliberately the ink ladder's
+///     dimmest rung (`Theme::faint`'s own doc: "must barely register"), and well
+///     above 1:1 (true invisibility).
+///
+///     CAVEAT (the Fable item 65 adjustment round): `base_100` is NOT the fold
+///     tail's real drawn ground on Mangrove/Firetail — `LavaEdge::Glow`'s own
+///     "soft light-spill under the column" lifts the WHOLE writing column, not
+///     only the margin edge (a screenshot pixel probe found the real rendered
+///     ground far brighter than `base_100`, e.g. Mangrove `(0x49,0x6D,0x68)` vs
+///     `base_100` `(0x11,0x27,0x23)`), which `Theme::background`'s "the page
+///     column itself stays flat" doc does not anticipate. This law still holds
+///     (it is a real, if incomplete, regression guard on the bare `faint`
+///     token, still drawn as-is on every non-lava world and as the tail's
+///     un-lifted STARTING point on a lava one) but it is NOT sufficient on its
+///     own for the two lava worlds — `capture::tests::folds::
+///     fold_afford_ink_clears_the_real_lava_ground_on_every_flagged_world`
+///     is the one that proves the ACTUALLY-drawn (possibly lifted) ink against
+///     the ACTUALLY-rendered ground, over a real captured PNG.
+/// (b) QUIET BOUND — `faint`'s contrast stays STRICTLY BELOW `base_content`'s
+///     (the heading's own ink — headings carry no separate color, only size/
+///     weight, per the four-role/no-rainbow philosophy) against the SAME ground,
+///     so the tail never out-salience the heading it hangs on. EXEMPT on a TRUE
+///     1-BIT world ([`Theme::is_one_bit`]): "the ink ladder COLLAPSES to one
+///     value in a true 1-bit world — there is nothing else to step through"
+///     (Wagtail's own doc comment) is an EXISTING, already-shipped, already
+///     law-tested (`wagtail_alone_is_one_bit` + this file's several other
+///     `is_one_bit` exemption arms) compensating fact: `faint == base_content`
+///     there BY DESIGN, so the two contrasts are trivially EQUAL, never `<`. This
+///     mirrors every other ink-ladder law's own declared 1-bit exemption rather
+///     than inventing a new one.
+#[test]
+fn fold_tail_ink_clears_the_readable_floor_and_stays_quieter_than_heading_ink() {
+    const FOLD_TAIL_READABLE_FLOOR: f32 = 1.8;
+    let _g = crate::testlock::serial();
+
+    for t in THEMES.iter() {
+        let faint_c = wcag_contrast(t.faint, t.base_100);
+        let content_c = wcag_contrast(t.base_content, t.base_100);
+        assert!(
+            faint_c >= FOLD_TAIL_READABLE_FLOOR,
+            "{}: the fold-tail ink (faint {:?} on base_100 {:?}) is only {faint_c:.2}:1, \
+             below the readable floor {FOLD_TAIL_READABLE_FLOOR}:1",
+            t.name, t.faint, t.base_100
+        );
+        if t.is_one_bit() {
+            assert_eq!(
+                faint_c, content_c,
+                "{}: a true 1-bit world's ink ladder collapses to one value — faint IS \
+                 the heading ink here, by design (see Theme::is_one_bit's doc)",
+                t.name
+            );
+        } else {
+            assert!(
+                faint_c < content_c,
+                "{}: the fold-tail ({faint_c:.2}:1) must read QUIETER than the heading ink \
+                 ({content_c:.2}:1) it hangs on, else it out-salience the heading it annotates",
+                t.name
+            );
+        }
+    }
 }

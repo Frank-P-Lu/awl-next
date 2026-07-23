@@ -100,6 +100,27 @@ pub fn selection() -> Srgb {
     active().selection
 }
 
+/// ITEM 65 taste correction — the fold-section CHEVRON's own ink: `muted`
+/// lifted toward `base_content` by the active theme's own [`super::model::
+/// FoldAfford::chevron_lift`] dial ([`super::model::FoldAfford::DEFAULT`]'s
+/// `0.0` makes this `muted()` verbatim on every non-lava world — see
+/// [`FoldAfford`]'s own doc for why the dial, and why chevron/tail are two
+/// independent dials rather than one). The ONE consumer
+/// (`render/layers.rs`'s fold-affordance draw); no per-world branch lives
+/// here, only the dial does.
+pub fn fold_afford_chevron_ink() -> Srgb {
+    let t = active();
+    t.muted.lerp(t.base_content, t.render_caps.fold_afford.chevron_lift.clamp(0.0, 1.0))
+}
+
+/// ITEM 65 taste correction — the fold-section "… N lines" TAIL's own ink:
+/// `faint` lifted toward `base_content` by [`super::model::FoldAfford::
+/// tail_lift`] — the [`fold_afford_chevron_ink`] sibling; see its doc.
+pub fn fold_afford_tail_ink() -> Srgb {
+    let t = active();
+    t.faint.lerp(t.base_content, t.render_caps.fold_afford.tail_lift.clamp(0.0, 1.0))
+}
+
 /// How far a DARK world's `Faint` placard rung steps up the ink ladder, from
 /// `faint` toward `muted` — the personality-assignment round's DARK-GROUND
 /// CONTRAST correction (the probe gallery's light-world Ghost was

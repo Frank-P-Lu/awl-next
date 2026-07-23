@@ -56,9 +56,11 @@ impl App {
     }
 
     /// CLICK-TO-EXPAND (item 47c): if the current pointer lands on a collapsed
-    /// heading's "… N lines" tail / chevron affordance (the cluster past the heading
-    /// text), the FULL-document heading line to expand; else `None`. Cheap no-op unless
-    /// a section is folded. See [`crate::buffer::Buffer::fold_tail_hit`].
+    /// heading's "… N lines" tail (past the heading text), the FULL-document heading
+    /// line to expand; else `None`. Cheap no-op unless a section is folded. The
+    /// summoned expand chevron (item 65) lives in the LEFT margin now — a visual cue
+    /// only, not a second click target; this hit region is unchanged. See
+    /// [`crate::buffer::Buffer::fold_tail_hit`].
     fn fold_affordance_at_pointer(&self) -> Option<usize> {
         if !self.buffer.has_folds() {
             return None;

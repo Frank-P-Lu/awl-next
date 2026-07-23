@@ -611,13 +611,16 @@ impl Buffer {
 
     /// CLICK-TO-EXPAND hit test: given a pointer's VISIBLE `(line, col)` (as the
     /// render's hit-test yields), return the FULL-document heading line to EXPAND when
-    /// the click landed on a collapsed heading's affordance — the "… N lines" tail /
-    /// chevron cluster, which hangs to the RIGHT of the heading text (so `col` at or
-    /// past the heading's own character length). `None` when nothing is folded, the
+    /// the click landed on a collapsed heading's "… N lines" TAIL (past the heading's
+    /// own character length — `col >= line_len`). `None` when nothing is folded, the
     /// clicked visible line is not a collapsed heading, or the click is ON the heading
-    /// text (which places the caret for editing, unchanged). The affordance region is
-    /// "past the heading text" — the tail + chevron both live there, so one rule covers
-    /// both without pixel geometry.
+    /// text (which places the caret for editing, unchanged). Column-based (no pixel
+    /// geometry): a click past the last glyph is unambiguously "the affordance", never
+    /// content. **item 65 note:** the expand CHEVRON moved to the LEFT margin (a
+    /// summoned VISUAL cue only — see `render::layers::FOLD_CHEVRON`'s doc); it is
+    /// not itself a second click target, so this hit region — and this fn's behavior —
+    /// is UNCHANGED by that move. Clicking anywhere past the heading text (where the
+    /// tail still hangs) keeps expanding exactly as before.
     pub fn fold_tail_hit(&self, visible_line: usize, col: usize) -> Option<usize> {
         if self.folds.is_empty() {
             return None;
@@ -628,7 +631,7 @@ impl Buffer {
         }
         // The affordance sits past the heading's own text. `col` is a CHAR column on
         // the logical line; a click to the right of the last glyph maps to the line's
-        // char length (the tail/chevron region), so `col >= len` is the hit.
+        // char length (the tail region), so `col >= len` is the hit.
         (col >= self.line_len(full)).then_some(full)
     }
 

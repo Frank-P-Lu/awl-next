@@ -908,6 +908,11 @@ pub struct RenderCaps {
     /// `crate::lava` consts) on every world; a lava world dials its own frost as
     /// one-line DATA. Inert on a static-ground world (no lava → no frost).
     pub frost: Frost,
+    /// ITEM 65's TASTE-CORRECTION dial: see [`FoldAfford`]'s own doc.
+    /// [`FoldAfford::DEFAULT`] (both lifts `0.0`, byte-identical to the bare
+    /// `faint`/`muted` ladder rungs) on every world; only a `Background::Lava`
+    /// world's own glow-lit writing column needs a lift, dialed per-world here.
+    pub fold_afford: FoldAfford,
 }
 
 /// Default value of [`RenderCaps::spell_underline_gap`] — the gap every world
@@ -961,6 +966,44 @@ impl Frost {
     };
 }
 
+/// ITEM 65's TASTE-CORRECTION CAPABILITY: how far (0.0..=1.0) the fold-section
+/// affordance's own quiet ink — the chevron ("›", drawn in `muted`) and the
+/// "… N lines" tail (drawn in `faint`) — blends toward `base_content` before it
+/// draws, one independent dial per mark (see [`crate::theme::derive::
+/// fold_afford_chevron_ink`] / `fold_afford_tail_ink`, the TWO consumers; no
+/// per-world branch lives there, only these dials do — mirrors [`Frost`]'s own
+/// "capability, never a code path" shape, and the SAME `render/tests/
+/// theme_caps_law.rs` grep-law that bans a world name under `src/render/`
+/// covers this field too).
+///
+/// Why two independent dials rather than one: Fable's item 65 taste audit
+/// measured the chevron/tail against the page ground they ACTUALLY draw on —
+/// which, on a `Background::Lava` world running `LavaEdge::Glow`, is NOT the
+/// flat `base_100` `Theme::background`'s doc names (`LavaEdge::Glow`'s own
+/// "soft light-spill under the column" lifts the WHOLE writing column, not
+/// only the margin edge) — and found the two marks need DIFFERENT treatment
+/// even on the SAME world: Firetail's own chevron already read fine at
+/// `muted`'s bare rung (measured ~2.9:1) while its tail needed lifting
+/// (measured ~1.4:1); Mangrove needed both lifted (measured ~1.5:1 / ~1.4:1).
+/// `DEFAULT` (`0.0`/`0.0`) is byte-identical to the pre-capability bare
+/// `faint`/`muted` draw on every non-lava world (a static-ground world has no
+/// glow-lit column to compensate for) — only the two lava worlds dial a lift,
+/// each independently calibrated (capture + pixel measurement) to clear the
+/// item 65 audit's ~3:1 floor against the REAL rendered ground, never
+/// theoretical `base_100`. See `theme::tests::
+/// fold_afford_lifted_ink_clears_the_real_lava_ground_on_every_flagged_world`
+/// for the calibration proof.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FoldAfford {
+    pub chevron_lift: f32,
+    pub tail_lift: f32,
+}
+
+impl FoldAfford {
+    /// Inert everywhere until a `Background::Lava` world dials its own lift.
+    pub const DEFAULT: FoldAfford = FoldAfford { chevron_lift: 0.0, tail_lift: 0.0 };
+}
+
 impl RenderCaps {
     pub const DEFAULT: RenderCaps = RenderCaps {
         selection_style: SelectionStyle::Fill,
@@ -1007,6 +1050,10 @@ impl RenderCaps {
         // `crate::lava` values on every world (byte-identical) until a lava
         // world dials its own frost.
         frost: Frost::DEFAULT,
+        // ITEM 65: both lifts land INERT (`0.0`/`0.0`, the bare ladder rung)
+        // on every world until a lava world dials its own — see
+        // [`FoldAfford`]'s own doc.
+        fold_afford: FoldAfford::DEFAULT,
     };
 
 }

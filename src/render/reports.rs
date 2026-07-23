@@ -157,23 +157,39 @@ impl TextPipeline {
     }
 
     /// PERSISTENT MARGIN OUTLINE: the capture sidecar's `outline` block —
-    /// `(on, headings, current)` where `on` mirrors [`crate::outline::outline_on`],
-    /// `headings` is `(text, level, line)` per heading in document order, and
-    /// `current` is [`Self::outline_current`] (the nearest heading at/above the
-    /// caret, or `None`). The heading list + current are reported REGARDLESS of
-    /// `on` (they are pure text/caret facts the render will consume) — only the
-    /// on-screen drawing is gated on `on`, which stays OFF by default so a plain
-    /// `--screenshot` reports `on: false` and is byte-identical.
+    /// `(on, headings, current, collapsed)` where `on` mirrors
+    /// [`crate::outline::outline_on`], `headings` is `(text, level, line)` per
+    /// heading in document order, `current` is [`Self::outline_current`] (the
+    /// nearest heading at/above the caret, or `None`), and `collapsed` (item 65) is
+    /// the ascending indices INTO `headings` of every heading that is CURRENTLY a
+    /// folded root — i.e. owns a visible [`crate::render::FoldTail`]
+    /// ([`Self::fold_tails`]), the SAME set the doc-body's own "… N lines" tail
+    /// draws from and the outline's collapsed-parent marker reads
+    /// (`render::chrome::outline::outline_collapsed_marker`). A heading buried
+    /// inside a collapsed ancestor never appears in `headings` at all (descendant
+    /// suppression is structural — see [`Self::outline_headings`]'s own doc), so
+    /// `collapsed` only ever names headings that ARE reported here (parent
+    /// retention). The heading list + current + collapsed are reported REGARDLESS
+    /// of `on` (they are pure text/caret/fold facts the render will consume) — only
+    /// the on-screen drawing is gated on `on`, which stays OFF by default so a
+    /// plain `--screenshot` reports `on: false` and is byte-identical.
     pub fn outline_report(
         &self,
-    ) -> (bool, Vec<(&str, u8, usize)>, Option<usize>) {
+    ) -> (bool, Vec<(&str, u8, usize)>, Option<usize>, Vec<usize>) {
         let on = crate::outline::outline_on();
         let headings = self
             .outline_headings
             .iter()
             .map(|h| (h.text.as_str(), h.level, h.line))
             .collect();
-        (on, headings, self.outline_current())
+        let collapsed = self
+            .outline_headings
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| self.fold_tails.iter().any(|t| t.line == h.line))
+            .map(|(i, _)| i)
+            .collect();
+        (on, headings, self.outline_current(), collapsed)
     }
 
     /// SYNTAX HIGHLIGHTING: the styled spans for the capture sidecar, as

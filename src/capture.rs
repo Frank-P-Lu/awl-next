@@ -359,7 +359,18 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // they shape to ZERO height — `line_count` shrinks accordingly), while `folds`
 // itself is the unfiltered heading set. A default `--screenshot` reports
 // `"folds": []` and is otherwise byte-identical.
-pub const SCHEMA_VERSION: u32 = 179;
+// `/180` — item 65 (fold affordance + Outline-state taste correction):
+// `outline.collapsed` — a new array on the existing `outline` block, the
+// ascending `outline.headings` indices of every heading CURRENTLY a folded
+// root (see `TextPipeline::outline_report`'s doc). `[]` when nothing is
+// folded, so a default `--screenshot` is byte-identical apart from this one
+// always-present empty key. No other block's shape changed: the collapsed
+// heading's row still appears in `outline.headings` exactly as before (parent
+// retention was already structural), and a folded-away descendant was already
+// absent from that list before this bump (descendant suppression was already
+// structural too) — this bump only SURFACES the fold/outline correlation a
+// capture can now assert directly instead of cross-referencing `folds` by hand.
+pub const SCHEMA_VERSION: u32 = 180;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

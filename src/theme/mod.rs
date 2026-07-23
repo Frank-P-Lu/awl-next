@@ -52,6 +52,7 @@ pub(crate) use cjk::EMBEDDED_CJK_FAMILIES;
 pub use color::Srgb;
 pub use derive::{
     active, active_index, background, base_100, base_200, base_300, base_content, error, faint,
+    fold_afford_chevron_ink, fold_afford_tail_ink,
     heatmap_colors, image_reveal_scrim, muted, overlay_band_overlap, overlay_bar_unselected,
     overlay_bars_scrim,
     overlay_selected_band,
@@ -77,7 +78,7 @@ pub use model::{Lens, RoleOverrides, ThemeTags};
 // them through `Theme::render_caps.<field>` rather than this bare re-export.
 pub use model::{
     AmbientStyle, Backdrop, BandResponse, BarCoverage, BarExtent, CardAnchor, CaretBlockStyle,
-    ChipVariant, ChromeFace, DecorativeWash, Elevation, FacetStyle, Frost, HighlightTexture, HighlightTreatment,
+    ChipVariant, ChromeFace, DecorativeWash, Elevation, FacetStyle, FoldAfford, Frost, HighlightTexture, HighlightTreatment,
     ImageReveal, ListBacking, ListStyle, MotionJuice, OverlayEntrance, PageFrame, PaneSplit,
     PlacardCorner, PlacardInk, RenderCaps, SelectionStyle, TitleStyle,
 };
