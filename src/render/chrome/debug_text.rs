@@ -64,6 +64,21 @@ impl TextPipeline {
         self.debug_autosave = state;
     }
 
+    /// Feed the debug panel the latest SETTLED theme switch — `(felt_total_ms,
+    /// per-phase breakdown)` (see `crate::themeswitch`) — for the two settle lines.
+    /// Fed ONLY by the live loop, behind `debug_on()` + a real settled present, so the
+    /// value is structurally off the headless deterministic path. `None` (the
+    /// constructor default AND the only value a capture ever holds) draws NO settle
+    /// lines — the readout is absent, keeping a `--debug` capture byte-identical. Once
+    /// fed, the last switch's numbers persist across subsequent debug frames (a settled
+    /// readout you can read off a live run) until the next switch overwrites them.
+    pub fn set_debug_theme_settle(
+        &mut self,
+        settle: Option<(f32, crate::themeswitch::SwitchPhases)>,
+    ) {
+        self.debug_theme_settle = settle;
+    }
+
     /// LIVE-ONLY: set (or clear) the PAGE-WIDTH DRAG READOUT — the pointer position
     /// (physical px) + the current measure (chars) the quiet label floats near the
     /// cursor while a page-column edge drag is in progress. `None` clears it (drag
@@ -149,7 +164,14 @@ impl TextPipeline {
         // App has ever fed this — the only value a capture ever sees) renders the
         // fixed `autosave —` placeholder, exactly like the perf triad + gpu line.
         let autosave = crate::debug::autosave_readout(self.debug_autosave);
-        [frame, latency, redraws, zoom, viewport, cursor, modes, mdsyn, gpu, autosave].join("\n")
+        let mut lines =
+            vec![frame, latency, redraws, zoom, viewport, cursor, modes, mdsyn, gpu, autosave];
+        // THEME-SWITCH SETTLE readout (live-only): two extra lines — the felt
+        // input→settled-present latency + the per-phase breakdown — but ONLY once a
+        // real switch has settled. A capture never feeds one (`None`), so
+        // `settle_lines` yields nothing and the panel text is byte-identical to before.
+        lines.extend(crate::themeswitch::settle_lines(self.debug_theme_settle));
+        lines.join("\n")
     }
 
     /// Shape + upload the opt-in DEBUG panel. Drawn DIM (the value-only, no-amber

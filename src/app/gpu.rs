@@ -209,6 +209,7 @@ impl Gpu {
             inject_surface_loss: false,
             #[cfg(not(target_arch = "wasm32"))]
             probe_mirror: None,
+            debug_frame_split: None,
         })
     }
 
@@ -486,9 +487,17 @@ impl Gpu {
         self.pipeline.atlas.trim();
         match (prepare_ms, t2, done) {
             (Some(prep), Some(t2), Some(done)) => {
-                GpuFrameOutcome::Presented(Some((prep + (done - t2).as_secs_f32() * 1000.0, done)))
+                // The SPLIT the theme-switch settle readout attributes to its atlas
+                // (prepare) + first-present phases — the SAME two spans that sum to the
+                // panel's frame cost, from the stamps already read above (no new clock).
+                let present_ms = (done - t2).as_secs_f32() * 1000.0;
+                self.debug_frame_split = Some((prep, present_ms));
+                GpuFrameOutcome::Presented(Some((prep + present_ms, done)))
             }
-            _ => GpuFrameOutcome::Presented(None),
+            _ => {
+                self.debug_frame_split = None;
+                GpuFrameOutcome::Presented(None)
+            }
         }
     }
 }

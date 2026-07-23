@@ -75,6 +75,14 @@ impl App {
     // the wasm build — which never runs a probe — reads it as unused.
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     pub(super) fn retint_theme_preview(&mut self, prev: crate::theme::Theme) {
+        // DEBUG settle readout (live-only): stamp the input that triggered this preview
+        // step as the switch's start. Re-stamped every arrow, so once the selection
+        // rests and the deferred reshape settles, the felt total measures from the LAST
+        // input to the settled present. Gated on `debug_on()` — the pane never creates
+        // the work it measures. Off the headless path (replay never calls this seam).
+        if crate::debug::debug_on() {
+            self.theme_switch_at = Some(self.clock.now());
+        }
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.pipeline.sync_theme_colors();
             self.theme_font_at = if gpu.pipeline.needs_theme_reshape() {
@@ -110,10 +118,41 @@ impl App {
     /// the chosen world must apply completely before the picker's absence.
     pub(super) fn retint_theme_now(&mut self) {
         self.theme_font_at = None;
+        // DEBUG settle readout (live-only): a direct/commit retint stamps the switch
+        // start at the retint (essentially the input time). Colors always apply now
+        // (`sync_theme` = colors + font); the font half routes through the shared
+        // timed-or-plain door below so it can feed the settle breakdown.
+        let input_at = crate::debug::debug_on().then(|| self.clock.now());
         if let Some(gpu) = self.gpu.as_mut() {
-            gpu.pipeline.sync_theme();
+            gpu.pipeline.sync_theme_colors();
         }
+        self.sync_theme_font_maybe_timed(input_at);
         self.update_title();
+    }
+
+    /// THE ONE FONT-RESHAPE DOOR for a settled/direct theme change, shared by
+    /// [`Self::retint_theme_now`] and [`Self::apply_deferred_theme_font`]. `input_at`
+    /// = `Some` only when the DEBUG settle readout is armed (`debug_on()`): then the
+    /// reshape is TIMED (`sync_theme_font_timed`) and a real reshape arms the
+    /// once-per-switch readout keyed to that input; a no-op reshape arms nothing (never
+    /// clobbering the last reading). `None` (panel off / no pending input) takes the
+    /// byte-identical plain `sync_theme_font` — the ONLY variant the headless path ever
+    /// reaches, so a capture reads no clock here.
+    fn sync_theme_font_maybe_timed(&mut self, input_at: Option<Instant>) {
+        let Some(gpu) = self.gpu.as_mut() else { return };
+        let armed = match input_at {
+            Some(input_at) => gpu
+                .pipeline
+                .sync_theme_font_timed()
+                .map(|phases| ThemeSettleInFlight { input_at, phases }),
+            None => {
+                gpu.pipeline.sync_theme_font();
+                None
+            }
+        };
+        if armed.is_some() {
+            self.theme_settle = armed;
+        }
     }
 
     /// The deferred theme FONT reshape, fired from `about_to_wait` once the
@@ -124,9 +163,13 @@ impl App {
     /// back) is inherently cheap inside `sync_theme_font`.
     pub(super) fn apply_deferred_theme_font(&mut self) {
         self.theme_font_at = None;
-        if let Some(gpu) = self.gpu.as_mut() {
-            gpu.pipeline.sync_theme_font();
-        }
+        // DEBUG settle readout (live-only): this is the deferred PREVIEW settle — time
+        // the reshape and arm the once-per-switch readout, keyed to the last preview
+        // input (`theme_switch_at`). The frame this schedules is the settled present,
+        // which the frame loop finalizes. Non-debug (and no pending input) takes the
+        // byte-identical plain `sync_theme_font`.
+        let input_at = crate::debug::debug_on().then(|| self.theme_switch_at).flatten();
+        self.sync_theme_font_maybe_timed(input_at);
         self.sync_view(false);
         // The reshape is now APPLIED into the view but not yet PRESENTED. This
         // redraw carries it to the screen; because the present-transaction bracket

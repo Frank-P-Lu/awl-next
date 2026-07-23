@@ -260,35 +260,75 @@ impl TextPipeline {
         // stays a no-op via this compare, mirroring the original `shaped_font` guard.
         let theme_recolor = new_theme != self.shaped_theme && self.has_baked_theme_colors();
         if new_font != self.shaped_font || theme_recolor {
-            self.reshape_count += 1;
-            self.shaped_font = new_font;
-            self.shaped_theme = new_theme;
-            // NOTE: the redundant `buffer.set_text` (a WHOLE-document cosmic-text
-            // reshape in the new plain family) was dropped here — `restyle_all_lines`
-            // below ALREADY re-lays every line's attrs in the new family (via
-            // `doc_attrs()`) AND covers the per-line markdown / heading / CJK spans,
-            // then reshapes the document. The old `set_text` shaped every line in the
-            // new face only to have `restyle_all_lines` immediately re-lay + reshape it
-            // again — one full reshape per theme-preview step for nothing. The text is
-            // unchanged by a theme switch, so the buffer already holds it; we only need
-            // the new wrap size + the restyle. Byte-identical (same final attrs/shape).
-            // Re-derive the wrap width from the live page COLUMN, never the buffer's
-            // own (possibly stale) size — preserving `self.buffer.size().0` here would
-            // carry a divergent edge-to-edge width through a theme switch and leave the
-            // page running off the right edge. Set it BEFORE restyling so the new-face
-            // reshape wraps at the right width.
-            let width = Some(self.text_wrap_width());
-            let shape_h = self.full_shape_height();
-            self.buffer
-                .set_size(&mut self.font_system, width, Some(shape_h));
-            // Re-apply the FULL per-line styling in the new face: markdown spans
-            // (dim markup, bold weight, HEADING SIZE) + per-theme CJK family — NOT
-            // CJK alone, else a theme switch drops the markdown styling and shrinks
-            // headings back to body size. `restyle_all_lines` re-shapes the document
-            // and invalidates the row-geometry cache (proportional advances + heading
-            // rows differ from mono), so no separate shape/invalidate is needed.
+            self.theme_font_adopt(new_font, new_theme);
             self.restyle_all_lines();
         }
+    }
+
+    /// The FONT-phase reconfigure of a theme switch: bump the reshape count, adopt the
+    /// new effective face + palette generation, and rewrap the document to the new
+    /// face's column. The ONE owner of this step, shared by [`Self::sync_theme_font`]
+    /// and the timed [`Self::sync_theme_font_timed`] (so the two can never drift). The
+    /// following `restyle_all_lines` does the actual shape + row-geom invalidation.
+    ///
+    /// NOTE: the redundant `buffer.set_text` (a WHOLE-document cosmic-text reshape in
+    /// the new plain family) was dropped here — `restyle_all_lines` ALREADY re-lays
+    /// every line's attrs in the new family (via `doc_attrs()`) AND covers the per-line
+    /// markdown / heading / CJK spans, then reshapes the document. The old `set_text`
+    /// shaped every line in the new face only to have `restyle_all_lines` immediately
+    /// re-lay + reshape it again — one full reshape per theme-preview step for nothing.
+    /// The text is unchanged by a theme switch, so the buffer already holds it; we only
+    /// need the new wrap size + the restyle. Byte-identical (same final attrs/shape).
+    /// Re-derive the wrap width from the live page COLUMN, never the buffer's own
+    /// (possibly stale) size — preserving `self.buffer.size().0` here would carry a
+    /// divergent edge-to-edge width through a theme switch and leave the page running
+    /// off the right edge. Set it BEFORE restyling so the new-face reshape wraps at the
+    /// right width.
+    fn theme_font_adopt(&mut self, new_font: &'static str, new_theme: usize) {
+        self.reshape_count += 1;
+        self.shaped_font = new_font;
+        self.shaped_theme = new_theme;
+        let width = Some(self.text_wrap_width());
+        let shape_h = self.full_shape_height();
+        self.buffer
+            .set_size(&mut self.font_system, width, Some(shape_h));
+    }
+
+    /// LIVE-ONLY (DEBUG settle readout): run the SAME work as [`Self::sync_theme_font`]
+    /// — the identical guard, the identical `theme_font_adopt` + `restyle_all_lines`
+    /// steps — but stamp each phase boundary and return the reshape-side phase millis
+    /// (font-adopt, reshape, row-geom), or `None` when the guard finds NO work (so a
+    /// no-op switch never clobbers the last meaningful readout). The caller (the live
+    /// App, behind `debug_on()`) folds the present-side atlas + present phases in on the
+    /// settled frame. The plain `sync_theme_font` — the ONLY variant the headless path
+    /// calls — reads no clock, so a capture never touches an `Instant` here.
+    ///
+    /// The row-geom walk is FORCED here (a plain reshape leaves it lazy for the next
+    /// prepare) purely so its cost is timed as its own phase — identical work moved a
+    /// few microseconds earlier, warming the cache the frame's prepare would rebuild
+    /// anyway, so the rendered frame stays byte-identical.
+    pub fn sync_theme_font_timed(&mut self) -> Option<crate::themeswitch::SwitchPhases> {
+        use crate::clock::Instant; // wasm-safe (`web_time` on wasm); native `std`.
+        use crate::themeswitch::{SwitchPhase, SwitchPhases};
+        let new_font = self.doc_family();
+        let new_theme = theme::active_index();
+        let theme_recolor = new_theme != self.shaped_theme && self.has_baked_theme_colors();
+        if new_font == self.shaped_font && !theme_recolor {
+            return None; // no reshape work — nothing to time, keep the last readout.
+        }
+        let ms = |d: std::time::Duration| d.as_secs_f32() * 1000.0;
+        let t0 = Instant::now();
+        self.theme_font_adopt(new_font, new_theme);
+        let t1 = Instant::now();
+        self.restyle_all_lines();
+        let t2 = Instant::now();
+        let _ = self.row_geom.total_height(&self.buffer, &self.metrics);
+        let t3 = Instant::now();
+        let mut phases = SwitchPhases::default();
+        phases.record(SwitchPhase::Font, ms(t1 - t0));
+        phases.record(SwitchPhase::Reshape, ms(t2 - t1));
+        phases.record(SwitchPhase::RowGeom, ms(t3 - t2));
+        Some(phases)
     }
 
     /// Apply the editor view snapshot: text, cursor, scroll, zoom, selection,

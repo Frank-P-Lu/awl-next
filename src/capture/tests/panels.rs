@@ -80,6 +80,16 @@ fn debug_panel_absent_by_default_and_toggles() {
     // The AUTOSAVE line trails the panel text as the fixed clockless placeholder
     // (the engine is structurally live-App-only — never fed in a capture).
     assert!(on_json.contains("autosave —"), "autosave placeholder line: {on_json}");
+    // THEME-SWITCH SETTLE readout (determinism law): STRUCTURALLY ABSENT from a
+    // `--debug` capture. The reshape timers + panel feed live only on the live App
+    // behind a real present, so a capture never measures a switch and
+    // `themeswitch::settle_lines(None)` yields NO lines — the panel text carries
+    // neither the `theme settled` headline nor its phase breakdown, keeping the
+    // capture byte-identical to before the feature.
+    assert!(
+        !on_json.contains("theme settled") && !on_json.contains("reshape"),
+        "theme-switch settle readout must be absent from a --debug capture: {on_json}"
+    );
 
     // Restore the default so later tests see the panel off.
     crate::debug::set_debug_on(false);
