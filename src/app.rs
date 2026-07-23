@@ -1648,6 +1648,13 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     fn drive_gpu_soak(&mut self, event_loop: &ActiveEventLoop) {
         if self.soak.is_none() { return; }
+        // Report EXACTLY ONCE. `event_loop.exit()` is a request, not an instant
+        // teardown: winit still drains the redraw requests this driver queues
+        // each tick and calls `about_to_wait` again before it stops. Without
+        // this guard those extra ticks re-hit the `finished` branch and reprint
+        // the identical report (item 53 added the every-tick redraw that made
+        // the backlog visible). `soak_passed` is set the moment we report.
+        if self.soak_passed.is_some() { return; }
         let now = self.clock.now();
         let metal = self.gpu.as_ref().and_then(Gpu::current_gpu_bytes);
         let (finished, stimuli) = {
@@ -1702,7 +1709,14 @@ impl App {
                 }
             }
         }
-        if !stimuli.is_empty() { if let Some(gpu) = self.gpu.as_ref() { gpu.window.request_redraw(); } }
+        // Keep the surface presenting every tick while the soak runs and is not
+        // yet finished — not only when this tick emitted stimuli. The tail of a
+        // slow run (item 53) emits NO new stimuli while the App is still
+        // confirming the last resize/recovery through its ordinary frames; the
+        // loop must keep waking so those `observe_*` calls land and
+        // `soak.finished` can flip on schedule completion. `finished` is false
+        // here (the finished branch returned above).
+        if let Some(gpu) = self.gpu.as_ref() { gpu.window.request_redraw(); }
         if self.last_frame.is_none() { event_loop.set_control_flow(control_flow_with_deadline(event_loop.control_flow(), now + if stimuli.len() == 32 { Duration::from_millis(1) } else { Duration::from_millis(100) })); }
     }
 

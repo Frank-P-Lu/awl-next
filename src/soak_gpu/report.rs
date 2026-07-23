@@ -5,7 +5,7 @@
 //! print sites live HERE, so the println-audit's `soak_gpu/*` accounting has one
 //! home.
 
-use super::{Counts, SkipKind};
+use super::{Counts, SkipKind, PRESENTS_FLOOR};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -76,10 +76,17 @@ pub(crate) struct Report {
 }
 
 impl Report {
+    /// The single pass oracle for the whole probe — the process exit status is
+    /// derived straight from this (see `src/app.rs`'s post-run `bail!`), so the
+    /// CI step never computes a second, independent verdict (item 53). Every
+    /// hard gate from the failure-swallowing removal (commit 39a6520) survives:
+    /// a real surface (`acquires`), the anti-slideshow presents FLOOR, the
+    /// absolute cycle contract, all three faults recovered, and live memory
+    /// samples. Deliberately TIME-INDEPENDENT — elapsed is reported, never gated.
     pub(crate) fn passed(&self) -> bool {
         self.backend.is_some()
             && self.counts.acquires > 0
-            && self.counts.presents > 0
+            && self.counts.presents >= PRESENTS_FLOOR
             && self.required_cycles_met
             && self.recovery_ms.iter().all(Option::is_some)
             && self.rss.is_some()
@@ -171,7 +178,7 @@ mod tests {
     fn report_refuses_missing_real_surface_proof() {
         let complete = Counts {
             acquires: 1,
-            presents: 1,
+            presents: PRESENTS_FLOOR,
             resizes: super::super::RESIZE_TARGET,
             themes: super::super::THEME_TARGET,
             overlays: super::super::OVERLAY_TARGET,
@@ -197,8 +204,53 @@ mod tests {
         assert!(report.passed());
         report.counts.presents = 0;
         assert!(!report.passed());
-        report.counts.presents = 1;
+        report.counts.presents = PRESENTS_FLOOR;
         report.backend = None;
         assert!(!report.passed());
+    }
+
+    /// The presents FLOOR and the faults gate are hard, and both are decided
+    /// by the process's OWN exit contract — never a script-side re-derivation
+    /// (item 53). And they are TIME-INDEPENDENT: a run that drifted far past
+    /// its nominal window still fails on a sub-floor presents count or on
+    /// fewer than three recovered faults, while the same counts at the floor
+    /// pass no matter how late they landed.
+    #[test]
+    fn presents_floor_and_faults_gate_regardless_of_elapsed() {
+        let memory = Summary {
+            min_bytes: 1,
+            median_bytes: 1,
+            peak_bytes: 1,
+            end_median_bytes: 1,
+            slope_bytes_per_min: 0.0,
+        };
+        let base = Counts {
+            acquires: 1,
+            presents: PRESENTS_FLOOR,
+            resizes: super::super::RESIZE_TARGET,
+            themes: super::super::THEME_TARGET,
+            overlays: super::super::OVERLAY_TARGET,
+            faults: 3,
+            ..Counts::default()
+        };
+        let build = |counts: Counts, required_cycles_met: bool, elapsed: Duration| Report {
+            elapsed,
+            backend: Some("Metal".to_string()),
+            counts,
+            rss: Some(memory),
+            metal: Some(memory),
+            recovery_ms: [Some(1.0); 3],
+            required_cycles_met,
+        };
+        // A run that finished LATE (10x its nominal window) still PASSES: elapsed
+        // is reported, not gated.
+        assert!(build(base, true, Duration::from_secs(250)).passed());
+        // One frame under the floor FAILS however long the run took.
+        let mut starved = base;
+        starved.presents = PRESENTS_FLOOR - 1;
+        assert!(!build(starved, true, Duration::from_secs(250)).passed());
+        // Two-of-three recovered faults FAILS regardless of time.
+        let short = build(base, false, Duration::from_secs(250));
+        assert!(!short.passed());
     }
 }
