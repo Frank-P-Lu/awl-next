@@ -175,16 +175,17 @@ impl App {
         }
         // Debounced theme-preview FONT reshape: while the theme picker's live preview
         // arrows across worlds, only the COLORS applied per step; once the selection
-        // rests `THEME_FONT_DEBOUNCE` the one deferred reshape lands here (the paused
+        // rests `theme_font_debounce()` the one deferred reshape lands here (the paused
         // hover then shows the true face). Each further preview step RE-STAMPS
         // `theme_font_at` (`retint_theme_preview`), sliding the deadline — the same
         // single-`WaitUntil`, idle-safe pattern as the zoom persist below (no hot
         // loop; commit/revert clear the stamp synchronously via `retint_theme_now`).
         if let Some(dirty) = self.theme_font_at {
-            match debounce_due(dirty, THEME_FONT_DEBOUNCE, self.clock.now()) {
+            let debounce = theme_font_debounce();
+            match debounce_due(dirty, debounce, self.clock.now()) {
                 true => self.apply_deferred_theme_font(),
                 false if self.last_frame.is_none() => {
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + THEME_FONT_DEBOUNCE));
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(dirty + debounce));
                 }
                 false => {}
             }
