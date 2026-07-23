@@ -10,11 +10,16 @@
 //!    render tree ONLY in `render.rs` (the resolver's own definition). A stray
 //!    live read in `chrome/` would relocate an open overlay on a preview cross —
 //!    exactly the HARD RULE this round forbids — so the scanner bans it.
-//! 2. **summon-time-only** — the frozen alignment WINS over the live anchor: a
-//!    theme-preview crossing that changes which world is active (simulated by
-//!    moving `set_card_anchor_test_override` under a held frozen value) does NOT
-//!    move the open card's x-extents. The `None`-frozen contrast proves the
-//!    mechanism is real (the live anchor WOULD have moved it).
+//! 2. **frozen-holds-under-a-passive-crossing** (item 45; the HOVER case after
+//!    item 52) — the frozen alignment WINS over the live anchor: a theme-preview
+//!    crossing that changes which world is active WITHOUT re-stamping `overlay_align`
+//!    (simulated by moving `set_card_anchor_test_override` under a held frozen value —
+//!    the render mirror of a passive pointer HOVER) does NOT move the open card's
+//!    x-extents. The `None`-frozen contrast proves the mechanism is real (the live
+//!    anchor WOULD have moved it). Item 52 adds the OTHER half: a DELIBERATE crossing
+//!    (keyboard nav / wheel) DOES re-stamp `overlay_align` and relocates the card —
+//!    pinned in `reanchor_crossing_law`. The render CONSUMERS still never read the
+//!    live world (law 1 holds); only an upstream `reanchor` moves the card.
 //! 3. **right-anchor** — `CardAnchor::TopRight` genuinely RIGHT-anchors: the row
 //!    column's x-extents hug the RIGHT window edge (one inset in), the mirror of
 //!    the left-anchored card hugging the LEFT edge.
@@ -184,8 +189,10 @@ fn right_anchor_hugs_the_right_edge_left_hugs_the_left() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. SUMMON-TIME-ONLY (rendered geometry) — the frozen alignment holds an open
-//    card in place when a theme-preview crossing changes the live anchor.
+// 2. FROZEN-HOLDS-UNDER-A-PASSIVE-CROSSING (rendered geometry) — the frozen
+//    alignment holds an open card in place when a theme-preview crossing changes
+//    the live anchor WITHOUT a deliberate re-anchor (the HOVER case; item 52's
+//    deliberate crossing is `reanchor_crossing_law`).
 // ---------------------------------------------------------------------------
 
 /// Read the currently-set overlay's card rect from a pipeline that has ingested
@@ -215,9 +222,10 @@ fn open_overlay_never_relocates_when_preview_crosses_worlds() {
     set_card_anchor_test_override(Some(theme::CardAnchor::TopCenter));
     let [ax, _, aw, _] = card_x_after(&mut p, &v);
 
-    // Frame B — the SAME open picker, but a theme-preview move crossed to a
-    // LEFT-anchored world (the live anchor now differs). The frozen value is
-    // unchanged, so the card must NOT move.
+    // Frame B — the SAME open picker, but a PASSIVE theme-preview crossing (a
+    // hover: the live anchor now differs but `overlay_align` is NOT re-stamped) to
+    // a LEFT-anchored world. The frozen value is unchanged, so the card must NOT
+    // move. (A DELIBERATE crossing re-stamps it — see `reanchor_crossing_law`.)
     set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
     let [bx, _, bw, _] = card_x_after(&mut p, &v);
 
