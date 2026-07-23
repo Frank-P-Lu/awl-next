@@ -108,28 +108,59 @@ fn set_float_quads(
     rect: Option<[f32; 4]>,
     elevation: FloatElevation,
 ) {
+    // A single-rect float delegates to the multi-rect owner (SPLIT-PANE round);
+    // `None` parks both border/card empty (an empty slice).
+    let one = rect.map(|r| [r]);
+    set_float_quads_rects(
+        shadow,
+        border,
+        card,
+        device,
+        queue,
+        width,
+        height,
+        one.as_ref().map(|r| &r[..]).unwrap_or(&[]),
+        elevation,
+    );
+}
+
+/// THE ONE FLOAT-QUAD OWNER — upload a raised `border` -> opaque `card` pair for
+/// EACH rect in `rects` (or park both empty when `rects` is empty). Generalizes
+/// [`set_float_quads`] to MORE than one surface for the SPLIT-PANE composition:
+/// a split Pane card passes its TWO fill rects (upper query surface + lower
+/// result room), so each surface gets its own opaque fill AND — under a
+/// [`FloatElevation`] that draws a rim — its own crisp 1px raised edge (the
+/// 1-bit world's card would be an invisible black-on-black rect without it). A
+/// unified card / spell popup passes ONE rect, byte-identical to the historical
+/// single-quad path. `shadow` is always parked (dark-depth Option C).
+#[allow(clippy::too_many_arguments)]
+fn set_float_quads_rects(
+    shadow: &mut SelectionPipeline,
+    border: &mut SelectionPipeline,
+    card: &mut SelectionPipeline,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    width: u32,
+    height: u32,
+    rects: &[[f32; 4]],
+    elevation: FloatElevation,
+) {
     // RETIRED (dark-depth Option C, 2026-07-22): the shadow quad never
     // uploads an instance any more — see `FloatElevation`'s doc. Parked once,
-    // up front, regardless of `rect`/`elevation`.
+    // up front, regardless of `rects`/`elevation`.
     shadow.prepare(device, queue, width, height, &[]);
-    match rect {
-        Some([x, y, w, h]) => {
-            if elevation != FloatElevation::Flat {
-                // Crisp raised BORDER edge: a slightly larger surface-step rect whose
-                // 1px rim peeks past the card, giving the box a clean, present edge.
-                border.prepare(device, queue, width, height, &[[x - 1.0, y - 1.0, w + 2.0, h + 2.0]]);
-            } else {
-                border.prepare(device, queue, width, height, &[]);
-            }
-            card.prepare(device, queue, width, height, &[[x, y, w, h]]);
-        }
-        None => {
-            // `shadow` already parked above; only border/card are conditional
-            // on `rect`.
-            border.prepare(device, queue, width, height, &[]);
-            card.prepare(device, queue, width, height, &[]);
-        }
-    }
+    // Crisp raised BORDER edge per surface: a slightly larger surface-step rect
+    // whose 1px rim peeks past the card. Empty under `Flat` (no rim).
+    let borders: Vec<[f32; 4]> = if elevation != FloatElevation::Flat {
+        rects
+            .iter()
+            .map(|&[x, y, w, h]| [x - 1.0, y - 1.0, w + 2.0, h + 2.0])
+            .collect()
+    } else {
+        Vec::new()
+    };
+    border.prepare(device, queue, width, height, &borders);
+    card.prepare(device, queue, width, height, rects);
 }
 
 /// The page-mode GUTTER's fully decided layout for one frame — see
@@ -562,22 +593,22 @@ impl TextPipeline {
         queue: &wgpu::Queue,
         width: u32,
         height: u32,
-        rect: Option<[f32; 4]>,
+        rects: &[[f32; 4]],
     ) {
         // The card's edge (the rim; no shadow — see `FloatElevation`'s doc)
         // rides the EFFECTIVE elevation — the world's own `render_caps.elevation`,
         // or the `AWL_OVERLAY_ELEVATION_FORCE` dev probe (the PALETTE-COMPOSITION
         // round's light-world-border A/B; no world's data flips). Composes with
-        // the new anchor + header gap freely — the rim just traces the card
-        // rect, wherever it sits.
-        let elevation = if rect.is_some()
+        // the anchor + header gap + SPLIT surfaces freely — the rim traces each
+        // fill rect, wherever they sit.
+        let elevation = if !rects.is_empty()
             && crate::render::effective_card_elevation() == theme::Elevation::Bordered
         {
             FloatElevation::Rimmed
         } else {
             FloatElevation::Flat
         };
-        set_float_quads(
+        set_float_quads_rects(
             &mut self.panel_shadow,
             &mut self.panel_border,
             &mut self.panel_card,
@@ -585,7 +616,7 @@ impl TextPipeline {
             queue,
             width,
             height,
-            rect,
+            rects,
             elevation,
         );
     }
@@ -638,6 +669,66 @@ pub(super) fn overlay_row_top(
     // height by the same `header_gap`, so this formula and the pixels agree.
     text_top + header_rows as f32 * line_height + header_gap + row as f32 * line_height
 }
+
+/// SPLIT-PANE COMPOSITION — the vertical bounds `(gap_top, gap_bottom)` (device
+/// px) of the visible-BACKGROUND strip between a split Pane card's two surfaces,
+/// or `None` when there is no header to split off (the contextual spell popup, or
+/// a zero query beat). The UPPER surface owns `[card_y, gap_top]` (the
+/// title/query INPUT line); the LOWER surface owns `[gap_bottom, card_bottom]`
+/// (the facets / section-headers + candidate rows + footer). The world's own
+/// background shows through `[gap_top, gap_bottom]`.
+///
+/// The gap is carved from the query BEAT's own negative space (the `header_gap`
+/// divider), so NO glyph falls in it and NO text moves — it is a pure FILL
+/// change:
+///   - FLAT picker (`header_rows == 1`): the query line 0 is inflated by
+///     `header_gap`, so its glyph centres LOW; the clear band is the query box's
+///     BOTTOM half, ending at the first candidate box top (`overlay_row_top(..,
+///     0, ..)` == `text_top + lh + header_gap`).
+///   - FACETED picker (`header_rows == 2`): the query line 0 is plain `lh` (its
+///     glyph sits HIGH) and the lens STRIP (line 1) is inflated by `header_gap`,
+///     so the strip labels centre LOW; the clear band is the strip box's TOP
+///     half, starting at the query box bottom (`text_top + lh`).
+/// The band is [`SPLIT_GAP_FRAC`] of the query beat tall — glyph-free by the
+/// half-leading CENTRING bound: an inflated line box (`line_height + header_gap`)
+/// centres its glyph run, so the glyph's far edge clears the band's near edge as
+/// long as the run's own font height stays under `line_height + header_gap·(1 -
+/// 2·frac)` (comfortably true for every body face at `frac = 0.4`: the query /
+/// strip shape at the overlay body size, whose ascent+descent sits well under the
+/// row pitch). Pixel-law-tested per world. THE ONE owner the fill
+/// ([`TextPipeline::overlay_pane_fills`]) and the split-outcome law both read.
+pub(super) fn overlay_split_bounds(
+    text_top: f32,
+    header_rows: usize,
+    header_gap: f32,
+    line_height: f32,
+) -> Option<(f32, f32)> {
+    if header_rows == 0 || header_gap <= 0.0 {
+        return None;
+    }
+    let gap = header_gap * SPLIT_GAP_FRAC;
+    if header_rows == 1 {
+        // FLAT: the query line 0 is inflated, its glyph centred LOW; hug the gap
+        // to the first candidate box top (`text_top + lh + header_gap`) so the
+        // clear band is the query box's inflated tail, well below the glyph.
+        let lower_top = text_top + line_height + header_gap;
+        Some((lower_top - gap, lower_top))
+    } else {
+        // FACETED: the query line 0 is plain `lh` (glyph HIGH) and the strip
+        // (line 1) is inflated (labels centred LOW); hug the gap to the query box
+        // bottom (`text_top + lh`) so the clear band is the strip box's inflated
+        // head, well above the strip labels.
+        let upper_bottom = text_top + line_height;
+        Some((upper_bottom, upper_bottom + gap))
+    }
+}
+
+/// SPLIT-PANE COMPOSITION — the visible-background gap between a split Pane
+/// card's two surfaces, as a fraction of the query BEAT (`header_gap`). `0.4`
+/// leaves a clear breath either side of the band within the beat's own negative
+/// space (see [`overlay_split_bounds`]'s centring bound) — a real strip of
+/// ground, never so wide it eats the beat's calm. A single dial the gallery A/Bs.
+const SPLIT_GAP_FRAC: f32 = 0.4;
 
 /// PER-ITEM LIST SURFACES round — the horizontal inset (device px) an
 /// UNSELECTED bar holds from the summoned card's left/right edges under
