@@ -351,6 +351,18 @@ impl TextPipeline {
         self.doc_top() + self.row_geom.line_first_top(&self.buffer, &self.metrics, line)
     }
 
+    /// Buffer-relative -> absolute: the REAL shaped BASELINE y of logical `line`'s
+    /// first visual row (`doc_top() + row_geom.line_first_baseline(...)`), read
+    /// straight off cosmic-text's own `LayoutRun::line_y` rather than approximated
+    /// from the row's metrics. The item 65 fold-affordance baseline-alignment fix's
+    /// placement source: [`Self::fold_tail_marks`] / [`Self::fold_chevron_marks`]
+    /// hang their small glyphs' OWN baseline exactly here, instead of merely
+    /// centering the glyph in the heading's tall (grown) row box — which used to
+    /// read as the tail "floating" above the heading's ink on a big heading.
+    pub(super) fn line_ornament_baseline(&self, line: usize) -> f32 {
+        self.doc_top() + self.row_geom.line_first_baseline(&self.buffer, &self.metrics, line)
+    }
+
     /// Each GFM table's `(header logical-line, byte range)` (cached per reshape via
     /// [`Self::ensure_ornament_lists`]). Read by `prepare_table_grid`, which culls
     /// off-screen tables and measures/places the on-screen ones. Empty for a
@@ -593,35 +605,96 @@ impl TextPipeline {
     }
 
     /// The absolute pixel x just PAST a collapsed heading's own rendered text on its
-    /// filtered row `line` — where the affordance cluster (chevron + "… N lines" tail)
-    /// hangs. Reads the SHAPED buffer's real glyph advances (so it honours the heading
-    /// SIZE scale + any caret-on-line conceal reveal), then adds a small gap. The base
-    /// every fold-affordance mark shares so the chevron + tail can't drift apart.
+    /// filtered row `line` — where the "… N lines" TAIL hangs (item 65: the chevron
+    /// moved to the LEFT margin — see [`Self::fold_chevron_left`] — so this base is
+    /// the tail's alone now). Reads the FIRST VISUAL ROW's own real glyph advances —
+    /// [`Self::visual_rows`], NOT the flattened whole-line [`Self::line_glyph_xs`] —
+    /// so a heading that WRAPS to a second visual row still hangs the tail right
+    /// after that FIRST row's own text (it never sees the wrapped row's glyphs, so
+    /// it never inherits their cumulative width). This matters because the tail's
+    /// baseline ([`Self::fold_tail_marks`]) is ALWAYS the heading's first-row
+    /// baseline too (a folded heading's own line is never hidden, but it can still
+    /// visually wrap) — the item 65 gallery sweep's own find: `line_glyph_xs`
+    /// deliberately FLATTENS wrapped rows by offsetting each one past the previous
+    /// (documented for callers that "don't care which visual row a column lands
+    /// on"), so its whole-line `.last()` on a wrapped heading returned a cumulative
+    /// sum FAR past the actual column — the tail rendered off in the page's right
+    /// margin, disconnected from the heading it annotates. `visual_rows`' per-row
+    /// `xs` are genuinely row-LOCAL (no such offset — see `visual_row_from_run`),
+    /// so `rows[0].xs[end_col]` is the first row's own real end x. Honours the
+    /// heading SIZE scale + any caret-on-line conceal reveal (both already baked
+    /// into the shaped run `visual_rows` reads); a small gap is added after.
     fn fold_affordance_base_x(&self, line: usize) -> f32 {
-        let end = self.line_glyph_xs(line).last().copied().unwrap_or(0.0);
+        let end = self
+            .visual_rows(line)
+            .first()
+            .and_then(|r| r.xs.get(r.end_col).copied())
+            .filter(|x| x.is_finite())
+            .unwrap_or(0.0);
         self.text_left() + end + self.metrics.char_width * 0.6
     }
 
+    /// The GAP (px) between the writing column's own text origin and a left-hung
+    /// fold chevron's right edge — the same small breath [`Self::quote_marks`]' own
+    /// drop-cap hang uses (`layers.rs`'s `quote_left`).
+    const FOLD_CHEVRON_GAP_CHARS: f32 = 0.3;
+
+    /// The RESERVED width (px, in char-width units) of the fold chevron's own glyph
+    /// box — generous for one small "›" so it never feels clipped.
+    const FOLD_CHEVRON_WIDTH_CHARS: f32 = 1.0;
+
+    /// Is there room in the writing column's OWN leading pad (`[column_left,
+    /// text_left)` — [`Self::text_pad`]) for the fold chevron, without spilling
+    /// LEFT of `column_left` into the persistent OUTLINE's own margin (the
+    /// established design law: "the margin belongs to the OUTLINE alone",
+    /// `layers.rs`'s pull-quote comment)? `false` in edge-to-edge (page mode off,
+    /// [`Self::text_pad`] is `0.0`) or a very narrow custom page pad — the chevron
+    /// gracefully hides rather than overlap the heading text, mirroring the
+    /// outline's / gutter's own no-room floors. The tail is UNAFFECTED (it hangs to
+    /// the right, in the always-available wrap width).
+    fn fold_chevron_has_room(&self) -> bool {
+        let need =
+            self.metrics.char_width * (Self::FOLD_CHEVRON_GAP_CHARS + Self::FOLD_CHEVRON_WIDTH_CHARS);
+        self.text_left() - self.column_left() >= need
+    }
+
+    /// The fold chevron's column-hugging LEFT x (px): hung in the writing column's
+    /// OWN leading pad, its right edge a small gap shy of `text_left` — the exact
+    /// same hang [`Self::quote_marks`]' blockquote drop-cap uses
+    /// (`super::geometry::pull_quote_left`), so BOTH left-margin-adjacent ornaments
+    /// share one placement law. Callers MUST gate on [`Self::fold_chevron_has_room`]
+    /// first — this clamps to `column_left` when the pad is too narrow, which would
+    /// otherwise overlap the heading's own first glyph.
+    fn fold_chevron_left(&self) -> f32 {
+        let gap = self.metrics.char_width * Self::FOLD_CHEVRON_GAP_CHARS;
+        let w = self.metrics.char_width * Self::FOLD_CHEVRON_WIDTH_CHARS;
+        super::geometry::pull_quote_left(self.column_left(), self.text_left(), gap, w)
+    }
+
     /// The quiet "… N lines" TAIL for every VISIBLE collapsed heading:
-    /// `(top-y, left-x, N hidden, filtered line)`. One entry per
+    /// `(baseline-y, left-x, N hidden, filtered line)`. One entry per
     /// [`ViewState::fold_tails`] row that is on-screen. The tail rides the heading's
     /// EXISTING row (an ornament, never a shaped line), so it adds no row and cannot
-    /// disturb the zero-height hidden-row law. A fixed chevron SLOT is reserved to its
-    /// left so the tail's x is stable whether or not the chevron shows (no reveal jump
-    /// when the caret lands on the heading). `line` lets the draw pass center the small
-    /// glyph on the heading's grown row. Empty unless folded.
+    /// disturb the zero-height hidden-row law. `left` sits to the RIGHT of the
+    /// heading text (unaffected by the item 65 chevron move — it now lives in the
+    /// LEFT margin, see [`Self::fold_chevron_marks`], so the tail no longer reserves
+    /// a slot for it). The `f32` in slot 0 is the heading's REAL shaped BASELINE
+    /// ([`Self::line_ornament_baseline`]), NOT its row top — the draw pass
+    /// (`layers.rs`) subtracts its OWN shaped small-glyph `line_y` from this to hang
+    /// the tail's baseline exactly on the heading's, rather than merely centering
+    /// the glyph in the heading's tall grown row (the item 65 "floating tail" taste
+    /// correction). Empty unless folded.
     pub(super) fn fold_tail_marks(&self) -> Vec<(f32, f32, usize, usize)> {
         if self.fold_tails.is_empty() {
             return Vec::new();
         }
-        let slot = self.metrics.char_width * 1.4; // reserved chevron slot + gap
         self.fold_tails
             .iter()
             .filter(|t| self.line_ornament_visible(t.line))
             .map(|t| {
                 (
-                    self.line_ornament_top(t.line),
-                    self.fold_affordance_base_x(t.line) + slot,
+                    self.line_ornament_baseline(t.line),
+                    self.fold_affordance_base_x(t.line),
                     t.hidden,
                     t.line,
                 )
@@ -631,27 +704,34 @@ impl TextPipeline {
 
     /// The expand CHEVRON for the collapsed headings whose chevron is REVEALED (caret
     /// on the heading OR pointer hovering it — [`crate::fold::chevron_revealed`]):
-    /// `(top-y, left-x, filtered line)`, the left in the reserved slot just before the
-    /// tail (so chevron + tail can't collide). Empty in a headless capture unless the
-    /// caret sits on a collapsed heading (no pointer → no hover). One quiet marker,
-    /// never amber (DESIGN §3).
+    /// `(baseline-y, left-x, filtered line)`. **item 65 taste correction:** the
+    /// chevron now hangs IMMEDIATELY LEFT of the heading, in the writing column's
+    /// own leading pad — OUTSIDE the editable text advance entirely (never part of
+    /// the shaped document glyph run, so it can never shift a heading glyph's x or
+    /// overlap its ink; [`Self::fold_chevron_left`]/[`Self::fold_chevron_has_room`]
+    /// keep it clear of both the heading text AND the persistent outline's own
+    /// margin). Previously it hung to the RIGHT, sharing a reserved slot with the
+    /// tail — moved because a leading (not trailing) affordance reads as the more
+    /// legible "there's a fold control here" cue, closer to a code editor's own
+    /// gutter chevron. Gracefully EMPTY when the pad has no room (edge-to-edge / a
+    /// very narrow custom page pad — [`Self::fold_chevron_has_room`]): the tail
+    /// alone still shows the "… N lines" count either way. Empty in a headless
+    /// capture unless the caret sits on a collapsed heading (no pointer → no
+    /// hover). One quiet marker, never amber (DESIGN §3), and NEVER itself a second
+    /// click target — clicking anywhere past the heading text (the tail's own
+    /// region, unchanged) still expands via [`crate::buffer::Buffer::fold_tail_hit`].
     pub(super) fn fold_chevron_marks(&self) -> Vec<(f32, f32, usize)> {
-        if self.fold_tails.is_empty() {
+        if self.fold_tails.is_empty() || !self.fold_chevron_has_room() {
             return Vec::new();
         }
+        let left = self.fold_chevron_left();
         self.fold_tails
             .iter()
             .filter(|t| {
                 crate::fold::chevron_revealed(t.line, self.cursor_line, self.hover_line)
                     && self.line_ornament_visible(t.line)
             })
-            .map(|t| {
-                (
-                    self.line_ornament_top(t.line),
-                    self.fold_affordance_base_x(t.line),
-                    t.line,
-                )
-            })
+            .map(|t| (self.line_ornament_baseline(t.line), left, t.line))
             .collect()
     }
 

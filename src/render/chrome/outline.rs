@@ -190,8 +190,24 @@ fn outline_block_left(right_edge: f32, block_w: f32, min_left: f32) -> f32 {
     (right_edge - block_w).max(min_left)
 }
 
+/// The persistent OUTLINE's COLLAPSED-PARENT state marker — appended (space-
+/// separated) to a collapsed heading row's label, item 65's Outline-state taste
+/// correction. Parenthesized so it reads unambiguously as METADATA, never as more
+/// title text: it can never collide with [`rowlayout::fit_primary_end`]'s own
+/// trailing-ellipsis truncation mark (a bare `…`, no digits/parens), and it is
+/// visually DISTINCT from the doc-body's own expand chevron (`FOLD_CHEVRON` in
+/// `render/layers.rs`) so it never reads as a second click target — the Outline
+/// stays click-to-jump ONLY (DESIGN.md's outline amendment); a row carrying this
+/// marker jumps exactly like any other row. The number is the SAME hidden-line
+/// count the doc-body's own "… N lines" tail shows for this heading
+/// ([`crate::fold::fold_tails`]), so the two surfaces never disagree.
+fn outline_collapsed_marker(hidden: usize) -> String {
+    format!(" ({hidden})")
+}
+
 /// One decided OUTLINE ROW for a frame: the label (ALREADY fit to one line through
-/// [`rowlayout::fit_primary`]), its composite ink `rung` ([`row_rung`]), whether it
+/// [`rowlayout::fit_primary`], with the [`outline_collapsed_marker`] suffix already
+/// folded in when `collapsed`), its composite ink `rung` ([`row_rung`]), whether it
 /// is the `current` heading (for the sidecar/tests — the ink already encodes the lit
 /// path), whether a half-row group `gap_before` renders above it (already
 /// window-adjusted: never on the first visible row), and the source heading's 0-based
@@ -212,6 +228,19 @@ pub(in crate::render) struct OutlineRow {
     pub(in crate::render) gap_before: bool,
     /// The source heading's 0-based document line — the click-to-jump target.
     pub(in crate::render) line: usize,
+    /// item 65 PERSISTENT OUTLINE: is this heading CURRENTLY a folded root — i.e.
+    /// does it own a visible [`crate::render::FoldTail`] ([`TextPipeline::fold_tails`])?
+    /// A collapsed heading's row STAYS in the outline (parent retention: this flag
+    /// is the ONLY thing that changes — nothing here ever removes the row), while
+    /// its now-hidden descendants are already absent from [`TextPipeline::outline_headings`]
+    /// itself (they were dropped from the FOLD-FILTERED text before the markdown
+    /// heading parse ever ran — see that field's own doc; descendant suppression is
+    /// structural, not a filter applied here). A pure STATE fact, read only by the
+    /// sidecar/tests — the DRAWN signal is the [`outline_collapsed_marker`] already
+    /// folded into `label` — kept as its own field (mirroring `current`) so a test
+    /// can assert the state independently of the marker's exact text/glyph.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::render) collapsed: bool,
 }
 
 /// The margin OUTLINE's fully decided layout for one frame — the visible heading
@@ -390,6 +419,25 @@ impl TextPipeline {
                 let faded = clipped_edge && !is_current;
                 // Suppress a group gap on the FIRST visible row (no leading blank).
                 let gap_before = vis > 0 && gap_full[pos];
+                // item 65 COLLAPSED-PARENT MARKER: this heading's own row is a
+                // currently-folded root exactly when it owns a visible `FoldTail`
+                // (`self.fold_tails` — the SAME set the doc-body's own "… N lines"
+                // tail draws from, in the SAME fold-filtered line space `h.line`
+                // already lives in — see `outline_headings`'s own doc). Appended
+                // BEFORE the later measured-pixel re-fit (`outline_pixel_fit`), so a
+                // title long enough to need BOTH truncation and the marker still
+                // never overflows `avail` — the marker is simply the first thing an
+                // extreme case's re-fit trims.
+                let hidden = self
+                    .fold_tails
+                    .iter()
+                    .find(|t| t.line == h.line)
+                    .map(|t| t.hidden);
+                let collapsed = hidden.is_some();
+                let label = match hidden {
+                    Some(n) => format!("{label}{}", outline_collapsed_marker(n)),
+                    None => label,
+                };
                 OutlineRow {
                     label,
                     rung,
@@ -397,6 +445,7 @@ impl TextPipeline {
                     current: is_current,
                     gap_before,
                     line: h.line,
+                    collapsed,
                 }
             })
             .collect();

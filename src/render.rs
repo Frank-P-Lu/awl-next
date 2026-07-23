@@ -3914,6 +3914,21 @@ pub struct TextPipeline {
     /// render (a later phase) reads this + `outline_current` to draw the margin
     /// table-of-contents; the capture sidecar reports it via
     /// [`Self::outline_report`]. Pure text-derived data — capture-safe.
+    ///
+    /// **item 65 DESCENDANT SUPPRESSION (structural, not a filter applied here):**
+    /// `md_spans` — and so this list — is parsed from `view.text`, which
+    /// [`crate::fold::apply_to_view`] has ALREADY fold-filtered (hidden lines
+    /// dropped) before [`Self::set_view`] ever reshapes. A heading buried inside a
+    /// collapsed ancestor's section is not merely hidden from the outline — its LINE
+    /// does not exist in the text this parse runs over, so it never becomes a
+    /// `Heading` here at all. A folded heading's OWN line is never hidden (see
+    /// `fold::section_range`'s doc), so it always survives into this list — PARENT
+    /// RETENTION is the same structural fact from the other side. `.line` on each
+    /// entry is therefore a FOLD-FILTERED line number (matching every other
+    /// filtered-space coordinate the shaped buffer carries), not a raw full-document
+    /// line — this is the space [`Self::fold_tails`] also reports in, which is what
+    /// lets `render::chrome::outline`'s collapsed-parent marker compare the two
+    /// directly with no remap.
     outline_headings: Vec<crate::markdown::Heading>,
     /// PERSISTENT MARGIN OUTLINE: the last CURRENT-heading index the outline
     /// resolved (the nearest heading at/above the caret line — see

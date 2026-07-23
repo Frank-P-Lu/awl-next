@@ -40,6 +40,17 @@ pub(super) struct RowGeom {
     /// the whole-doc `visual_rows(li)` per candidate. Indexed by logical line;
     /// dropped with the rest by [`Self::invalidate`].
     line_tops: std::cell::RefCell<Option<Vec<f32>>>,
+    /// Per LOGICAL line: the buffer-relative BASELINE y of that line's FIRST visual
+    /// row (`line_first_baseline`) — cosmic-text's own `LayoutRun::line_y`, i.e.
+    /// `line_top + (line_height - glyph_height)/2 + max_ascent`, read straight off
+    /// the REAL shaped run rather than approximated from the metrics. Built in the
+    /// SAME walk as `line_tops` (one extra field per row, no extra pass). The item
+    /// 65 fold-affordance baseline-alignment fix reads this to hang the quiet "…
+    /// N lines" tail / expand chevron on a collapsed heading's OWN baseline instead
+    /// of merely centering the small glyph in the heading's tall (grown) row box —
+    /// which used to read as "floating" above the heading's ink, especially on a
+    /// big H1. Indexed by logical line; dropped with the rest by [`Self::invalidate`].
+    line_baselines: std::cell::RefCell<Option<Vec<f32>>>,
     /// SINGLE-SLOT memo of the most-recently-requested logical line's
     /// [`VisualRow`]s — in the per-frame caret path that line is the CURSOR line.
     /// [`super::TextPipeline::visual_rows`] is O(every shaped run in the document)
@@ -75,6 +86,7 @@ impl RowGeom {
             heights: std::cell::RefCell::new(None),
             doc_height: std::cell::Cell::new(0.0),
             line_tops: std::cell::RefCell::new(None),
+            line_baselines: std::cell::RefCell::new(None),
             rows_line: std::cell::Cell::new(None),
             rows: std::cell::RefCell::new(None),
             generation: std::cell::Cell::new(0),
@@ -96,6 +108,7 @@ impl RowGeom {
         *self.tops.borrow_mut() = None;
         *self.heights.borrow_mut() = None;
         *self.line_tops.borrow_mut() = None;
+        *self.line_baselines.borrow_mut() = None;
         // Drop the cursor-line VisualRow memo too: the shaped runs just changed, so
         // the cached wrap geometry is stale and must rebuild on the next read.
         self.rows_line.set(None);
@@ -118,10 +131,11 @@ impl RowGeom {
         let mut tops = Vec::new();
         let mut heights = Vec::new();
         let mut doc_h = 0.0f32;
-        // Per logical line: the top of its FIRST visual row. `layout_runs()` yields a
-        // line's runs consecutively in wrap order, so the FIRST run seen for a given
-        // `line_i` is its first visual row.
+        // Per logical line: the top (and BASELINE) of its FIRST visual row.
+        // `layout_runs()` yields a line's runs consecutively in wrap order, so the
+        // FIRST run seen for a given `line_i` is its first visual row.
         let mut line_tops: Vec<f32> = vec![0.0; buf.lines.len()];
+        let mut line_baselines: Vec<f32> = vec![0.0; buf.lines.len()];
         let mut line_seen: Vec<bool> = vec![false; buf.lines.len()];
         for run in buf.layout_runs() {
             tops.push(run.line_top);
@@ -131,6 +145,7 @@ impl RowGeom {
                 if !*seen {
                     *seen = true;
                     line_tops[run.line_i] = run.line_top;
+                    line_baselines[run.line_i] = run.line_y;
                 }
             }
         }
@@ -138,6 +153,7 @@ impl RowGeom {
         *self.tops.borrow_mut() = Some(tops);
         *self.heights.borrow_mut() = Some(heights);
         *self.line_tops.borrow_mut() = Some(line_tops);
+        *self.line_baselines.borrow_mut() = Some(line_baselines);
     }
 
     /// Buffer-relative top y (px) of logical `line`'s FIRST visual row — the O(1)
@@ -147,6 +163,20 @@ impl RowGeom {
     pub(super) fn line_first_top(&self, buf: &GlyphBuffer, m: &Metrics, line: usize) -> f32 {
         self.ensure(buf, m);
         self.line_tops
+            .borrow()
+            .as_ref()
+            .and_then(|v| v.get(line).copied())
+            .unwrap_or(0.0)
+    }
+
+    /// Buffer-relative BASELINE y (px) of logical `line`'s FIRST visual row — the
+    /// REAL shaped baseline (`LayoutRun::line_y`), not an approximation from the
+    /// metrics. `0.0` for an out-of-range line or an unshaped buffer (mirrors
+    /// [`Self::line_first_top`]'s fallback). The item 65 fold-affordance
+    /// baseline-alignment fix's one geometry source.
+    pub(super) fn line_first_baseline(&self, buf: &GlyphBuffer, m: &Metrics, line: usize) -> f32 {
+        self.ensure(buf, m);
+        self.line_baselines
             .borrow()
             .as_ref()
             .and_then(|v| v.get(line).copied())

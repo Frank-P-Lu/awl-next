@@ -618,11 +618,11 @@ fn popover_json(pipeline: &TextPipeline) -> String {
     }
 }
 
-/// PERSISTENT MARGIN OUTLINE block: `{ on, headings, current, ancestors }`. `on`
-/// mirrors `crate::outline::outline_on()` (the render gate; ON by default since
-/// the 2026-07-09 taste flip — see `outline.rs`'s module doc — so a plain
-/// `--screenshot` now reports `true`; a config `outline = false` still wins).
-/// `headings` is one `{ text, level, line }`
+/// PERSISTENT MARGIN OUTLINE block: `{ on, headings, current, ancestors,
+/// collapsed }`. `on` mirrors `crate::outline::outline_on()` (the render gate; ON
+/// by default since the 2026-07-09 taste flip — see `outline.rs`'s module doc —
+/// so a plain `--screenshot` now reports `true`; a config `outline = false` still
+/// wins). `headings` is one `{ text, level, line }`
 /// per document heading in order (distilled from the SAME markdown parse the
 /// styling pays for), empty for a non-markdown / heading-free buffer. `current`
 /// is the 0-based index of the nearest heading AT or ABOVE the caret line, or
@@ -630,10 +630,15 @@ fn popover_json(pipeline: &TextPipeline) -> String {
 /// heading's ANCESTOR CHAIN — the heading indices the caret is nested inside, the
 /// rest of the "lit path" the outline lifts alongside `current`
 /// (`TextPipeline::outline_ancestors`), empty when there is no current heading or it
-/// is top-level. Pure text + caret facts (no clock), so a capture is deterministic.
-/// See [`TextPipeline::outline_report`].
+/// is top-level. `collapsed` (`/180`, item 65) is the ascending `headings` indices
+/// of every heading CURRENTLY a folded root — a collapsed heading's row stays in
+/// `headings` (parent retention) while a heading buried inside it never appears
+/// there at all (descendant suppression, already structural — see
+/// `TextPipeline::outline_headings`'s doc); `[]` when nothing is folded, so a
+/// default `--screenshot` is unaffected. Pure text + caret + fold facts (no
+/// clock), so a capture is deterministic. See [`TextPipeline::outline_report`].
 fn outline_json(pipeline: &TextPipeline) -> String {
-    let (on, headings, current) = pipeline.outline_report();
+    let (on, headings, current, collapsed) = pipeline.outline_report();
     let body = headings
         .iter()
         .map(|(text, level, line)| {
@@ -650,10 +655,15 @@ fn outline_json(pipeline: &TextPipeline) -> String {
         .map(|a| a.to_string())
         .collect::<Vec<_>>()
         .join(", ");
+    let collapsed = collapsed
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
     let current = current
         .map(|c| c.to_string())
         .unwrap_or_else(|| "null".to_string());
-    format!("{{ \"on\": {on}, \"headings\": [{body}], \"current\": {current}, \"ancestors\": [{ancestors}] }}")
+    format!("{{ \"on\": {on}, \"headings\": [{body}], \"current\": {current}, \"ancestors\": [{ancestors}], \"collapsed\": [{collapsed}] }}")
 }
 
 /// WEB/LINUX MENU BAR block: `{ shown, open_menu, items }` — whether the awl-rendered

@@ -15,6 +15,7 @@ use crate::caret::CaretAnim;
 use crate::render;
 
 mod caret_streak;
+mod folds;
 mod i18n_fixtures;
 mod panels;
 mod pickers_faceted;

@@ -18,7 +18,7 @@ fn outline_headings_stashed_and_current_is_nearest_at_or_above_caret() {
     let mut plain = view(text, 0, 0);
     plain.is_markdown = false;
     p.set_view(&plain);
-    let (_on, headings, current) = p.outline_report();
+    let (_on, headings, current, _collapsed) = p.outline_report();
     assert!(headings.is_empty(), "non-markdown buffer has no outline: {headings:?}");
     assert_eq!(current, None);
 
@@ -26,7 +26,7 @@ fn outline_headings_stashed_and_current_is_nearest_at_or_above_caret() {
     let mut md = view(text, 0, 0);
     md.is_markdown = true;
     p.set_view(&md);
-    let (_on, headings, current) = p.outline_report();
+    let (_on, headings, current, _collapsed) = p.outline_report();
     assert_eq!(
         headings,
         vec![("Title", 1u8, 0usize), ("Section A", 2, 4), ("Deep", 3, 8)],
@@ -96,7 +96,15 @@ fn outline_draws_on_page_md_and_the_current_row_is_flagged() {
     // target): "# Title" is line 0, "## Section A" line 4, "### Deep" line 8.
     // These cases are fully visible (nothing clips), so every row is un-`faded`.
     let row = |label: &str, rung: OutlineRung, current: bool, gap_before: bool, line: usize| {
-        OutlineRow { label: label.to_string(), rung, faded: false, current, gap_before, line }
+        OutlineRow {
+            label: label.to_string(),
+            rung,
+            faded: false,
+            current,
+            gap_before,
+            line,
+            collapsed: false,
+        }
     };
 
     let lines = p
@@ -151,6 +159,97 @@ fn outline_draws_on_page_md_and_the_current_row_is_flagged() {
     // A markdown buffer with NO headings hides too.
     p.set_view(&view_md("just prose, no headings here\n", 0, 0));
     assert_eq!(p.outline_draw_report(900), None, "a heading-free doc hides the outline");
+
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}
+
+/// item 65 PERSISTENT OUTLINE — the collapsed-parent state marker: fold `##
+/// Section A` (raw line 4). Its own row STAYS in the outline (PARENT RETENTION),
+/// gains the `outline_collapsed_marker`-style " (N)" suffix and `collapsed: true`
+/// — the SAME hidden count the doc-body's own "… N lines" tail would show. Its hidden descendant `### Deep` (buried inside the fold) is
+/// ABSENT from the outline entirely (DESCENDANT SUPPRESSION) — not merely
+/// unmarked, genuinely not a row — while the unrelated LATER sibling `##
+/// Section B` (outside the folded section) is completely unaffected: present,
+/// `collapsed: false`, no marker, and its OWN click-to-jump line is still exactly
+/// what a plain click resolves to ([`TextPipeline::outline_hit_line`]) — proving
+/// the marker is a state indicator, never a second toggle: every row (marked or
+/// not) still only ever jumps.
+#[test]
+fn outline_collapsed_parent_retained_descendant_suppressed_with_a_state_marker() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping outline_collapsed_parent...: no wgpu adapter");
+        return;
+    };
+    let _o = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    crate::outline::set_outline_on(true);
+    crate::page::set_measure(40);
+    crate::page::set_page_on(true);
+    p.set_size(1900.0, 900.0);
+    // 0 "# Title" / 4 "## Section A" / 8 "### Deep" / 10 "## Section B".
+    let text = "# Title\n\nprose\n\n## Section A\n\nbody\n\n### Deep\n\n## Section B\n\nmore body\n";
+
+    // Fold "## Section A" (raw line 4): its section runs to the next <=H2
+    // (`## Section B`, raw line 10), hiding raw lines 5..10 — "### Deep" among
+    // them — 5 lines, matching the doc-body tail's own "… 5 lines" count.
+    let levels = crate::fold::heading_levels(text, true);
+    let folds: std::collections::BTreeSet<usize> = [4].into_iter().collect();
+    let hidden = crate::fold::hidden_lines(&levels, &folds);
+    let tails = crate::fold::fold_tails(&levels, &folds);
+    assert_eq!(tails, vec![(4, 5)], "fixture self-check: 5 lines hidden under Section A");
+
+    let mut view = view_md(text, 0, 0);
+    crate::fold::apply_to_view(&mut view, &hidden, &tails);
+    p.set_view(&view);
+
+    let lines = p
+        .outline_draw_report(900)
+        .expect("page + md + on + a wide margin => the outline is drawn");
+    let labels: Vec<&str> = lines.iter().map(|r| r.label.as_str()).collect();
+    assert!(
+        !labels.iter().any(|l| l.contains("Deep")),
+        "DESCENDANT SUPPRESSION: the buried '### Deep' must not appear at all: {labels:?}"
+    );
+    assert_eq!(
+        labels.len(),
+        3,
+        "exactly Title + the collapsed Section A + the unaffected Section B: {labels:?}"
+    );
+
+    let title = lines.iter().find(|r| r.label.contains("Title")).expect("Title row present");
+    assert!(!title.collapsed, "Title was never folded");
+
+    let section_a = lines
+        .iter()
+        .find(|r| r.label.contains("Section A"))
+        .expect("PARENT RETENTION: the collapsed heading's own row stays in the outline");
+    assert!(section_a.collapsed, "Section A is the currently-folded root");
+    assert!(
+        section_a.label.ends_with(" (5)"),
+        "the state marker carries the SAME hidden count as the doc-body tail: {:?}",
+        section_a.label
+    );
+
+    let section_b = lines
+        .iter()
+        .find(|r| r.label.contains("Section B"))
+        .expect("the unrelated later sibling is unaffected");
+    assert!(!section_b.collapsed, "Section B was never folded");
+    assert!(
+        !section_b.label.contains('('),
+        "no marker on an uncollapsed row: {:?}",
+        section_b.label
+    );
+
+    // CLICK-TO-JUMP ONLY: the marker changes no click semantics — every row's
+    // `line` (jump target) is exactly its own, marked or not.
+    assert_eq!(section_a.line, 4, "Section A's own (filtered) row is still the jump target");
+    assert_eq!(
+        section_b.line, 5,
+        "Section B's FILTERED line (its raw line 10, minus the 5 hidden lines above it)"
+    );
 
     crate::outline::set_outline_on(false);
     crate::page::set_page_on(false);

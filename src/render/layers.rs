@@ -30,10 +30,15 @@ const QUOTE_MARK_SCALE: f32 = 2.0;
 const QUOTE_MARK_GLYPH: char = '\u{201C}';
 
 /// The collapsed-heading expand CHEVRON — U+203A SINGLE RIGHT-POINTING ANGLE
-/// QUOTATION MARK, a quiet right-pointing "click to open" mark. Shaped in the world
-/// DISPLAY face (General Punctuation, like the elision ellipsis the picker already
-/// renders there), so it never tofus. Revealed only when the caret is on the heading
-/// or it is hovered ([`crate::fold::chevron_revealed`]).
+/// QUOTATION MARK, a quiet right-pointing "opens into the heading" mark. Shaped in
+/// the world DISPLAY face (General Punctuation, like the elision ellipsis the
+/// picker already renders there), so it never tofus. Revealed only when the caret
+/// is on the heading or it is hovered ([`crate::fold::chevron_revealed`]); rest
+/// state shows none. **item 65 taste correction:** hung IMMEDIATELY LEFT of the
+/// heading (the writing column's own leading pad), OUTSIDE the shaped document
+/// glyph run, instead of the original right-of-text placement — see
+/// [`super::TextPipeline::fold_chevron_marks`]'s own doc for the geometry and the
+/// graceful no-room hide.
 const FOLD_CHEVRON: &str = "\u{203A}";
 
 /// The collapsed-heading TAIL text: `… N lines` (singular `… 1 line`). The leading
@@ -1223,44 +1228,60 @@ impl TextPipeline {
         let fence_lang_right = self.text_left() + self.text_wrap_width();
         let fence_lang_inset = m.char_width * 0.5;
 
-        // COLLAPSED-HEADING AFFORDANCES (item 47): the quiet "… N lines" TAIL on every
-        // visible folded heading, plus the small expand CHEVRON revealed when the caret
-        // is on the heading (or it is hovered — live only). Both are ornaments hung on
-        // the heading's OWN row, so they add NO row and never touch the zero-height
-        // hidden-row law. Each is shaped in a line-box of the heading's grown row height
-        // (`md_line_scale`) so the small glyph centers vertically on the big heading
-        // text — the break-fleuron trick. FAINT ink for the quiet tail, MUTED for the
-        // summoned chevron; never amber (DESIGN §3).
+        // COLLAPSED-HEADING AFFORDANCES (item 47, item 65 taste correction): the
+        // quiet "… N lines" TAIL on every visible folded heading (to the RIGHT of
+        // its text), plus the small expand CHEVRON — now hung IMMEDIATELY LEFT of
+        // the heading, in the writing column's own leading pad, OUTSIDE the shaped
+        // document glyph run entirely (`fold_chevron_marks`'s own doc) — revealed
+        // when the caret is on the heading (or it is hovered — live only). Both are
+        // ornaments, never part of the shaped line, so they add NO row and never
+        // touch the zero-height hidden-row law, and can never shift a heading
+        // glyph's x. Each shapes at its OWN natural small-text row height
+        // (`fold_label_scale`, NOT the heading's grown row) so its OWN baseline
+        // (`layout_runs().next().line_y`, read after shaping) can be placed exactly
+        // on the heading's REAL shaped baseline (`fold_mark_line_y`, below) —
+        // BASELINE-ALIGNED, not merely centered in the tall row (the old approach,
+        // which read as the tail "floating" above a big heading's ink). FAINT ink
+        // for the quiet tail, MUTED for the summoned chevron; never amber (DESIGN §3).
         let faint = theme::faint().to_glyphon();
         let fold_tail_marks = self.fold_tail_marks();
         let fold_chevron_marks = self.fold_chevron_marks();
         let fold_label_scale = crate::markdown::type_scale::LABEL;
         let fold_tail_attrs = panel_attrs().color(faint);
         let fold_chevron_attrs = panel_attrs().color(muted);
-        // Shape a small buffer per affordance in the heading's grown row-box; folds are
-        // few, so a per-mark buffer (no dedupe) stays O(visible).
-        let fold_box_h = |this: &Self, line: usize| {
-            this.metrics.line_height
-                * md_line_scale(this.buffer.lines[line].text(), this.md_enabled)
+        // The NATURAL (unstretched) box every fold-affordance glyph shapes in —
+        // shared by the tail and the chevron so they read as ONE quiet family.
+        let fold_mark_h = m.line_height * fold_label_scale;
+        let fold_mark_metrics = GlyphMetrics::new(m.font_size * fold_label_scale, fold_mark_h);
+        // The y-OFFSET from a fold-affordance buffer's own box top to its REAL
+        // shaped baseline, read straight off the run cosmic-text just laid — the
+        // placement loops below subtract this from the heading's own target
+        // baseline (`fold_tail_marks`/`fold_chevron_marks`'s `f32` slot 0) to land
+        // the mark's baseline exactly there. Falls back to a conservative fraction
+        // of the box height on the (unreachable in practice — the mark text is
+        // never empty) empty-run case, so this can never divide by a missing run.
+        let fold_mark_line_y = |buf: &GlyphBuffer| -> f32 {
+            buf.layout_runs()
+                .next()
+                .map(|r| r.line_y)
+                .unwrap_or(fold_mark_h * 0.8)
         };
+        // Shape a small buffer per affordance; folds are few, so a per-mark buffer
+        // (no dedupe) stays O(visible).
         let mut fold_tail_buffers: Vec<GlyphBuffer> =
             Vec::with_capacity(fold_tail_marks.len());
-        for &(_, _, n, line) in &fold_tail_marks {
-            let box_h = fold_box_h(self, line);
-            let metrics = GlyphMetrics::new(m.font_size * fold_label_scale, box_h);
-            let mut buf = GlyphBuffer::new(&mut self.font_system, metrics);
-            buf.set_size(&mut self.font_system, Some(col_w), Some(box_h));
+        for &(_, _, n, _line) in &fold_tail_marks {
+            let mut buf = GlyphBuffer::new(&mut self.font_system, fold_mark_metrics);
+            buf.set_size(&mut self.font_system, Some(col_w), Some(fold_mark_h));
             buf.set_text(&mut self.font_system, &fold_tail_text(n), &fold_tail_attrs, Shaping::Advanced, None);
             buf.shape_until_scroll(&mut self.font_system, false);
             fold_tail_buffers.push(buf);
         }
         let mut fold_chevron_buffers: Vec<GlyphBuffer> =
             Vec::with_capacity(fold_chevron_marks.len());
-        for &(_, _, line) in &fold_chevron_marks {
-            let box_h = fold_box_h(self, line);
-            let metrics = GlyphMetrics::new(m.font_size * fold_label_scale, box_h);
-            let mut buf = GlyphBuffer::new(&mut self.font_system, metrics);
-            buf.set_size(&mut self.font_system, Some(col_w), Some(box_h));
+        for &(_, _, _line) in &fold_chevron_marks {
+            let mut buf = GlyphBuffer::new(&mut self.font_system, fold_mark_metrics);
+            buf.set_size(&mut self.font_system, Some(col_w), Some(fold_mark_h));
             buf.set_text(&mut self.font_system, FOLD_CHEVRON, &fold_chevron_attrs, Shaping::Advanced, None);
             buf.shape_until_scroll(&mut self.font_system, false);
             fold_chevron_buffers.push(buf);
@@ -1336,8 +1357,12 @@ impl TextPipeline {
             });
         }
         // FOLD affordances: the tail (faint) then the summoned chevron (muted), each
-        // hung at its computed (top, left) on the collapsed heading's own row.
-        for (i, &(top, left, _n, _line)) in fold_tail_marks.iter().enumerate() {
+        // BASELINE-ALIGNED to the collapsed heading's own REAL shaped baseline —
+        // `baseline` (slot 0) minus this buffer's OWN `line_y` places its baseline
+        // exactly there (item 65's "floating tail" taste correction; see the marks'
+        // own doc comments).
+        for (i, &(baseline, left, _n, _line)) in fold_tail_marks.iter().enumerate() {
+            let top = baseline - fold_mark_line_y(&fold_tail_buffers[i]);
             areas.push(TextArea {
                 buffer: &fold_tail_buffers[i],
                 left,
@@ -1348,7 +1373,8 @@ impl TextPipeline {
                 custom_glyphs: &[],
             });
         }
-        for (i, &(top, left, _line)) in fold_chevron_marks.iter().enumerate() {
+        for (i, &(baseline, left, _line)) in fold_chevron_marks.iter().enumerate() {
+            let top = baseline - fold_mark_line_y(&fold_chevron_buffers[i]);
             areas.push(TextArea {
                 buffer: &fold_chevron_buffers[i],
                 left,
