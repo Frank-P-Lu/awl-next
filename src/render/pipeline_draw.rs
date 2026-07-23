@@ -553,6 +553,7 @@ impl TextPipeline {
             debug_budget_ms: None,
             debug_gpu_bytes: None,
             debug_autosave: None,
+            debug_theme_settle: None,
             overlay_active: false,
             overlay_align: None,
             overlay_crisp: false,

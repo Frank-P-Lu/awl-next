@@ -386,6 +386,23 @@ struct Gpu {
     /// `Gpu::mirror_presented_frame` + `crate::probe`'s module doc.
     #[cfg(not(target_arch = "wasm32"))]
     probe_mirror: Option<wgpu::Texture>,
+    /// LIVE-ONLY (DEBUG): the last presented frame's cost SPLIT — `(prepare_ms,
+    /// present_ms)` — recorded by `Gpu::redraw` from the perf stamps it already reads
+    /// (no new clock read; `None` when the debug panel is off, or on a skipped frame).
+    /// The frame loop reads it right after a settled theme-switch present to attribute
+    /// the atlas (prepare) + first-present phases of the settle readout
+    /// (`crate::themeswitch`). Off the headless path — `redraw`'s stamps are gated on
+    /// `debug_on()`, so a capture never sets it.
+    debug_frame_split: Option<(f32, f32)>,
+}
+
+/// LIVE-ONLY (DEBUG): a theme-switch settle in flight — armed when the reshape was
+/// timed (`App::theme_settle`), consumed on the frame that presents it. Carries the
+/// triggering input's `Instant` (for the felt total) and the reshape-side phases
+/// already recorded; the frame loop folds in the atlas + present phases at finalize.
+struct ThemeSettleInFlight {
+    input_at: Instant,
+    phases: crate::themeswitch::SwitchPhases,
 }
 
 /// GPU surface + frame loop (device/queue/surface, prepare/render).
@@ -882,6 +899,20 @@ pub struct App {
     /// replay applies theme fonts synchronously through the pure core + a fresh
     /// pipeline, so captures are untouched).
     theme_font_at: Option<Instant>,
+    /// LIVE-ONLY (DEBUG settle readout): the `Instant` of the input that triggered the
+    /// current theme switch — re-stamped by each preview arrow (`retint_theme_preview`)
+    /// so the settle measures from the LAST input, and stamped afresh by a direct/commit
+    /// retint (`retint_theme_now`). Read only when `debug_on()`, only to time the
+    /// once-per-switch settle readout (`crate::themeswitch`); `None` = no switch pending.
+    /// Off the headless path — the deterministic replay never routes through the live
+    /// retint seams, so a capture never stamps it.
+    theme_switch_at: Option<Instant>,
+    /// LIVE-ONLY (DEBUG settle readout): a theme-switch settle whose reshape was just
+    /// timed and whose SETTLED present is still pending. Armed by the retint seams
+    /// (behind `debug_on()`), finalized on the next real present by the frame loop, which
+    /// folds in the atlas + present phases and feeds the panel. `None` = nothing in
+    /// flight. Structurally live-App-only (see `ThemeSettleInFlight`).
+    theme_settle: Option<ThemeSettleInFlight>,
     /// AMBIENT LAVA TICK — the lava-lamp ground's slow ~10 fps drift clock
     /// (`crate::lava`). `Some(when)` = the last tick instant, driving the single
     /// `WaitUntil(when + LAVA_TICK)` in `about_to_wait` that advances the phase by
@@ -1328,6 +1359,8 @@ impl App {
             zoom_reflow: ZoomReflow::default(),
             zoom_anchor: None,
             theme_font_at: None,
+            theme_switch_at: None,
+            theme_settle: None,
             lava_tick_at: None,
             focused: true,
             resize_settle_at: None,

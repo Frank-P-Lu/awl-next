@@ -577,6 +577,37 @@ impl App {
             }
         }
 
+        // THEME-SWITCH SETTLE readout (DEBUG, live-only): the reshape was timed on an
+        // earlier frame and THIS present carried it to the screen — so this is the
+        // settled present. Fold in the atlas (prepare) + first-present phases from the
+        // split `Gpu::redraw` just recorded, compute the felt input→settled total, and
+        // feed the panel; a stamp redraw then draws the two new lines. Gated on a real
+        // present (`frame_presented`) so a skipped/occluded frame keeps the switch in
+        // flight until a real present lands. Structurally off the headless path (armed
+        // only behind `debug_on()`; a capture never arms `theme_settle`).
+        if crate::debug::debug_on() && frame_presented && self.theme_settle.is_some() {
+            if let Some((_, done)) = presented {
+                let mut settle = self.theme_settle.take().expect("just checked is_some");
+                if let Some((prep_ms, present_ms)) =
+                    self.gpu.as_ref().and_then(|g| g.debug_frame_split)
+                {
+                    settle
+                        .phases
+                        .record(crate::themeswitch::SwitchPhase::Atlas, prep_ms);
+                    settle
+                        .phases
+                        .record(crate::themeswitch::SwitchPhase::Present, present_ms);
+                }
+                let total_ms = (done - settle.input_at).as_secs_f32() * 1000.0;
+                if let Some(gpu) = self.gpu.as_mut() {
+                    gpu.pipeline
+                        .set_debug_theme_settle(Some((total_ms, settle.phases)));
+                    // Feed lands after this frame's prepare; one redraw draws the lines.
+                    gpu.window.request_redraw();
+                }
+            }
+        }
+
         // EVENT-ORDERED PREVIEW-BRACKET TEARDOWN (phase 2): a frame just presented
         // while a teardown was pending — that frame is the reshaped one, and it
         // landed INSIDE the present transaction. Disarm the bracket now, strictly

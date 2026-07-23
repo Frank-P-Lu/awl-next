@@ -131,6 +131,10 @@ mod stats;
 mod streaks;
 mod syntax;
 mod theme;
+// THE THEME-SWITCH SETTLE-LATENCY readout (debug-mode, live-only): a once-per-switch
+// felt-latency + per-phase breakdown, pure-formatted here, fed real millis by the
+// live App. Absent from every headless capture (see the module doc).
+mod themeswitch;
 #[cfg(test)]
 mod testlock;
 mod typewriter;
