@@ -137,7 +137,48 @@ const ZOOM_PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 /// until the selection rests turns a 10-world arrow burst into 10 cheap recolors +
 /// ONE reshape; a paused hover still shows the true face well inside a beat. Commit
 /// (Enter), revert (Esc/C-g), and the headless capture all stay SYNCHRONOUS.
-const THEME_FONT_DEBOUNCE: Duration = Duration::from_millis(150);
+///
+/// The shipped value, in milliseconds. Overridable at startup by the DEV-ONLY
+/// `AWL_THEME_FONT_DEBOUNCE_MS` env knob — see [`theme_font_debounce`], the only
+/// consumer; production code never reads this const directly.
+const THEME_FONT_DEBOUNCE_DEFAULT_MS: u64 = 150;
+
+/// Pure parse for the `AWL_THEME_FONT_DEBOUNCE_MS` override: unset, empty, or
+/// unparseable all fall back to [`THEME_FONT_DEBOUNCE_DEFAULT_MS`]; any valid
+/// `u64` — including `0`, which removes the debounce's coalescing entirely — wins.
+/// Split out from [`theme_font_debounce`] so the branches are unit-testable
+/// without touching the real process environment.
+fn parse_theme_font_debounce_ms(raw: Option<&str>) -> u64 {
+    raw.filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(THEME_FONT_DEBOUNCE_DEFAULT_MS)
+}
+
+/// [`THEME_FONT_DEBOUNCE_DEFAULT_MS`], overridden by the DEV-ONLY
+/// `AWL_THEME_FONT_DEBOUNCE_MS` env knob — a latency-probe aid:
+/// `AWL_THEME_FONT_DEBOUNCE_MS=0` removes the coalescing debounce so every
+/// preview step reshapes immediately, for an A/B comparison against the shipped
+/// 150ms. Read ONCE and memoized (mirrors `convention::awl_convention_force` /
+/// `lava::env_override`'s `OnceLock` precedent — this is read on every
+/// `about_to_wait`, so an unmemoized `std::env::var` would re-expose the same
+/// env-var thread-safety hazard those precedents' docs warn about).
+fn theme_font_debounce() -> Duration {
+    static ONCE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let ms = *ONCE.get_or_init(|| {
+        parse_theme_font_debounce_ms(std::env::var("AWL_THEME_FONT_DEBOUNCE_MS").ok().as_deref())
+    });
+    Duration::from_millis(ms)
+}
+
+#[cfg(test)]
+#[test]
+fn theme_font_debounce_ms_env_parse() {
+    assert_eq!(parse_theme_font_debounce_ms(None), THEME_FONT_DEBOUNCE_DEFAULT_MS);
+    assert_eq!(parse_theme_font_debounce_ms(Some("")), THEME_FONT_DEBOUNCE_DEFAULT_MS);
+    assert_eq!(parse_theme_font_debounce_ms(Some("0")), 0);
+    assert_eq!(parse_theme_font_debounce_ms(Some("37")), 37);
+    assert_eq!(parse_theme_font_debounce_ms(Some("garbage")), THEME_FONT_DEBOUNCE_DEFAULT_MS);
+}
 
 /// AMBIENT LAVA TICK period — the lava-lamp ground's slow drift cadence
 /// (`crate::lava::LAVA_TICK_MS`). A single `WaitUntil` this far out in
