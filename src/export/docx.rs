@@ -128,7 +128,7 @@ impl Docx<'_> {
     fn block(&mut self, block: &Block, list_depth: usize) {
         match block {
             Block::Heading { level, inlines } => {
-                let style = format!("Heading{}", (*level).clamp(1, 6));
+                let style = format!("Heading{}", *level);
                 self.paragraph(&style, None, None, inlines);
             }
             Block::Paragraph(inlines) => self.paragraph("Normal", None, None, inlines),
