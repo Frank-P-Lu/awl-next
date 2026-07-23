@@ -27,7 +27,7 @@
 //! **LOCAL day (flagged):** std exposes no local-timezone offset, so the day
 //! boundary is read from the OS via libc's `tm_gmtoff` (`localtime_r`) added to
 //! the wall clock, then floored to a civil date by the pure
-//! [`crate::streaks::civil_date_from_epoch_secs`]. This is the ONE timezone read;
+//! [`crate::streaks::civil_ymd_from_epoch_secs`]. This is the ONE timezone read;
 //! the pure model stays clock-free and unit-testable.
 
 use super::*;
@@ -40,11 +40,20 @@ impl App {
     /// a panic.
     #[cfg(not(target_arch = "wasm32"))]
     fn streaks_local_today(&self) -> String {
+        let (y, m, d) = self.streaks_local_today_ymd();
+        crate::streaks::fmt_ymd(y, m, d)
+    }
+
+    /// Today's LOCAL calendar day as `(y, m, d)` — the tuple form the streaks card's
+    /// view/streak/series consume directly (no stringify + re-parse round trip). Same
+    /// clock + OS-offset read as [`Self::streaks_local_today`], which formats this.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn streaks_local_today_ymd(&self) -> (i64, i64, i64) {
         let secs = crate::clock::system_now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        crate::streaks::civil_date_from_epoch_secs(secs + local_utc_offset_secs())
+        crate::streaks::civil_ymd_from_epoch_secs(secs + local_utc_offset_secs())
     }
 
     /// The active buffer's whole-document word count (the same `markdown::word_count`
@@ -130,7 +139,7 @@ impl App {
     pub(super) fn streaks_sync_card(&mut self) {
         // Compute the view BEFORE borrowing the GPU (both read `self`).
         let view = if self.config.stats_on() {
-            Some(self.streaks.view(&self.streaks_local_today()))
+            Some(self.streaks.view(self.streaks_local_today_ymd()))
         } else {
             None
         };
@@ -270,12 +279,12 @@ mod tests {
         // keystroke). Drives the REAL post-apply side effect the live app runs.
         crate::fs::with_fs(Arc::new(crate::fs::InMemoryFs::new()), || {
             let mut app = App::new(None, PathBuf::from("/n"), None, None, Config::empty());
-            let today = app.streaks_local_today();
+            let today = app.streaks_local_today_ymd();
             // Type into the birth scratch, but DON'T let an idle flush fire.
             app.buffer.set_text("live words not yet flushed today");
             // The delta is still pending — the store hasn't seen it.
             assert_eq!(
-                app.streaks.view(&today).today_words,
+                app.streaks.view(today).today_words,
                 0,
                 "precondition: the pending delta is not yet in the store"
             );
@@ -288,7 +297,7 @@ mod tests {
                 crate::theme::active(),
             );
             assert_eq!(
-                app.streaks.view(&today).today_words,
+                app.streaks.view(today).today_words,
                 6,
                 "summoning FLUSHED the pending delta — the card reads live, not stale"
             );

@@ -860,7 +860,7 @@ impl App {
             },
             // Go-to's HEADINGS lens accepted (the retired Outline picker): move the
             // cursor to the chosen heading's document line.
-            actions::Effect::JumpToLine(line) => self.jump_to_line(&line.to_string()),
+            actions::Effect::JumpToLine(line) => self.jump_to_line(line),
             // Cmd-`;` "Add '<word>' to dictionary": silence the word in the live
             // checker + append it to the on-disk personal dictionary, then rescan.
             actions::Effect::AddToDictionary(word) => self.add_to_dictionary(&word),

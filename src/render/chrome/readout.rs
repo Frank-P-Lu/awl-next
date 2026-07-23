@@ -13,13 +13,12 @@ use super::*;
 /// of the corner-anchor placement math — split out of [`TextPipeline::prepare_corner_
 /// label`] so each anchor is unit-testable without a GPU (the empty-text off-screen
 /// park stays in the caller). An 8px inset from the canvas edges for the docked
-/// corners; a small clamped float for the at-pointer readout. Only the TWO
-/// TOP-anchored arms ([`CornerAnchor::TopLeft`] / [`CornerAnchor::TopRight`]) read
-/// `menubar_reserve` — a shown bar pushes them down by exactly its own height, the
-/// SAME accessor the document's `doc_top`, the margin Outline, and the search/replace
-/// panel's card already fold in (merge, don't align: one owner, never a second
-/// offset convention). The bottom / pointer-anchored arms are unaffected (a bar at
-/// the TOP of the canvas never reaches them).
+/// corners; a small clamped float for the at-pointer readout. Only the TOP-anchored
+/// [`CornerAnchor::TopRight`] arm reads `menubar_reserve` — a shown bar pushes it
+/// down by exactly its own height, the SAME accessor the document's `doc_top`, the
+/// margin Outline, and the search/replace panel's card already fold in (merge, don't
+/// align: one owner, never a second offset convention). The bottom / pointer-anchored
+/// arms are unaffected (a bar at the TOP of the canvas never reaches them).
 pub(in crate::render) fn corner_origin(
     anchor: CornerAnchor,
     text_w: f32,
@@ -31,7 +30,6 @@ pub(in crate::render) fn corner_origin(
     menubar_reserve: f32,
 ) -> (f32, f32) {
     match anchor {
-        CornerAnchor::TopLeft => (col_left.max(8.0), 8.0 + menubar_reserve),
         // Right-aligned to the CANVAS edge (8px inset), top row — clear of the top-left
         // margin the persistent outline owns. Never off the left edge on a tiny canvas.
         CornerAnchor::TopRight => ((width - text_w - 8.0).max(8.0), 8.0 + menubar_reserve),
@@ -422,9 +420,11 @@ mod tests {
         assert_eq!(l3, 8.0, "clamps to the left inset on a tiny canvas");
     }
 
-    /// THE MENUBAR-YIELD LAW: a shown bar pushes BOTH top-anchored corners (TopLeft /
-    /// TopRight — TopRight is the debug panel's own anchor today) straight down by
-    /// its own reserve, never touching their horizontal placement — the SAME
+    /// THE MENUBAR-YIELD LAW: a shown bar pushes a top-anchored corner straight down
+    /// by its own reserve, never touching its horizontal placement — the yield is
+    /// corner-AGNOSTIC (decoupled from the horizontal math), witnessed here by two
+    /// TopRight placements at different label widths yielding the IDENTICAL top.
+    /// TopRight is the debug panel's own anchor (the sole top anchor today). The SAME
     /// `menubar_reserve` accessor the document/outline/search-panel already fold in,
     /// so the debug panel can never disagree with its siblings about where the bar's
     /// bottom edge sits. `top ≥ bar_height` holds by construction (`8.0 + reserve`).
@@ -436,9 +436,18 @@ mod tests {
         assert_eq!(top_right, 8.0 + reserve, "TopRight (the debug panel) yields by exactly the reserve");
         assert!(top_right >= reserve, "the debug panel's top never sits above the bar's own bottom edge");
 
-        let (_, top_left) =
-            corner_origin(CornerAnchor::TopLeft, 100.0, 18.0, 1000.0, 800.0, 0.0, 0.0, reserve);
-        assert_eq!(top_left, 8.0 + reserve, "TopLeft yields identically (same accessor, same law)");
+        // The yield is purely VERTICAL and decoupled from horizontal placement: a
+        // different label width lands the panel at a different left, yet the top is
+        // unchanged — exactly the corner-AGNOSTIC property the law asserts (the
+        // reserve pushes any top-anchored corner down by the same amount, whatever its
+        // own horizontal math).
+        let (left_wide, top_wide) =
+            corner_origin(CornerAnchor::TopRight, 500.0, 18.0, 1000.0, 800.0, 0.0, 0.0, reserve);
+        let (left_narrow, top_narrow) =
+            corner_origin(CornerAnchor::TopRight, 100.0, 18.0, 1000.0, 800.0, 0.0, 0.0, reserve);
+        assert_ne!(left_wide, left_narrow, "a wider label moves the panel horizontally");
+        assert_eq!(top_wide, top_narrow, "…but both yield the IDENTICAL vertical top");
+        assert_eq!(top_wide, 8.0 + reserve, "which is exactly the reserve push (same accessor, same law)");
 
         // Bottom / pointer anchors are UNTOUCHED by a nonzero reserve — a strip at the
         // TOP of the canvas never reaches them.
@@ -462,11 +471,6 @@ mod tests {
     /// arm; the others are byte-identical to the pre-extraction inline math).
     #[test]
     fn docked_corners_keep_their_placement() {
-        // Top-left: at the column left, floored to the 8px margin.
-        assert_eq!(
-            corner_origin(CornerAnchor::TopLeft, 100.0, 18.0, 1000.0, 800.0, 0.0, 0.0, 0.0),
-            (8.0, 8.0)
-        );
         // Bottom-right: right-aligned to the writing COLUMN (col_left + col_width − w).
         let (l, t) = corner_origin(CornerAnchor::BottomRight, 120.0, 18.0, 1000.0, 800.0, 100.0, 600.0, 0.0);
         assert!((l - (100.0 + 600.0 - 120.0)).abs() < 1e-3);

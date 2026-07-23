@@ -448,8 +448,6 @@ fn row(line_top: f32, start_col: usize, end_col: usize, total_cols: usize) -> Vi
     VisualRow {
         line_top,
         line_height: LINE_HEIGHT,
-        byte_start: start_col,
-        byte_end: end_col,
         start_col,
         end_col,
         xs,

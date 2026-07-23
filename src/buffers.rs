@@ -217,11 +217,10 @@ impl<T> BufferRegistry<T> {
         self.entries.len()
     }
 
-    /// True when `key` names a currently-backgrounded buffer. Exercised by the
-    /// registry's own tests; kept `pub` as the natural companion of `park`/
-    /// `take` for a future caller (e.g. a tab-strip chrome, out of v1 scope).
-    #[allow(dead_code)]
-    pub fn contains(&self, key: &BufferKey) -> bool {
+    /// True when `key` names a currently-backgrounded buffer — a test-only
+    /// companion of `park`/`take` (the live code never queries membership).
+    #[cfg(test)]
+    pub(crate) fn contains(&self, key: &BufferKey) -> bool {
         self.entries.iter().any(|(k, _)| k == key)
     }
 

@@ -208,7 +208,7 @@ impl App {
             .as_ref()
             .and_then(|g| g.pipeline.outline_hit_line(px, py, g.config.height));
         if let Some(line) = line {
-            self.jump_to_line(&line.to_string());
+            self.jump_to_line(line);
             true
         } else {
             false

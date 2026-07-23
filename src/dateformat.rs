@@ -123,7 +123,10 @@ impl DateFormat {
     /// back to [`DateFormat::DdMmYy`] — what Enter on the Settings menu's
     /// "Date format" row does (`App::cycle_date_format`).
     pub fn cycle_next(self) -> DateFormat {
-        let i = Self::ALL.iter().position(|f| *f == self).unwrap_or(0);
+        let i = Self::ALL
+            .iter()
+            .position(|f| *f == self)
+            .expect("DateFormat::ALL lists every variant");
         Self::ALL[(i + 1) % Self::ALL.len()]
     }
 
@@ -160,7 +163,10 @@ impl DateFormat {
 static ACTIVE_FORMAT: AtomicU8 = AtomicU8::new(0);
 
 fn format_to_u8(f: DateFormat) -> u8 {
-    DateFormat::ALL.iter().position(|c| *c == f).map(|i| i as u8 + 1).unwrap_or(0)
+    // +1 keeps sentinel 0 reserved for genuine unset; `position` is always Some by
+    // ALL's exhaustiveness.
+    DateFormat::ALL.iter().position(|c| *c == f).expect("DateFormat::ALL lists every variant") as u8
+        + 1
 }
 
 /// The EFFECTIVE date-insert format right now.
@@ -216,7 +222,7 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
 /// sites (`App::insert_date`, the Settings overlay's live "today" preview
 /// gather) read the clock, so they can never drift apart. UTC, not the local
 /// timezone: awl carries no timezone database (matches
-/// `crashlog::civil_date`/`streaks::civil_date_from_epoch_secs`'s own
+/// `crashlog::civil_date`/`streaks::civil_ymd_from_epoch_secs`'s own
 /// UTC-civil-day convention) — a date typed near local midnight may read as
 /// "yesterday" or "tomorrow" relative to the user's own wall clock, a known,
 /// documented simplification, not a bug to chase here.

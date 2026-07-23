@@ -73,7 +73,7 @@ fn emit_block(out: &mut String, block: &Block, images: &dyn ImageSource, indent:
     let pad = "  ".repeat(indent);
     match block {
         Block::Heading { level, inlines } => {
-            let l = (*level).clamp(1, 6);
+            let l = *level;
             out.push_str(&format!("{pad}<h{l}>"));
             emit_inlines(out, inlines, images);
             out.push_str(&format!("</h{l}>\n"));

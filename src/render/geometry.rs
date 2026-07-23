@@ -878,8 +878,6 @@ pub(super) fn visual_row_from_run(
     VisualRow {
         line_top: run.line_top,
         line_height: run.line_height,
-        byte_start,
-        byte_end,
         start_col,
         end_col,
         xs,
@@ -1557,8 +1555,6 @@ impl TextPipeline {
         VisualRow {
             line_top: line as f32 * self.metrics.line_height,
             line_height: self.metrics.line_height,
-            byte_start: 0,
-            byte_end: line_text.len(),
             start_col: 0,
             end_col: char_count,
             xs,
@@ -1619,8 +1615,6 @@ impl TextPipeline {
                 // deliberately does NOT compute.
                 line_top: 0.0,
                 line_height: self.metrics.line_height,
-                byte_start,
-                byte_end,
                 start_col,
                 end_col,
                 xs,

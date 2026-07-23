@@ -1142,8 +1142,6 @@ fn chrome_attrs() -> Attrs<'static> {
 /// top-left margin the outline now owns), or the bottom-center calm notice.
 #[derive(Clone, Copy)]
 enum CornerAnchor {
-    #[allow(dead_code)]
-    TopLeft,
     /// Right-aligned to the CANVAS's right edge (not the writing column): the stacked
     /// DEBUG panel, moved out of the top-left corner the persistent margin outline
     /// took over. A small 8px inset from the right + top edges.
@@ -2579,11 +2577,6 @@ struct VisualRow {
     /// text, LARGER for a heading row. Caret / selection / squiggle centering use
     /// it so overlays grow with a heading instead of floating in a base-height cell.
     line_height: f32,
-    /// Byte range of the original line covered by this row (cluster byte spans).
-    #[allow(dead_code)]
-    byte_start: usize,
-    #[allow(dead_code)]
-    byte_end: usize,
     /// Char-column span of this row on the logical line: `[start_col, end_col]`.
     start_col: usize,
     end_col: usize,

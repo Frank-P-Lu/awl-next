@@ -174,40 +174,41 @@ impl Streaks {
         self.days.get(day).map(|d| d.words).unwrap_or(0)
     }
 
-    /// The CURRENT STREAK ending at `today`: the count of consecutive calendar
-    /// days with words written, ending today OR yesterday. Counting yesterday
-    /// keeps a live streak from reading 0 all morning before you've written
-    /// today — the standard contribution-graph semantics. 0 when neither today
-    /// nor yesterday has any words.
-    pub fn current_streak(&self, today: &str) -> u64 {
-        let mut day = today.to_string();
-        if self.words_on(&day) == 0 {
-            day = prev_day(&day);
-            if self.words_on(&day) == 0 {
+    /// The CURRENT STREAK ending at `today` `(y, m, d)`: the count of consecutive
+    /// calendar days with words written, ending today OR yesterday. Counting
+    /// yesterday keeps a live streak from reading 0 all morning before you've written
+    /// today — the standard contribution-graph semantics. 0 when neither today nor
+    /// yesterday has any words. Walks day-by-day via [`prev_day`] (pure civil-date
+    /// arithmetic, no per-step parse), formatting each day only to key the word map.
+    pub fn current_streak(&self, today: (i64, i64, i64)) -> u64 {
+        let mut day = today;
+        if self.words_on(&fmt_ymd(day.0, day.1, day.2)) == 0 {
+            day = prev_day(day.0, day.1, day.2);
+            if self.words_on(&fmt_ymd(day.0, day.1, day.2)) == 0 {
                 return 0;
             }
         }
         let mut count = 0u64;
-        while self.words_on(&day) > 0 {
+        while self.words_on(&fmt_ymd(day.0, day.1, day.2)) > 0 {
             count += 1;
-            day = prev_day(&day);
+            day = prev_day(day.0, day.1, day.2);
         }
         count
     }
 
-    /// The card's RENDER VIEW for a given `today`: the 371 heatmap buckets (ending
-    /// at today's week), the current streak, and today's word total — everything
-    /// the pixels + the sidecar need, computed once from this store.
-    pub fn view(&self, today: &str) -> StreaksView {
+    /// The card's RENDER VIEW for a given `today` `(y, m, d)`: the 371 heatmap
+    /// buckets (ending at today's week), the current streak, and today's word total —
+    /// everything the pixels + the sidecar need, computed once from this store. The
+    /// caller passes the civil date directly (the live seam already holds it), so no
+    /// date string is parsed on this path.
+    pub fn view(&self, today: (i64, i64, i64)) -> StreaksView {
+        let (ty, tm, td) = today;
         let mut cells = [0u8; CELLS];
         // The grid ends at the current week; column WEEKS-1 holds today. Sunday of
         // today's week is `today - dow`; the grid's first Sunday is (WEEKS-1) weeks
         // before that. A cell dated in the FUTURE (later this week than today) stays
         // level 0 — no writing has happened there yet.
-        let today_days = match parse_ymd(today) {
-            Some((y, m, d)) => days_from_civil(y, m, d),
-            None => 0,
-        };
+        let today_days = days_from_civil(ty, tm, td);
         let dow = weekday(today_days); // 0 = Sunday … 6 = Saturday
         let grid_first_sunday = today_days - dow - ((WEEKS as i64 - 1) * DAYS_PER_WEEK as i64);
         // Peak words over the PAST-AND-TODAY window drives the quartile scaling, so
@@ -237,7 +238,7 @@ impl Streaks {
             cells,
             cumulative: self.cumulative_series(today),
             streak: self.current_streak(today),
-            today_words: self.words_on(today),
+            today_words: self.words_on(&fmt_ymd(ty, tm, td)),
         }
     }
 
@@ -247,15 +248,13 @@ impl Streaks {
     /// of the current week are excluded; no writing has happened there). A day
     /// with no record carries the total FLAT (a gap is a plateau, never a dip
     /// — day totals are clamped ≥ 0 at recording, so the series is
-    /// non-decreasing by construction: the rising line IS the point). A
-    /// malformed `today` degrades to the epoch window, mirroring
-    /// [`Streaks::view`]'s own lenient date handling.
+    /// non-decreasing by construction: the rising line IS the point). `today` is
+    /// the civil date `(y, m, d)` passed straight through by [`Streaks::view`]
+    /// (which already holds it), so no date string is parsed here.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn cumulative_series(&self, today: &str) -> Vec<u64> {
-        let today_days = match parse_ymd(today) {
-            Some((y, m, d)) => days_from_civil(y, m, d),
-            None => 0,
-        };
+    pub fn cumulative_series(&self, today: (i64, i64, i64)) -> Vec<u64> {
+        let (ty, tm, td) = today;
+        let today_days = days_from_civil(ty, tm, td);
         let dow = weekday(today_days);
         let first = today_days - dow - ((WEEKS as i64 - 1) * DAYS_PER_WEEK as i64);
         let len = (today_days - first + 1) as usize;
@@ -411,49 +410,30 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// Parse a strict `"YYYY-MM-DD"` into `(y, m, d)`, or `None` if it isn't shaped
-/// like one (lenient callers treat `None` as "unusable").
-#[cfg(not(target_arch = "wasm32"))]
-fn parse_ymd(s: &str) -> Option<(i64, i64, i64)> {
-    let mut it = s.split('-');
-    let y = it.next()?.parse::<i64>().ok()?;
-    let m = it.next()?.parse::<i64>().ok()?;
-    let d = it.next()?.parse::<i64>().ok()?;
-    if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-        return None;
-    }
-    Some((y, m, d))
-}
-
 /// Format `(y, m, d)` as a zero-padded `"YYYY-MM-DD"`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn fmt_ymd(y: i64, m: i64, d: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// The calendar day BEFORE `day` (`"YYYY-MM-DD"` in, one out). A malformed input
-/// is returned unchanged (so a `while words_on > 0` walk over a bad key simply
-/// terminates rather than looping).
+/// The calendar day BEFORE `day` `(y, m, d)`, returned as `(y, m, d)`. Pure
+/// civil-date arithmetic (no parse, no format) — total and non-panicking, so a
+/// `while words_on > 0` streak walk always terminates rather than looping.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn prev_day(day: &str) -> String {
-    match parse_ymd(day) {
-        Some((y, m, d)) => {
-            let (py, pm, pd) = civil_from_days(days_from_civil(y, m, d) - 1);
-            fmt_ymd(py, pm, pd)
-        }
-        None => day.to_string(),
-    }
+pub fn prev_day(y: i64, m: i64, d: i64) -> (i64, i64, i64) {
+    civil_from_days(days_from_civil(y, m, d) - 1)
 }
 
-/// The civil calendar day (`"YYYY-MM-DD"`) for an epoch-SECONDS stamp — pure, so
-/// the live App feeds it `system_now()`-derived seconds ALREADY shifted by the
-/// local UTC offset (see `app/streaks.rs`), keeping the timezone read at the one
-/// live seam and this conversion unit-testable with no clock. `div_euclid` floors
-/// toward negative infinity so a pre-epoch stamp still maps to the right day.
+/// The civil calendar day `(y, m, d)` for an epoch-SECONDS stamp — pure, so the
+/// live App feeds it `system_now()`-derived seconds ALREADY shifted by the local
+/// UTC offset (see `app/streaks.rs`), keeping the timezone read at the one live
+/// seam and this conversion unit-testable with no clock. `div_euclid` floors toward
+/// negative infinity so a pre-epoch stamp still maps to the right day. The streaks
+/// card feeds this tuple STRAIGHT into [`Streaks::view`] (no stringify round trip);
+/// the record path formats it with [`fmt_ymd`] to key the day map.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn civil_date_from_epoch_secs(secs: i64) -> String {
-    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
-    fmt_ymd(y, m, d)
+pub fn civil_ymd_from_epoch_secs(secs: i64) -> (i64, i64, i64) {
+    civil_from_days(secs.div_euclid(86_400))
 }
 
 /// Where the streaks file lives: beside the stats / session / recent-* files.
@@ -586,12 +566,12 @@ mod tests {
             s.days.insert(day.to_string(), DayWords { words: 10, raw_net: 10 });
         }
         // Today (17th) blank but yesterday (16th) written → streak still alive = 3.
-        assert_eq!(s.current_streak("2026-07-17"), 3);
+        assert_eq!(s.current_streak((2026, 7, 17)), 3);
         // Today written extends it to 4.
         s.days.insert("2026-07-17".to_string(), DayWords { words: 5, raw_net: 5 });
-        assert_eq!(s.current_streak("2026-07-17"), 4);
+        assert_eq!(s.current_streak((2026, 7, 17)), 4);
         // A two-day gap (neither today nor yesterday) → 0.
-        assert_eq!(s.current_streak("2026-07-19"), 0);
+        assert_eq!(s.current_streak((2026, 7, 19)), 0);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -610,14 +590,14 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn civil_date_from_epoch_secs_maps_the_day() {
+    fn civil_ymd_from_epoch_secs_maps_the_day() {
         // 2026-07-17 00:00:00 UTC = 1_784_246_400s; any second that day maps to it.
         let start = days_from_civil(2026, 7, 17) * 86_400;
-        assert_eq!(civil_date_from_epoch_secs(start), "2026-07-17");
-        assert_eq!(civil_date_from_epoch_secs(start + 86_399), "2026-07-17");
-        assert_eq!(civil_date_from_epoch_secs(start + 86_400), "2026-07-18");
+        assert_eq!(civil_ymd_from_epoch_secs(start), (2026, 7, 17));
+        assert_eq!(civil_ymd_from_epoch_secs(start + 86_399), (2026, 7, 17));
+        assert_eq!(civil_ymd_from_epoch_secs(start + 86_400), (2026, 7, 18));
         // A negative (pre-epoch) stamp still floors to the right day.
-        assert_eq!(civil_date_from_epoch_secs(-1), "1969-12-31");
+        assert_eq!(civil_ymd_from_epoch_secs(-1), (1969, 12, 31));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -630,11 +610,13 @@ mod tests {
         // Round trip a modern date.
         let d = days_from_civil(2026, 7, 17);
         assert_eq!(civil_from_days(d), (2026, 7, 17));
-        // prev_day steps across a month boundary.
-        assert_eq!(prev_day("2026-08-01"), "2026-07-31");
-        assert_eq!(prev_day("2026-01-01"), "2025-12-31");
-        // A malformed key is returned unchanged (walk-terminating).
-        assert_eq!(prev_day("not-a-date"), "not-a-date");
+        // prev_day steps back one civil day, across month and year boundaries.
+        assert_eq!(prev_day(2026, 8, 1), (2026, 7, 31));
+        assert_eq!(prev_day(2026, 1, 1), (2025, 12, 31));
+        // It is pure arithmetic — total, so the streak walk always terminates (the
+        // old string form's "malformed key returned unchanged" fallback is gone with
+        // the parse: callers only ever hold real civil dates now).
+        assert_eq!(prev_day(1970, 1, 1), (1969, 12, 31));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -642,7 +624,7 @@ mod tests {
     fn view_lays_today_in_the_last_column_and_leaves_the_future_empty() {
         let mut s = Streaks::default();
         s.days.insert("2026-07-17".to_string(), DayWords { words: 500, raw_net: 500 });
-        let v = s.view("2026-07-17");
+        let v = s.view((2026, 7, 17));
         // 2026-07-17 is a Friday → weekday 5. It sits in the LAST week column at
         // row 5; the peak day lights level 4.
         let today_days = days_from_civil(2026, 7, 17);
@@ -696,7 +678,7 @@ mod tests {
     #[test]
     fn cumulative_series_runs_totals_and_carries_gaps_flat() {
         // 2026-07-17 is a Friday (dow 5): window = 52 weeks + Sun..Fri = 370 days.
-        let today = "2026-07-17";
+        let today = (2026, 7, 17);
 
         // Empty store: a full-length, all-zero series (a flat baseline, no bars).
         let empty = Streaks::default().cumulative_series(today);

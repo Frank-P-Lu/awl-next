@@ -69,6 +69,10 @@ pub const TWINKLE_RATE_STEPS: u32 = 6;
 /// never-vanishing breath (floor 0.12) missed. TASTE TUNABLE — the twinkle FEEL
 /// over real seconds is a live human-confirm.
 pub const STAR_ACTIVE_FRAC: f32 = 0.5;
+// The lifecycle envelope divides by this fraction, so it must stay within the
+// sane lit-window band; a compile-time guard bounds any future edit to the const
+// instead of a per-call runtime clamp.
+const _: () = assert!(STAR_ACTIVE_FRAC >= 0.05 && STAR_ACTIVE_FRAC <= 1.0);
 
 /// The per-star LOW-SATURATION tint palette — real-star colors: a cool
 /// blue-white (the world's own ambient `tint`, the dominant), a neutral bright
@@ -201,7 +205,7 @@ pub fn brightness(seed: f32, phase: f32, floor: f32, peak: f32) -> f32 {
 /// across the `u` wrap — combined with the integer per-loop rate, `brightness`
 /// meets its own endpoint at the ambient-loop wrap. Pure.
 fn lifecycle_env(u: f32) -> f32 {
-    let active = STAR_ACTIVE_FRAC.clamp(0.05, 1.0);
+    let active = STAR_ACTIVE_FRAC;
     if u >= active {
         return 0.0; // the dark dwell — the star is gone
     }
