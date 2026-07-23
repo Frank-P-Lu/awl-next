@@ -300,6 +300,65 @@ scripts/capture.sh --debug   # same, using the debug build
 - `gallery/NAME.png`  — 1200×800 RGBA, one deterministic frame
 - `gallery/NAME.json` — the render-state sidecar described below
 
+## The world gallery (`scripts/capture-worlds.sh`) — item 68
+
+A second, roster-driven sibling to `scripts/capture.sh`: instead of sweeping
+`samples/*.md` once each, it sweeps every CURRENT world once each, against
+one shared canonical specimen (`scripts/world-gallery-specimen.md` — a
+restrained-but-real document: one H1, two H2s, short prose, italic + bold +
+inline code, a short list, a section break, no placeholders, nothing spell
+would flag). For every world it renders two shots:
+
+- **the Room** — the writing view itself, caret parked past the last
+  heading (so the whole heading ladder sits fully WYSIWYG-concealed) at a
+  fixed WIDE canvas (1600×1000) with page mode explicitly on and a narrower
+  fixed measure (66) — generous margins on both sides for the page edges
+  *and* the default persistent Outline rail; an 80ch page that reads
+  edge-to-edge is exactly the failure this guards against.
+- **the Frame** — the same origin, then the command palette summoned
+  (`Cmd-P`) — one representative summoned overlay every world composes
+  identically, exercising card/list/chrome personality.
+
+```sh
+scripts/capture-worlds.sh            # builds release, captures every world
+scripts/capture-worlds.sh --debug    # same, using the debug build
+```
+
+Output lands under a **replaceable** gitignored run dir (wiped and rebuilt
+every invocation — `/gallery` is already in `.gitignore`):
+
+- `gallery/worlds/room/<World>.png` + `.json` — the Room, one pair per world
+- `gallery/worlds/frame/<World>.png` + `.json` — the Frame, one pair per world
+- `gallery/worlds/contact-light.png` + `.json` — labeled contact sheet, the light worlds
+- `gallery/worlds/contact-dark.png` + `.json` — labeled contact sheet, the dark worlds
+
+**The roster comes from the binary, never a hand-copied shell list.** The
+script's only source of world names is `awl --list-worlds` (one name per
+line), which prints `theme::world_names()` — the same one-owner function
+`--help`'s theme line and the unknown-`--theme` error read (`src/theme/
+worlds.rs`). Inserting or retiring a world in `theme::THEMES` changes every
+one of them for free; there is nothing to keep in sync by hand. The contact
+sheets don't hand-classify light/dark either — each world's bucket is read
+straight off its own Room sidecar's `theme.mode`, the same field the script
+already verified. The contact sheets are themselves ordinary awl captures:
+a small markdown document embedding the just-written Room/Frame PNGs as
+inline `![World — Room|WIDTH](room/World.png)` images under a `## World`
+heading, rendered by awl's own image + text pipeline — no new external image
+utility, no network, no OS automation.
+
+The script **fails loudly** (`exit 1`, naming the offender) on: an empty
+roster, a duplicate name in `--list-worlds`' output, a capture that errors
+for a listed world (the binary rejecting the very name it just printed), a
+written sidecar whose `theme.name` doesn't match the world it was asked to
+render, an unrecognized `theme.mode`, or Room page/outline/margin geometry
+that isn't the generous, non-edge-to-edge shape above. The separate law that
+catches a world being newly **un-enrolled** (or added, or reordered) lives in
+`tests/world_gallery_roster.rs` — a Rust integration test against the real
+binary that hard-codes an 18-name roster snapshot on purpose, so a
+`theme::THEMES` change fails `cargo test` loudly until a human consciously
+updates it (mirroring `theme::tests::worlds_eleven_dark_seven_light`'s
+existing hard-coded `18`).
+
 ## Determinism guarantees
 
 A capture is **byte-stable across runs on the same machine** for the same input

@@ -149,6 +149,22 @@ fn worlds_eleven_dark_seven_light() {
     assert_eq!(light, 7);
 }
 
+/// `world_names()` (item 68's one code-owned roster source, read by `--help`,
+/// the unknown-`--theme` error, and `--list-worlds`) is exactly `THEMES`'
+/// names in `THEMES`' own order — no reordering, no drift, no duplicate.
+#[test]
+fn world_names_mirrors_themes_order_exactly() {
+    let names = super::world_names();
+    assert_eq!(names.len(), THEMES.len());
+    for (name, theme) in names.iter().zip(THEMES.iter()) {
+        assert_eq!(*name, theme.name);
+    }
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), names.len(), "world_names() contains a duplicate");
+}
+
 /// `Theme::is_one_bit` — Wagtail's 2026-07 rework, from greyscale (any grey
 /// permitted) to a true 1-bit world (only pure black/white) — is `true` for
 /// Wagtail alone, and (the stricter sub-case relationship) every one-bit

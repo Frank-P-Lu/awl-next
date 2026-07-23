@@ -88,7 +88,7 @@ pub use ornament::{
     LIST_INDENT_SCALE_PLAIN, LIST_INDENT_SCALE_WIDE, ORNAMENT_GARAMOND, ORNAMENT_JUNICODE,
     ORNAMENT_MARKS, ORNAMENT_SCALE_FLEURON, ORNAMENT_SCALE_GEOMETRIC, ORNAMENT_SCALE_ORNATE,
 };
-pub use worlds::{DEFAULT_THEME, THEMES};
+pub use worlds::{world_names, DEFAULT_THEME, THEMES};
 #[allow(unused_imports)] // the seventeen individually named world consts: public
 // API surface (each usable individually, e.g. `theme::TAWNY.mono`); non-test code
 // always reaches them through the `THEMES` array instead (Cassowary among them).

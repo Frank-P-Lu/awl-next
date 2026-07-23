@@ -108,7 +108,11 @@ const EXPECTED: &[(&str, usize)] = &[
     ("keymap.rs", 4),
     // `--help` + other CLI-only output.
     ("main.rs", 2),
-    ("main/args.rs", 1),
+    // `--help`'s big usage dump, plus `--list-worlds` (item 68): a
+    // machine-readable roster dump for `scripts/capture-worlds.sh` and any
+    // other script that wants the world list without parsing --help. Both
+    // are fate (c) — genuine CLI/diagnostic stdout, not app-runtime chatter.
+    ("main/args.rs", 2),
     // `--screenshot`/`--screenshot-motion*`/`--screenshot-frames`/`--capture-*`'s
     // "wrote …" deliverable output — this IS the CLI's product, read by
     // scripts/agents — plus the permissive `--keys` replay's ONE stderr warning
