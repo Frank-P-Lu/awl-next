@@ -268,7 +268,9 @@ pub struct ListItem {
     /// Byte offset where the item's CONTENT begins (after the marker + its space).
     pub content: usize,
     /// True when the item has no content (just the marker + optional trailing
-    /// whitespace) — the "empty item" that Enter ends the list on.
+    /// whitespace) — the "empty item" whose Enter behavior is special: an ordered /
+    /// blockquote item ENDS the block, an unordered bullet is PRESERVED with a plain
+    /// line opened below (item 63; see `actions::edit::smart_newline_for`).
     pub empty: bool,
 }
 

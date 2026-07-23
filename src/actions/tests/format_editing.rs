@@ -156,22 +156,102 @@ fn smart_newline_continues_lists_quotes_and_indent() {
 
 #[test]
 fn smart_newline_empty_item_ends_the_block() {
-    // Enter on an EMPTY bullet strips the dangling marker (ends the list).
-    let mut b = md("- a\n- ", 6);
-    drive_newline(&mut b);
-    assert_eq!(b.text(), "- a\n");
-    assert_eq!(b.cursor_char(), 4);
-
-    // Same for an empty ordered item …
+    // Enter on an empty ORDERED item strips the dangling marker (ends the list).
     let mut b = md("1. ", 3);
     drive_newline(&mut b);
     assert_eq!(b.text(), "");
     assert_eq!(b.cursor_char(), 0);
 
-    // … and an empty blockquote.
+    // … and an empty BLOCKQUOTE.
     let mut b = md("> ", 2);
     drive_newline(&mut b);
     assert_eq!(b.text(), "");
+
+    // A NESTED empty ordered item ends its block too (strips indent + marker).
+    let mut b = md("  1. ", 5);
+    drive_newline(&mut b);
+    assert_eq!(b.text(), "", "empty ordered item ends the block, indent and all");
+}
+
+#[test]
+fn smart_newline_empty_bullet_is_preserved_item_63() {
+    // ITEM 63 (reverses item 40): Enter on an EMPTY unordered marker PRESERVES the
+    // bullet byte-semantically and opens a fresh PLAIN line below — it does NOT
+    // strip the marker (the old "end the block" behavior), and it does NOT emit a
+    // second bullet. Verify exact text + caret across the three unordered markers.
+    for marker in ['-', '*', '+'] {
+        let src = format!("{marker} a\n{marker} ");
+        let mut b = md(&src, 6);
+        drive_newline(&mut b);
+        assert_eq!(
+            b.text(),
+            format!("{marker} a\n{marker} \n"),
+            "the `{marker} ` bullet stays intact and a plain line opens below"
+        );
+        // Caret is at column 0 of the NEW empty line (char 7 over the 7-char body).
+        assert_eq!(b.cursor_char(), 7, "caret parks on the new plain line, col 0");
+        let (line, col) = b.cursor_line_col();
+        assert_eq!((line, col), (2, 0), "caret on the fresh line below the bullet");
+    }
+
+    // The lone bullet at document START, no preceding sibling: still preserved.
+    let mut b = md("- ", 2);
+    drive_newline(&mut b);
+    assert_eq!(b.text(), "- \n", "a lone empty bullet is preserved, plain line below");
+    assert_eq!(b.cursor_char(), 3);
+
+    // NESTED empty bullet: the indent + `- ` marker are ALL preserved intact.
+    let mut b = md("  - ", 4);
+    drive_newline(&mut b);
+    assert_eq!(b.text(), "  - \n", "the nested bullet (indent + marker) is preserved");
+    assert_eq!(b.cursor_char(), 5);
+    assert_eq!(b.cursor_line_col(), (1, 0));
+}
+
+#[test]
+fn smart_newline_empty_bullet_preserve_is_one_undo_group_item_63() {
+    // The whole gesture is ONE atomic undo group: a single Cmd-Z restores the
+    // pre-Enter state (the empty bullet, caret at its end), and a redo re-applies it.
+    let mut b = md("- a\n- ", 6);
+    drive_newline(&mut b);
+    assert_eq!(b.text(), "- a\n- \n");
+    let after = b.text();
+
+    b.undo();
+    assert_eq!(b.text(), "- a\n- ", "one undo removes exactly the opened line");
+    assert_eq!(b.cursor_char(), 6, "caret restored to the end of the empty bullet");
+
+    b.redo();
+    assert_eq!(b.text(), after, "redo re-opens the plain line under the preserved bullet");
+    assert_eq!(b.cursor_char(), 7);
+
+    // Driven as the real keystroke stream `- <space> Enter`: typing then Enter must
+    // still leave the preserved bullet + a writable plain line, undoable as sensible
+    // chunks (the Enter is its own group — it never coalesces the marker away).
+    let mut b = md("", 0);
+    drive_act(&mut b, &Action::InsertChar('-'));
+    drive_act(&mut b, &Action::InsertChar(' '));
+    drive_act(&mut b, &Action::Newline);
+    drive_act(&mut b, &Action::InsertChar('x'));
+    assert_eq!(b.text(), "- \nx", "typed bullet preserved; `x` lands on the plain line");
+    assert_eq!(b.cursor_char(), 4);
+    b.undo(); // remove the x
+    assert_eq!(b.text(), "- \n", "undo the typed x, bullet + plain line intact");
+    b.undo(); // remove the opened line
+    assert_eq!(b.text(), "- ", "undo the Enter — the preserved bullet remains");
+}
+
+#[test]
+fn smart_newline_empty_bullet_preserve_round_trips_crlf_item_63() {
+    // CRLF restoration: a buffer whose EOL is CRLF preserves the empty bullet and
+    // opens a plain line, and `disk_bytes` restores CRLF on EVERY line — including
+    // the freshly opened one. The rope stays pure `\n` (EOL is document metadata).
+    let mut b = md("- a\n- ", 6);
+    b.set_eol(crate::buffer::Eol::Crlf);
+    drive_newline(&mut b);
+    assert_eq!(b.text(), "- a\n- \n", "the rope preserves the bullet + a plain line");
+    let disk = String::from_utf8(b.disk_bytes()).unwrap();
+    assert_eq!(disk, "- a\r\n- \r\n", "save restores CRLF on every line, opened one too");
 }
 
 #[test]
