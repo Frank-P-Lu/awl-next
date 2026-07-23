@@ -401,6 +401,39 @@ fn a_heading_jump_onto_a_hidden_line_reveals_its_fold() {
 }
 
 #[test]
+fn outline_click_target_maps_a_fold_filtered_row_back_to_the_raw_heading_line() {
+    // item 74 — THE BUG: `TextPipeline::outline_hit_line` (what a real outline
+    // click hit-tests to) reports a row's line in FOLD-FILTERED space — with # A
+    // folded, `# B`'s row sits at FILTERED line 1 (the two hidden a1/a2 rows above
+    // it collapse away), even though `# B` truly lives on RAW document line 3.
+    // `App::outline_click` used to hand that filtered line straight to
+    // `jump_to_line`, landing on the wrong line (raw line 1 = the hidden a1) any
+    // time a fold sits before the clicked heading. `outline_row_target_line` is the
+    // exact seam the fix routes the hit-tested row through before jumping — this
+    // pins its law without needing a live GPU hit test.
+    let app = folded_app(); // # A folded (line 0), hides a1 (raw 1) / a2 (raw 2); # B is raw line 3.
+    assert_eq!(
+        app.outline_row_target_line(1),
+        3,
+        "outline row 1 (# B, filtered) must map back to its TRUE raw document line 3"
+    );
+    // The folded heading's OWN row (filtered 0) is unaffected — nothing hides above
+    // a heading's own line.
+    assert_eq!(app.outline_row_target_line(0), 0, "# A's own row needs no remap");
+
+    // NO-FOLD CASE UNCHANGED: the identical document with nothing folded maps the
+    // identity — today's no-fold outline click resolves to the same target as
+    // before this fix.
+    let mut plain = App::new_hermetic(None, PathBuf::from("/tmp"), Config::empty());
+    plain.buffer.set_text(FOLD_DOC);
+    assert_eq!(
+        plain.outline_row_target_line(1),
+        1,
+        "unfolded: row 1 (# B) is already its own raw line — the identity"
+    );
+}
+
+#[test]
 fn a_shift_click_across_a_collapsed_section_reveals_the_fold_it_spans() {
     // THE DRAG/SHIFT-CLICK REVEAL (Wave-4 neighbourhood): with # A folded, the caret
     // parks on # A (char 0). A shift-click on the b1 row (filtered row 2 -> full line
