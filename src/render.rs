@@ -3766,11 +3766,14 @@ pub struct TextPipeline {
     debug_theme_settle: Option<(f32, crate::themeswitch::SwitchPhases)>,
     /// --- summoned navigation overlay view state (copied in set_view) ---
     overlay_active: bool,
-    /// ITEM 45 — mirror of [`ViewState::overlay_align`]: the overlay's alignment
-    /// FROZEN at summon (`Some` while an overlay is open, `None` when closed), read
-    /// through the ONE owner [`crate::render::resolve_overlay_anchor`] by every
-    /// render-path anchor reader. Held here so a theme-preview crossing that changes
-    /// the active world never relocates the open card (the HARD RULE).
+    /// ITEM 45 → ITEM 52 — mirror of [`ViewState::overlay_align`]: the overlay's
+    /// alignment (`Some` while an overlay is open, `None` when closed), read through the
+    /// ONE owner [`crate::render::resolve_overlay_anchor`] by every render-path anchor
+    /// reader. The render path NEVER reads the live world anchor (the alignment-is-data
+    /// grep-law): a passive theme-preview crossing (hover) leaves this value put, so the
+    /// open card holds its rail. A DELIBERATE crossing (keyboard nav / wheel) re-stamps
+    /// it upstream via [`crate::overlay::OverlayState::reanchor`], so the theme picker's
+    /// card SNAPS into the destination world's rail — choosing a world drops you inside it.
     overlay_align: Option<theme::CardAnchor>,
     /// Mirror of [`ViewState::overlay_crisp`]: the THEME / CARET pickers keep the doc
     /// crisp (no blur backdrop). Drives both the render path and [`Self::dims_doc`].

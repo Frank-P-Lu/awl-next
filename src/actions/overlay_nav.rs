@@ -267,7 +267,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
         Action::InsertChar(c) => {
             ctx.overlay.as_mut().unwrap().push(*c);
             // Typing to fuzzy-filter also PREVIEWS the new top/selected match.
-            preview_overlay(ctx.overlay.as_ref().unwrap());
+            preview_move(ctx.overlay.as_mut().unwrap());
             return Effect::None;
         }
         Action::DeleteBackward | Action::DeleteWordBackward => {
@@ -301,14 +301,14 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             } else {
                 ctx.overlay.as_mut().unwrap().pop();
             }
-            preview_overlay(ctx.overlay.as_ref().unwrap());
+            preview_move(ctx.overlay.as_mut().unwrap());
             return Effect::None;
         }
         Action::NextLine => {
             ctx.overlay.as_mut().unwrap().move_sel(1);
             // LIVE PREVIEW: moving the selection in the Theme picker applies
             // that world immediately (no-op for the other overlay kinds).
-            preview_overlay(ctx.overlay.as_ref().unwrap());
+            preview_move(ctx.overlay.as_mut().unwrap());
             return Effect::None;
         }
         // PgDn / PgUp (C-v / M-v / the named keys) PAGE the selection a card-ful
@@ -316,12 +316,12 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
         // command list — is pageable, not just one-row-at-a-time.
         Action::PageScrollDown => {
             ctx.overlay.as_mut().unwrap().move_sel(OVERLAY_PAGE);
-            preview_overlay(ctx.overlay.as_ref().unwrap());
+            preview_move(ctx.overlay.as_mut().unwrap());
             return Effect::None;
         }
         Action::PageScrollUp => {
             ctx.overlay.as_mut().unwrap().move_sel(-OVERLAY_PAGE);
-            preview_overlay(ctx.overlay.as_ref().unwrap());
+            preview_move(ctx.overlay.as_mut().unwrap());
             return Effect::None;
         }
         // JUMP-TO-ENDS: a modal picker OWNS Home/End (and the very-start/end pair
@@ -335,12 +335,12 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
         // no-op, so no keymap change is needed to claim them while a picker is open.
         Action::LineStart | Action::BufferStart => {
             ctx.overlay.as_mut().unwrap().select_first();
-            preview_overlay(ctx.overlay.as_ref().unwrap());
+            preview_move(ctx.overlay.as_mut().unwrap());
             return Effect::None;
         }
         Action::LineEnd | Action::BufferEnd => {
             ctx.overlay.as_mut().unwrap().select_last();
-            preview_overlay(ctx.overlay.as_ref().unwrap());
+            preview_move(ctx.overlay.as_mut().unwrap());
             return Effect::None;
         }
         Action::ForwardChar => {
@@ -354,7 +354,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             // new section; preview it (a no-op when it's the same item).
             if ov.is_faceting() {
                 ctx.overlay.as_mut().unwrap().cycle_lens(1);
-                preview_overlay(ctx.overlay.as_ref().unwrap());
+                preview_move(ctx.overlay.as_mut().unwrap());
                 return Effect::None;
             }
             // In the NON-faceting navigable explorer (MOVE-DEST) Right DESCENDS into
@@ -374,12 +374,12 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 return Effect::None;
             }
             ctx.overlay.as_mut().unwrap().move_sel(1);
-            preview_overlay(ctx.overlay.as_ref().unwrap());
+            preview_move(ctx.overlay.as_mut().unwrap());
             return Effect::None;
         }
         Action::PreviousLine => {
             ctx.overlay.as_mut().unwrap().move_sel(-1);
-            preview_overlay(ctx.overlay.as_ref().unwrap());
+            preview_move(ctx.overlay.as_mut().unwrap());
             return Effect::None;
         }
         Action::BackwardChar => {
@@ -390,7 +390,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             // faceted explorer (Browse) cycles its lens on ←, with ascend on Backspace.
             if ov.is_faceting() {
                 ctx.overlay.as_mut().unwrap().cycle_lens(-1);
-                preview_overlay(ctx.overlay.as_ref().unwrap());
+                preview_move(ctx.overlay.as_mut().unwrap());
                 return Effect::None;
             }
             // Up for a flat picker; in the NON-faceting explorer (MOVE-DEST) Left
@@ -406,7 +406,7 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 return Effect::None;
             }
             ctx.overlay.as_mut().unwrap().move_sel(-1);
-            preview_overlay(ctx.overlay.as_ref().unwrap());
+            preview_move(ctx.overlay.as_mut().unwrap());
             return Effect::None;
         }
         Action::Newline => {
@@ -1097,4 +1097,17 @@ pub(crate) fn preview_overlay(ov: &OverlayState) {
         }
         _ => {}
     }
+}
+
+/// ITEM 52 — LIVE PREVIEW **plus** RE-ANCHOR for a DELIBERATE selection crossing
+/// (keyboard nav, wheel, page/jump moves): applies the highlighted world
+/// ([`preview_overlay`]) and THEN snaps the card into that world's own left/center/
+/// right rail ([`OverlayState::reanchor`], a no-op for a non-Theme picker) — choosing
+/// a world drops you inside it. The re-anchor runs AFTER the preview so it reads the
+/// DESTINATION world's anchor. PASSIVE pointer hover uses the bare [`preview_overlay`]
+/// instead (`app/input/mouse.rs::overlay_hover`), so a hover re-tints without starting
+/// a spatial chase (the item-45 freeze still holds the card put under the pointer).
+pub(crate) fn preview_move(ov: &mut OverlayState) {
+    preview_overlay(ov);
+    ov.reanchor();
 }

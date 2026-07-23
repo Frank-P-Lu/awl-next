@@ -284,6 +284,26 @@ impl OverlayState {
         }
     }
 
+    /// ITEM 52 — RE-STAMP the card's frozen [`Self::align`] to the CURRENTLY-active
+    /// world's own anchor. Called on a DELIBERATE selection crossing (keyboard nav,
+    /// wheel, page/jump moves) AFTER [`crate::actions::preview_overlay`] has made the
+    /// highlighted world active, so an open THEME picker SNAPS its card into the
+    /// destination world's own left/center/right rail — choosing a world drops you
+    /// inside it (the standing law; SUPERSEDES item 45's summon-time freeze for a
+    /// deliberate move). PASSIVE pointer hover never calls this, so sweeping the
+    /// pointer down the rows re-tints every world WITHOUT starting a spatial chase
+    /// (the item-45 freeze still holds the card put through a hover). A NO-OP for
+    /// every non-Theme picker: the active world can't move under them, so
+    /// [`crate::render::effective_card_anchor`] returns the same anchor it froze at
+    /// summon. It reads the SAME [`crate::render::effective_card_anchor`] owner the
+    /// summon freeze does, so a keyboard crossing and a fresh summon into the same
+    /// world resolve to the identical rail.
+    pub fn reanchor(&mut self) {
+        if self.kind == OverlayKind::Theme {
+            self.align = crate::render::effective_card_anchor();
+        }
+    }
+
     /// The corpus index currently highlighted (into `corpus`/`git`/`is_dir`), or
     /// `None` when no item matches.
     pub fn selected_corpus_index(&self) -> Option<usize> {

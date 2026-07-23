@@ -264,6 +264,10 @@ impl App {
         // OR one-bit).
         let prev = crate::theme::active();
         if let Some(ov) = self.overlay.as_ref() {
+            // BARE preview — NOT `preview_move`: a passive HOVER re-tints the world but
+            // must NOT re-anchor the card (item 52 — no spatial chase under a wandering
+            // pointer; the item-45 freeze holds the card put). Deliberate crossings
+            // (keyboard nav, wheel) re-anchor; hover alone does not.
             crate::actions::preview_overlay(ov);
         }
         // A Theme preview mutated the process-global active world: re-tint the baked GPU
@@ -299,8 +303,11 @@ impl App {
             None => return,
         };
         let prev = crate::theme::active();
-        if let Some(ov) = self.overlay.as_ref() {
-            crate::actions::preview_overlay(ov);
+        if let Some(ov) = self.overlay.as_mut() {
+            // The WHEEL is a DELIBERATE selection crossing (it moves `selected` like
+            // ↑/↓), so it RE-ANCHORS the card into the destination world's rail (item
+            // 52) — unlike passive `overlay_hover`, which keeps the bare preview.
+            crate::actions::preview_move(ov);
         }
         if kind == crate::overlay::OverlayKind::Theme {
             // Wheel preview: colors now, font reshape on settle (see overlay_hover).
