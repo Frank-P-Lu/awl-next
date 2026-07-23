@@ -3800,6 +3800,12 @@ pub struct TextPipeline {
     overlay_query: String,
     /// Mirror of [`ViewState::overlay_title`]: this picker's quiet input-line prefix.
     overlay_title: &'static str,
+    /// Mirror of [`ViewState::overlay_row_path_splits`] (item 66): does the open
+    /// overlay's FLAT row content carry a genuine path/URL, earning the
+    /// muted-directory/content-filename figure/ground split? Read by
+    /// `shape_overlay_names` so a picker whose rows use `/` for something else
+    /// (the date picker's `DD/MM/YY` separator) renders every glyph one ink.
+    overlay_row_path_splits: bool,
     overlay_items: Vec<String>,
     /// Mirror of [`ViewState::overlay_empty`]: the shared empty-state message drawn
     /// when the overlay has no candidate rows, or `None` when it has rows.

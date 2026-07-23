@@ -578,6 +578,44 @@ impl OverlayKind {
         }
     }
 
+    /// ITEM 66 — does this kind's FLAT row content carry a genuine PATH/URL, so
+    /// its row should get the muted-directory/content-filename figure/ground
+    /// split ([`crate::overlay::row_split`])? Only [`OverlayKind::InsertLink`]
+    /// (a typed URL, e.g. `https://example.com/a/b`) — every faceting kind
+    /// (Goto/Browse/Project/Command/History/Settings) renders its rows through
+    /// the SEPARATE grouped shaper (`shape_theme_spans`), which never calls
+    /// `row_split` at all, so this gate only ever matters for the FLAT shaper
+    /// (`shape_overlay_names`). Crucially `false` for [`OverlayKind::Date`]:
+    /// three of the five example-date formats (`DD/MM/YY`, `MM/DD/YY`,
+    /// `YYYY/MM/DD`) use `/` as a DATE separator, not a path separator — before
+    /// this gate, `row_split`'s "split at the last `/`" rule mistook that
+    /// separator for a directory boundary and rendered the date's own glyphs in
+    /// TWO inks (muted before the last `/`, content after). One coherent ink per
+    /// example date is the law (a SEPARATE description label beside it may still
+    /// use secondary ink). A NO-WILDCARD match so a future kind must decide.
+    pub fn row_path_splits(self) -> bool {
+        match self {
+            OverlayKind::InsertLink => true,
+            OverlayKind::Goto
+            | OverlayKind::Project
+            | OverlayKind::Browse
+            | OverlayKind::Theme
+            | OverlayKind::Caret
+            | OverlayKind::MoveDest
+            | OverlayKind::Dictionary
+            | OverlayKind::CjkLang
+            | OverlayKind::Date
+            | OverlayKind::Command
+            | OverlayKind::Spell
+            | OverlayKind::Keybindings
+            | OverlayKind::History
+            | OverlayKind::Settings
+            | OverlayKind::Assets
+            | OverlayKind::Rename
+            | OverlayKind::KeepName => false,
+        }
+    }
+
     /// THE OVERLAY-TITLES ROUND: does this kind's RENDER draw the `title() › `
     /// prefix on its input line? `false` for Rename/InsertLink/KeepName — their
     /// own modal prompt (`foot_hint`, "rename to:"/"link to:"/"name this

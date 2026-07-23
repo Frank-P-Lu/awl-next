@@ -346,6 +346,18 @@ pub(super) fn settled_viewstate(
         })
         .map(|o| o.title)
         .unwrap_or("");
+    // ITEM 66: the path/URL figure-ground gate, resolved from the SAME mode
+    // string via the SAME `OverlayKind::row_path_splits` owner `App::sync_view`
+    // reads — so a `--keys` capture of, say, InsertLink's typed URL renders
+    // identically to the live picker, and every other kind (sharpest of all
+    // Date, whose `/`-shaped examples must never split) stays single-ink here
+    // too. An unrecognized mode falls to `false` (every real mode resolves).
+    vstate.overlay_row_path_splits = opts
+        .overlay
+        .as_ref()
+        .and_then(|o| crate::overlay::OverlayKind::from_mode(o.mode))
+        .map(|k| k.row_path_splits())
+        .unwrap_or(false);
     vstate.overlay_items = opts.overlay.as_ref().map(|o| o.items.clone()).unwrap_or_default();
     vstate.overlay_empty = opts.overlay.as_ref().and_then(|o| o.empty.clone());
     vstate.overlay_bindings = opts.overlay.as_ref().map(|o| o.bindings.clone()).unwrap_or_default();

@@ -903,7 +903,15 @@ impl TextPipeline {
                 Some(c) if flip => (c, c),
                 _ => (ink, muted),
             };
-            let split = if content.ends_with('/') {
+            // ITEM 66: the muted-directory/content-filename split only applies to a
+            // kind whose row content is a genuine path/URL (`overlay_row_path_splits`
+            // — currently InsertLink alone). Everything else — most sharply the DATE
+            // picker's `DD/MM/YY`-shaped examples, where `/` is a date separator, not
+            // a path one — renders its ENTIRE row in one uniform ink; `row_split`'s
+            // "split at the last `/`" rule would otherwise have mistaken that
+            // separator for a directory boundary and muted part of the date's own
+            // glyphs.
+            let split = if content.ends_with('/') || !self.overlay_row_path_splits {
                 0
             } else {
                 crate::overlay::row_split(content)

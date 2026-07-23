@@ -249,6 +249,13 @@ impl App {
                 .filter(|o| o.kind.draws_title_prefix())
                 .map(|o| o.kind.title())
                 .unwrap_or(""),
+            // ITEM 66: the open overlay's path/URL-figure/ground gate (`false`, inert,
+            // when no overlay is open).
+            overlay_row_path_splits: self
+                .overlay
+                .as_ref()
+                .map(|o| o.kind.row_path_splits())
+                .unwrap_or(false),
             overlay_items: self
                 .overlay
                 .as_ref()

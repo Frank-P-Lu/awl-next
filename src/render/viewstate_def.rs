@@ -118,6 +118,13 @@ pub struct ViewState {
     /// ("<title> › ") before the query text on the picker's own input line. Empty
     /// when no overlay is open.
     pub overlay_title: &'static str,
+    /// ITEM 66 — [`crate::overlay::OverlayKind::row_path_splits`] for the open
+    /// overlay: does its FLAT row content carry a genuine path/URL, earning the
+    /// muted-directory/content-filename figure/ground split? `false` (the inert
+    /// default) when no overlay is open. Read by the flat shaper
+    /// (`shape_overlay_names`) so a picker whose rows use `/` for something else
+    /// (the date picker's `DD/MM/YY` separator) never gets that split.
+    pub overlay_row_path_splits: bool,
     /// The overlay's filtered + ranked candidate strings, top-to-bottom.
     pub overlay_items: Vec<String>,
     /// EMPTY STATE: `Some(message)` when the overlay has NO candidate rows (an empty
@@ -330,6 +337,7 @@ impl ViewState {
             overlay_crisp: false,
             overlay_query: String::new(),
             overlay_title: "",
+            overlay_row_path_splits: false,
             overlay_items: Vec::new(),
             overlay_empty: None,
             overlay_bindings: Vec::new(),
