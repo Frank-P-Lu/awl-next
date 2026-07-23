@@ -141,6 +141,10 @@ const EXPECTED: &[(&str, usize)] = &[
     // `--bench-frost`'s tabular CLI output.
     ("render/framebench.rs", 39),
     ("render/perfbench.rs", 8),
+    // `--bench-caret`'s tabular CLI output (item 57): the header + column ruler,
+    // the per-position rows, and the machine-readable verdict line — the same
+    // CLI-harness class as the bench entries above.
+    ("render/caretbench.rs", 6),
     // `--bench-suite`'s tabular CLI output + the baseline diff report — the
     // same CLI-harness class as the four bench entries above.
     ("render/benchsuite/mod.rs", 12),

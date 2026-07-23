@@ -212,6 +212,13 @@ pub(crate) enum Mode {
     /// worlds, witnessing a nonzero seed field + zero-rebuild steady frames + one
     /// rebuild after a zoom / margin-text change. Opens no window.
     BenchFrost,
+    /// Hidden performance harness: the CARET LOOKUP WITNESS (item 57) — places the
+    /// caret at the document top/middle/tail on a long fixture and records, per
+    /// position, the prefix runs a whole-doc walk would touch (grows), the
+    /// target-line-local glyph count the fixed lookup visits (nonzero, constant), and
+    /// the median old-walk vs new-lookup cost — proving the caret glyph lookup cost is
+    /// independent of document position. Opens no window.
+    BenchCaret,
     /// Hidden performance harness: the UNIFIED BENCH SUITE — deterministic
     /// corpus tiers x interaction scenarios, every cell witnessed, printed as
     /// a table and written to `bench.json` beside the invocation. `baseline`
@@ -486,6 +493,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
     let mut bench_theme_burst = false;
     let mut bench_zoom_burst = false;
     let mut bench_frost = false;
+    let mut bench_caret = false;
     let mut bench_suite = false;
     #[cfg(not(target_arch = "wasm32"))]
     let mut soak_gpu = false;
@@ -549,6 +557,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
             }
             "--bench-frost" => {
                 bench_frost = true;
+            }
+            "--bench-caret" => {
+                bench_caret = true;
             }
             "--bench-suite" => {
                 bench_suite = true;
@@ -1011,6 +1022,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
     }
     if bench_frost {
         return Ok(Mode::BenchFrost);
+    }
+    if bench_caret {
+        return Ok(Mode::BenchCaret);
     }
     // CLI VALIDATION (error paths only — valid runs are unaffected).
     // 1) At most ONE capture-mode flag. With more than one, the Mode chosen below

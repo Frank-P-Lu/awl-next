@@ -852,3 +852,121 @@ fn reduced_motion_settles_the_caret_style_preview_loop_instantly() {
     );
     crate::motion::set_reduced(saved);
 }
+
+/// ITEM 57 — the caret's per-frame glyph lookup is POSITION-INDEPENDENT: on a
+/// document of many IDENTICAL lines, the lookup at the TOP, MIDDLE, and TAIL
+/// resolves the SAME glyph, reports the SAME line-local visited work, and lands the
+/// SAME within-row baseline offset — even though the number of shaped runs BEFORE
+/// the cursor line grows from a handful to the whole document. The old lookups
+/// filtered the whole `layout_runs()` stream (cost ∝ position); the target-line-local
+/// record reads only the cursor line's own `layout_opt()`, so equal lines do equal
+/// work wherever they sit.
+#[test]
+fn caret_lookup_position_independent() {
+    // Block look is the deterministic anchor (cursor column). Pin it under the
+    // reentrant serial guard the caret-mode global shares.
+    let _g = crate::testlock::serial();
+    let _cl = crate::testlock::serial();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping caret_lookup_position_independent: no wgpu adapter");
+        return;
+    };
+    let saved = crate::caret::mode();
+    crate::caret::set_mode(CaretMode::Block);
+
+    // Many IDENTICAL non-wrapping content lines: one shaped run each, so the prefix
+    // before the cursor line grows 1:1 with the line index.
+    const N: usize = 200;
+    let line = "abcdefghij";
+    let text = std::iter::repeat(line).take(N).collect::<Vec<_>>().join("\n");
+    let col = 3;
+
+    let sample = |p: &mut TextPipeline, li: usize| {
+        p.set_view(&view(&text, li, col));
+        let key = p.cursor_glyph_key_at(li, col);
+        let glyphs = p.caret_line_glyph_count();
+        // Within-row baseline offset: the absolute baseline minus the visual row's
+        // top. For identical lines this is a pure font fact, independent of WHERE the
+        // row sits in the document — so it exposes any position-dependent baseline bug.
+        let off = p.caret_baseline_y() - p.visual_row_top(li, col);
+        // The prefix a whole-doc walk would touch (grows with position) — proves the
+        // doc really does put a long prefix in front of the tail case (non-vacuous).
+        let mut prefix = 0usize;
+        for run in p.buffer.layout_runs() {
+            if run.line_i > li {
+                break;
+            }
+            prefix += 1;
+        }
+        (key, glyphs, off, prefix)
+    };
+
+    let (k_top, g_top, o_top, pre_top) = sample(&mut p, 1);
+    let (k_mid, g_mid, o_mid, pre_mid) = sample(&mut p, N / 2);
+    let (k_tail, g_tail, o_tail, pre_tail) = sample(&mut p, N - 1);
+
+    // Non-vacuous: the prefix really grows top → middle → tail.
+    assert!(
+        pre_top < pre_mid && pre_mid < pre_tail,
+        "sanity: the shaped-run prefix must grow with position (top={pre_top}, \
+         mid={pre_mid}, tail={pre_tail}) or the test proves nothing"
+    );
+
+    // Work ran (never "measured" 0 work) and is CONSTANT across positions.
+    assert!(g_top > 0, "the line-local lookup visited real glyph work");
+    assert_eq!(
+        (g_top, g_mid, g_tail),
+        (g_top, g_top, g_top),
+        "identical lines do identical line-local work regardless of position \
+         (top={g_top}, mid={g_mid}, tail={g_tail})"
+    );
+
+    // The resolved glyph is IDENTICAL — same shaped 'd' at col 3, wherever the line
+    // sits. (byte-identical to the old whole-doc walk, which resolved the same glyph.)
+    assert!(k_top.is_some(), "col 3 of a content line has a glyph");
+    assert_eq!(k_top, k_mid, "top and middle resolve the SAME glyph key");
+    assert_eq!(k_top, k_tail, "top and tail resolve the SAME glyph key");
+
+    // The within-row baseline offset is IDENTICAL — the baseline reconstruction is a
+    // function of the row's own layout, not its document position.
+    assert!(
+        (o_top - o_mid).abs() < 1e-3 && (o_top - o_tail).abs() < 1e-3,
+        "the within-row baseline offset is position-independent \
+         (top={o_top}, mid={o_mid}, tail={o_tail})"
+    );
+
+    crate::caret::set_mode(saved);
+}
+
+/// ITEM 57 GREP-LAW — the caret render module (`src/render/caret.rs`) must NOT walk
+/// the whole document's `layout_runs()` stream: the per-frame caret glyph lookups
+/// read the cursor line's OWN `layout_opt()` (the target-line-local record) so their
+/// cost is independent of the caret's document position. This structurally bans a
+/// future consumer from quietly reintroducing the O(prefix) whole-doc walk. (The
+/// prefix-run WITNESS legitimately walks `layout_runs()` — it lives in
+/// `caretbench.rs`, a bench driver, exempt like the other `--bench-*` harnesses.)
+#[test]
+fn caret_no_whole_doc_walk_law() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/render/caret.rs");
+    let text = std::fs::read_to_string(&path).expect("read caret.rs");
+    let mut hits = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        // Consider only the CODE before any `//` comment, so the doc comments (which
+        // discuss `layout_runs()` by name) don't trip the ban.
+        let code = line.split("//").next().unwrap_or("");
+        if code.contains("layout_runs") {
+            hits.push((i + 1, line.trim().to_string()));
+        }
+    }
+    assert!(
+        hits.is_empty(),
+        "src/render/caret.rs must not call `layout_runs()` — the caret glyph lookups \
+         read the cursor line's own `layout_opt()` (target-line-local, item 57). \
+         Offending lines:\n{}",
+        hits.iter()
+            .map(|(l, s)| format!("  caret.rs:{l}: {s}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}

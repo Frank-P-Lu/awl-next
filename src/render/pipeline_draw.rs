@@ -438,6 +438,7 @@ impl TextPipeline {
             last_conceal_cursor_line: None,
             last_conceal_selection: None,
             row_geom: rowgeom::RowGeom::new(),
+            caret_line_glyphs: std::cell::RefCell::new(None),
             ornament_cache: rects::OrnamentCache::new(),
             table_report: std::cell::RefCell::new(Vec::new()),
             table_pan: None,

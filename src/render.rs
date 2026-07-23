@@ -161,6 +161,15 @@ pub mod framebench;
 /// on the render path.
 pub mod benchsuite;
 
+/// CARET LOOKUP WITNESS — the hidden `--bench-caret` harness (item 57): places the
+/// caret at the document TOP / MIDDLE / TAIL on a long fixture and records, per
+/// position, the prefix runs a whole-doc walk would touch, the target-line-local
+/// glyph count the fixed lookup actually visits (proven nonzero), and the median
+/// per-frame caret-glyph-lookup cost — witnessing that the cost is independent of
+/// document position. A child of `render` for the same private-seam reason as
+/// [`perfbench`]. Dev-only; never on the render path.
+pub mod caretbench;
+
 /// The render-relevant editor SNAPSHOT — the [`ViewState`] struct + its canonical
 /// [`ViewState::base`] default, carved out of `render.rs` VERBATIM into a physical
 /// home (pure data, no `&self`, no GPU types — see the module doc). Re-exported
@@ -3201,6 +3210,16 @@ pub struct TextPipeline {
     /// pipeline's `row_top_px` / `row_height_px` / `total_doc_height` /
     /// `total_visual_rows` delegate here.
     row_geom: rowgeom::RowGeom,
+    /// TARGET-LINE-LOCAL caret glyph record (item 57) — the cursor line's shaped
+    /// glyph clusters `(start_byte, end_byte, CacheKey)`, read from that line's OWN
+    /// `layout_opt()` rather than by filtering the whole document's `layout_runs()`.
+    /// A SINGLE slot (the caret is only ever on one line), rebuilt when the cursor
+    /// crosses to a new line or the shaped geometry changes (a newer `row_geom`
+    /// generation). Shared by the block ink box / morph masks / descender / cluster
+    /// span so their per-frame glyph lookups cost O(the cursor line's glyphs) rather
+    /// than O(the whole prefix before the caret). Interior-mutable so the `&self`
+    /// lookups (`cursor_glyph_key_at`) can lazily fill it. See [`caret::CaretLineGlyphs`].
+    caret_line_glyphs: std::cell::RefCell<Option<caret::CaretLineGlyphs>>,
     /// CACHED ORNAMENT LINE LISTS (rule lines + bullet lines), keyed by the reshape
     /// version, so the per-frame ornament pass filters a cached set to the visible
     /// rows instead of re-scanning every line × md_span. See [`rects::OrnamentCache`].
