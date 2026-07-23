@@ -1276,14 +1276,24 @@ impl TextPipeline {
                 .unwrap_or(fold_mark_h * 0.8)
         };
         // Shape a small buffer per affordance; folds are few, so a per-mark buffer
-        // (no dedupe) stays O(visible).
+        // (no dedupe) stays O(visible). The tail's own SHAPED width (`run.line_w`,
+        // the same measurement `fence_lang_widths` above takes) is recorded per
+        // mark — item 73: it's the one thing the PLACEMENT clamp below needs that
+        // isn't knowable from geometry alone (the text is short but its pixel width
+        // still depends on the active world's own ornament face).
         let mut fold_tail_buffers: Vec<GlyphBuffer> =
             Vec::with_capacity(fold_tail_marks.len());
+        let mut fold_tail_widths: Vec<f32> = Vec::with_capacity(fold_tail_marks.len());
         for &(_, _, n, _line) in &fold_tail_marks {
             let mut buf = GlyphBuffer::new(&mut self.font_system, fold_mark_metrics);
             buf.set_size(&mut self.font_system, Some(col_w), Some(fold_mark_h));
             buf.set_text(&mut self.font_system, &fold_tail_text(n), &fold_tail_attrs, Shaping::Advanced, None);
             buf.shape_until_scroll(&mut self.font_system, false);
+            let mut w = 0.0f32;
+            for run in buf.layout_runs() {
+                w = w.max(run.line_w);
+            }
+            fold_tail_widths.push(w);
             fold_tail_buffers.push(buf);
         }
         let mut fold_chevron_buffers: Vec<GlyphBuffer> =
@@ -1370,11 +1380,39 @@ impl TextPipeline {
         // `baseline` (slot 0) minus this buffer's OWN `line_y` places its baseline
         // exactly there (item 65's "floating tail" taste correction; see the marks'
         // own doc comments).
-        for (i, &(baseline, left, _n, _line)) in fold_tail_marks.iter().enumerate() {
+        //
+        // item 73 CLAMP: the tail's PREFERRED left (`desired_left`, item 65's own
+        // small-gap placement) hangs it just past the heading's first visual row —
+        // correct UNLESS that row already runs to (or near) the column's own right
+        // edge, in which case the tail's shaped width (`fold_tail_widths[i]`, only
+        // known now that it's shaped) would carry its own right edge past
+        // `column_right` and bleed onto the margin ground (Fable's item 65 taste
+        // find). Never touches item 65's baseline, chevron, ink dials, or the
+        // Outline `(N)` marker — placement ONLY. Three cases:
+        //   1. fits at the preferred spot (`desired_left + w <= column_right`):
+        //      byte-identical to before this fix.
+        //   2. doesn't fit there, but fits hugging the column edge
+        //      (`column_right - w` is still at/past the heading's own real text
+        //      end, `fold_affordance_row_end_x`): SHIFT left just enough to end
+        //      exactly at `column_right`, drawing over the row's own trailing
+        //      whitespace (never over the heading's real ink — the floor guards
+        //      that).
+        //   3. doesn't fit even hugging the edge (the heading's first row runs
+        //      flush to the column with no gap at all, and the tail is wider than
+        //      what's left): ELIDE this tail rather than either overlap the
+        //      heading's own glyphs or bleed past the column.
+        let column_right = left + col_w;
+        for (i, &(baseline, desired_left, _n, line)) in fold_tail_marks.iter().enumerate() {
+            let w = fold_tail_widths[i];
+            let floor_left = self.fold_affordance_row_end_x(line);
+            let draw_left = desired_left.min(column_right - w);
+            if draw_left < floor_left {
+                continue;
+            }
             let top = baseline - fold_mark_line_y(&fold_tail_buffers[i]);
             areas.push(TextArea {
                 buffer: &fold_tail_buffers[i],
-                left,
+                left: draw_left,
                 top,
                 scale: 1.0,
                 bounds,
