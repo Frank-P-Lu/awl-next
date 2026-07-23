@@ -2379,6 +2379,9 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 // every world — the silent pole included.
                 list_style: model::ListStyle::Pane,
                 facet_style: model::FacetStyle::Text,
+                // SPLIT-PANE COMPOSITION round: the silent pole takes the DEFAULT
+                // split like every Pane world (only Cassowary opts to `Unified`).
+                pane_split: model::PaneSplit::Split,
                 // TWINKLING-STARS round: no ambient life on the silent pole
                 // (and a fractional-alpha breath is 1-bit-illegal besides).
                 ambient: model::AmbientStyle::None,
@@ -2436,6 +2439,9 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 elevation: Elevation::Bordered,
                 list_style: poster_bars,
                 facet_style: FacetStyle::Chips(ChipVariant::Bracket),
+                // SPLIT-PANE COMPOSITION round: the NERV console is the ONE Pane
+                // exception — a UNIFIED room (dormant under its poster Bars list).
+                pane_split: model::PaneSplit::Unified,
                 ..RenderCaps::DEFAULT
             },
             other => panic!(
