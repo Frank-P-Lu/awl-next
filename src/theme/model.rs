@@ -788,7 +788,11 @@ pub enum AmbientStyle {
         cell_px: f32,
         /// Fraction of cells that actually carry a star, in `[0, 1]`.
         density: f32,
-        /// Star dot diameter (px) — tiny points, not marks.
+        /// Star dot diameter (px) — tiny points, not marks. Each drawn star
+        /// scales this by its own small hash-derived multiplier
+        /// (`crate::stars::star_size_scale`, item 62) for a mild, deterministic
+        /// size spread — this field is the authored CENTER of that spread, not
+        /// the drawn size of every star.
         size_px: f32,
         /// The TOP of a star's brightness breath: the alpha its tint reaches
         /// at peak, in `(0, 1]`. The quiet-band law binds the COMPOSITED

@@ -300,6 +300,57 @@ fn currawong_star_field_is_dpi_invariant_in_logical_space() {
     );
 }
 
+/// THE DETERMINISTIC-IDENTITY LAW (item 62, 2026-07-24): the SAME star, at the
+/// SAME fixed phase, renders BYTE-IDENTICAL pixels across two independent
+/// captures — position, size, tint, AND phase (brightness) are all pure
+/// functions of (seed, phase), never a clock or entropy (`crate::stars`'s own
+/// doc). Two full end-to-end captures of the identical Currawong scene, at the
+/// frozen headless phase (0.0, never advanced), must produce the identical
+/// frame buffer down to the byte — the pixel-level proof that the item 62 size
+/// spread stayed deterministic (a live-random size would desync the two
+/// frames the instant it landed on a differently-sized star).
+#[test]
+fn currawong_stars_are_pixel_identical_across_two_captures_of_the_same_phase() {
+    const W: u32 = 900;
+    const H: u32 = 600;
+    let Some((device, queue, mut p)) = headless_dqp(W as f32, H as f32) else {
+        eprintln!(
+            "skipping currawong_stars_are_pixel_identical_across_two_captures_of_the_same_phase: \
+             no wgpu adapter"
+        );
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let was_page_on = crate::page::page_on();
+    let was_measure = crate::page::measure();
+    crate::page::set_page_on(true);
+    crate::page::set_measure(24); // narrow column -> wide, star-bearing margins
+
+    theme::set_active_by_name("Currawong").unwrap();
+    p.sync_theme();
+    let v = view("hi\nthere\n", 0, 0);
+    p.set_view(&v);
+
+    // Two independent end-to-end captures at the SAME (frozen) phase — never
+    // advanced between them.
+    let frame_a = render_frame(&device, &queue, &mut p, W, H);
+    let count_a = p.stars_pipeline.instance_count();
+    let frame_b = render_frame(&device, &queue, &mut p, W, H);
+    let count_b = p.stars_pipeline.instance_count();
+
+    crate::page::set_page_on(was_page_on);
+    crate::page::set_measure(was_measure);
+
+    assert!(count_a > 10, "a real star population must be present ({count_a} instances)");
+    assert_eq!(count_a, count_b, "the drawn star count must not drift across captures");
+    assert_eq!(
+        frame_a, frame_b,
+        "two captures of the SAME Currawong scene at the SAME fixed phase must be \
+         byte-identical — every star's position, size, tint, and phase is a pure \
+         function of (seed, phase), never a clock or randomness"
+    );
+}
+
 /// THE ABSENT HALF: every `AmbientStyle::None` world uploads ZERO star
 /// instances through the same prepare path (structurally nothing to draw — the
 /// byte-identity guarantee for the starless roster), and even the stars world
