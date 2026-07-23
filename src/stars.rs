@@ -38,7 +38,22 @@
 //!   no new pipeline, no new shader, nothing new for the WebGL2 fallback to
 //!   validate. Per-frame work is phase arithmetic over the visible star set
 //!   (the proto-cache shape: layout built once per size/params, culled +
-//!   tinted per frame).
+//!   tinted per frame). Every instance shares ONE uploaded corner radius
+//!   (`Globals::corner`) sized to the WIDEST star the size spread allows; the
+//!   shader clamps it to each instance's own half-extent
+//!   (`min(g.corner, hsize)`, `selection.wgsl`), so a smaller star still
+//!   renders as a full circle with no per-instance corner field needed.
+//! * **Chroma up, size mildly spread, never a clock or a brightness change**
+//!   (item 62, 2026-07-24, user-decided). The palette ([`STAR_TINT_WHITE`],
+//!   [`STAR_TINT_CHAMPAGNE`], the world's own `ambient.tint`) carries ~10%
+//!   more saturation than it shipped with, at no greater luminance (champagne
+//!   alone is capped short of the full amount — the amber guard's exemption
+//!   line is the hard ceiling on a hue that sits only ~5° from the caret's).
+//!   Each star's dot size also spreads mildly around the authored `size_px`
+//!   by a FOURTH decorrelated roll off its own `seed` ([`star_size_scale`]) —
+//!   deterministic, no extra clock, no density change; the same seed always
+//!   yields the same scale, so a star's size (like its tint, phase, and
+//!   position) is identical across every frame and every capture.
 
 use crate::theme::Srgb;
 use std::sync::OnceLock;
@@ -83,11 +98,43 @@ const _: () = assert!(STAR_ACTIVE_FRAC >= 0.05 && STAR_ACTIVE_FRAC <= 1.0);
 /// renderer (`prepare_stars_layer`) and the amber-guard law
 /// (`theme::tests::ambient_stars_laws_hold_for_every_world`) iterate, so the
 /// drawn tints and the law-checked tints can never drift.
-pub const STAR_TINT_WHITE: Srgb = Srgb::rgb(0xE9, 0xEC, 0xF2);
-/// The warm champagne pole — deliberately kept near white (HSL sat ~0.13) so it
+///
+/// CHROMA BOOST (item 62, 2026-07-24, user-decided): every entry here (plus
+/// the world's own `ambient.tint`, e.g. `worlds::CURRAWONG`) carries ~10%
+/// MORE saturation than it shipped with — never more brightness. Each hex
+/// triple below was hand-picked (not computed at runtime) so the exact
+/// relative-luminance delta could be checked by hand ahead of shipping: every
+/// one moves at EQUAL OR LOWER luminance than its predecessor (see the
+/// per-entry deltas below and the measured-delta law test,
+/// `star_palette_carries_more_chroma_than_before_at_no_greater_luminance`).
+/// A runtime "boost by X%" helper was deliberately rejected: at these near-
+/// white starting saturations, u8 channel quantization means a literal +10%
+/// HSL-saturation move sometimes rounds back to the IDENTICAL byte triple
+/// (no boost at all) and sometimes, depending on which channel the rounding
+/// falls on, nudges luminance UP by a fraction of a percent — a real, if
+/// tiny, brightening the user's call explicitly rules out. Picking the target
+/// bytes by hand and checking luminance directly sidesteps both traps.
+///
+/// * World's own `ambient.tint` (e.g. `worlds::CURRAWONG`): was `#9DB0CF`,
+///   now `#9BB0D2` — saturation +10.8%, luminance -0.12% (hue holds within
+///   0.1°).
+/// * [`STAR_TINT_WHITE`]: was `#E9ECF2`, now `#E6EAF1` — saturation +9.7%,
+///   luminance -2.0% (hue drifts ~2° but stays the same cool blue-white).
+pub const STAR_TINT_WHITE: Srgb = Srgb::rgb(0xE6, 0xEA, 0xF1);
+/// The warm champagne pole — deliberately kept near white (HSL sat ~0.14) so it
 /// stays clear of the ambient amber guard despite its warm hue sitting near the
 /// gold caret; a real champagne saturation would read as a second accent.
-pub const STAR_TINT_CHAMPAGNE: Srgb = Srgb::rgb(0xEF, 0xEE, 0xEA);
+///
+/// CHROMA BOOST, CAPPED (item 62): unlike its two palette siblings, champagne
+/// does NOT get the full ~10% — its hue (~48°) sits only ~5° from the amber
+/// caret's, so the amber-guard's exemption line (HSL sat <= 0.15) is the hard
+/// ceiling on how much chroma this ONE entry may ever carry (any u8 triple
+/// that clears 0.15 here fails `ambient_stars_laws_hold_for_every_world`
+/// outright — verified by brute-force search over every nearby byte triple,
+/// not just this one). Was `#EFEEEA`, now `#EDECE7` — saturation +5.7%
+/// (0.135 -> 0.143, still comfortably under the 0.15 line), luminance -2.0%
+/// (never brighter).
+pub const STAR_TINT_CHAMPAGNE: Srgb = Srgb::rgb(0xED, 0xEC, 0xE7);
 
 /// One scattered star: a jittered position (px, top-left origin) plus its own
 /// hash seed in `[0, 1)` — the seed derives the star's individual twinkle rate
@@ -249,6 +296,30 @@ pub fn star_tint(base: Srgb, seed: f32) -> Srgb {
 /// law never checks can never be drawn.
 pub fn star_palette(base: Srgb) -> [Srgb; 3] {
     [base, STAR_TINT_WHITE, STAR_TINT_CHAMPAGNE]
+}
+
+// --- Size spread (item 62, 2026-07-24) -----------------------------------------
+
+/// How far a star's own dot size may spread from the authored `size_px`, as a
+/// fraction of it: a star's scaled size lands in `[1 - SPREAD, 1 + SPREAD]` ×
+/// `size_px` ([`star_size_scale`]). SMALL and MILD by construction — the
+/// compile-time guard bounds any future edit to a genuinely narrow band, never
+/// a wide scatter that would read as noise. TASTE TUNABLE.
+pub const STAR_SIZE_SPREAD_FRAC: f32 = 0.18;
+const _: () = assert!(STAR_SIZE_SPREAD_FRAC > 0.0 && STAR_SIZE_SPREAD_FRAC <= 0.3);
+
+/// This star's own dot-size MULTIPLIER, in `[1 - STAR_SIZE_SPREAD_FRAC, 1 +
+/// STAR_SIZE_SPREAD_FRAC]` — a fourth decorrelated roll off `seed` (a prime
+/// multiplier clear of the rate/offset/shine/tint folds above), so a star's
+/// size is fixed by its own identity alone: the SAME seed always yields the
+/// SAME scale, never true randomness, no extra clock. The renderer
+/// (`prepare_stars_layer`) multiplies `size_px` by this before drawing the
+/// quad, so a star's tint, size, phase, and position are ALL pure functions of
+/// (seed, phase) — identical across every frame and every capture of the same
+/// layout. Pure.
+pub fn star_size_scale(seed: f32) -> f32 {
+    let r = (seed * 41.27).fract();
+    1.0 - STAR_SIZE_SPREAD_FRAC + 2.0 * STAR_SIZE_SPREAD_FRAC * r
 }
 
 // --- The margin gate (THE placement law, one owner) ---------------------------
@@ -509,7 +580,7 @@ mod tests {
     /// dominant, with white and champagne glints).
     #[test]
     fn star_tint_is_a_deterministic_pick_from_the_low_sat_palette() {
-        let base = Srgb::rgb(0x9D, 0xB0, 0xCF); // Currawong's ambient tint
+        let base = Srgb::rgb(0x9B, 0xB0, 0xD2); // Currawong's ambient tint
         let palette = star_palette(base);
         let mut seen = [0usize; 3];
         for i in 0..1000 {
@@ -641,6 +712,131 @@ mod tests {
         assert_eq!(parse_phase("0"), Some(0.0));
         for bad in ["", "wat", "NaN", "inf", "-inf"] {
             assert_eq!(parse_phase(bad), None, "expected None for {bad:?}");
+        }
+    }
+
+    /// THE CHROMA-BOOST LAW (item 62, 2026-07-24, user-decided): every entry in
+    /// today's shipped palette carries MEASURABLY more saturation than the
+    /// palette it replaced, at NO GREATER relative luminance (never brighter —
+    /// the user's explicit call). The pre-item-62 hex triples are kept here
+    /// ONLY as the "before" snapshot this law measures against — they are not
+    /// a second source of truth for the shipped colors (`star_palette` alone
+    /// is that), and nothing else in the crate reads them.
+    #[test]
+    fn star_palette_carries_more_chroma_than_before_at_no_greater_luminance() {
+        fn lin(u: u8) -> f32 {
+            let s = u as f32 / 255.0;
+            if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        }
+        fn rel_lum(c: Srgb) -> f32 {
+            0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+        }
+        // The "before" snapshot (was Currawong's shipped palette pre-item-62).
+        let old_base = Srgb::rgb(0x9D, 0xB0, 0xCF);
+        let old_white = Srgb::rgb(0xE9, 0xEC, 0xF2);
+        let old_champagne = Srgb::rgb(0xEF, 0xEE, 0xEA);
+        let old_palette = [old_base, old_white, old_champagne];
+
+        // The "after" is TODAY's data: the live Currawong tint plus the two
+        // shared consts, read through the SAME `star_palette` the renderer and
+        // the amber-guard law use (one owner, never a second copy).
+        let (new_base, ..) = crate::theme::CURRAWONG
+            .render_caps
+            .ambient
+            .stars_params()
+            .expect("Currawong must ship AmbientStyle::Stars");
+        let new_palette = star_palette(new_base);
+
+        for (label, old, new) in [
+            ("blue-white base", old_palette[0], new_palette[0]),
+            ("white", old_palette[1], new_palette[1]),
+            ("champagne", old_palette[2], new_palette[2]),
+        ] {
+            let (_, s_old, _) = old.to_hsl();
+            let (_, s_new, _) = new.to_hsl();
+            assert!(
+                s_new > s_old + 0.005,
+                "{label}: saturation must measurably increase ({s_old:.4} -> {s_new:.4})"
+            );
+            let y_old = rel_lum(old);
+            let y_new = rel_lum(new);
+            assert!(
+                y_new <= y_old + 1e-4,
+                "{label}: must not brighten (Y {y_old:.5} -> {y_new:.5}) — the user's \
+                 explicit call was more chroma, never more brightness"
+            );
+        }
+    }
+
+    /// THE SIZE-SPREAD LAW (item 62): [`star_size_scale`] is a NARROW, NONZERO
+    /// distribution around `1.0` — narrow (every roll lands inside
+    /// `[1 - STAR_SIZE_SPREAD_FRAC, 1 + STAR_SIZE_SPREAD_FRAC]`, a mild band,
+    /// not a wide scatter) and genuinely nonzero (across a spread of seeds the
+    /// scale actually varies — it is not a constant `1.0` in disguise). Also
+    /// deterministic: the same seed always yields the same scale.
+    #[test]
+    fn star_size_scale_is_a_narrow_nonzero_spread_around_one() {
+        let lo_bound = 1.0 - STAR_SIZE_SPREAD_FRAC;
+        let hi_bound = 1.0 + STAR_SIZE_SPREAD_FRAC;
+        let mut lo = f32::MAX;
+        let mut hi = f32::MIN;
+        for i in 0..1000 {
+            let seed = i as f32 / 1000.0;
+            let scale = star_size_scale(seed);
+            // Deterministic and pure.
+            assert_eq!(scale, star_size_scale(seed), "star_size_scale must be pure");
+            // NARROW: never outside the authored band.
+            assert!(
+                (lo_bound..=hi_bound).contains(&scale),
+                "seed {seed}: scale {scale} escaped the narrow band [{lo_bound}, {hi_bound}]"
+            );
+            lo = lo.min(scale);
+            hi = hi.max(scale);
+        }
+        // NONZERO: the population actually spreads (not every star the same size).
+        assert!(
+            hi - lo > 0.5 * (hi_bound - lo_bound),
+            "the size spread must be genuinely nonzero across the population \
+             (observed range {lo:.3}..{hi:.3} inside authored band \
+             {lo_bound:.3}..{hi_bound:.3})"
+        );
+        // MILD: the band itself stays narrow relative to the star (never a wide
+        // scatter that would read as size noise rather than a subtle spread).
+        assert!(
+            STAR_SIZE_SPREAD_FRAC <= 0.3,
+            "the size-spread fraction must stay mild, not a wide scatter"
+        );
+    }
+
+    /// THE STAR-IDENTITY LAW: a star's tint, size, phase (brightness), and
+    /// position are ALL pure functions of (seed, phase) — so the SAME star,
+    /// evaluated twice at the SAME fixed phase, is identical on every axis.
+    /// This is the unit-level half of the render-side pixel proof
+    /// (`render::tests::stars::currawong_stars_are_pixel_identical_across_two_captures_of_the_same_phase`).
+    #[test]
+    fn a_star_is_identical_across_two_evaluations_of_the_same_fixed_phase() {
+        let (_, _, peak, floor) = currawong_stars();
+        let base = Srgb::rgb(0x9B, 0xB0, 0xD2);
+        let stars_a = layout(1200.0, 800.0, 34.0, 0.30);
+        let stars_b = layout(1200.0, 800.0, 34.0, 0.30);
+        let phase = 1.7;
+        for (a, b) in stars_a.iter().zip(stars_b.iter()) {
+            // Position: the layout hash itself.
+            assert_eq!((a.x, a.y, a.seed), (b.x, b.y, b.seed), "position/seed must match");
+            // Phase (brightness): a pure function of (seed, phase, band).
+            assert_eq!(
+                brightness(a.seed, phase, floor, peak),
+                brightness(b.seed, phase, floor, peak),
+                "brightness at a fixed phase must match"
+            );
+            // Tint: a pure function of seed.
+            assert_eq!(star_tint(base, a.seed), star_tint(base, b.seed), "tint must match");
+            // Size: a pure function of seed.
+            assert_eq!(
+                star_size_scale(a.seed),
+                star_size_scale(b.seed),
+                "size scale must match"
+            );
         }
     }
 }

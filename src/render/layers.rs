@@ -318,6 +318,9 @@ impl TextPipeline {
     /// by [`crate::stars::brightness`] at the resolved twinkle phase
     /// ([`TextPipeline::stars_render_phase`]: env knob > Reduce-Motion freeze >
     /// the shared ambient clock — frozen at t=0 in every headless capture).
+    /// Each star's own dot size is `size_px` scaled by
+    /// [`crate::stars::star_size_scale`] (a small hash roll off its seed,
+    /// item 62) — deterministic, so a star's size never drifts frame to frame.
     pub(super) fn prepare_stars_layer(
         &mut self,
         device: &wgpu::Device,
@@ -382,11 +385,22 @@ impl TextPipeline {
                 ink_zones.push(r);
             }
         }
-        let half = size_px * 0.5;
         let phase = self.stars_render_phase();
         let gap = crate::stars::STAR_MARGIN_GAP_PX;
+        // SIZE SPREAD (item 62, 2026-07-24): each star's own dot size is
+        // `size_px` scaled by a small hash-derived multiplier off its seed
+        // (`crate::stars::star_size_scale`) — deterministic and stable across
+        // frames, never true randomness. The WIDEST half-size the spread
+        // allows becomes the ONE uploaded corner radius (`Globals::corner`,
+        // shared by every instance in the draw call); the shader clamps it
+        // per instance to that star's own half-extent
+        // (`min(g.corner, hsize)`, `selection.wgsl`), so a smaller star still
+        // renders as a full circle rather than a rounded square.
+        let max_half = size_px * 0.5 * (1.0 + crate::stars::STAR_SIZE_SPREAD_FRAC);
         let mut quads: Vec<([f32; 4], [u8; 4])> = Vec::with_capacity(self.stars_protos.len());
         for s in &self.stars_protos {
+            let star_size = size_px * crate::stars::star_size_scale(s.seed);
+            let half = star_size * 0.5;
             if !crate::stars::in_margin(s.x, half, band_left, band_right, gap) {
                 continue;
             }
@@ -410,13 +424,15 @@ impl TextPipeline {
             // white / champagne — the amber guard holds by low saturation).
             let st = crate::stars::star_tint(tint, s.seed);
             quads.push((
-                [s.x - half, s.y - half, size_px, size_px],
+                [s.x - half, s.y - half, star_size, star_size],
                 [st.r, st.g, st.b, alpha],
             ));
         }
         // Fully-rounded corners turn each tiny quad into a soft dot (the SDF
-        // becomes a circle when the radius reaches the half-size).
-        self.stars_pipeline.set_corner(half);
+        // becomes a circle when the radius reaches the half-size) — set to the
+        // WIDEST star's half so the per-instance shader clamp rounds every
+        // smaller star fully too (see the size-spread note above).
+        self.stars_pipeline.set_corner(max_half);
         self.stars_pipeline
             .prepare_multicolor(device, queue, width, height, &quads);
     }

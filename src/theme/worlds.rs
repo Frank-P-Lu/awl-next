@@ -701,17 +701,30 @@ pub const CURRAWONG: Theme = Theme {
     // margins, each on its own slow seconds-scale LIFECYCLE (2026-07-23): a dark
     // dwell at true zero -> rise -> brief shine -> fade, so the visible sky
     // genuinely changes (stars appear and die). Per-star tint from a low-sat
-    // real-star palette (cool blue-white #9DB0CF dominant, ~217°/~170° clear of
+    // real-star palette (cool blue-white #9BB0D2 dominant, ~217°/~172° clear of
     // the gold caret; plus a neutral white and a subtle champagne — the amber
     // guard holds by low saturation, `crate::stars::star_palette`). A star's
     // shine may now rise ABOVE the muted whisper cap (a user-blessed relaxation
     // of the quiet-band law) but stays well under the text ink. All numbers are
     // TASTE TUNABLE — the twinkle FEEL and shine ceiling are live human-confirm.
+    // CHROMA + SIZE (item 62, 2026-07-24, user-decided): the palette carries
+    // ~10% more chroma than it shipped with (was #9DB0CF; every entry moved at
+    // NO GREATER luminance — a richer sky, never a brighter one, see
+    // `crate::stars::star_palette`'s doc and its measured-delta law test).
+    // Champagne alone stays capped WELL under a full +10% (its hue sits only
+    // ~5° from the gold caret, so ANY saturation above the amber guard's 0.15
+    // exemption line would make it a second accent — the guard bounds how much
+    // chroma this one entry may take, `STAR_TINT_CHAMPAGNE`'s own doc). Each
+    // star's dot size also now spreads mildly around `size_px` by a hash roll
+    // off its own seed (`crate::stars::star_size_scale`) — deterministic, no
+    // new clock, no density change.
     render_caps: RenderCaps {
         elevation: Elevation::Bordered,
         card_anchor: CardAnchor::TopLeft,
         ambient: AmbientStyle::Stars {
-            tint: Srgb::rgb(0x9D, 0xB0, 0xCF),
+            // +10.8% saturation over the shipped #9DB0CF at Y -0.12% (never
+            // brighter) — see the module doc above.
+            tint: Srgb::rgb(0x9B, 0xB0, 0xD2),
             cell_px: 34.0,
             // Denser candidate field than the old always-on breath (0.16): the
             // LIFECYCLE round leaves ~half the field dark-dwelling at any moment,

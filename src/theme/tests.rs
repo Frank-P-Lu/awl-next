@@ -451,6 +451,17 @@ fn ambient_stars_laws_hold_for_every_world() {
                     "{}: dot {size_px}px must stay well inside its {cell_px}px cell's jitter band",
                     t.name
                 );
+                // SIZE SPREAD (item 62): even the WIDEST star the spread ever
+                // draws — `size_px * (1 + STAR_SIZE_SPREAD_FRAC)` — must still
+                // clear the same cell-jitter safety margin above, not just the
+                // authored base size.
+                let widest = size_px * (1.0 + crate::stars::STAR_SIZE_SPREAD_FRAC);
+                assert!(
+                    widest < cell_px * 0.3,
+                    "{}: the widest spread star {widest}px must stay well inside its \
+                     {cell_px}px cell's jitter band too",
+                    t.name
+                );
                 // (d) ONE-BIT GUARD.
                 assert!(
                     !t.is_one_bit(),
@@ -2357,7 +2368,9 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 elevation: Elevation::Bordered,
                 card_anchor: model::CardAnchor::TopLeft,
                 ambient: model::AmbientStyle::Stars {
-                    tint: Srgb::rgb(0x9D, 0xB0, 0xCF),
+                    // ITEM 62 (2026-07-24): +10.8% chroma over the shipped
+                    // #9DB0CF, at no greater luminance. Mirrors `worlds::CURRAWONG`.
+                    tint: Srgb::rgb(0x9B, 0xB0, 0xD2),
                     cell_px: 34.0,
                     // LIFECYCLE round (2026-07-23): denser candidate field
                     // (~half dark-dwelling at any moment) and the visibility band
