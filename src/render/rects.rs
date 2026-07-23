@@ -808,6 +808,32 @@ impl TextPipeline {
         crate::markdown::destination_ranges(&doc_text, &self.md_spans)
     }
 
+    /// Queue item 72: true when nit `[.., end_col)` on OFF-cursor line `li` falls
+    /// FULLY inside an UNORDERED list marker's own prefix (indent + `-`/`*`/`+` +
+    /// its required space, [`crate::markdown::ListItem::content`]) — the exact
+    /// region [`Self::bullet_marks`] paints its depth-derived BULLET GLYPH over
+    /// (same `md_enabled` + `!it.ordered` gate, so this tracks the glyph in
+    /// lockstep). That prefix's raw text stays REAL, non-zero-width dim ink
+    /// (unlike the image-source conceal's zero-width trick guarded by
+    /// [`Self::IMAGE_CONCEAL_UNDERLINE_MIN_ADVANCE`] — a list marker never
+    /// shrinks its advance), so an un-gated nit fully inside it — typically the
+    /// single REQUIRED trailing space of an EMPTY item's `"- "` — would draw its
+    /// muted tick with nothing visible above it: the row-bottom placement lands
+    /// right at the NEXT row's top, reading as a stray mark on the following
+    /// (often blank) line. Ordered items are untouched (`bullet_marks` never
+    /// conceals their number either). Callers already know `li != cursor_line`
+    /// (reveal-on-cursor excludes the caret's own line first), so a caret ON the
+    /// marker line — raw text genuinely visible, no bullet drawn — keeps its nit.
+    fn nit_hidden_by_bullet_glyph(&self, li: usize, end_col: usize) -> bool {
+        self.md_enabled
+            && self
+                .buffer
+                .lines
+                .get(li)
+                .and_then(|l| crate::markdown::list_item(l.text()))
+                .is_some_and(|it| !it.ordered && end_col <= it.content)
+    }
+
     /// Rebuild the cached spell-squiggle protos IF the shaped geometry or the
     /// misspelling list changed since they were last built (keyed by the row-geometry
     /// GENERATION + the spell list generation). ONE `layout_runs()` walk for ALL
@@ -1141,6 +1167,9 @@ impl TextPipeline {
         for p in protos.iter() {
             if p.line == self.cursor_line {
                 continue; // reveal-on-cursor: judged only once you've moved off it
+            }
+            if self.nit_hidden_by_bullet_glyph(p.line, p.end_col) {
+                continue; // item 72: the marker prefix is masked by the bullet glyph
             }
             let line_top = doc_top + p.line_top;
             if !self.proto_visible(line_top, p.line_height) {
