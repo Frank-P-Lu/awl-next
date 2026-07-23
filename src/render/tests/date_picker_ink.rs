@@ -291,6 +291,8 @@ fn date_picker_examples_render_one_ink_across_worlds_and_states() {
 /// it, then accepts the one-ink counterpart.
 #[test]
 fn assert_row_one_ink_would_have_caught_the_pre_fix_split() {
+    let _g = crate::testlock::serial();
+    let orig_theme = crate::theme::active_index();
     crate::theme::set_active_by_name("Tawny");
     let s = crate::theme::base_300();
     let bg = [s.r, s.g, s.b, 255];
@@ -340,4 +342,6 @@ fn assert_row_one_ink_would_have_caught_the_pre_fix_split() {
     // ONE-INK strip (this item's fix: the whole row in content ink) — must PASS.
     let one_ink = paint_half(muted); // both halves `muted` now — genuinely uniform
     assert_row_one_ink(&one_ink, region, "synthetic post-fix control (muted | muted)");
+
+    crate::theme::set_active(orig_theme);
 }
