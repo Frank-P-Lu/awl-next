@@ -22,6 +22,17 @@ use std::path::Path;
 /// keyable once it has been named (given a real path), at which point it is an
 /// ordinary pathed buffer for every OTHER purpose here; a stale value simply
 /// re-triggers one redundant (harmless) autosave on reactivation.
+/// A remembered "desk" for the two-desk "Notes" flip (item 59): the project
+/// ROOT to return to plus the FILE that was active there (`None` = a pathless
+/// scratch buffer, restored from the registry's `Scratch` slot). Entering Notes
+/// stashes the outgoing home desk here so a second flip restores the whole
+/// writing context — root AND the exact buffer/view — rather than only the root
+/// (the split state the Wave-4 user reported).
+pub(super) struct DeskReturn {
+    pub root: PathBuf,
+    pub file: Option<PathBuf>,
+}
+
 #[derive(Default)]
 pub(super) struct BufferExtra {
     /// Whether the buffer's active selection (if any) was begun with Shift —
@@ -628,22 +639,29 @@ impl App {
     }
 
     /// "Notes" (`Action::NotesFlip`, palette-only, user-decided 2026-07-22):
-    /// flip the active project to `notes_root` and back — the pure toggle
-    /// DECISION lives in [`notes_flip_target`] (unit-tested standalone, no
-    /// `App` needed); this is just its impure APPLY, mirroring `window_title`'s
-    /// own pure/impure split one function down.
+    /// a TWO-DESK FLIP between the current project and `notes_root` (item 59).
+    /// The pure toggle DECISION lives in [`notes_flip_target`] (unit-tested
+    /// standalone, no `App` needed); this is its impure APPLY.
     ///
-    /// Deliberately calls [`Self::set_root`] directly rather than
-    /// [`Self::switch_project`] — like the C-x n jump, a Notes flip is a
-    /// transient VISIT, not "this is my project now": it neither persists the
-    /// STICKY project root (a bare relaunch after visiting Notes still reopens
-    /// whatever was genuinely active — see `resolve_root`) nor pushes the
-    /// recent-projects MRU (Notes is not a "recent project" you switched to).
-    /// A cancelled MAS grant panel means the flip never happened (mirrors
-    /// `switch_project`/`new_note`): the remembered root only updates once
-    /// `set_root` reports success.
+    /// The flip switches the WHOLE writing context, not just the root: entering
+    /// Notes parks the current buffer, re-scopes the root, and RESTORES the last
+    /// active notes buffer with its full caret/selection/scroll/fold view (via
+    /// `buffer_registry`) — or opens a FRESH untitled quick-note on a first-ever
+    /// visit rather than choosing an arbitrary existing file. Flipping back
+    /// restores the exact prior project AND its active buffer/view. Dirty
+    /// buffers are PARKED (a dirty note is named+saved by `set_root`'s
+    /// `flush_note` first, then parked), never discarded or spuriously saved.
+    ///
+    /// The root change GATES the buffer swap as ONE transaction: `set_root`
+    /// returning `false` (a cancelled MAS grant) leaves BOTH desks and the
+    /// remembered return target untouched. Like the C-x n jump, the visit is
+    /// TRANSIENT — it calls [`Self::set_root`] directly rather than
+    /// [`Self::switch_project`], so it never persists the STICKY project root
+    /// (a bare relaunch still reopens whatever was genuinely active) nor pushes
+    /// the recent-projects MRU (Notes is not a "recent project" you switched to).
     pub(super) fn notes_flip(&mut self) {
-        match notes_flip_target(&self.root, &self.notes_root, self.prev_project_root.as_deref()) {
+        let previous = self.notes_return.as_ref().map(|d| d.root.as_path());
+        match notes_flip_target(&self.root, &self.notes_root, previous) {
             // Nothing to flip to (no usable notes_root) or nothing to flip
             // BACK to (already home, nothing remembered) — a quiet no-op,
             // exactly like `last_buffer_toggle`'s own "nothing opened before".
@@ -652,17 +670,129 @@ impl App {
                 // The notes root may not exist yet on a fresh machine — create
                 // it lazily, exactly like `new_note` does before its own jump.
                 let _ = crate::fs::active().create_dir_all(&target);
-                if self.set_root(target) {
-                    self.prev_project_root = Some(remember);
+                // ONE TRANSACTION: the root change gates everything below. A
+                // denied grant returns here with both desks + the return memory
+                // untouched (`notes_last_file` is not consumed until success).
+                if !self.set_root(target) {
+                    return;
                 }
+                // `set_root` flushed the leaving (home) buffer, so a dirty
+                // home NOTE now carries its derived path — snapshot the home
+                // desk AFTER, so that just-named file is what we return to.
+                let return_desk = DeskReturn { root: remember, file: self.file.clone() };
+                // Restore the notes desk's last active buffer (full view via
+                // the registry), or open a fresh untitled note on a first-ever
+                // visit. Either activation parks the home buffer under its key.
+                match self.notes_last_file.take() {
+                    Some(f) => self.load_path(f),
+                    None => self.start_fresh_note(),
+                }
+                self.notes_return = Some(return_desk);
             }
             NotesFlipTarget::Back { target } => {
-                if self.set_root(target) {
-                    // Consumed: a THIRD invocation (now back at the original
-                    // project) re-enters notes_root fresh, remembering anew.
-                    self.prev_project_root = None;
+                // `target` is the remembered home root; take the full desk.
+                let Some(ret) = self.notes_return.take() else { return };
+                debug_assert_eq!(ret.root, target, "Back target must be the remembered home root");
+                if !self.set_root(ret.root.clone()) {
+                    // Denied: restore the memory, leave both desks untouched.
+                    self.notes_return = Some(ret);
+                    return;
+                }
+                // `set_root` flushed the leaving notes buffer (naming a dirty
+                // note), so `self.file` now reflects the notes desk's real
+                // active file — remember it for the next visit (an unnamed/empty
+                // note leaves `None` → a fresh note opens next time).
+                self.notes_last_file = self.file.clone();
+                match ret.file {
+                    Some(f) => self.load_path(f),
+                    None => self.restore_scratch_desk(),
                 }
             }
+        }
+    }
+
+    /// Swap in a fresh empty quick-NOTE buffer as the active buffer — the
+    /// buffer-swap half of C-x n, factored out of [`Self::new_note`] so the
+    /// two-desk Notes flip's first-ever visit opens the SAME fresh note without
+    /// re-running the root change. The caller has ALREADY re-scoped the root to
+    /// `notes_root` (via `set_root`). Parks the leaving buffer under its key.
+    fn start_fresh_note(&mut self) {
+        self.prev_file = self.file.take();
+        // WRITING STREAKS: sample the LEAVING buffer's word-delta before it is
+        // replaced by the fresh note (the anchor is reset below), so words
+        // written in it are recorded before the swap (native only; gated inside).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_flush();
+        // PARK the buffer we are leaving (registered under its own identity if
+        // it has one) exactly like `load_path`, so a later C-x b / reopen finds
+        // it live rather than re-reading disk.
+        self.park_active_buffer();
+        self.buffer.start_note(self.notes_root.clone());
+        self.restore_extra(BufferExtra::default());
+        self.search = None;
+        self.preedit.clear();
+        self.caret_synced_version = self.buffer.version();
+        self.autosave_saved_version = None;
+        self.autosave_dirty_at = None;
+        // STICKY PAGE WIDTH: a fresh note is always markdown (PROSE), so this
+        // re-applies `page_width_prose` regardless of what the leaving buffer's
+        // kind was — mirrors `load_path`'s own resync.
+        self.sync_page_measure();
+        // LIFETIME STATS: a fresh note is a buffer swap — drop the caret-travel
+        // anchor so its first caret sample re-anchors (see `load_path`).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stats_reset_caret_anchor();
+        // WRITING STREAKS: a fresh note is an awl-CREATED buffer born empty, so
+        // anchor EAGERLY at its birth count (0) rather than lazily — otherwise the
+        // words typed before the first idle flush would be anchored away on that
+        // flush (the anchor-swallow bug). See `streaks_anchor_now` vs the lazy
+        // `streaks_reset_baseline` an OPENED file uses.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_anchor_now();
+        self.update_title();
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
+        }
+    }
+
+    /// Restore the pathless SCRATCH buffer as the active buffer — the pathless
+    /// sibling of [`Self::load_path`], used when a Notes flip BACK returns to a
+    /// home desk that had NO open file (a bare-launch scratch surface). Parks
+    /// the current (notes) buffer, then brings the registry's `Scratch` entry
+    /// (its edits + full view state) back, or a fresh scratch if it was evicted.
+    fn restore_scratch_desk(&mut self) {
+        self.flush_note();
+        self.autosave_flush();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_flush();
+        self.prev_file = self.file.take();
+        self.park_active_buffer();
+        match self.buffer_registry.take(&crate::buffers::BufferKey::Scratch) {
+            Some(entry) => {
+                self.buffer = entry.buffer;
+                self.restore_extra(entry.extra);
+            }
+            None => {
+                self.buffer = Buffer::scratch();
+                self.restore_extra(BufferExtra::default());
+                self.doc_saved_version = Some(self.buffer.version());
+                self.caret_synced_version = self.buffer.version();
+            }
+        }
+        self.file = None;
+        self.search = None;
+        self.preedit.clear();
+        self.history_preview = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stats_reset_caret_anchor();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.streaks_reset_baseline();
+        self.sync_page_measure();
+        self.update_title();
+        self.sync_view(true);
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.window.request_redraw();
         }
     }
 
@@ -1424,43 +1554,9 @@ impl App {
         if !self.set_root(self.notes_root.clone()) {
             return;
         }
-        self.prev_file = self.file.take();
-        // WRITING STREAKS: sample the LEAVING buffer's word-delta before it is
-        // replaced by the fresh note (the anchor is reset below), so words written
-        // in it are recorded before the swap (native only; gated inside).
-        #[cfg(not(target_arch = "wasm32"))]
-        self.streaks_flush();
-        // PARK the buffer we are leaving (registered under its own identity if
-        // it has one) exactly like `load_path`, so a later C-x b / reopen finds
-        // it live rather than re-reading disk.
-        self.park_active_buffer();
-        self.buffer.start_note(self.notes_root.clone());
-        self.restore_extra(BufferExtra::default());
-        self.search = None;
-        self.preedit.clear();
-        self.caret_synced_version = self.buffer.version();
-        self.autosave_saved_version = None;
-        self.autosave_dirty_at = None;
-        // STICKY PAGE WIDTH: a fresh note is always markdown (PROSE), so this
-        // re-applies `page_width_prose` regardless of what the leaving buffer's
-        // kind was — mirrors `load_path`'s own resync.
-        self.sync_page_measure();
-        // LIFETIME STATS: a fresh note is a buffer swap — drop the caret-travel
-        // anchor so its first caret sample re-anchors (see `load_path`).
-        #[cfg(not(target_arch = "wasm32"))]
-        self.stats_reset_caret_anchor();
-        // WRITING STREAKS: a fresh note is an awl-CREATED buffer born empty, so
-        // anchor EAGERLY at its birth count (0) rather than lazily — otherwise the
-        // words typed before the first idle flush would be anchored away on that
-        // flush (the anchor-swallow bug). See `streaks_anchor_now` vs the lazy
-        // `streaks_reset_baseline` an OPENED file uses.
-        #[cfg(not(target_arch = "wasm32"))]
-        self.streaks_anchor_now();
-        self.update_title();
-        self.sync_view(true);
-        if let Some(gpu) = self.gpu.as_ref() {
-            gpu.window.request_redraw();
-        }
+        // The buffer-swap half is shared with the two-desk Notes flip's
+        // first-ever visit (item 59) — one owner, `start_fresh_note`.
+        self.start_fresh_note();
     }
 
     /// ROBUST-AUTOSAVE flush: write a pending note save IMMEDIATELY, bypassing the
@@ -2244,21 +2340,143 @@ mod tests {
             let mut app = App::new(None, PathBuf::from("/w/proj-a"), None, None, Config::empty());
             app.notes_root = PathBuf::from("/home/me/notes");
 
-            // FIRST invocation: enters notes_root, remembering proj-a.
+            // FIRST invocation: enters notes_root, remembering the home desk
+            // (proj-a, no open file). With nothing remembered from a prior visit
+            // a FRESH untitled note opens (item 59) rather than an arbitrary file.
             app.notes_flip();
             assert_eq!(app.root, PathBuf::from("/home/me/notes"));
-            assert_eq!(app.prev_project_root, Some(PathBuf::from("/w/proj-a")));
+            assert_eq!(
+                app.notes_return.as_ref().map(|d| d.root.clone()),
+                Some(PathBuf::from("/w/proj-a"))
+            );
+            assert!(app.buffer.is_note(), "a first-ever visit opens a fresh untitled quick-note");
+            assert!(app.file.is_none(), "the fresh note is unnamed until it gains content");
 
             // SECOND invocation: flips straight back, consuming the memory.
             app.notes_flip();
             assert_eq!(app.root, PathBuf::from("/w/proj-a"));
-            assert_eq!(app.prev_project_root, None);
+            assert!(app.notes_return.is_none());
 
             // A Notes flip is a VISIT, not a switch: it never touches the sticky
             // project_root pref nor the recent-projects MRU (both stay exactly
             // as a fresh launch left them — mirrors `new_note`'s own C-x n jump).
             assert_eq!(app.config.project_root, None, "the flip never persists a sticky root");
             assert!(app.recent_projects.is_empty(), "the flip never counts as a recent project");
+        });
+    }
+
+    #[test]
+    fn notes_flip_is_a_two_desk_swap_of_root_and_active_buffer() {
+        // ITEM 59: "Notes" flips the WHOLE writing context — the active BUFFER
+        // travels with the root, not only the folder. Project A's file → the
+        // remembered notes file → back to EXACTLY A's file, and re-entering
+        // restores the last notes file (with its live buffer), never a fresh one.
+        let fake = Arc::new(
+            crate::fs::InMemoryFs::new()
+                .with_file("/w/proj-a/a.md", "alpha body")
+                .with_file("/home/me/notes/n.md", "note body"),
+        );
+        crate::fs::with_fs(fake, || {
+            let mut app = App::new(None, PathBuf::from("/w/proj-a"), None, None, Config::empty());
+            app.notes_root = PathBuf::from("/home/me/notes");
+            // Home desk: an open project file, with content.
+            app.load_path(PathBuf::from("/w/proj-a/a.md"));
+            assert_eq!(app.file, Some(PathBuf::from("/w/proj-a/a.md")));
+            assert!(app.buffer.text().contains("alpha"));
+
+            // ENTER Notes (first visit): root re-scoped, home file remembered,
+            // a fresh untitled note opened. The home buffer is parked, not lost.
+            app.notes_flip();
+            assert_eq!(app.root, PathBuf::from("/home/me/notes"));
+            assert_eq!(
+                app.notes_return.as_ref().and_then(|d| d.file.clone()),
+                Some(PathBuf::from("/w/proj-a/a.md")),
+                "the home desk's active file is the remembered return target"
+            );
+            assert!(app.buffer.is_note() && app.file.is_none());
+
+            // Work IN the notes desk: open a real notes file.
+            app.load_path(PathBuf::from("/home/me/notes/n.md"));
+            assert!(app.buffer.text().contains("note body"));
+
+            // FLIP BACK: exact prior project AND its active buffer/view restored.
+            app.notes_flip();
+            assert_eq!(app.root, PathBuf::from("/w/proj-a"));
+            assert_eq!(app.file, Some(PathBuf::from("/w/proj-a/a.md")));
+            assert!(app.buffer.text().contains("alpha"), "A's buffer came back, not re-read stale");
+            assert!(app.notes_return.is_none(), "the return memory is consumed");
+            assert_eq!(
+                app.notes_last_file,
+                Some(PathBuf::from("/home/me/notes/n.md")),
+                "the notes desk's last active file is remembered for re-entry"
+            );
+
+            // RE-ENTER: the last notes file returns (its live buffer), NOT a
+            // fresh untitled note and NOT an arbitrary pick.
+            app.notes_flip();
+            assert_eq!(app.root, PathBuf::from("/home/me/notes"));
+            assert_eq!(app.file, Some(PathBuf::from("/home/me/notes/n.md")));
+            assert!(app.buffer.text().contains("note body"));
+
+            // Still transient the whole way: no sticky root, no recent-project MRU.
+            assert_eq!(app.config.project_root, None);
+            assert!(app.recent_projects.is_empty());
+        });
+    }
+
+    #[test]
+    fn notes_flip_parks_a_dirty_home_buffer_and_restores_it_unsaved() {
+        // ITEM 59: a DIRTY home buffer is PARKED across the visit — never
+        // discarded — and comes back with its unsaved edit intact. Autosave is
+        // turned OFF here to isolate the PARKING guarantee from awl's standard
+        // autosave-on-switch (which set_root fires for every project switch, so
+        // the flip never SPURIOUSLY saves — it rides the one existing door).
+        let fake = Arc::new(
+            crate::fs::InMemoryFs::new()
+                .with_file("/w/proj-a/a.md", "alpha body")
+                .with_dir("/home/me/notes"),
+        );
+        crate::fs::with_fs(fake, || {
+            let mut cfg = Config::empty();
+            cfg.autosave = Some(false);
+            let mut app = App::new(None, PathBuf::from("/w/proj-a"), None, None, cfg);
+            app.notes_root = PathBuf::from("/home/me/notes");
+            app.load_path(PathBuf::from("/w/proj-a/a.md"));
+            // Dirty the home buffer WITHOUT saving.
+            app.buffer.set_text("alpha body — UNSAVED EDIT");
+            assert!(app.buffer.is_dirty());
+
+            app.notes_flip(); // enter notes (parks the dirty home buffer)
+            // Disk untouched: with autosave off nothing was written on the flip.
+            assert_eq!(
+                crate::fs::active().read_to_string(Path::new("/w/proj-a/a.md")).unwrap(),
+                "alpha body",
+                "with autosave off the flip writes nothing to disk"
+            );
+
+            app.notes_flip(); // back home — the unsaved edit survives
+            assert_eq!(app.file, Some(PathBuf::from("/w/proj-a/a.md")));
+            assert!(app.buffer.text().contains("UNSAVED EDIT"), "the dirty edit came back intact");
+            assert!(app.buffer.is_dirty(), "still dirty — the parked buffer was never discarded");
+        });
+    }
+
+    #[test]
+    fn notes_flip_denied_root_change_leaves_both_desks_untouched() {
+        // ITEM 59: root change + buffer activation are ONE transaction. If the
+        // root change is refused, BOTH desks and the remembered return target
+        // stay exactly as they were. Modeled with an EMPTY notes_root (the "no
+        // usable folder" sentinel → `Inert`): the command is a clean no-op.
+        let fake = Arc::new(crate::fs::InMemoryFs::new().with_file("/w/proj-a/a.md", "alpha"));
+        crate::fs::with_fs(fake, || {
+            let mut app = App::new(None, PathBuf::from("/w/proj-a"), None, None, Config::empty());
+            app.notes_root = PathBuf::new(); // no usable notes root
+            app.load_path(PathBuf::from("/w/proj-a/a.md"));
+
+            app.notes_flip();
+            assert_eq!(app.root, PathBuf::from("/w/proj-a"), "root unchanged");
+            assert_eq!(app.file, Some(PathBuf::from("/w/proj-a/a.md")), "active buffer unchanged");
+            assert!(app.notes_return.is_none(), "no return target remembered");
         });
     }
 

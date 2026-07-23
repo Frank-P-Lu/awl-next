@@ -772,12 +772,19 @@ pub struct App {
     /// (a tiny 2-deep history: the current `file` + this one). `None` until a
     /// second file has been opened. Toggling swaps `file` <-> `prev_file`.
     prev_file: Option<PathBuf>,
-    /// The PROJECT ROOT to return to on the NEXT "Notes" flip — the `root`
-    /// sibling of `prev_file`, one level up (a tiny 2-deep history: the active
-    /// `root` + this one). `None` until a flip INTO `notes_root` has happened
+    /// The "home" DESK to return to on the NEXT "Notes" flip — the project root
+    /// AND the buffer that was active there, so the flip restores the WHOLE
+    /// writing context (root + active buffer/view), not just the root (Wave-4
+    /// user bug, item 59). `None` until a flip INTO `notes_root` has happened
     /// (or after a flip BACK has consumed it — a third invocation flips fresh).
     /// See [`crate::app::files::notes_flip_target`] for the pure toggle logic.
-    prev_project_root: Option<PathBuf>,
+    notes_return: Option<files::DeskReturn>,
+    /// The file that was active in the NOTES desk on the LAST visit, restored
+    /// (with full buffer/view state via `buffer_registry`) when Notes is
+    /// re-entered. `None` before the first-ever visit — or after a visit left an
+    /// unnamed/empty note behind — in which case a fresh untitled quick-note
+    /// opens instead of re-choosing an arbitrary existing file.
+    notes_last_file: Option<PathBuf>,
     /// The SUMMONED navigation overlay (go-to / switch-project). `None` when not
     /// showing. Lives here AND is threaded through `apply_core` so `--keys` can
     /// drive it identically.
@@ -1334,7 +1341,8 @@ impl App {
             recent_projects,
             recent_files,
             prev_file: None,
-            prev_project_root: None,
+            notes_return: None,
+            notes_last_file: None,
             overlay: None,
             notes_root,
             autosave_dirty_at: None,

@@ -95,7 +95,15 @@ fn real_fs_app_new_calls_are_all_accounted_for() {
         // own `fs::with_fs(fake, ..)` closure with an `InMemoryFs` handle — it
         // exists specifically to prove `App::notes_flip` never writes the
         // sticky `project_root` config key nor the recent-projects store, so it
-        // needs the same CONTROL + INSPECT access `new_hermetic` hides. Plus 2
+        // needs the same CONTROL + INSPECT access `new_hermetic` hides. Plus 3
+        // TWO-DESK NOTES FLIP tests (item 59: the flip swaps root AND active
+        // buffer — `notes_flip_is_a_two_desk_swap_of_root_and_active_buffer`,
+        // `notes_flip_parks_a_dirty_home_buffer_and_restores_it_unsaved`,
+        // `notes_flip_denied_root_change_leaves_both_desks_untouched`), each
+        // inside its own `fs::with_fs(fake, ..)` closure with an `InMemoryFs`
+        // handle — they drive `App::load_path`/`App::notes_flip` against
+        // controlled files + inspect the parked/restored buffer bytes, the same
+        // CONTROL + INSPECT need `new_hermetic` hides. Plus 2
         // ADD-TO-DICTIONARY tests (item 39:
         // `add_to_dictionary_persists_the_word_and_silences_it_live` +
         // `startup_loads_the_personal_dictionary_so_an_added_word_never_squiggles_across_a_restart`),
@@ -104,7 +112,7 @@ fn real_fs_app_new_calls_are_all_accounted_for() {
         // `App::new` → `load_user_dictionary` reads back from) `dictionary.txt`
         // beside `config.toml` on disk, the same CONTROL + INSPECT need
         // `new_hermetic` hides.
-        ("app/files.rs", 12),
+        ("app/files.rs", 15),
         // 9 LIFETIME STATS + USAGE LEDGER + DISCOVERABILITY tests, each inside its own
         // `fs::with_fs(fake, ..)` closure seeded with an `InMemoryFs` — they exist
         // specifically to prove what the tracking hooks / the ledger's
