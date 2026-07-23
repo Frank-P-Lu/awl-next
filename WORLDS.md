@@ -17,28 +17,50 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 
 ## The worlds at a glance
 
-| World          | Ground                     | Display             | Mono            | Ornament (`---`/`***`/`___`)                  | Time  | Register | Voice     | Temp    |
-| -------------- | -------------------------- | ------------------- | --------------- | --------------------------------------------- | ----- | -------- | --------- | ------- |
-| **Gumtree**    | pale eucalyptus-green      | Literata            | Monaspace Xenon | Junicode · botanical sprig / spray / fleur    | Day   | Refined  | Literary  | Cool    |
-| **Bilby**      | palest rose-gold dawn      | Newsreader          | Monaspace Xenon | EB Garamond · ❧ ☙ ❦                           | Dawn  | Refined  | Literary  | Warm    |
-| **Magpie**     | paper-white, high-contrast | Bitter              | Monaspace Xenon | Junicode · quatrefoil / lattice / damask-tile | Day   | Everyday | Literary  | Neutral |
-| **Saltpan**    | warm ecru salt-flat        | Fraunces            | Monaspace Xenon | Junicode · running-vine / vine-scroll ×2      | Dawn  | Refined  | Literary  | Warm    |
-| **Quokka**     | warm peach reef            | Fira Sans           | IBM Plex Mono   | Awl Marks · ✿ ❀ ✽                             | Dawn  | Everyday | Modern    | Warm    |
-| **Galah**      | dusty-pink                 | Figtree             | IBM Plex Mono   | Awl Marks · ❁ ❂ ✿                             | Dawn  | Everyday | Modern    | Warm    |
-| **Potoroo**    | dark burnt-orange          | Monaspace Xenon     | Monaspace Xenon | Awl Marks · ✶ ✦ ◆                             | Dusk  | Humble   | Technical | Warm    |
-| **Mopoke**     | warm charcoal              | iA Writer Quattro S | IBM Plex Mono   | Junicode · damask / candelabra / damask-tile  | Dusk  | Humble   | Modern    | Warm    |
-| **Bombora**   | dark violet                | EB Garamond         | Monaspace Xenon | EB Garamond · ☙ ❧ ❦                           | Night | Refined  | Literary  | Cool    |
-| **Mulga**    | blackish-olive             | Zilla Slab          | Monaspace Xenon | Junicode · ⁂ ⁑ ❦                              | Night | Everyday | Literary  | Cool    |
-| **Bowerbird** | midnight-navy              | IBM Plex Sans       | JetBrains Mono  | Awl Marks · ❂ ✴ ◈                             | Night | Everyday | Modern    | Cool    |
-| **Brolga**     | pale sky-blue              | IBM Plex Sans       | IBM Plex Mono   | Awl Marks · ✧ ✴ ⬥                             | Day   | —        | —         | Cool    |
-| **Mangrove**   | dark tidal-teal            | JetBrains Mono      | JetBrains Mono  | Awl Marks · ❖ ◈ ⬥                             | Night | Humble   | Technical | Cool    |
-| **Tawny**      | warm-grey                  | IBM Plex Mono       | IBM Plex Mono   | Awl Marks · ✦ ✷ ◈                             | Night | Humble   | Technical | Neutral |
-| **Currawong**  | near-pure-black OLED       | Iosevka             | Iosevka         | Awl Marks · ✷ ✴ ⬥                             | Night | Humble   | Technical | Neutral |
-| **Wagtail**    | near-black, zero-saturation | JetBrains Mono     | JetBrains Mono  | Awl Marks · ✧ ⭑ ❡                             | Dusk  | —        | —         | —       |
-| **Firetail**   | deep oxblood-charcoal       | Monaspace Xenon    | Monaspace Xenon | Awl Marks · ✷ ✶ ✦                             | —     | —        | —         | Warm    |
-| **Cassowary**  | near-black glass            | Iosevka            | Iosevka         | Awl Marks · ◆ ✴ ◈                             | Night | —        | Technical | —       |
+| World          | Ground                      | Margin background | Display             | Mono            | Ornament (`---`/`***`/`___`)                  | Time  | Register | Voice     | Temp    |
+| -------------- | --------------------------- | ----------------- | ------------------- | --------------- | --------------------------------------------- | ----- | -------- | --------- | ------- |
+| **Gumtree**    | pale eucalyptus-green       | Dots              | Literata            | Monaspace Xenon | Junicode · botanical sprig / spray / fleur    | Day   | Refined  | Literary  | Cool    |
+| **Bilby**      | palest rose-gold dawn       | Gradient          | Newsreader          | Monaspace Xenon | EB Garamond · ❧ ☙ ❦                           | Dawn  | Refined  | Literary  | Warm    |
+| **Magpie**     | paper-white, high-contrast  | Pinstripe         | Bitter              | Monaspace Xenon | Junicode · quatrefoil / lattice / damask-tile | Day   | Everyday | Literary  | Neutral |
+| **Saltpan**    | warm ecru salt-flat         | Pinstripe         | Fraunces            | Monaspace Xenon | Junicode · running-vine / vine-scroll ×2      | Dawn  | Refined  | Literary  | Warm    |
+| **Quokka**     | warm peach reef             | Dots              | Fira Sans           | IBM Plex Mono   | Awl Marks · ✿ ❀ ✽                             | Dawn  | Everyday | Modern    | Warm    |
+| **Galah**      | dusty-pink                  | Gradient          | Figtree             | IBM Plex Mono   | Awl Marks · ❁ ❂ ✿                             | Dawn  | Everyday | Modern    | Warm    |
+| **Potoroo**    | dark burnt-orange           | Stripes           | Monaspace Xenon     | Monaspace Xenon | Awl Marks · ✶ ✦ ◆                             | Dusk  | Humble   | Technical | Warm    |
+| **Mopoke**     | warm charcoal               | Dots              | iA Writer Quattro S | IBM Plex Mono   | Junicode · damask / candelabra / damask-tile  | Dusk  | Humble   | Modern    | Warm    |
+| **Bombora**    | dark violet                 | Starfield         | EB Garamond         | Monaspace Xenon | EB Garamond · ☙ ❧ ❦                           | Night | Refined  | Literary  | Cool    |
+| **Mulga**      | blackish-olive              | Starfield         | Zilla Slab          | Monaspace Xenon | Junicode · ⁂ ⁑ ❦                              | Night | Everyday | Literary  | Cool    |
+| **Bowerbird**  | midnight-navy               | Dots              | IBM Plex Sans       | JetBrains Mono  | Awl Marks · ❂ ✴ ◈                             | Night | Everyday | Modern    | Cool    |
+| **Brolga**     | pale sky-blue               | Gradient          | IBM Plex Sans       | IBM Plex Mono   | Awl Marks · ✧ ✴ ⬥                             | Day   | —        | —         | Cool    |
+| **Mangrove**   | dark tidal-teal             | Lava · dithered   | JetBrains Mono      | JetBrains Mono  | Awl Marks · ❖ ◈ ⬥                             | Night | Humble   | Technical | Cool    |
+| **Tawny**      | warm-grey                   | Dots              | IBM Plex Mono       | IBM Plex Mono   | Awl Marks · ✦ ✷ ◈                             | Night | Humble   | Technical | Neutral |
+| **Currawong**  | near-pure-black OLED        | Gradient + stars  | Iosevka             | Iosevka         | Awl Marks · ✷ ✴ ⬥                             | Night | Humble   | Technical | Neutral |
+| **Wagtail**    | near-black, zero-saturation | Gradient          | JetBrains Mono      | JetBrains Mono  | Awl Marks · ✧ ⭑ ❡                             | Dusk  | —        | —         | —       |
+| **Firetail**   | deep oxblood-charcoal       | Lava · smooth     | Monaspace Xenon     | Monaspace Xenon | Awl Marks · ✷ ✶ ✦                             | —     | —        | —         | Warm    |
+| **Cassowary**  | near-black glass            | Pinstripe         | Iosevka             | Iosevka         | Awl Marks · ◆ ✴ ◈                             | Night | —        | Technical | —       |
 
 *(18 worlds. The names are Australian fauna, flora, and landscape — flavour, not taxonomy. Wagtail and Firetail close the roster as statement-world mirrors; Brolga is the cool light pole; Cassowary is the dark-technical statement, a NERV terminal — see below.)*
+
+---
+
+## The margin backgrounds
+
+Page mode keeps the writing column flat and paints the world background only in
+the margins. The pattern is structure, not content: it stays behind the page,
+uses the world's own quiet palette, and never spends the caret accent.
+
+| Background | What it draws | Shipping worlds |
+| ---------- | ------------- | --------------- |
+| **Gradient** | A directional colour blend with no built-in marks. | Bilby, Currawong, Galah, Brolga, Wagtail |
+| **Dots** | A regular grid of small round dots over a gradient. All shipping dot worlds currently use the uniform form; the available page-edge proximity form is unassigned. | Gumtree, Quokka, Mopoke, Bowerbird, Tawny |
+| **Starfield** | Deterministically scattered dots with occasional four-point sparkles. Static in captures and independent of the caret. | Bombora, Mulga |
+| **Pinstripe** | Fine parallel print/ledger lines over a gradient. | Magpie, Saltpan, Cassowary |
+| **Stripes** | A diagonal striped band concentrated at the page boundary and dissolved outward into the margin. | Potoroo |
+| **Lava** | A slow metaball field in the margins. Reduce Motion can still it; deterministic captures use a fixed phase. Firetail is smooth wine; Mangrove is dithered deep-sea blue. | Firetail, Mangrove |
+
+Currawong's base margin background is **Gradient**. Its slowly appearing and
+dying stars are a separate ambient Frame layer, not the static **Starfield**
+background used by Bombora and Mulga; the at-a-glance table writes
+“Gradient + stars” so the visible result is not misleading.
 
 ---
 
