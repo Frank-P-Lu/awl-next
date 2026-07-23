@@ -222,7 +222,7 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
 /// sites (`App::insert_date`, the Settings overlay's live "today" preview
 /// gather) read the clock, so they can never drift apart. UTC, not the local
 /// timezone: awl carries no timezone database (matches
-/// `crashlog::civil_date`/`streaks::civil_date_from_epoch_secs`'s own
+/// `crashlog::civil_date`/`streaks::civil_ymd_from_epoch_secs`'s own
 /// UTC-civil-day convention) — a date typed near local midnight may read as
 /// "yesterday" or "tomorrow" relative to the user's own wall clock, a known,
 /// documented simplification, not a bug to chase here.
