@@ -2579,11 +2579,6 @@ struct VisualRow {
     /// text, LARGER for a heading row. Caret / selection / squiggle centering use
     /// it so overlays grow with a heading instead of floating in a base-height cell.
     line_height: f32,
-    /// Byte range of the original line covered by this row (cluster byte spans).
-    #[allow(dead_code)]
-    byte_start: usize,
-    #[allow(dead_code)]
-    byte_end: usize,
     /// Char-column span of this row on the logical line: `[start_col, end_col]`.
     start_col: usize,
     end_col: usize,
