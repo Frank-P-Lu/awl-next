@@ -175,7 +175,7 @@ impl App {
         }
         // Debounced theme-preview FONT reshape: while the theme picker's live preview
         // arrows across worlds, only the COLORS applied per step; once the selection
-        // rests `THEME_FONT_DEBOUNCE` the one deferred reshape lands here (the paused
+        // rests `theme_font_debounce()` the one deferred reshape lands here (the paused
         // hover then shows the true face). Each further preview step RE-STAMPS
         // `theme_font_at` (`retint_theme_preview`), sliding the deadline — the same
         // single-`WaitUntil`, idle-safe pattern as the zoom persist below (no hot
