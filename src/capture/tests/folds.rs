@@ -217,3 +217,233 @@ fn fold_afford_ink_clears_the_real_lava_ground_on_every_flagged_world() {
         );
     }
 }
+
+/// The largest single-channel absolute difference between two RGB(A) pixels —
+/// POLARITY-AGNOSTIC (unlike [`brightest_in`], which only finds ink LIGHTER than
+/// its ground — the right read for the two Lava worlds above, but wrong for a
+/// flat/light world like Bilby, where the heading's own body ink is DARKER than
+/// the page). A real ink pixel of either polarity trips this; anti-aliased noise
+/// against a smooth gradient ground does not (the floor below is chosen well
+/// clear of gradient dither).
+fn max_channel_diff(a: [u8; 4], b: [u8; 4]) -> u8 {
+    (0..3).map(|i| (a[i] as i16 - b[i] as i16).unsigned_abs() as u8).max().unwrap()
+}
+
+/// The largest [`max_channel_diff`] found in `[x0, x1) x [y0, y1)` against ITS OWN
+/// COLUMN's ground, sampled at `(x, ground_y)` — PER-X, not one fixed reference
+/// point, because the scanned band can straddle TWO different backgrounds: the
+/// page column's own gradient/lava fill stops at the (narrower) text-column edge,
+/// and the outer margin (a flat, DIFFERENT color) picks up beyond the (wider)
+/// page column edge — a single far-away reference reads the column's own paint
+/// as "ink" (a false bleed) the moment the scan crosses that internal seam.
+/// Sampling per-X at a row (`ground_y`) known to be ink-free sidesteps this
+/// entirely: it reads whatever THIS column's real background is, gradient or
+/// lava blob alike — close enough to the scanned band that a smooth background
+/// pattern cannot itself drift past the floor. `ground_y` must be ink-free for
+/// every `x` scanned (the caller picks a row that never carries text — ABOVE
+/// `text_origin.top`, safe whether or not the document below is folded).
+fn max_ink_in(img: &image::RgbaImage, x0: u32, x1: u32, y0: u32, y1: u32, ground_y: u32) -> u8 {
+    let mut best = 0u8;
+    let gy = ground_y.min(img.height() - 1);
+    for x in x0..x1.min(img.width()) {
+        let bg = img.get_pixel(x, gy).0;
+        for y in y0..y1.min(img.height()) {
+            let d = max_channel_diff(img.get_pixel(x, y).0, bg);
+            if d > best {
+                best = d;
+            }
+        }
+    }
+    best
+}
+
+/// The RIGHTMOST x in `[x0, x1)` carrying real ink anywhere in `[y0, y1)` — same
+/// per-column ground convention as [`max_ink_in`] — or `None` when the whole band
+/// is clear.
+fn rightmost_ink_x(img: &image::RgbaImage, x0: u32, x1: u32, y0: u32, y1: u32, ground_y: u32) -> Option<u32> {
+    let gy = ground_y.min(img.height() - 1);
+    for x in (x0..x1.min(img.width())).rev() {
+        let bg = img.get_pixel(x, gy).0;
+        let hit = (y0..y1.min(img.height())).any(|y| max_channel_diff(img.get_pixel(x, y).0, bg) > 12);
+        if hit {
+            return Some(x);
+        }
+    }
+    None
+}
+
+/// ITEM 73 (Fable-flagged item 65 defect): a collapsed heading's own "… N lines"
+/// TAIL must never bleed past the writing column's own TEXT-COLUMN right edge —
+/// `text_origin.left + text_wrap_width()`, the SAME boundary [`crate::render::
+/// TextPipeline::text_wrap_width`]'s own "the right margin mirrors the left" doc
+/// names, and the exact quantity `render::tests::folds::
+/// fold_tail_hangs_after_the_first_visual_row_when_the_heading_wraps` already
+/// checks the tail's LEFT against (that item 65 law caught the FLATTENED-across-
+/// wrapped-rows placement bug; this one catches the NARROWER defect Fable found
+/// in the corrected placement itself — `fold_affordance_base_x` reads the first
+/// visual row's own real end-x, which is right, but the old code never accounted
+/// for the TAIL'S OWN shaped width, so a heading whose first row already runs
+/// close to the column edge had its tail's ink carry past it). Not read off the
+/// sidecar (a STATE oracle only, per CLAUDE.md's own tripwire) — measured over
+/// the real captured PNG via [`max_ink_in`], polarity-agnostic so ONE test covers
+/// both a dark-ink-on-light world (Bilby) and a light-ink-on-dark Lava world
+/// (Firetail).
+///
+/// Each world gets TWO fixtures, both real H2 headings engineered to wrap with
+/// their first visual row landing close to the column edge (found by sweeping
+/// filler words/characters through this exact capture path and reading back
+/// each candidate's own real geometry, since the outline panel this path shows
+/// narrows the column vs. a plain `--screenshot`):
+///   - a STRONG case reproducing Fable's own find (pre-fix: visible bleed) — the
+///     fix has genuinely no room here, so it ELIDES the tail; asserted by NO ink
+///     anywhere past the column edge.
+///   - a NARROW case where the fix's shift branch (not elide) applies — enough
+///     room remains that the tail still draws, shifted left over the row's own
+///     trailing whitespace; asserted BOTH that it stays inside the column edge
+///     AND that it still visibly draws (never silently vanishes when there was
+///     room to shift instead).
+#[test]
+fn fold_tail_never_bleeds_past_the_text_column_edge_on_a_wrapped_heading() {
+    if !adapter_available() {
+        eprintln!(
+            "skipping fold_tail_never_bleeds_past_the_text_column_edge_on_a_wrapped_heading: no wgpu adapter"
+        );
+        return;
+    }
+    let _g = crate::testlock::serial();
+    crate::page::set_page_on(true);
+
+    struct Case {
+        world: &'static str,
+        heading: &'static str,
+        tail_still_shows: bool,
+    }
+    // Every heading is a real, dictionary-clean sentence (no spellcheck squiggle
+    // to confound the ink scan) engineered — by sweeping real fill words through
+    // THIS EXACT capture path (`Buffer` + `capture_with` + `CaptureOpts::default`,
+    // which shows the margin outline and so wraps NARROWER than a plain
+    // `--screenshot`) — to land its first visual row at a specific distance from
+    // the text-column edge.
+    let cases = [
+        Case {
+            world: "Bilby",
+            heading: "## A section heading with many words that keeps extending further \
+                      to probe the wrap boundary near the edge",
+            tail_still_shows: false, // Fable's own strong-bleed find: no room, elides.
+        },
+        Case {
+            world: "Firetail",
+            // Same heading text as the Bilby case above — it elides here too,
+            // by coincidence of this fixture's own geometry, not by design.
+            heading: "## A section heading with many words that keeps extending further \
+                      to probe the wrap boundary near the edge",
+            tail_still_shows: false,
+        },
+        Case {
+            world: "Bilby",
+            heading: "## A section heading with many words that keepsiiiiii extending \
+                      further to probe the wrap boundary near the edge",
+            tail_still_shows: true, // just enough room: shifts left, still visible.
+        },
+        Case {
+            world: "Firetail",
+            heading: "## A section heading among many words that keeps extending further \
+                      to probe the wrap boundary near the edge",
+            tail_still_shows: true,
+        },
+    ];
+
+    let dir = std::env::temp_dir().join(format!("awl_fold_tail_clamp_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    for (i, case) in cases.iter().enumerate() {
+        let text = format!("{}\n\nbody one\n\nbody two\n", case.heading);
+        assert!(
+            crate::theme::set_active_by_name(case.world).is_some(),
+            "unknown world {:?}",
+            case.world
+        );
+
+        // UNFOLDED baseline capture first — same caret (0, 0), so the heading's
+        // own WYSIWYG reveal state is identical to the folded capture below (the
+        // CLAUDE.md tripwire: conceal reveal changes glyph advances). This is the
+        // heading's own real text ink alone, no tail, letting the folded capture
+        // below be judged by how much FARTHER RIGHT it reaches — not by a
+        // hand-guessed pixel band that risks re-detecting the heading's own text.
+        let unfolded_buf = Buffer::from_str(&text);
+        let unfolded_png = dir.join(format!("case_{i}_{}_unfolded.png", case.world));
+        capture_with(&unfolded_png, &unfolded_buf, &CaptureOpts::default()).expect("unfolded capture");
+        let unfolded_img = image::open(&unfolded_png).expect("decode unfolded png").to_rgba8();
+
+        // FOLDED capture: same buffer, heading collapsed.
+        let mut buf = Buffer::from_str(&text);
+        let folded = buf.toggle_fold_at_cursor();
+        assert_eq!(folded, Some(0), "{}: the heading (line 0) is what folds", case.world);
+        let png = dir.join(format!("case_{i}_{}.png", case.world));
+        capture_with(&png, &buf, &CaptureOpts::default()).expect("folded capture");
+        let img = image::open(&png).expect("decode fold-tail-clamp png").to_rgba8();
+
+        // GEOMETRY off THIS capture's own sidecar (never a hand-typed constant).
+        let sidecar: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(png.with_extension("json")).unwrap())
+                .expect("parse fold-tail-clamp sidecar");
+        let text_left = sidecar["text_origin"]["left"].as_f64().unwrap() as f32;
+        let text_top = sidecar["text_origin"]["top"].as_f64().unwrap() as u32;
+        let col_left = sidecar["page"]["column"]["left"].as_f64().unwrap() as f32;
+        let col_w = sidecar["page"]["column"]["width"].as_f64().unwrap() as f32;
+        let line_h = sidecar["font"]["line_height"].as_f64().unwrap() as u32;
+
+        // THE TEXT-COLUMN right edge — `text_wrap_width()`'s own "mirrors the
+        // left" doc: the text pad reserved left of `text_left` (`text_left -
+        // col_left`) is mirrored on the right too, so the boundary the document's
+        // own prose wraps against sits `text_pad` short of the page column's own
+        // (wider) visual right edge.
+        let text_pad = text_left - col_left;
+        let column_right = (text_left + (col_w - 2.0 * text_pad)).round() as u32;
+
+        // A generous first-visual-row band: an H2's grown row plus slack for the
+        // wrapped second row.
+        let row_top = text_top;
+        let row_bottom = text_top + line_h * 3;
+        // Ink-free reference row: ABOVE the text origin, never carrying a glyph
+        // in EITHER capture (folded or not) — close enough to the scanned band
+        // for a smooth background (gradient OR lava blob) to still read as
+        // itself at every x this test scans.
+        let ground_y = text_top.saturating_sub(10);
+
+        // THE LAW: no ink anywhere past the text-column edge, in the heading's
+        // own row band. (`+1` so the boundary pixel itself is never over-strict.)
+        let bleed = max_ink_in(&img, column_right + 1, img.width(), row_top, row_bottom, ground_y);
+        assert!(
+            bleed <= 12,
+            "{}: fold tail bled past the text-column edge (max channel diff {bleed} \
+             past x={column_right}) — case {i} {:?}",
+            case.world,
+            case.heading
+        );
+
+        // The heading's own text (no tail) never reaches the column edge either —
+        // a sanity floor on the fixture itself (else this case can't tell "the
+        // heading's own ink" apart from "the tail's own ink" below).
+        let unfolded_rightmost =
+            rightmost_ink_x(&unfolded_img, col_left as u32, column_right + 1, row_top, row_bottom, ground_y)
+                .unwrap_or(col_left as u32);
+
+        if case.tail_still_shows {
+            // The FOLDED capture must reach FARTHER RIGHT than the unfolded
+            // baseline (the tail adds real ink the bare heading text didn't have)
+            // yet still never past the column edge — proving the clamp SHIFTS
+            // the tail rather than silently eliding it when there was room to.
+            let folded_rightmost =
+                rightmost_ink_x(&img, col_left as u32, column_right + 1, row_top, row_bottom, ground_y);
+            assert!(
+                folded_rightmost.is_some_and(|x| x > unfolded_rightmost + 10),
+                "{}: fold tail should still be visible (shifted, not elided) past the \
+                 heading's own text end (unfolded rightmost {unfolded_rightmost}, folded \
+                 rightmost {folded_rightmost:?}) — case {i} {:?}",
+                case.world,
+                case.heading
+            );
+        }
+    }
+}

@@ -604,34 +604,46 @@ impl TextPipeline {
             .collect()
     }
 
-    /// The absolute pixel x just PAST a collapsed heading's own rendered text on its
-    /// filtered row `line` — where the "… N lines" TAIL hangs (item 65: the chevron
-    /// moved to the LEFT margin — see [`Self::fold_chevron_left`] — so this base is
-    /// the tail's alone now). Reads the FIRST VISUAL ROW's own real glyph advances —
-    /// [`Self::visual_rows`], NOT the flattened whole-line [`Self::line_glyph_xs`] —
-    /// so a heading that WRAPS to a second visual row still hangs the tail right
-    /// after that FIRST row's own text (it never sees the wrapped row's glyphs, so
-    /// it never inherits their cumulative width). This matters because the tail's
-    /// baseline ([`Self::fold_tail_marks`]) is ALWAYS the heading's first-row
-    /// baseline too (a folded heading's own line is never hidden, but it can still
-    /// visually wrap) — the item 65 gallery sweep's own find: `line_glyph_xs`
-    /// deliberately FLATTENS wrapped rows by offsetting each one past the previous
-    /// (documented for callers that "don't care which visual row a column lands
-    /// on"), so its whole-line `.last()` on a wrapped heading returned a cumulative
-    /// sum FAR past the actual column — the tail rendered off in the page's right
-    /// margin, disconnected from the heading it annotates. `visual_rows`' per-row
-    /// `xs` are genuinely row-LOCAL (no such offset — see `visual_row_from_run`),
-    /// so `rows[0].xs[end_col]` is the first row's own real end x. Honours the
-    /// heading SIZE scale + any caret-on-line conceal reveal (both already baked
-    /// into the shaped run `visual_rows` reads); a small gap is added after.
-    fn fold_affordance_base_x(&self, line: usize) -> f32 {
+    /// The absolute pixel x of a collapsed heading's own rendered text on its
+    /// filtered row `line`, EXACTLY where its last glyph ends — no gap added. The
+    /// FLOOR the "… N lines" tail (item 73) may never cross: it is the true
+    /// boundary between the heading's own real ink and the row's trailing
+    /// whitespace, so a tail clamped no closer than this can only ever draw over
+    /// blank space, never over a real glyph. Reads the FIRST VISUAL ROW's own real
+    /// glyph advances — [`Self::visual_rows`], NOT the flattened whole-line
+    /// [`Self::line_glyph_xs`] — so a heading that WRAPS to a second visual row
+    /// still measures against that FIRST row's own text (it never sees the wrapped
+    /// row's glyphs, so it never inherits their cumulative width). This matters
+    /// because the tail's baseline ([`Self::fold_tail_marks`]) is ALWAYS the
+    /// heading's first-row baseline too (a folded heading's own line is never
+    /// hidden, but it can still visually wrap) — the item 65 gallery sweep's own
+    /// find: `line_glyph_xs` deliberately FLATTENS wrapped rows by offsetting each
+    /// one past the previous (documented for callers that "don't care which visual
+    /// row a column lands on"), so its whole-line `.last()` on a wrapped heading
+    /// returned a cumulative sum FAR past the actual column — the tail rendered off
+    /// in the page's right margin, disconnected from the heading it annotates.
+    /// `visual_rows`' per-row `xs` are genuinely row-LOCAL (no such offset — see
+    /// `visual_row_from_run`), so `rows[0].xs[end_col]` is the first row's own real
+    /// end x. Honours the heading SIZE scale + any caret-on-line conceal reveal
+    /// (both already baked into the shaped run `visual_rows` reads).
+    pub(super) fn fold_affordance_row_end_x(&self, line: usize) -> f32 {
         let end = self
             .visual_rows(line)
             .first()
             .and_then(|r| r.xs.get(r.end_col).copied())
             .filter(|x| x.is_finite())
             .unwrap_or(0.0);
-        self.text_left() + end + self.metrics.char_width * 0.6
+        self.text_left() + end
+    }
+
+    /// The DESIRED (unclamped) tail placement — [`Self::fold_affordance_row_end_x`]
+    /// plus a small breath, item 65's original spacing. This is the tail's
+    /// preferred left; item 73's clamp (`layers.rs`'s `prepare_ornaments`, the only
+    /// place the tail's own SHAPED width is known) pulls it no further left than
+    /// [`Self::fold_affordance_row_end_x`] itself when the preferred spot would
+    /// bleed the tail's ink past the writing column's right edge.
+    fn fold_affordance_base_x(&self, line: usize) -> f32 {
+        self.fold_affordance_row_end_x(line) + self.metrics.char_width * 0.6
     }
 
     /// The GAP (px) between the writing column's own text origin and a left-hung
