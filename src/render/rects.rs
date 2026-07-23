@@ -781,6 +781,33 @@ impl TextPipeline {
     /// is 0.01), while any real glyph run clears it with room to spare.
     const IMAGE_CONCEAL_UNDERLINE_MIN_ADVANCE: f32 = 1.0;
 
+    /// Queue item 60: every inline link/image DESTINATION byte range in the
+    /// document, in ABSOLUTE document byte coordinates — "markdown
+    /// destinations are ADDRESSES, not prose." Shared by
+    /// [`Self::ensure_squiggle_protos`] (spell) and [`Self::ensure_nit_protos`]
+    /// (writing-nits) so the two candidate builders can never disagree on
+    /// where an address starts and ends, and — unlike
+    /// [`Self::IMAGE_CONCEAL_UNDERLINE_MIN_ADVANCE`]'s near-zero-advance
+    /// guard (item 25, which only catches the OFF-cursor COLLAPSED case) —
+    /// this excludes the destination whether the source is visibly revealed
+    /// under the caret OR WYSIWYG-concealed off it, and covers ordinary
+    /// LINKS (never guarded before this item) as well as images. Reads the
+    /// SAME `md_spans` conceal ranges item 25's `line_is_inline_image` reads
+    /// ([`crate::markdown::destination_ranges`], THE one owner) — never a
+    /// second pulldown parse, never a second path/extension heuristic.
+    /// Reconstructs the shaped document text from `self.buffer`'s own lines
+    /// (byte-identical to what `md_spans` was parsed from, `parse_doc_spans`'s
+    /// `text` param) only when there IS markdown to scan (`md_spans` non-empty
+    /// guard), so a code/plain buffer pays nothing.
+    fn destination_ranges(&self) -> Vec<std::ops::Range<usize>> {
+        if self.md_spans.is_empty() {
+            return Vec::new();
+        }
+        let doc_text: String =
+            self.buffer.lines.iter().map(|l| l.text()).collect::<Vec<_>>().join("\n");
+        crate::markdown::destination_ranges(&doc_text, &self.md_spans)
+    }
+
     /// Rebuild the cached spell-squiggle protos IF the shaped geometry or the
     /// misspelling list changed since they were last built (keyed by the row-geometry
     /// GENERATION + the spell list generation). ONE `layout_runs()` walk for ALL
@@ -793,11 +820,38 @@ impl TextPipeline {
         if self.squiggle_cache.version.get() == Some(key) {
             return;
         }
+        // Item 60: link/image destination byte ranges, excluded from spell
+        // candidates outright (see `Self::destination_ranges`). Empty (and the
+        // per-span `line_starts` lookup skipped below) for a non-markdown buffer.
+        let destination_ranges = self.destination_ranges();
+        let mut line_starts: Vec<usize> = Vec::new();
+        if !destination_ranges.is_empty() {
+            let mut start = 0usize;
+            for line in self.buffer.lines.iter() {
+                line_starts.push(start);
+                start += line.text().len() + 1; // +1 for the '\n'
+            }
+        }
         let lines: std::collections::BTreeSet<usize> =
             self.misspelled.iter().map(|sp| sp.line).collect();
         let rows_by_line = self.visual_rows_for_lines(&lines);
         let mut protos = Vec::with_capacity(self.misspelled.len());
         for sp in &self.misspelled {
+            // Item 60: a misspelling fully inside a link/image DESTINATION is
+            // never a candidate — addresses are not prose, in caret-ON and
+            // caret-OFF states alike.
+            if let Some(&ls) = line_starts.get(sp.line) {
+                let text = self.buffer.lines[sp.line].text();
+                if crate::nits::span_in_prose_ranges(
+                    text,
+                    ls,
+                    sp.start_col,
+                    sp.end_col,
+                    &destination_ranges,
+                ) {
+                    continue;
+                }
+            }
             // A misspelled span is a single word; cosmic-text wraps at spaces so
             // the word stays on ONE visual run. Find the run owning its start
             // column and keep that run's wrap-aware top + own x boundaries, so the
@@ -974,6 +1028,10 @@ impl TextPipeline {
             .filter(|(_, k)| k.is_table_markup())
             .map(|(r, _)| r.clone())
             .collect();
+        // Item 60: link/image destination byte ranges — a nit fully inside one
+        // is dropped outright, in caret-ON and caret-OFF states alike (see
+        // `Self::destination_ranges`). Empty for a non-markdown buffer.
+        let destination_ranges = self.destination_ranges();
         let mut per_line: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
         let mut line_start = 0usize;
         for li in 0..self.buffer.lines.len() {
@@ -993,6 +1051,11 @@ impl TextPipeline {
             };
             if let Some(ranges) = &prose_ranges {
                 spans.retain(|&(s, e)| crate::nits::span_in_prose_ranges(text, line_start, s, e, ranges));
+            }
+            if !destination_ranges.is_empty() {
+                spans.retain(|&(s, e)| {
+                    !crate::nits::span_in_prose_ranges(text, line_start, s, e, &destination_ranges)
+                });
             }
             if !spans.is_empty() {
                 per_line.push((li, spans));

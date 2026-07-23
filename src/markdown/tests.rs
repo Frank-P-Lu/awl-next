@@ -1321,3 +1321,86 @@ fn strikethrough_tag_strings_for_sidecar() {
     assert_eq!(MdKind::ConcealMarkup(ConcealKind::Strikethrough).tag(), "markup");
     assert_eq!(ConcealKind::Strikethrough.tag(), "strikethrough");
 }
+
+// -----------------------------------------------------------------------
+// Queue item 60: link/image DESTINATION exclusion (spell + writing-nits).
+// -----------------------------------------------------------------------
+
+#[test]
+fn label_destination_range_isolates_just_the_parens_interior() {
+    // A link's own conceal-tail shape (`push_link_markers`'s span starts
+    // exactly at `](`).
+    let link_tail = "](assets/pasted-18.png)";
+    let r = label_destination_range(link_tail).expect("destination found");
+    assert_eq!(&link_tail[r], "assets/pasted-18.png");
+
+    // A whole image reference (`![alt](path)`) — the `](`-search skips past
+    // the alt text automatically.
+    let image_ref = "![](assets/pasted-18.png)";
+    let r2 = label_destination_range(image_ref).expect("destination found");
+    assert_eq!(&image_ref[r2], "assets/pasted-18.png");
+
+    // Alt text with a size hint + a SPACE in the path — the whole parens
+    // interior is returned regardless of what's inside it.
+    let image_with_alt = "![a cat|300](assets/my photo.png)";
+    let r3 = label_destination_range(image_with_alt).expect("destination found");
+    assert_eq!(&image_with_alt[r3], "assets/my photo.png");
+
+    // A fragment-only destination and an absolute URL both isolate cleanly.
+    assert_eq!(
+        &"](#a-fragment)"[label_destination_range("](#a-fragment)").unwrap()],
+        "#a-fragment"
+    );
+    assert_eq!(
+        &"](https://example.com/p?q=1)"[label_destination_range(
+            "](https://example.com/p?q=1)"
+        )
+        .unwrap()],
+        "https://example.com/p?q=1"
+    );
+
+    // Reference-style (`[text][ref]`) / malformed: no `](` at all — nothing
+    // to exclude, mirroring `push_link_markers`'s own fallback.
+    assert_eq!(label_destination_range("[text][ref]"), None);
+    assert_eq!(label_destination_range("![alt]"), None);
+}
+
+#[test]
+fn destination_ranges_excludes_addresses_but_never_label_or_alt_text() {
+    // Item 60's exact motivating fixture (a raw pasted-image line) PLUS an
+    // ordinary link, both carrying a misspelled LABEL/ALT word ("wrold")
+    // that must stay eligible, alongside a misspelling-shaped word buried in
+    // each destination that must NOT. The relative path carries a SPACE, which
+    // CommonMark requires wrapping in `<...>` (an unescaped space in a bare
+    // destination isn't a link at all — the angle-bracket form).
+    let text = "See [wrold](<assets/relative wrold.png#frag>) and \
+                ![wrold](https://example.com/wrold.png)\n";
+    let s = spans(text);
+    let dests = destination_ranges(text, &s);
+    assert_eq!(dests.len(), 2, "one destination per reference: {dests:?}");
+
+    let substrs: Vec<&str> = dests.iter().map(|r| &text[r.clone()]).collect();
+    assert!(
+        substrs.contains(&"<assets/relative wrold.png#frag>"),
+        "relative path + space + fragment isolated whole: {substrs:?}"
+    );
+    assert!(
+        substrs.contains(&"https://example.com/wrold.png"),
+        "absolute URL isolated whole: {substrs:?}"
+    );
+
+    // Every "wrold" occurrence OUTSIDE a destination range (the two labels /
+    // alt text) survives; only the ones INSIDE the two destinations above are
+    // covered. Count total occurrences vs. how many a destination swallows.
+    let total_wrold = text.matches("wrold").count();
+    assert_eq!(total_wrold, 4, "sanity: two labels + two in-destination words");
+    let covered = text
+        .match_indices("wrold")
+        .filter(|(i, w)| dests.iter().any(|r| r.start <= *i && i + w.len() <= r.end))
+        .count();
+    assert_eq!(covered, 2, "exactly the two IN-DESTINATION words are covered: {dests:?}");
+
+    // A document with no link/image yields no destinations at all.
+    let prose = "just some prose, no addresses here\n";
+    assert!(destination_ranges(prose, &spans(prose)).is_empty());
+}

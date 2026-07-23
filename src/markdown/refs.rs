@@ -154,6 +154,64 @@ pub fn image_width_hint_edit(src: &str, width: u32) -> Option<(usize, usize, Str
     Some((alt_start, alt_end, set_alt_width_hint(raw_alt, width)))
 }
 
+/// The DESTINATION byte range within a `[text](url)` / `![alt](url)` markdown
+/// reference SOURCE substring — the interior of the `(...)` that follows the
+/// label's closing `]`, EXCLUDING the syntax characters and the label/alt text
+/// before it. Locates the FIRST `](` (the same split
+/// [`super::spans::push_link_markers`]'s conceal split already scans for — a
+/// link's own `ConcealKind::Link` tail span starts exactly there) and, for an
+/// image, that search skips straight past the `![alt` prefix automatically
+/// (the alt text ends at the first `]`, same as [`parse_image_source`]'s own
+/// `rest.find(']')`), so ONE tiny idiom serves both reference shapes. Returns
+/// `None` when `src` has no `](` or no closing `)` — a reference-style
+/// (`[text][ref]`) or malformed link, nothing to exclude, mirroring
+/// `push_link_markers`'s own fallback.
+pub fn label_destination_range(src: &str) -> Option<std::ops::Range<usize>> {
+    let rel = src.find("](")?;
+    let inner_start = rel + 2;
+    let inner = src.get(inner_start..)?;
+    let end_rel = inner.find(')')?;
+    Some(inner_start..inner_start + end_rel)
+}
+
+/// EVERY inline link/image DESTINATION byte range in the document, in ABSOLUTE
+/// document byte coordinates (queue item 60 — "markdown destinations are
+/// ADDRESSES, not prose"). Reads the SAME `ConcealMarkup(Link)` /
+/// `ConcealMarkup(Image)` spans [`super::spans::spans`] already parsed this
+/// reshape (the identical `md_spans` field item 25's concealed-image work
+/// reads via `line_is_inline_image`) and slices out just the `(...)` interior
+/// with [`label_destination_range`] — never a second pulldown parse, never a
+/// second path/extension heuristic. A link's `Link` span is already just the
+/// `](url…)` tail (`push_link_markers`), so it needs no alt-skip; an image's
+/// `Image` span is the WHOLE `![alt](path…)` reference, and
+/// `label_destination_range`'s `](`-search skips past the alt text
+/// automatically — so alt text (and a link's visible label, which never
+/// shares either span) keeps its own existing spell/nit behavior untouched.
+/// Empty for a non-markdown buffer (`md_spans` is empty there) or a document
+/// with no link/image, so every other buffer's candidates are byte-identical.
+pub fn destination_ranges(
+    text: &str,
+    md_spans: &[(std::ops::Range<usize>, super::MdKind)],
+) -> Vec<std::ops::Range<usize>> {
+    use super::{ConcealKind, MdKind};
+    let mut out = Vec::new();
+    for (r, k) in md_spans {
+        if !matches!(
+            k,
+            MdKind::ConcealMarkup(ConcealKind::Link) | MdKind::ConcealMarkup(ConcealKind::Image)
+        ) {
+            continue;
+        }
+        let Some(src) = text.get(r.clone()) else {
+            continue;
+        };
+        if let Some(rel) = label_destination_range(src) {
+            out.push(r.start + rel.start..r.start + rel.end);
+        }
+    }
+    out
+}
+
 /// The destination URL of the markdown link CONTAINING document byte offset
 /// `byte`, or `None` when the caret is not inside any link — the pure extraction
 /// behind [`crate::keymap::Action::FollowLink`] (open-link-at-point). Reuses
