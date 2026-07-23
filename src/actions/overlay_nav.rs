@@ -906,24 +906,27 @@ fn dispatch_settings_row(
         // Flip IN PLACE: signal the caller to toggle + persist + refresh the value
         // cell. A row with no key (shouldn't happen for a Toggle) is a calm no-op
         // rather than a signal.
-        crate::settings::SettingKind::Toggle => match crate::settings::toggle_key(row.name) {
-            Some(key) => {
-                if close_on_toggle {
-                    *ctx.overlay = None;
-                }
-                Effect::SettingToggle { key: key.to_string() }
+        crate::settings::SettingKind::Toggle => {
+            let key = crate::settings::toggle_key(row.name).expect(
+                "Toggle row always resolves its config key — settings law \
+                 every_toggle_has_a_config_key_and_nothing_else_does",
+            );
+            if close_on_toggle {
+                *ctx.overlay = None;
             }
-            None => Effect::None,
-        },
+            Effect::SettingToggle { key: key.to_string() }
+        }
         // Open the sub-picker with a breadcrumb back to `breadcrumb`. `make_overlay`
         // builds it from the live globals (theme/caret/dictionary/keybindings), so a
         // commit reflects in the value cell when the breadcrumb re-summons.
         crate::settings::SettingKind::Picker | crate::settings::SettingKind::Submenu => {
-            if let Some(target) = crate::settings::sub_overlay(row.name) {
-                if let Some(mut next) = (ctx.make_overlay)(target) {
-                    next.return_to = Some(breadcrumb);
-                    *ctx.overlay = Some(next);
-                }
+            let target = crate::settings::sub_overlay(row.name).expect(
+                "Picker/Submenu row always resolves its sub-overlay — settings law \
+                 pickers_and_submenus_open_a_sub_overlay_and_nothing_else_does",
+            );
+            if let Some(mut next) = (ctx.make_overlay)(target) {
+                next.return_to = Some(breadcrumb);
+                *ctx.overlay = Some(next);
             }
             Effect::None
         }
@@ -943,12 +946,14 @@ fn dispatch_settings_row(
         // own modal intercept, checked above); the caller then owns the keys until
         // Enter commits / Esc cancels.
         crate::settings::SettingKind::Value => {
-            if let Some(key) = crate::settings::value_key(row.name) {
-                ctx.overlay
-                    .as_mut()
-                    .unwrap()
-                    .start_value_edit(key.to_string(), row.name.to_string());
-            }
+            let key = crate::settings::value_key(row.name).expect(
+                "Value row always resolves its config key — settings law \
+                 value_and_path_keys_track_their_kinds",
+            );
+            ctx.overlay
+                .as_mut()
+                .unwrap()
+                .start_value_edit(key.to_string(), row.name.to_string());
             Effect::None
         }
         // PATH (notes_root / workspace / project_root): open the folder NAVIGATOR (the
@@ -956,12 +961,14 @@ fn dispatch_settings_row(
         // `return_to = breadcrumb` + the config key stamped, so its accept writes THAT
         // key and returns rather than switching the project blindly.
         crate::settings::SettingKind::Path => {
-            if let Some(key) = crate::settings::path_key(row.name) {
-                if let Some(mut nav) = (ctx.browse_to)(crate::overlay::OverlayKind::Project, None) {
-                    nav.return_to = Some(breadcrumb);
-                    nav.setting_path_key = Some(key.to_string());
-                    *ctx.overlay = Some(nav);
-                }
+            let key = crate::settings::path_key(row.name).expect(
+                "Path row always resolves its config key — settings law \
+                 value_and_path_keys_track_their_kinds",
+            );
+            if let Some(mut nav) = (ctx.browse_to)(crate::overlay::OverlayKind::Project, None) {
+                nav.return_to = Some(breadcrumb);
+                nav.setting_path_key = Some(key.to_string());
+                *ctx.overlay = Some(nav);
             }
             Effect::None
         }
