@@ -206,15 +206,38 @@ fn kept_open(levels: &[u8], line: usize) -> BTreeSet<usize> {
     kept
 }
 
-/// "Collapse other sections" (the daily-notes gesture): fold EVERY heading except
-/// the caret's section — its enclosing chain and everything nested inside it stay
-/// open, every sibling / unrelated section collapses. When the caret is before the
-/// first heading (no section), every heading folds.
+/// "Collapse other sections" (the daily-notes gesture): fold every section OUTSIDE
+/// the caret's — its enclosing chain and everything nested inside it stay open,
+/// every sibling / unrelated section collapses. When the caret is before the first
+/// heading (no section), every top section folds.
+///
+/// The result is a MINIMAL ANTICHAIN: only the SHALLOWEST heading of each collapsed
+/// region is stored, never a deeper heading already hidden inside an outer folded
+/// root. An outer collapsed heading SUBSUMES its descendants, so clicking that one
+/// root open reveals the whole sibling section in a single gesture — not a
+/// partly-collapsed accordion that peels back one buried layer per click (the
+/// Wave-4 bug: the old "fold every heading not kept" set stored a fold for a
+/// sibling AND for each of its already-hidden descendants). No folded heading here
+/// has a folded ancestor, and no deeper fold is invented beneath a collapsed root.
+/// Idempotent: the set is derived purely from the levels + caret, so repeating the
+/// gesture from the same caret yields the same antichain.
 pub fn collapse_others(levels: &[u8], caret_line: usize) -> BTreeSet<usize> {
     let keep = kept_open(levels, caret_line);
-    (0..levels.len())
-        .filter(|&i| levels[i] != 0 && !keep.contains(&i))
-        .collect()
+    let mut folds = BTreeSet::new();
+    // The exclusive end of the section of the last committed fold ROOT: any heading
+    // before it is already hidden inside that root and must not become its own fold.
+    // Walking in document order guarantees a parent is visited before its children,
+    // so the first heading past `covered` outside `keep` is always a shallowest root.
+    let mut covered = 0usize;
+    for i in 0..levels.len() {
+        if levels[i] == 0 || i < covered || keep.contains(&i) {
+            continue;
+        }
+        let (_, e) = section_range(levels, i);
+        folds.insert(i);
+        covered = e;
+    }
+    folds
 }
 
 /// Toggle the fold on the heading enclosing `caret_line`. Returns the heading line

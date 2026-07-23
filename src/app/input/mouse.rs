@@ -190,6 +190,14 @@ impl App {
                 self.buffer.select_range(s, e);
             }
         }
+        // REVEALED PLACEMENT (folds): a shift-click whose new selection spans a
+        // collapsed section — or any click/word/line placement that lands on a
+        // hidden row — routes through the ONE placement owner so the caret and every
+        // selection endpoint stay visible. A cheap no-op unless a section is folded
+        // (the fold-affordance click above already returned; it is a deliberate
+        // unfold, not a placement). The caller's `sync_view(true)` repaints any
+        // now-revealed section.
+        self.buffer.reveal_placement();
     }
 
     /// CLICK-TO-JUMP on a persistent MARGIN OUTLINE row: hit-test the pointer against
@@ -596,6 +604,11 @@ impl App {
                 }
             }
         }
+        // REVEALED PLACEMENT (folds): a drag that extends the selection ACROSS a
+        // collapsed section reveals every intersected fold before the selection is
+        // shown, through the ONE placement owner — so a drag can never span hidden
+        // lines invisibly. A cheap no-op unless a section is folded.
+        self.buffer.reveal_placement();
     }
 
     /// LIVE-ONLY: recompute the CONTEXT-AWARE OS cursor shape (`cursor_shape.rs`) for

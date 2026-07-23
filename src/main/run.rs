@@ -683,6 +683,12 @@ impl<'a> ReplaySession<'a> {
             actions::Effect::JumpToLine(line) => {
                 let idx = self.buffer.line_col_to_char(line, 0);
                 self.buffer.set_cursor(idx);
+                // REVEALED PLACEMENT (folds): the headless twin of `App::jump_to_line`
+                // — route through the ONE placement owner so a heading jump onto a
+                // hidden line reveals it here exactly as it does live, keeping the
+                // sidecar's cursor + filtered mapping honest. A cheap no-op unless
+                // a section is folded.
+                self.buffer.reveal_placement();
             }
             // COMMAND PALETTE run-on-Enter: feed the chosen command back through the
             // core (the palette already closed), so e.g. "Go to file" opens the goto

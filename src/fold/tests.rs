@@ -182,6 +182,73 @@ fn collapse_others_before_the_first_heading_folds_everything() {
     assert_eq!(f, folds(&[1, 3]));
 }
 
+// A DEEPER outline than OUTLINE: a sibling section (# Beta) that itself nests two
+// more levels — the exact shape the Wave-4 bug needed (OUTLINE's single-level
+// siblings can't witness the antichain, so its collapse-others tests pass either
+// way). H1 -> H2 -> H3:
+//   0 # Alpha / 1 a / 2 # Beta / 3 b / 4 ## Beta one / 5 c / 6 ### Beta one a / 7 d /
+//   8 # Gamma / 9 e
+const NEST: &str = "# Alpha\na\n# Beta\nb\n## Beta one\nc\n### Beta one a\nd\n# Gamma\ne";
+
+/// A fold set is an ANTICHAIN when no folded heading sits inside another folded
+/// heading's section — equivalently, none of the folded headings is itself hidden.
+fn is_antichain(levels: &[u8], folds: &BTreeSet<usize>) -> bool {
+    let hidden = hidden_lines(levels, folds);
+    folds.iter().all(|&h| !hidden.get(h).copied().unwrap_or(false))
+}
+
+#[test]
+fn collapse_others_emits_a_minimal_antichain_over_a_nested_sibling() {
+    let levels = heading_levels(NEST, true);
+    // Caret in # Alpha's body (line 1): keep only # Alpha (line 0) open. The old
+    // "fold every heading not kept" set was {2,4,6,8} — a fold for # Beta AND its
+    // already-hidden descendants ## Beta one / ### Beta one a. The fix stores just
+    // the SHALLOWEST roots: # Beta (2) subsumes its whole subtree, # Gamma (8) is a
+    // separate top section.
+    let f = collapse_others(&levels, 1);
+    assert_eq!(f, folds(&[2, 8]));
+    assert!(
+        !f.contains(&4) && !f.contains(&6),
+        "no fold is stored for a heading already hidden inside # Beta's section"
+    );
+    assert!(is_antichain(&levels, &f), "no folded heading has a folded ancestor");
+    // Every folded heading is itself visible, so each shows exactly one tail — the
+    // render never hangs a tail on a buried heading.
+    assert_eq!(fold_tails(&levels, &f).len(), f.len());
+}
+
+#[test]
+fn collapse_others_root_unfold_reveals_the_whole_sibling_subtree_in_one_step() {
+    // THE WAVE-4 BUG, at the fold seam: with the antichain {2,8}, unfolding the one
+    // stored root # Beta (line 2) reveals its ENTIRE subtree (lines 3..=7) at once —
+    // no buried ## Beta one / ### Beta one a fold remains to peel back click by click.
+    let levels = heading_levels(NEST, true);
+    let mut f = collapse_others(&levels, 1);
+    assert!(f.remove(&2), "# Beta is the single stored root over its subtree");
+    let hidden = hidden_lines(&levels, &f);
+    for line in 3..=7 {
+        assert!(!hidden[line], "line {line} of # Beta's subtree is now visible");
+    }
+    // Only # Gamma's section stays collapsed.
+    assert_eq!(f, folds(&[8]));
+}
+
+#[test]
+fn collapse_others_is_idempotent_from_the_same_caret() {
+    let levels = heading_levels(NEST, true);
+    // The caret parks on the still-visible heading/body; repeating the gesture from
+    // the same caret line re-derives the identical antichain (never accreting folds).
+    let once = collapse_others(&levels, 1);
+    let twice = collapse_others(&levels, 1);
+    assert_eq!(once, twice);
+    // Caret ON # Beta itself keeps its subtree open, folding only the outer siblings —
+    // and is likewise idempotent.
+    let on_beta = collapse_others(&levels, 2);
+    assert_eq!(on_beta, folds(&[0, 8]));
+    assert!(is_antichain(&levels, &on_beta));
+    assert_eq!(collapse_others(&levels, 2), on_beta);
+}
+
 #[test]
 fn expand_containing_reveals_a_line_hidden_by_nested_folds() {
     let levels = heading_levels(OUTLINE, true);
