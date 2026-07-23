@@ -1402,6 +1402,7 @@ pub(crate) fn run(mode: Mode) -> Result<()> {
         Mode::BenchFrame => crate::render::framebench::run(),
         Mode::BenchThemeBurst => crate::render::framebench::run_theme_burst(),
         Mode::BenchZoomBurst => crate::render::framebench::run_zoom_burst(),
+        Mode::BenchFrost => crate::render::framebench::run_frost(),
         Mode::BenchSuite { baseline } => crate::render::benchsuite::run(baseline),
         #[cfg(not(target_arch = "wasm32"))]
         Mode::SoakGpu(config) => {

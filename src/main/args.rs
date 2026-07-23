@@ -206,6 +206,12 @@ pub(crate) enum Mode {
     /// per-input reflow with latest-wins present-boundary coalescing. Opens no
     /// window.
     BenchZoomBurst,
+    /// Hidden performance harness: the FROST steady-frame profiler (item 32) — the
+    /// organic glyph-seeded frost field's real workload over a heading-rich
+    /// page-mode lava fixture with a populated outline + gutter, for both lava
+    /// worlds, witnessing a nonzero seed field + zero-rebuild steady frames + one
+    /// rebuild after a zoom / margin-text change. Opens no window.
+    BenchFrost,
     /// Hidden performance harness: the UNIFIED BENCH SUITE — deterministic
     /// corpus tiers x interaction scenarios, every cell witnessed, printed as
     /// a table and written to `bench.json` beside the invocation. `baseline`
@@ -479,6 +485,7 @@ pub(crate) fn parse_args() -> Result<Mode> {
     let mut bench_frame = false;
     let mut bench_theme_burst = false;
     let mut bench_zoom_burst = false;
+    let mut bench_frost = false;
     let mut bench_suite = false;
     #[cfg(not(target_arch = "wasm32"))]
     let mut soak_gpu = false;
@@ -539,6 +546,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
             }
             "--bench-zoom-burst" => {
                 bench_zoom_burst = true;
+            }
+            "--bench-frost" => {
+                bench_frost = true;
             }
             "--bench-suite" => {
                 bench_suite = true;
@@ -976,6 +986,9 @@ pub(crate) fn parse_args() -> Result<Mode> {
     }
     if bench_zoom_burst {
         return Ok(Mode::BenchZoomBurst);
+    }
+    if bench_frost {
+        return Ok(Mode::BenchFrost);
     }
     // CLI VALIDATION (error paths only — valid runs are unaffected).
     // 1) At most ONE capture-mode flag. With more than one, the Mode chosen below

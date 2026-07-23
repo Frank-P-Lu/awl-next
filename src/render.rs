@@ -1568,6 +1568,66 @@ pub(crate) fn effective_page_frame() -> theme::PageFrame {
     }
 }
 
+/// THE ORGANIC FROST SEED HALO RADIUS (device px) for a margin-ink row of physical
+/// height `row_h`: the glyph-derived core (a fraction of the ZOOMED line box, so it
+/// tracks the actual glyph size) PLUS the authored skirt ([`crate::lava::FROST_FEATHER_PX`],
+/// zoom/DPI-scaled). Because the skirt is a fixed LOGICAL px while `row_h` scales
+/// with zoom, the halo's reach RELATIVE to the row pitch shifts with zoom — so
+/// nearby rows join into a larger island at small zoom and separate at large zoom,
+/// naturally, through the continuous field (never a mode switch). ONE owner so the
+/// outline and gutter seeds share the exact halo. See `docs/render.md`.
+pub(crate) fn frost_seed_radius(row_h: f32, zoom: f32, dpi: f32) -> f32 {
+    row_h * crate::lava::FROST_SEED_RADIUS_FRAC
+        + crate::lava::frost_px(crate::lava::FROST_FEATHER_PX, zoom, dpi)
+}
+
+/// Push FROST SEEDS `[x0, x1, yc, r]` for one drawn text run spanning
+/// `[left, left+width]` (device px) at row centre `yc`, halo radius `r`, given its
+/// fitted `label`. PER-GLYPH ([`crate::lava::FROST_SEED_PER_GLYPH`]) scatters one
+/// point seed per non-space glyph cell evenly across the MEASURED run — the ideal
+/// bumpy hug; the NAMED DEGRADATION ARM emits one capsule seed per whitespace-
+/// delimited WORD RUN (far fewer per-pixel seeds), both anchored to the SAME
+/// measured extent so word gaps fall where the ink's do. ONE owner shared by the
+/// outline + gutter seed builders, so both worlds and both surfaces seed identically.
+pub(crate) fn push_text_seeds(
+    seeds: &mut Vec<[f32; 4]>,
+    left: f32,
+    width: f32,
+    yc: f32,
+    r: f32,
+    label: &str,
+) {
+    let chars: Vec<char> = label.chars().collect();
+    let n = chars.len();
+    if n == 0 || width <= 0.0 {
+        return;
+    }
+    // Average glyph advance across the MEASURED run (the actual zoomed extent).
+    let cw = width / n as f32;
+    if crate::lava::FROST_SEED_PER_GLYPH {
+        for (i, &c) in chars.iter().enumerate() {
+            if c.is_whitespace() {
+                continue; // a space seeds no halo — the ink's gaps stay open
+            }
+            let cx = left + (i as f32 + 0.5) * cw;
+            seeds.push([cx, cx, yc, r]);
+        }
+    } else {
+        let mut i = 0usize;
+        while i < n {
+            if chars[i].is_whitespace() {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < n && !chars[i].is_whitespace() {
+                i += 1;
+            }
+            seeds.push([left + start as f32 * cw, left + i as f32 * cw, yc, r]);
+        }
+    }
+}
+
 /// TEST-ONLY escape hatch: force the EFFECTIVE title style without touching
 /// the env var — which, like `AWL_CJK_FORCE`, is memoized after first read
 /// and so cannot safely change mid-process (many tests share one binary).
@@ -2690,6 +2750,23 @@ pub struct TextPipeline {
     /// this fixed while the page mask follows the current window, then snaps it
     /// once the resize debounce settles.
     lava_field_viewport: [f32; 2],
+    /// THE ORGANIC FROST SEED FIELD (proto-cache): the visible margin glyphs' halo
+    /// seeds `[x0, x1, yc, r]` (the outline entries + the gutter), summed by the
+    /// lava shader into one continuous frosted field. Rebuilt only when
+    /// [`Self::frost_seed_key`] misses — warm steady frames reuse it (zero
+    /// rebuilds); a margin-text / zoom / resize change rebuilds once. EMPTY in every
+    /// non-frost frame. See [`Self::prepare_lava_layer`].
+    frost_seeds: Vec<[f32; 4]>,
+    /// The frost seed-field cache key: viewport, zoom×DPI, the column, the active
+    /// face, and the drawn outline/gutter text (see [`Self::frost_seed_key`]).
+    /// `None` clears the cache (a non-frost frame).
+    frost_seed_key: Option<u64>,
+    /// How many times the frost seed field has been rebuilt this pipeline's life —
+    /// the bench witness (`--bench-frost`) asserts ZERO across warm steady frames
+    /// and EXACTLY ONE after a margin-text or zoom change, so a bench that reshaped
+    /// nothing can't pass as measuring the work.
+    pub frost_seed_rebuilds: u64,
+    // (frost seed count is exposed via `TextPipeline::frost_seed_count`.)
     /// TWINKLING STARS (`theme::AmbientStyle::Stars`, the TWINKLING-STARS
     /// round): tiny individually-phased breathing points in the page-mode
     /// MARGINS — Currawong's ambient differentiator. A reused

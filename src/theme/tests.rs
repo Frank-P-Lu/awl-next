@@ -637,9 +637,9 @@ fn outline_frost_pills_keep_ink_contrast_on_every_lava_world() {
 /// HARD-carve its corner out of the lava mask, dropping the band to the flat,
 /// DARKEST page ground (`base_100`) — an ugly geometric dark pocket beside the much
 /// lighter writing column and below the margin's own blob peaks (worst on
-/// Firetail, ground lum ~12 vs column ~60). It now rides the SAME per-entry FROST
-/// treatment the outline does (`TextPipeline::lava_gutter_frost_rect` →
-/// `prepare_lava_layer`'s `pills`): the lamp renders SOFTENED (a blurred
+/// Firetail, ground lum ~12 vs column ~60). It now rides the SAME organic FROST
+/// FIELD the outline does (`TextPipeline::gutter_frost_seeds` →
+/// `prepare_lava_layer`'s `seeds`): the lamp renders SOFTENED (a blurred
 /// SMOOTH-field sample, `crate::lava::frost_field`) and value-DIMMED toward the
 /// flat ground (`crate::lava::frost_pixel` / `FROST_DIM`), so the dim gutter ink
 /// keeps its contrast while the lamp reads THROUGH — a warm whisper, not a dead
@@ -660,12 +660,12 @@ fn outline_frost_pills_keep_ink_contrast_on_every_lava_world() {
 ///     `frost_pixel(1.0, ..)` = `mix(blob_hi, ground, FROST_DIM)`; the ink clears
 ///     the floors against THAT, so every phase is covered by construction.
 ///
-/// (4) THE FROST IS LOCAL — both margins keep their lamp: coverage
-///     (`frost_amount`) is solid INSIDE the corner and exactly 0 OUTSIDE it (the
-///     left margin above the band, the whole right margin), so nothing carves and
-///     the rest of both margins stay their live lamp. The pill BOUNDS (a
-///     bottom-left box) are pinned at the render seam by
-///     `render::tests::outline::lava_gutter_frost_pill_follows_gutter_visibility`.
+/// (4) THE FROST IS LOCAL — both margins keep their lamp: the organic coverage
+///     (`frost_coverage`) is solid OVER the gutter seed's ink and exactly 0 far
+///     from every seed (the left margin high above the band, the whole right
+///     margin), so nothing carves and the rest of both margins stay their live
+///     lamp. The gutter seed geometry is pinned at the render seam by
+///     `render::tests::outline::gutter_frost_seeds_follow_gutter_visibility`.
 ///
 /// The `Background` match is NO-WILDCARD: a future ground variant must decide its
 /// frost story here or fail to compile. A static-ground world carries no lava, so
@@ -680,12 +680,12 @@ fn gutter_frost_pill_keeps_ink_contrast_on_every_lava_world() {
         ((2.0 + rbar / 256.0) * dr * dr + 4.0 * dg * dg + (2.0 + (255.0 - rbar) / 256.0) * db * db)
             .sqrt()
     }
-    // Representative page geometry (the 1600x1000 gallery canvas). The gutter's
-    // local frost pill [left, top, right, bottom]: left 0, right a small gap shy of
-    // the column, a BOTTOM band (the two stacked LABEL rows ~8px up from the canvas
-    // bottom — `prepare_gutter` / `gutter_carve_rect`).
+    // Representative page geometry (the 1600x1000 gallery canvas). The gutter seeds
+    // the ORGANIC frost field near the bottom-left column edge — a capsule run
+    // `[x0, x1, yc, r]` hugging the two stacked LABEL rows ~8px up from the canvas
+    // bottom (`prepare_gutter` / `gutter_frost_seeds`).
     let vp = (1600.0f32, 1000.0f32);
-    let pill = [0.0f32, 850.0, 260.0, 1000.0];
+    let gutter_seed = [40.0f32, 250.0, 930.0, 40.0];
     for t in THEMES.iter() {
         // NO-WILDCARD: a future ground variant must decide its frost story here.
         let (ground, blob_lo, blob_hi) = match t.background {
@@ -701,8 +701,7 @@ fn gutter_frost_pill_keeps_ink_contrast_on_every_lava_world() {
         // world tuning its gutter frost is held to the same ink-contrast floor.
         let blur = t.render_caps.frost.blur_px;
         let dim = t.render_caps.frost.dim;
-        let feather = t.render_caps.frost.feather_px;
-        // The pill's un-lit floor IS the page's own ground — the ink-ladder laws
+        // The field's un-lit floor IS the page's own ground — the ink-ladder laws
         // govern it; the frost only ever LIFTS from there toward the dimmed lamp.
         assert_eq!(ground, t.base_100, "{}: frost ground must be base_100", t.name);
 
@@ -716,12 +715,6 @@ fn gutter_frost_pill_keeps_ink_contrast_on_every_lava_world() {
                 // x strictly INSIDE the pill, past its right-face feather.
                 let x = 12.0 + (235.0 - 12.0) * (xi as f32 + 0.5) / 16.0;
                 for y in [860.0, 900.0, 940.0, 980.0] {
-                    // The pill fully covers this pixel (coverage ~1 well inside).
-                    assert!(
-                        crate::lava::frost_pill_coverage(x, y, pill, feather) > 0.99,
-                        "{}: sample x={x} y={y} is not solidly inside the gutter pill",
-                        t.name
-                    );
                     let field = crate::lava::frost_field(
                         (x, y),
                         vp,
@@ -774,25 +767,26 @@ fn gutter_frost_pill_keeps_ink_contrast_on_every_lava_world() {
             redmean(t.muted, worst)
         );
 
-        // (4) THE FROST IS LOCAL — both margins keep their live lamp. Coverage is
-        //     solid inside the pill (non-vacuous) and exactly zero OUTSIDE it (the
-        //     left margin above the band, and the whole right margin), so nothing
-        //     is carved and the rest of both margins are untouched.
+        // (4) THE FROST IS LOCAL — both margins keep their live lamp. The organic
+        //     coverage is solid over the gutter seed's ink (non-vacuous) and exactly
+        //     zero far from every seed (the left margin high above the band, and the
+        //     whole right margin), so nothing is carved and the rest of both margins
+        //     are untouched. `frost_coverage` sums the seed halos and thresholds them.
         assert!(
-            crate::lava::frost_amount(120.0, 930.0, &[pill], feather) > 0.99,
-            "{}: the gutter pill does not frost its own corner (vacuous)",
+            crate::lava::frost_coverage(120.0, 930.0, &[gutter_seed]) > 0.99,
+            "{}: the gutter seed does not frost its own ink (vacuous)",
             t.name
         );
         for (x, y) in [
-            (60.0, 500.0),   // left margin, above the band
-            (180.0, 300.0),  // left margin, above the band
+            (150.0, 400.0),  // left margin, far above the band
+            (200.0, 200.0),  // left margin, far above the band
             (1320.0, 930.0), // right margin, at the band's y
             (1560.0, 970.0), // right margin, deep bottom
         ] {
             assert_eq!(
-                crate::lava::frost_amount(x, y, &[pill], feather),
+                crate::lava::frost_coverage(x, y, &[gutter_seed]),
                 0.0,
-                "{}: frost leaked outside the gutter pill at x={x} y={y} (not local — a margin lost its lamp)",
+                "{}: frost leaked far from the gutter seed at x={x} y={y} (not local — a margin lost its lamp)",
                 t.name
             );
         }

@@ -102,28 +102,38 @@ pub const BACKDROP_BLOBS: [[f32; 4]; 8] = [
     [0.88, 0.82, 0.136, 0.95],
 ];
 
-// --- FROST RAIL constants (the shipped headed-doc treatment) ------------------
+// --- FROST constants (the shipped headed-doc treatment) -----------------------
 //
 // The user's design: on a lava world a HEADED doc keeps BOTH margins alive (the
-// lamp animates in the left margin too), and each drawn outline entry gets a
-// FROSTED PILL behind its text — the SMOOTH metaball field softened + a value dim
-// — so the dim outline ink keeps its contrast while the lamp stays fully alive
-// between and around the pills. This REPLACES the old whole-left-margin CARVE
-// (which flattened the entire rail to ground). All TASTE TUNABLE — flagged for
-// live review, named like `THEME_FONT_DEBOUNCE`.
+// lamp animates in the left margin too), and the drawn margin ink (the outline
+// entries + the bottom-left gutter) sits over a FROSTED FIELD — the SMOOTH
+// metaball field softened + a value dim — so the dim ink keeps its contrast while
+// the lamp stays fully alive around it. This REPLACES the old whole-left-margin
+// CARVE (which flattened the entire rail to ground). All TASTE TUNABLE — flagged
+// for live review, named like `THEME_FONT_DEBOUNCE`.
+//
+// ORGANIC GLYPH-SEEDED FIELD (item 32): the frost is NOT a union of rectangular
+// pills. Every visible margin glyph SEEDS a small close halo; the halos are
+// summed into ONE continuous scalar field and thresholded ([`frost_coverage`]),
+// so neighbouring seeds MERGE in ANY direction wherever their softened halos
+// overlap — nearby words / rows naturally become a larger organic island, a run
+// of consecutive headings joins while a group-gapped one separates, with NO
+// artificial per-row separation and NO zoom breakpoint (the topology falls out of
+// the continuous field, never an `if zoom >= X` mode switch). Mangrove and
+// Firetail share the SAME shape recipe; only the palette-derived colour differs.
 
 /// THE SHIPPED HEADED-DOC TREATMENT. `true` (the user's pick — "both margins
-/// alive on every doc") = per-entry FROST pills, the lamp animating in both
+/// alive on every doc") = the glyph-seeded FROST field, the lamp animating in both
 /// margins. Flip this ONE const to `false` to revert to the OLD whole-left-margin
 /// CARVE (the `rail` global + [`rail_dist_outside`] + `lava_rail_carved` stay
 /// wired for exactly this one-line data revert): frost turns off and a headed
 /// doc's whole left margin flattens back to the flat page ground.
 pub const FROST_RAIL_DEFAULT: bool = true;
 
-/// The VALUE DIM inside a frost pill: how far the softened field is mixed back
+/// The VALUE DIM inside the frost field: how far the softened field is mixed back
 /// toward the flat page `ground` (0 = the raw softened lamp, 1 = pure flat
-/// ground). Sized so the dim outline ink clears its ink-ladder contrast floor
-/// against the pill at EVERY animation phase (law
+/// ground). Sized so the dim margin ink clears its ink-ladder contrast floor
+/// against the field at EVERY animation phase (law
 /// `outline_frost_pills_keep_ink_contrast_on_every_lava_world`), while a whisper
 /// of the softened lamp still reads behind the text.
 pub const FROST_DIM: f32 = 0.65;
@@ -136,33 +146,64 @@ pub const FROST_DIM: f32 = 0.65;
 /// dither.
 pub const FROST_BLUR_PX: f32 = 5.0;
 
-/// The frost pill EDGE FEATHER (logical px, zoom/DPI-scaled): the band over which a
-/// pill's frost coverage ramps 1 → 0 at its boundary, so the pill blends into the
-/// live lamp instead of drawing a hard rectangle edge.
+/// The frost SEED HALO SKIRT (logical px, zoom/DPI-scaled): a soft px pad added to
+/// each seed's glyph-derived halo radius, so the field blends into the live lamp
+/// instead of drawing a hard boundary. (Formerly the rectangular pill's edge
+/// feather; now the halo skirt of the organic field.)
 pub const FROST_FEATHER_PX: f32 = 7.0;
 
-/// The horizontal padding (logical px, zoom/DPI-scaled) a frost pill extends past each
-/// end of its outline entry's shaped text extent — the "comfortable padding" that
-/// hugs the text without clipping its antialiased edge.
+/// The horizontal padding (logical px, zoom/DPI-scaled) the seeded run extends past
+/// each end of its shaped text extent — the "comfortable padding" that hugs the
+/// text without clipping its antialiased edge.
 pub const FROST_PILL_PAD_X: f32 = 6.0;
 
-/// The vertical inset of a frost pill from its outline row's full line box, as a
-/// fraction of the row height (top AND bottom) — so the pill hugs the text band
-/// and the lamp breathes in the leading BETWEEN consecutive pills (never a solid
-/// column of frost down the rail).
+/// The vertical inset of a frost seed row from its full line box, as a fraction of
+/// the row height (top AND bottom) — so seed y-centres hug the text band. (Kept
+/// for the coarse outline-ink exclusion rects the STARS layer reads.)
 pub const FROST_PILL_INSET_Y_FRAC: f32 = 0.1;
 
+/// THE SEED HALO RADIUS as a fraction of the LABEL row height — the "small close
+/// halo" each glyph seeds, DERIVED FROM THE ACTUAL ZOOMED GLYPH GEOMETRY (the row
+/// height IS the zoomed line box). Tuned with [`FROST_ISO`] so glyph seeds within
+/// a run always merge, consecutive rows (pitch one row height) merge into a larger
+/// island, and a group-gapped row (pitch 1.5 rows) tends to separate — the natural
+/// island structure, with no explicit per-row rule.
+pub const FROST_SEED_RADIUS_FRAC: f32 = 0.62;
+
+/// THE FIELD ISO LEVEL: the summed seed halo strength at which the organic frost
+/// coverage crosses 0.5. A lone seed peaks at 1.0 at its core, so ISO < 1 gives a
+/// halo out past the seed; two seeds each contributing ~ISO/2 in the gap between
+/// them bridge into one island (the metaball neck). MUST match `shaders/lava.wgsl`.
+pub const FROST_ISO: f32 = 0.55;
+
+/// THE ISO SOFT BAND: the summed-field half-width over which coverage ramps
+/// 0 → 1 around [`FROST_ISO`] — the organic edge softness (never a hard contour).
+/// MUST match `shaders/lava.wgsl`.
+pub const FROST_ISO_SOFT: f32 = 0.42;
+
+/// SEED GRANULARITY (item 32 perf arm). `true` = PER-GLYPH seeds (one halo per
+/// visible glyph — the ideal bumpy hug). `false` = the NAMED DEGRADATION ARM:
+/// one WORD-RUN seed per whitespace-delimited run, still merging organically in
+/// any direction, far fewer per-pixel seeds. Flipped to the degradation arm only
+/// if the per-glyph steady frame cost regresses > 5% (item 32 STEP 3).
+pub const FROST_SEED_PER_GLYPH: bool = false;
+
 /// Convert an authored Frost dimension from logical to physical pixels. The lava
-/// shader consumes physical pixels, so its blur, feather, and pill padding must
-/// use the same user-zoom × device-DPI scale as [`crate::render::Metrics::with_dpi`].
+/// shader consumes physical pixels, so its blur, skirt, and pad must use the same
+/// user-zoom × device-DPI scale as [`crate::render::Metrics::with_dpi`].
 pub fn frost_px(logical_px: f32, zoom: f32, dpi: f32) -> f32 {
     logical_px * zoom * dpi
 }
 
-/// The MAX frost pills the shader's uniform carries (`array<vec4<f32>,
-/// MAX_FROST_PILLS>`). The visible outline row count is capped here — far above
-/// any realistic followed-window row budget, so in practice every drawn entry
-/// gets its pill.
+/// The MAX frost SEEDS the shader's uniform carries (`array<vec4<f32>,
+/// MAX_FROST_SEEDS>`). Per-glyph seeding over a full followed outline plus the
+/// gutter can reach into the low hundreds; the field clamps here (a generous cap,
+/// far above any realistic margin-ink glyph budget).
+pub const MAX_FROST_SEEDS: usize = 256;
+
+/// The MAX outline-ink exclusion RECTS the STARS layer reads (one per drawn
+/// outline row) — unchanged from the pre-organic-field cap, kept for that coarse
+/// keep-out geometry (see [`crate::render::TextPipeline::lava_frost_pill_rects`]).
 pub const MAX_FROST_PILLS: usize = 48;
 
 #[allow(dead_code)] // shader-mirror constant (see the pure-math note below).
@@ -327,13 +368,14 @@ pub fn metaball_field(px: (f32, f32), viewport: (f32, f32), blobs: &[[f32; 4]], 
 
 // --- FROST pure math (the shader mirror, unit-tested) -------------------------
 //
-// The FROST treatment (behind each outline entry's pill): a SOFTENED sample of
-// the SMOOTH metaball field ([`frost_field`], a 3×3 tap average — never the
-// dithered color, the Mangrove palette-blur lesson) mapped through the same
-// edge/core blend the lamp uses, then value-dimmed toward the flat ground
-// ([`frost_pixel`]). Blended into the live lamp by a per-pill feathered coverage
-// ([`frost_pill_coverage`], which reuses [`gutter_corner_dist_outside`] as the
-// rounded-pill rect SDF). All three MUST stay in lockstep with `shaders/lava.wgsl`.
+// The FROST treatment (behind the margin ink): a SOFTENED sample of the SMOOTH
+// metaball field ([`frost_field`], a 3×3 tap average — never the dithered color,
+// the Mangrove palette-blur lesson) mapped through the same edge/core blend the
+// lamp uses, then value-dimmed toward the flat ground ([`frost_pixel`]). Blended
+// into the live lamp by the ORGANIC glyph-seeded coverage — every seed contributes
+// a soft halo ([`frost_seed_bump`]), the halos SUM into one continuous field and
+// threshold ([`frost_coverage`]) so neighbours merge in any direction. All four
+// MUST stay in lockstep with `shaders/lava.wgsl`.
 
 /// The SOFTENED (blurred) metaball field at pixel `px`: [`metaball_field`]
 /// averaged over a 3×3 tap cross at `blur` px spacing. Averaging the RAW field
@@ -382,28 +424,35 @@ pub fn frost_pixel(field: f32, ground: Srgb, blob_lo: Srgb, blob_hi: Srgb, dim: 
     }
 }
 
-/// The FROST PILL COVERAGE at pixel `(x, y)` for one pill `rect` (`[left, top,
-/// right, bottom]`, px): 1 well inside the pill, ramping to 0 over `feather` px at
-/// its boundary, so the frost blends into the live lamp instead of drawing a hard
-/// rectangle edge. Reuses [`gutter_corner_dist_outside`] as the rect SDF (a pill
-/// is a rounded-corner rect; the feathered edge IS the round). MUST match
-/// `shaders/lava.wgsl`'s per-pill coverage. Pure.
+/// THE SEED HALO BUMP at pixel `(x, y)` for one glyph/word SEED `[x0, x1, yc, r]`
+/// (a horizontal run `[x0, x1]` at row centre `yc`, halo radius `r` px): a compact
+/// support soft bump — `(1 - (d/r)^2)^2` where `d` is the distance to the run
+/// segment (0 within the run's x-span), so it is `1` at the ink and `0` past a
+/// radius, C1-smooth. Summed across seeds it is the metaball field that MERGES
+/// neighbours. MUST match `shaders/lava.wgsl`'s `seed_bump`. Pure.
 #[allow(dead_code)]
-pub fn frost_pill_coverage(x: f32, y: f32, rect: [f32; 4], feather: f32) -> f32 {
-    let d = gutter_corner_dist_outside(x, y, rect);
-    1.0 - smoothstep(-feather.max(1.0), 0.0, d)
+pub fn frost_seed_bump(x: f32, y: f32, seed: [f32; 4]) -> f32 {
+    let dx = (seed[0] - x).max(x - seed[1]).max(0.0);
+    let dy = y - seed[2];
+    let r = seed[3].max(1.0);
+    let t = (1.0 - (dx * dx + dy * dy) / (r * r)).clamp(0.0, 1.0);
+    t * t
 }
 
-/// The FROST AMOUNT at pixel `(x, y)` — the max coverage over every visible pill
-/// (`pills`), so a pixel inside ANY entry's pill gets frosted while the lamp stays
-/// alive between and around them. MUST match `shaders/lava.wgsl`'s pill loop. Pure.
+/// THE ORGANIC FROST COVERAGE at pixel `(x, y)`: the seed halos SUMMED into one
+/// continuous field, then thresholded at [`FROST_ISO`] over the [`FROST_ISO_SOFT`]
+/// band. Because the halos SUM (never a max/union), two nearby seeds bridge into
+/// one island wherever their combined field clears the iso — so glyphs within a
+/// run, and nearby rows, merge in ANY direction with no per-row rule. An EMPTY
+/// seed list is a total no-op (0 everywhere) — the inert non-frost frame. MUST
+/// match `shaders/lava.wgsl`'s seed loop. Pure.
 #[allow(dead_code)]
-pub fn frost_amount(x: f32, y: f32, pills: &[[f32; 4]], feather: f32) -> f32 {
-    let mut amt = 0.0f32;
-    for p in pills {
-        amt = amt.max(frost_pill_coverage(x, y, *p, feather));
+pub fn frost_coverage(x: f32, y: f32, seeds: &[[f32; 4]]) -> f32 {
+    let mut field = 0.0f32;
+    for s in seeds {
+        field += frost_seed_bump(x, y, *s);
     }
-    amt
+    smoothstep(FROST_ISO - FROST_ISO_SOFT, FROST_ISO + FROST_ISO_SOFT, field)
 }
 
 // --- CADENCE / PHASE resolution (pure, unit-tested) ---------------------------
@@ -641,16 +690,17 @@ struct Globals {
     /// the bounded bottom-left region the field vanishes from when `gutter == 1`.
     /// All-zero when there is no gutter carve. See [`gutter_corner_dist_outside`].
     gutter_rect: [f32; 4],
-    /// FROST params `[dim, blur_px, feather_px, pill_count]`: the per-entry frost
-    /// pill treatment (the shipped headed-doc default). `pill_count` (the trailing
-    /// float) is how many of [`Globals::pills`] are live — `0` in every non-frost
-    /// frame (non-lava world, no outline, or `AWL_LAVA_FROST=off`), so the whole
-    /// frost path is inert. See [`frost_pixel`] / [`frost_pill_coverage`].
+    /// FROST params `[dim, blur_px, iso_unused, seed_count]`: the organic
+    /// glyph-seeded field treatment (the shipped headed-doc default). `seed_count`
+    /// (the trailing float) is how many of [`Globals::seeds`] are live — `0` in
+    /// every non-frost frame (non-lava world, no margin ink, or `AWL_LAVA_FROST=off`),
+    /// so the whole frost path is inert. See [`frost_pixel`] / [`frost_coverage`].
     frost: [f32; 4],
-    /// The FROST PILL rects `[left, top, right, bottom]` (px), one per drawn
-    /// outline entry — the regions the lava renders FROSTED behind. Only the first
-    /// `frost.w` are live (all-zero otherwise). See [`MAX_FROST_PILLS`].
-    pills: [[f32; 4]; MAX_FROST_PILLS],
+    /// The FROST SEEDS `[x0, x1, yc, r]` (px), one per visible margin glyph (or
+    /// per word-run under the degradation arm) — the halos whose SUMMED field the
+    /// lava renders FROSTED behind. Only the first `frost.w` are live (all-zero
+    /// otherwise). See [`MAX_FROST_SEEDS`] / [`frost_seed_bump`].
+    seeds: [[f32; 4]; MAX_FROST_SEEDS],
 }
 
 /// The LAVA-LAMP metaball ground pipeline: one fullscreen triangle, drawn right
@@ -769,11 +819,11 @@ impl LavaPipeline {
     /// the full carve can never disagree with what the frame draws), the GUTTER's
     /// bounded LOCAL corner carve rect (`gutter_rect`, `Some` iff the gutter
     /// draws — from `TextPipeline::lava_gutter_carve_rect`), the effective
-    /// `phase`, the per-entry FROST `pills` (the drawn outline entries' pill rects
-    /// — empty in every non-frost frame, so the frost path is inert) plus their
-    /// `[dim, blur_px, feather_px]` params, and (for the one-line carve revert)
-    /// whether the whole LEFT margin is carved (`rail_carved`, `false` under the
-    /// frost default).
+    /// `phase`, the organic FROST `frost_seeds` (the visible margin glyphs' halo
+    /// seeds `[x0, x1, yc, r]` — empty in every non-frost frame, so the frost path
+    /// is inert) plus their `[dim, blur_px, iso]` params, and (for the one-line
+    /// carve revert) whether the whole LEFT margin is carved (`rail_carved`, `false`
+    /// under the frost default).
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
@@ -785,7 +835,7 @@ impl LavaPipeline {
         col_w: f32,
         rail_carved: bool,
         gutter_rect: Option<[f32; 4]>,
-        frost_pills: &[[f32; 4]],
+        frost_seeds: &[[f32; 4]],
         frost_params: [f32; 3],
         params: Option<(Srgb, Srgb, Srgb, LavaEdge, bool)>,
         phase: f32,
@@ -820,15 +870,15 @@ impl LavaPipeline {
             blobs,
             gutter_rect: gutter_rect.unwrap_or([0.0; 4]),
             frost: {
-                let n = frost_pills.len().min(MAX_FROST_PILLS);
+                let n = frost_seeds.len().min(MAX_FROST_SEEDS);
                 [frost_params[0], frost_params[1], frost_params[2], n as f32]
             },
-            pills: {
-                let mut ps = [[0.0f32; 4]; MAX_FROST_PILLS];
-                for (dst, src) in ps.iter_mut().zip(frost_pills.iter()) {
+            seeds: {
+                let mut ss = [[0.0f32; 4]; MAX_FROST_SEEDS];
+                for (dst, src) in ss.iter_mut().zip(frost_seeds.iter()) {
                     *dst = *src;
                 }
-                ps
+                ss
             },
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
@@ -1430,43 +1480,68 @@ mod tests {
         assert!(far < 0.01, "bare ground stays dark under the blur: {far}");
     }
 
-    /// THE PILL SDF + COVERAGE: [`frost_pill_coverage`] is 1 well inside a pill,
-    /// 0 outside, and ramps monotonically over the feather at the edge — the
-    /// rounded pill's soft boundary (reusing the rect SDF).
+    /// THE SEED HALO BUMP: [`frost_seed_bump`] is 1 on the ink run, decays
+    /// smoothly to 0 by a radius, and is symmetric about the run — the soft halo
+    /// each glyph seeds.
     #[test]
-    fn frost_pill_coverage_is_one_inside_zero_outside_and_feathers() {
-        let rect = [100.0f32, 200.0, 300.0, 260.0];
-        let feather = FROST_FEATHER_PX;
-        // Deep interior → full coverage.
-        assert!((frost_pill_coverage(200.0, 230.0, rect, feather) - 1.0).abs() < 1e-4);
-        // A feather past the right face → zero coverage.
-        assert_eq!(frost_pill_coverage(300.0 + feather + 1.0, 230.0, rect, feather), 0.0);
-        // AT the edge → 0 (the ramp bottom); a feather inside → ~1.
-        assert!(frost_pill_coverage(300.0, 230.0, rect, feather) < 1e-4, "0 at the edge");
-        assert!(frost_pill_coverage(300.0 - feather, 230.0, rect, feather) > 0.999, "full a feather inside");
-        // Monotone ramp stepping out across the right feather.
+    fn frost_seed_bump_is_one_on_the_ink_and_decays_to_zero_by_a_radius() {
+        // A run [100, 300] at yc=230, radius 40.
+        let seed = [100.0f32, 300.0, 230.0, 40.0];
+        // On the run, at the row centre → full core bump.
+        assert!((frost_seed_bump(200.0, 230.0, seed) - 1.0).abs() < 1e-6, "1 on the ink");
+        assert!((frost_seed_bump(100.0, 230.0, seed) - 1.0).abs() < 1e-6, "1 at the run's left end");
+        // Past a radius beyond the end / above the row → 0 (compact support).
+        assert_eq!(frost_seed_bump(300.0 + 41.0, 230.0, seed), 0.0, "0 past a radius right");
+        assert_eq!(frost_seed_bump(200.0, 230.0 + 41.0, seed), 0.0, "0 past a radius up");
+        // Monotone decay stepping out past the right end.
         let mut prev = 1.0;
-        for k in 0..=(feather as i32 + 2) {
-            let x = 300.0 - feather + k as f32;
-            let c = frost_pill_coverage(x, 230.0, rect, feather);
-            assert!(c <= prev + 1e-6, "coverage ramps down monotonically at x={x}: {c} <= {prev}");
-            prev = c;
+        for k in 0..=42 {
+            let x = 300.0 + k as f32;
+            let b = frost_seed_bump(x, 230.0, seed);
+            assert!(b <= prev + 1e-6, "bump decays monotonically at x={x}: {b} <= {prev}");
+            prev = b;
         }
+        // Vertically symmetric about the row centre.
+        assert!(
+            (frost_seed_bump(200.0, 230.0 - 20.0, seed) - frost_seed_bump(200.0, 230.0 + 20.0, seed)).abs() < 1e-6,
+            "the halo is symmetric above/below the ink"
+        );
     }
 
-    /// FROST GATING: [`frost_amount`] is the MAX over every pill (a pixel in ANY
-    /// entry's pill frosts), and an EMPTY pill list is a total no-op (0 everywhere)
-    /// — the inert path a non-frost frame uploads.
+    /// THE ORGANIC MERGE: two seeds spaced within reach SUM above [`FROST_ISO`] in
+    /// the GAP between them (one island), while the same seeds pushed far apart
+    /// leave the gap below iso (two islands) — the metaball neck, with NO union/max
+    /// and NO per-row rule. The transition is purely the continuous summed field.
     #[test]
-    fn frost_amount_is_the_max_over_pills_and_empty_is_inert() {
-        let a = [0.0f32, 0.0, 50.0, 40.0];
-        let b = [200.0f32, 200.0, 260.0, 240.0];
-        let f = FROST_FEATHER_PX;
-        assert!(frost_amount(25.0, 20.0, &[a, b], f) > 0.999, "inside pill A → frosted");
-        assert!(frost_amount(230.0, 220.0, &[a, b], f) > 0.999, "inside pill B → frosted");
-        assert_eq!(frost_amount(1000.0, 1000.0, &[a, b], f), 0.0, "between/around pills the lamp is live");
-        // No pills → inert everywhere (the non-frost frame).
-        assert_eq!(frost_amount(25.0, 20.0, &[], f), 0.0, "an empty pill list frosts nothing");
+    fn frost_coverage_merges_nearby_seeds_and_splits_far_ones() {
+        let r = 40.0f32;
+        // Two point-seeds (x0==x1) on the same row, 50px apart (< 2r) → the
+        // midpoint's summed field clears iso: ONE island.
+        let near = [[100.0f32, 100.0, 200.0, r], [150.0, 150.0, 200.0, r]];
+        assert!(frost_coverage(125.0, 200.0, &near) > 0.5, "nearby seeds bridge into one island");
+        // The same seeds 140px apart (> 2r + skirt) → the midpoint falls below iso:
+        // TWO islands, yet each seed's own core still frosts.
+        let far = [[100.0f32, 100.0, 200.0, r], [240.0, 240.0, 200.0, r]];
+        assert!(frost_coverage(170.0, 200.0, &far) < 0.5, "far seeds leave a live gap between islands");
+        assert!(frost_coverage(100.0, 200.0, &far) > 0.5, "each far seed still frosts its own core");
+        // MERGE IN ANY DIRECTION: two seeds stacked vertically within reach also
+        // bridge (no per-row separation).
+        let stacked = [[100.0f32, 200.0, 200.0, r], [100.0, 200.0, 250.0, r]];
+        assert!(frost_coverage(150.0, 225.0, &stacked) > 0.5, "vertically-close rows merge organically");
+    }
+
+    /// FROST GATING: [`frost_coverage`] frosts a pixel over a seed's ink, stays
+    /// live far from every seed, and an EMPTY seed list is a total no-op (0
+    /// everywhere) — the inert path a non-frost frame uploads.
+    #[test]
+    fn frost_coverage_frosts_the_ink_and_empty_is_inert() {
+        let a = [10.0f32, 40.0, 20.0, 40.0];
+        let b = [200.0f32, 240.0, 220.0, 40.0];
+        assert!(frost_coverage(25.0, 20.0, &[a, b]) > 0.999, "over seed A's ink → frosted");
+        assert!(frost_coverage(220.0, 220.0, &[a, b]) > 0.999, "over seed B's ink → frosted");
+        assert_eq!(frost_coverage(1000.0, 1000.0, &[a, b]), 0.0, "far from every seed the lamp is live");
+        // No seeds → inert everywhere (the non-frost frame).
+        assert_eq!(frost_coverage(25.0, 20.0, &[]), 0.0, "an empty seed list frosts nothing");
     }
 
     /// THE FROST PIXEL: below the field threshold it is EXACTLY the flat ground

@@ -891,19 +891,22 @@ pub const SPELL_UNDERLINE_GAP_DEFAULT: f32 = 1.0;
 ///
 /// * `dim` — how far the softened field is mixed back toward the flat page
 ///   `ground` (0 = raw softened lamp, 1 = pure flat ground). The value-dim that
-///   keeps the dim margin ink legible over the pill (law tests
+///   keeps the dim margin ink legible over the frosted field (law tests
 ///   `outline_frost_pills_keep_ink_contrast_on_every_lava_world` /
 ///   `gutter_frost_pill_keeps_ink_contrast_on_every_lava_world`).
 /// * `blur_px` — the 3×3 cross tap offset [`crate::lava::frost_field`] averages
 ///   the SMOOTH field over (never the posterized color — the Bayer-moiré lesson).
-/// * `feather_px` — the edge band over which a pill's coverage ramps 1 → 0, so it
-///   blends into the live lamp instead of drawing a hard rectangle.
+/// * `feather_px` — the soft px SKIRT added to each glyph seed's halo radius
+///   ([`crate::render::frost_seed_radius`]), so the ORGANIC glyph-seeded field
+///   blends into the live lamp instead of drawing a hard boundary. (Formerly the
+///   rectangular pill's edge feather; the taste half — item 32 — made the frost a
+///   summed glyph-halo field, so this dial widens each halo's skirt.)
 ///
 /// The per-world TINT is not a fourth numeric dial: the dim already mixes toward
 /// the world's OWN lava `ground`, so a world's tint IS its ground color — already
-/// per-world data on [`Background::Lava`]. The pill GEOMETRY (pad / vertical
-/// inset) stays a shared const in `crate::lava` (it hugs text identically on every
-/// world), not part of this taste recipe.
+/// per-world data on [`Background::Lava`]. The seed GEOMETRY (halo radius fraction,
+/// iso level, horizontal pad) stays shared consts in `crate::lava` — Mangrove and
+/// Firetail share the SAME organic shape recipe, only the palette colour differs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frost {
     pub dim: f32,

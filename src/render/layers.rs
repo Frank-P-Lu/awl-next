@@ -174,41 +174,51 @@ impl TextPipeline {
         };
         let rail_carved = self.lava_rail_carved(height);
         let gutter_rect = self.lava_gutter_carve_rect(height);
-        // FROST PILLS (the shipped headed-doc default): one pill per drawn outline
-        // entry hugging its text extents, PLUS the bottom-left gutter's OWN pill.
-        // The gutter's old hard corner carve (a mask->0 rectangle that dropped its
-        // band to the flat, darkest page ground — an ugly geometric dark pocket
-        // under the filename/project readout, worst on Firetail) is now a FROST
-        // pill too (see `lava_gutter_frost_rect`), so its `muted`/`faint` stack
-        // sits on a softened, value-dimmed lamp — a warm whisper that breathes with
-        // the field — instead of a dead flat-dark patch. Empty in every non-frost
-        // frame (no lava ground, no outline AND no gutter, or `AWL_LAVA_FROST=off`),
-        // so the shader's frost path is inert (`pill_count == 0`) and a
-        // heading-less, gutter-less doc stays byte-identical. The gutter pill LEADS
-        // so it always survives the `MAX_FROST_PILLS` clamp.
-        let frost_pills = if crate::lava::frost_on()
-            && self.effective_background().lava_params().is_some()
-        {
-            let mut pills = Vec::new();
-            if let Some(g) = self.lava_gutter_frost_rect(height) {
-                pills.push(g);
+        // ORGANIC FROST SEEDS (the shipped headed-doc default): every visible margin
+        // glyph (the outline entries + the bottom-left gutter's filename/project
+        // stack) seeds a small close halo `[x0, x1, yc, r]`; the shader SUMS them
+        // into one continuous field and thresholds it, so nearby words/rows merge
+        // into organic islands with NO per-row separation and NO zoom breakpoint
+        // (see `shaders/lava.wgsl` + `crate::lava::frost_coverage`). The gutter's
+        // old hard corner carve — an ugly geometric dark pocket — is subsumed: its
+        // stack rides the SAME softened, value-dimmed field. EMPTY in every
+        // non-frost frame (no lava ground, no margin ink, or `AWL_LAVA_FROST=off`),
+        // so the shader's frost path is inert (`seed_count == 0`) and a heading-less,
+        // gutter-less doc stays byte-identical. The gutter seeds LEAD so they always
+        // survive the `MAX_FROST_SEEDS` clamp.
+        //
+        // PROTO-CACHE (the `render/rects.rs` shape): the seed field is REBUILT only
+        // when its key misses ([`Self::frost_seed_key`] — viewport, zoom/DPI, the
+        // column, and the drawn outline/gutter TEXT), so warm steady frames pay ZERO
+        // rebuilds and a margin-text or zoom change pays EXACTLY ONE. `--bench-frost`
+        // witnesses this (a bench that reshaped nothing would be a lie).
+        let frost_active = crate::lava::frost_on()
+            && self.effective_background().lava_params().is_some();
+        if frost_active {
+            let key = self.frost_seed_key(width, height);
+            if self.frost_seed_key != Some(key) {
+                let mut seeds = self.gutter_frost_seeds(height);
+                seeds.extend(self.outline_frost_seeds(height));
+                seeds.truncate(crate::lava::MAX_FROST_SEEDS);
+                self.frost_seeds = seeds;
+                self.frost_seed_key = Some(key);
+                self.frost_seed_rebuilds += 1;
             }
-            pills.extend(self.lava_frost_pill_rects(height));
-            pills.truncate(crate::lava::MAX_FROST_PILLS);
-            pills
-        } else {
-            Vec::new()
-        };
+        } else if self.frost_seed_key.is_some() {
+            self.frost_seeds.clear();
+            self.frost_seed_key = None;
+        }
         // FROST RECIPE AS DATA: the ONE runtime consumer reads the active world's
         // `frost` capability (see `theme::Frost`), never the bare consts — so a
         // world dials its own softened-lamp recipe with no per-world code path
         // (`theme_caps_law`). Every world carries `Frost::DEFAULT` (the shipped
-        // `crate::lava` values), so this is byte-identical until a world tunes.
+        // `crate::lava` values), so this is byte-identical until a world tunes. The
+        // third slot carries the field ISO the shader thresholds the summed halos at.
         let frost = crate::theme::active().render_caps.frost;
         let frost_params = [
             frost.dim,
             crate::lava::frost_px(frost.blur_px, self.metrics.zoom, self.dpi),
-            crate::lava::frost_px(frost.feather_px, self.metrics.zoom, self.dpi),
+            crate::lava::FROST_ISO,
         ];
         let params = self.effective_background().lava_params().map(
             |(ground, lo, hi, edge, dithered)| {
@@ -237,11 +247,54 @@ impl TextPipeline {
                 bg_w,
                 rail_carved,
                 gutter_rect,
-                &frost_pills,
+                &self.frost_seeds,
                 frost_params,
                 params,
                 phase,
             );
+    }
+
+    /// How many organic frost SEEDS the cached field currently holds — the live
+    /// seed/island population the `--bench-frost` witness reads (a nonzero field is
+    /// the "the bench measures real work" guard). Zero in every non-frost frame.
+    pub fn frost_seed_count(&self) -> usize {
+        self.frost_seeds.len()
+    }
+
+    /// THE FROST SEED-FIELD CACHE KEY for this frame — the proto-cache key the
+    /// organic frost seeds rebuild on a MISS of (see [`Self::prepare_lava_layer`]).
+    /// Captures every input the seed geometry derives from WITHOUT shaping any text:
+    /// the physical viewport, the user zoom × device DPI, the writing column's left
+    /// edge (`page_geometry`, the one owner), and the DRAWN margin TEXT — the
+    /// outline's followed rows (each fitted label + its group-gap / current flags +
+    /// `top`/`right_edge`) and the gutter's filename/project + `avail`. So warm
+    /// steady frames hash the SAME key (zero rebuilds) and a margin-text edit, a
+    /// follow-window slide, a resize, or a zoom step flips it (exactly one rebuild).
+    pub(super) fn frost_seed_key(&self, width: u32, height: u32) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        width.hash(&mut h);
+        height.hash(&mut h);
+        self.metrics.zoom.to_bits().hash(&mut h);
+        self.dpi.to_bits().hash(&mut h);
+        // The active world's face drives the MEASURED label widths (and so the seed
+        // positions); a Mangrove↔Firetail switch changes the face, so key on it.
+        crate::theme::active_index().hash(&mut h);
+        let (_page_on, _measure, col_left, col_w) = self.page_geometry();
+        col_left.to_bits().hash(&mut h);
+        col_w.to_bits().hash(&mut h);
+        // The DRAWN outline rows (char-level layout — no GPU shaping): any change to
+        // which headings show, their fitted text, the follow slice, or the group
+        // rhythm flips the key. Uses the test-visible draw report shape without the
+        // pixel-fit (that only shifts with zoom/DPI, already in the key).
+        if let Some(rows) = self.outline_key_rows(height) {
+            rows.hash(&mut h);
+        }
+        if let Some((name, project)) = self.gutter_report() {
+            name.hash(&mut h);
+            project.hash(&mut h);
+        }
+        h.finish()
     }
 
     /// TWINKLING STARS (`theme::AmbientStyle::Stars`, the TWINKLING-STARS round):
@@ -454,29 +507,6 @@ impl TextPipeline {
         self.gutter_carve_rect(height)
     }
 
-    /// THE GUTTER'S LOCAL FROST PILL rect for this frame (the SHIPPED default):
-    /// `Some([left, top, right, bottom])` (px) exactly when the FROST treatment is
-    /// on ([`crate::lava::frost_on`] — env-aware, so `AWL_LAVA_FROST=off` shows the
-    /// raw lamp for the gallery A/B, matching the outline), a lava ground is
-    /// active, AND the bottom-left GUTTER is DRAWN ([`Self::gutter_visible`]).
-    /// [`Self::prepare_lava_layer`] pushes it onto the shader's `pills` array, so
-    /// the gutter's `muted`/`faint` stack sits on a SOFTENED, value-dimmed lamp (a
-    /// warm whisper that breathes with the field) instead of the old hard-carved
-    /// dead-flat corner — the de-uglify fix, keeping the ink's contrast floor (law
-    /// `theme::tests::gutter_frost_pill_keeps_ink_contrast_on_every_lava_world`).
-    /// Geometry comes from the SAME [`Self::gutter_carve_rect`] owner the demoted
-    /// hard carve ([`Self::lava_gutter_carve_rect`]) rode, so the pill covers
-    /// exactly the drawn gutter block. Mirrors the OUTLINE's frost-on
-    /// ([`Self::lava_frost_pill_rects`]) / revert ([`Self::lava_rail_carved`]) fork.
-    pub(super) fn lava_gutter_frost_rect(&self, height: u32) -> Option<[f32; 4]> {
-        if !crate::lava::frost_on()
-            || self.effective_background().lava_params().is_none()
-            || !self.gutter_visible()
-        {
-            return None;
-        }
-        self.gutter_carve_rect(height)
-    }
 
     /// Upload the document text layer with the full-ink default color — the one
     /// glyphon `prepare` per frame (the caret is a quad drawn underneath).

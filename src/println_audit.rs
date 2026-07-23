@@ -133,9 +133,9 @@ const EXPECTED: &[(&str, usize)] = &[
     // names itself + the grammar before falling back to the world default, so a
     // stale gallery re-shoot can't silently duplicate the default.
     ("render.rs", 3),
-    // `--bench-frame` / `--bench-theme-burst` / `--bench-zoom-burst`'s
-    // tabular CLI output.
-    ("render/framebench.rs", 36),
+    // `--bench-frame` / `--bench-theme-burst` / `--bench-zoom-burst` /
+    // `--bench-frost`'s tabular CLI output.
+    ("render/framebench.rs", 39),
     ("render/perfbench.rs", 8),
     // `--bench-suite`'s tabular CLI output + the baseline diff report — the
     // same CLI-harness class as the four bench entries above.

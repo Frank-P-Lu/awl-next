@@ -805,6 +805,186 @@ fn zoom_frame(
     Ok(())
 }
 
+// ============================================================================
+// FROST STEADY-FRAME PROFILER (hidden `--bench-frost`, item 32) — the organic
+// glyph-seeded frost field's real workload: a HEADING-RICH page-mode lava fixture
+// with a POPULATED outline + gutter, for BOTH lava worlds. Times the exact live
+// redraw (`prepare` → encode → submit+poll → trim, the same body `zoom_frame`
+// runs) and WITNESSES the work: a nonzero seed field, ZERO seed rebuilds across
+// warm steady frames, and EXACTLY ONE rebuild after a zoom step or a margin-text
+// change (a bench that reshaped nothing is a lie — CLAUDE.md's own rule).
+
+/// The heading-rich page-mode fixture: this repo's `CLAUDE.md` (many `##`/`###`
+/// headings → a populated followed outline) under a named buffer (→ a populated
+/// bottom-left gutter), page mode + outline ON.
+const FROST_DOC: &str = "CLAUDE.md";
+
+/// Run the FROST steady-frame profiler over both lava worlds.
+pub fn run_frost() -> anyhow::Result<()> {
+    pollster::block_on(frost_async())
+}
+
+async fn frost_async() -> anyhow::Result<()> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .map_err(|e| anyhow::anyhow!("no wgpu adapter for frost bench: {e:?}"))?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("awl frost bench device"),
+            ..Default::default()
+        })
+        .await?;
+    let cache = Cache::new(&device);
+
+    crate::debug::set_debug_on(true);
+    crate::page::set_page_on(true);
+    crate::page::set_measure(72);
+    crate::outline::set_outline_on(true);
+    let spell = crate::spell::SpellChecker::new(crate::spell::DictVariant::EnUs)
+        .map_err(|e| anyhow::anyhow!("spell checker failed to load: {e}"))?;
+
+    let per_glyph = crate::lava::FROST_SEED_PER_GLYPH;
+    println!(
+        "frost profiler — {WIDTH}x{HEIGHT} @{DPI}x · page ON · outline ON · debug ON · \
+         seed mode: {} · {WARMUP} warmup + {FRAMES} timed frames",
+        if per_glyph { "PER-GLYPH" } else { "WORD-RUN (degradation arm)" }
+    );
+    println!("(headless: submit+poll SERIALIZES the GPU cost; the window overlaps it and adds present/acquire)");
+    for world in ["Mangrove", "Firetail"] {
+        frost_world(&device, &queue, &cache, &spell, world)?;
+    }
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+    crate::outline::set_outline_on(false);
+    crate::theme::set_active(crate::theme::DEFAULT_THEME);
+    Ok(())
+}
+
+fn frost_world(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    cache: &Cache,
+    spell: &crate::spell::SpellChecker,
+    world: &str,
+) -> anyhow::Result<()> {
+    crate::theme::set_active_by_name(world);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(FROST_DOC);
+    let buffer = Buffer::from_file(&path);
+    let text = buffer.text();
+    let misspelled = spell.misspellings_for(&text, buffer.syntax_lang());
+    let mut view = live_view(&buffer, misspelled);
+    view.zoom = 1.0;
+
+    let mut p = TextPipeline::new(device, queue, cache, FORMAT);
+    p.set_size(WIDTH as f32, HEIGHT as f32);
+    p.set_dpi(DPI);
+    p.set_view(&view);
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("awl frost bench target"),
+        size: wgpu::Extent3d { width: WIDTH, height: HEIGHT, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+    // Warm the atlas + settle the caret spring, then WITNESS the seed field.
+    for f in 0..WARMUP {
+        frost_frame(&mut p, device, queue, &target_view, f)?;
+    }
+    let seed_count = p.frost_seed_count();
+    // The FLOOR run (`AWL_LAVA_FROST=off`, the dev A/B knob) suppresses frost, so
+    // the seed field is legitimately empty — it times the raw lamp as the no-frost
+    // baseline. Otherwise a nonzero field is the "measuring real work" witness.
+    if crate::lava::frost_on() {
+        anyhow::ensure!(
+            seed_count > 0,
+            "{world}: the frost seed field is EMPTY after warmup — the bench is not \
+             measuring the organic frost (no outline/gutter ink seeded?)"
+        );
+    }
+
+    // STEADY: the seed field is cached, so warm frames rebuild it ZERO times.
+    let rebuilds_before = p.frost_seed_rebuilds;
+    let mut totals = Vec::with_capacity(FRAMES);
+    for f in 0..FRAMES {
+        totals.push(frost_frame(&mut p, device, queue, &target_view, WARMUP + f)?);
+    }
+    let steady_rebuilds = p.frost_seed_rebuilds - rebuilds_before;
+    anyhow::ensure!(
+        steady_rebuilds == 0,
+        "{world}: {steady_rebuilds} frost seed rebuilds across {FRAMES} warm steady \
+         frames (expected 0 — the cache is churning)"
+    );
+    let med_ms = median(totals) as f64 / 1.0e6;
+
+    // EXACTLY ONE rebuild after a ZOOM step (the halo radius is glyph-derived, so
+    // the field must re-seed) and EXACTLY ONE after a MARGIN-TEXT change (the gutter
+    // filename — a drawn margin-ink change). Skipped in the floor run (frost off →
+    // the field is inert, nothing to rebuild).
+    if crate::lava::frost_on() {
+        let before = p.frost_seed_rebuilds;
+        view.zoom = 1.25;
+        p.set_view(&view);
+        frost_frame(&mut p, device, queue, &target_view, 0)?;
+        let zoom_rebuilds = p.frost_seed_rebuilds - before;
+        anyhow::ensure!(
+            zoom_rebuilds == 1,
+            "{world}: a zoom step rebuilt the frost seed field {zoom_rebuilds} times (expected exactly 1)"
+        );
+
+        let before = p.frost_seed_rebuilds;
+        view.gutter_name = "renamed-fixture.md".to_string();
+        p.set_view(&view);
+        frost_frame(&mut p, device, queue, &target_view, 0)?;
+        let text_rebuilds = p.frost_seed_rebuilds - before;
+        anyhow::ensure!(
+            text_rebuilds == 1,
+            "{world}: a margin-text change rebuilt the frost seed field {text_rebuilds} times (expected exactly 1)"
+        );
+    }
+
+    let witness = if crate::lava::frost_on() {
+        "steady rebuilds 0 | +1 on zoom | +1 on margin-text"
+    } else {
+        "FLOOR (AWL_LAVA_FROST=off — raw lamp, no seed field)"
+    };
+    println!("  {world:<9} | median frame {med_ms:>7.3} ms | seeds {seed_count:>4} | {witness}");
+    Ok(())
+}
+
+/// One complete steady frame (the live `RedrawRequested` body: advance → prepare
+/// aggregate → encode → submit+poll → trim), returning its total nanoseconds. The
+/// blocking poll serializes submitted GPU work into the number like the sibling
+/// profilers.
+fn frost_frame(
+    p: &mut TextPipeline,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target_view: &wgpu::TextureView,
+    frame: usize,
+) -> anyhow::Result<u128> {
+    let t0 = Instant::now();
+    p.advance(DT);
+    p.set_debug_perf(None, None, Some(frame as u64), false, Some(1000.0 / 60.0));
+    p.prepare(device, queue, WIDTH, HEIGHT)?;
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("awl frost bench encoder"),
+    });
+    p.render(&mut encoder, target_view)?;
+    queue.submit(Some(encoder.finish()));
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .context("device poll failed")?;
+    p.atlas.trim();
+    Ok(t0.elapsed().as_nanos())
+}
+
 /// One frame's coarse stage split (ms): the glyphon text prepare (shape walk +
 /// atlas rasterization), the squiggle+nit proto rebuild + upload, everything
 /// else in `prepare`, the encode+submit+poll GPU tail, and the total.
