@@ -16,6 +16,13 @@ pub(crate) const DEFAULT_DURATION: Duration = Duration::from_secs(15 * 60);
 pub(crate) const RESIZE_TARGET: u32 = 300;
 pub(crate) const THEME_TARGET: u32 = 300;
 pub(crate) const OVERLAY_TARGET: u32 = 150;
+/// Minimum presented frames for a run to pass — the anti-slideshow floor, now
+/// owned by the BINARY's pass contract ([`report::Report::passed`]) so the CI
+/// step needs no second, independently-computed verdict (item 53). A fixed
+/// minimum, not a per-second rate: any healthy run of the CI length clears it
+/// with room to spare, while a handful-of-frames degradation fails regardless
+/// of how long the run drifted.
+pub(crate) const PRESENTS_FLOOR: u64 = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SoakConfig {
@@ -171,8 +178,45 @@ impl Controller {
         }
     }
 
+    /// The run ends when the full deterministic stimulus schedule has EXECUTED
+    /// — not when a wall-clock timer fires. On a slightly-slow shared CI VM the
+    /// time-fraction pacing only walks ~95% of the schedule inside the nominal
+    /// window; the OLD `elapsed >= duration` guillotine cut there and reported
+    /// `290/287/143` against the absolute `300/300/150` contract → a spurious
+    /// FAIL on identical code (item 53). Now the cycle contract stays ABSOLUTE
+    /// and elapsed time is a REPORTED outcome: the loop keeps stepping until the
+    /// schedule completes (a slow VM finishes a little late = PASS), bounded by
+    /// a grace cap of 2x the requested duration so a genuinely broken VM — one
+    /// that never presents or never recovers a fault — still stops and reports
+    /// FAIL rather than hanging.
     pub(crate) fn finished(&self, now: Instant) -> bool {
-        now.duration_since(self.started) >= self.config.duration
+        self.schedule_complete() || self.grace_deadline_reached(now)
+    }
+
+    /// The bounded grace: even a stalled schedule stops here (2x the requested
+    /// duration). Reaching THIS instead of [`Self::schedule_complete`] is the
+    /// broken-VM signature — the report then fails its presents/faults/recovery
+    /// gates on the incomplete counts.
+    fn grace_deadline_reached(&self, now: Instant) -> bool {
+        now.duration_since(self.started) >= self.config.duration * 2
+    }
+
+    /// The absolute cycle contract on OBSERVED completions, deliberately
+    /// TIME-INDEPENDENT: a slow VM that walks the whole schedule late still
+    /// meets it. Shared by [`Self::report`]'s `required_cycles_met` and the
+    /// loop's [`Self::finished`] test so there is one owner of the rule.
+    fn cycles_met(&self) -> bool {
+        self.counts.resizes >= RESIZE_TARGET
+            && self.counts.themes >= THEME_TARGET
+            && self.counts.overlays >= OVERLAY_TARGET
+            && self.counts.faults == 3
+    }
+
+    /// The full schedule has EXECUTED: every periodic cycle observed to target
+    /// and all three injected faults recovered (`recovery_ms` populated). This,
+    /// not elapsed time, is the primary exit condition.
+    fn schedule_complete(&self) -> bool {
+        self.cycles_met() && self.recovery_ms.iter().all(Option::is_some)
     }
 
     /// Spread the full roster uniformly over the post-warmup interval. A short
@@ -333,10 +377,7 @@ impl Controller {
             rss: report::summarize(&rss),
             metal: report::summarize(&metal),
             recovery_ms: self.recovery_ms,
-            required_cycles_met: self.counts.resizes >= RESIZE_TARGET
-                && self.counts.themes >= THEME_TARGET
-                && self.counts.overlays >= OVERLAY_TARGET
-                && self.counts.faults == 3,
+            required_cycles_met: self.cycles_met(),
         }
     }
 }
@@ -473,6 +514,80 @@ mod tests {
                 assert!(c.scheduled_overlay_toggles > 0, "overlays starved");
             }
         }
+    }
+
+    /// Drive a controller's OBSERVED counters to the full absolute contract
+    /// (every cycle to target, all three faults injected + recovered) as the
+    /// live App would, so `finished`/`schedule_complete` can be exercised
+    /// without a surface.
+    fn complete_schedule(c: &mut Controller, recover_at: Instant) {
+        for _ in 0..RESIZE_TARGET {
+            c.observe_resize();
+        }
+        for _ in 0..THEME_TARGET {
+            c.observe_theme_switch();
+        }
+        for _ in 0..OVERLAY_TARGET {
+            c.observe_overlay_cycle();
+        }
+        for (i, kind) in [
+            FaultKind::OutOfMemory,
+            FaultKind::SurfaceLost,
+            FaultKind::DeviceLost,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            c.counts.faults += 1;
+            c.recovery_started[i] = Some(recover_at);
+            c.observe_recovered(kind, recover_at);
+        }
+    }
+
+    /// The short-duration contract math (item 53): a slow VM that walks the
+    /// FULL schedule only AFTER the nominal window has passed is NOT guillotined
+    /// — `finished` waits for schedule completion, then fires (a little late =
+    /// PASS). A VM that never completes the schedule is not hung forever either:
+    /// the 2x grace cap stops it, and the report's presents/faults gates then
+    /// decide FAIL on the incomplete counts. Elapsed is a reported outcome, not
+    /// a cutoff.
+    #[test]
+    fn slow_vm_runs_to_schedule_completion_within_grace() {
+        let start = Instant::now();
+        let dur = Duration::from_secs(25);
+
+        // At exactly the nominal window with the schedule still SHORT (the
+        // slightly-slow VM's real state — e.g. 290/287/143), the OLD guillotine
+        // would have cut and reported a sub-target FAIL. The new contract keeps
+        // running.
+        let mut slow = Controller::new_at(SoakConfig { duration: dur }, start);
+        slow.counts.resizes = RESIZE_TARGET - 10;
+        slow.counts.themes = THEME_TARGET - 13;
+        slow.counts.overlays = OVERLAY_TARGET - 7;
+        slow.counts.faults = 3;
+        slow.recovery_ms = [Some(1.0); 3];
+        assert!(!slow.finished(start + dur), "must not cut at the nominal window");
+        assert!(!slow.cycles_met(), "counts are still below the absolute target");
+
+        // The same VM walks the REST of the schedule a little late (past the
+        // nominal window, well inside the 2x grace). `finished` now fires —
+        // regardless of elapsed.
+        let late = start + dur + Duration::from_secs(2);
+        let mut c = Controller::new_at(SoakConfig { duration: dur }, start);
+        complete_schedule(&mut c, late);
+        assert!(c.cycles_met());
+        assert!(c.finished(late), "a completed schedule ends the run, late or not");
+
+        // A broken VM that NEVER completes the schedule is bounded by the grace
+        // cap (2x duration) rather than hanging.
+        let mut broken = Controller::new_at(SoakConfig { duration: dur }, start);
+        broken.counts.presents = 0;
+        assert!(!broken.finished(start + dur * 2 - Duration::from_nanos(1)));
+        assert!(
+            broken.finished(start + dur * 2),
+            "the grace cap stops a schedule that never completes"
+        );
+        assert!(!broken.report(start + dur * 2).passed(), "and it reports FAIL");
     }
 
     /// A skip is tallied both in the headline total and in its own per-kind
