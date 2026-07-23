@@ -1240,13 +1240,11 @@ impl App {
         self.buffer.set_cursor(restored);
     }
 
-    /// Jump the cursor to the START of the 0-based `line` (passed as a string —
-    /// the outline picker's accept value). Clears any selection, then re-syncs the
-    /// view so the heading scrolls into view. A malformed value is ignored.
-    pub(super) fn jump_to_line(&mut self, line_str: &str) {
-        let Ok(line) = line_str.parse::<usize>() else {
-            return;
-        };
+    /// Jump the cursor to the START of the 0-based `line`. Clears any selection,
+    /// then re-syncs the view so the target scrolls into view. Callers pass the
+    /// line directly: Go-to's HEADINGS lens (`Effect::JumpToLine`) and a click on
+    /// a persistent margin-outline row.
+    pub(super) fn jump_to_line(&mut self, line: usize) {
         let idx = self.buffer.line_col_to_char(line, 0);
         self.buffer.clear_mark();
         self.buffer.set_cursor(idx);
