@@ -128,12 +128,19 @@ fn spell_panel_width_fits_longest_suggestion_not_the_word() {
     let content = p.measure_spell_content_w();
     assert!(content > 0.0, "a shaped suggestion has a positive width");
     let [_lx, _ly, w_long, _lh] = p.overlay_card_rect().expect("the spell overlay has a card");
-    // The card width follows the formula: content + padding, floored at the calm
-    // MIN (140) and capped small (360), kept on-canvas — NOT the word's width.
-    let expect = (content + 2.0 * pad).clamp(140.0, 360.0).min(canvas - 2.0 * margin);
+    // The card width follows the formula: max(shaped content, the widest row's
+    // char-grid width — item 49's floor so the char-budget elision never fires
+    // below the cap) + padding, floored at the calm MIN (140), capped small (520),
+    // kept on-canvas — NOT the word's width.
+    let widest_chars =
+        long.overlay_items.iter().map(|s| s.chars().count()).max().unwrap();
+    let grid_slack = 1 + crate::render::rowlayout::GAP_CHARS + 1;
+    let char_grid = (widest_chars + grid_slack) as f32 * p.metrics.char_width;
+    let content_w = content.max(char_grid);
+    let expect = (content_w + 2.0 * pad).clamp(140.0, 520.0).min(canvas - 2.0 * margin);
     assert!(
         (w_long - expect).abs() < 0.5,
-        "card width is content-driven (max-row + pad, min 140, cap 360): got {w_long}, expected {expect} (content {content})"
+        "card width is content-driven (max(shaped, char-grid) + pad, min 140, cap 520): got {w_long}, expected {expect} (content {content}, grid {char_grid})"
     );
     // The long suggestion pushed the card PAST the min floor (so this case is
     // meaningful) and its inner text column FITS the suggestion — no overflow.
@@ -143,7 +150,7 @@ fn spell_panel_width_fits_longest_suggestion_not_the_word() {
         "the card's text column ({}) fits the longest suggestion ({content})",
         w_long - 2.0 * pad
     );
-    assert!(w_long <= 360.0, "still a small popup, not a takeover: {w_long}");
+    assert!(w_long <= 520.0, "still a small popup, not a takeover: {w_long}");
 
     // The SAME word with only SHORT suggestions → a NARROWER card, clamped to the
     // calm MIN. Width tracks the content, not the (identical) word.
@@ -158,6 +165,91 @@ fn spell_panel_width_fits_longest_suggestion_not_the_word() {
     assert!(
         w_short < w_long,
         "the longer suggestions make a WIDER card ({w_long}) than the short set ({w_short}) at the SAME word — content-driven, not word-driven"
+    );
+}
+
+/// ITEM 49 — THE ADD-TO-DICTIONARY ROW IS A FIRST-CLASS PICKER ROW: at an
+/// ordinary WIDE width its COMPLETE label ("Add '<word>' to dictionary") must
+/// render, never elided. TWO bugs conspired on a WIDE-mono world (Firetail /
+/// Monaspace Xenon), the world the report came from:
+///   (1) the spell popup's `overlay_bindings` is a per-row vec of EMPTY strings
+///       (one blank slot per suggestion + the add row), which reserved a phantom
+///       right column charging the primary `1 + GAP` cells — fixed at the one
+///       owner `overlay_right_labels` (an all-empty column is NO column);
+///   (2) the card was sized to a SHAPED UI-face measurement, but the elision
+///       budget divides `text_w` by the DOCUMENT mono `char_width` (and reserves
+///       one `…` cell), so the char grid needed more width than the shaped
+///       measurement granted — fixed by flooring the popup's content width by the
+///       widest row's char-grid width and raising the small-popup cap.
+/// This asserts the OUTCOME on the REAL render: the shaped `panel_buffer` rows the
+/// prepare pass actually laid out. A SHORT word's add row shapes WHOLE (no `…`); a
+/// LONG adversarial word overruns the cap and DOES elide.
+#[test]
+fn spell_add_to_dictionary_row_renders_whole_at_wide_width() {
+    let _g = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!("skipping spell_add_to_dictionary_row_renders_whole_at_wide_width: no wgpu adapter");
+        return;
+    };
+    // FIRETAIL — the wide-mono world (Monaspace Xenon) where the char-grid budget
+    // outruns the UI-face shaped measurement; the world the report came from.
+    let saved = theme::active().name.to_string();
+    theme::set_active_by_name("Firetail");
+    p.sync_theme();
+
+    // The shaped row text the render actually laid out (post fit_primary).
+    let shaped_rows = |p: &mut TextPipeline| -> String {
+        p.panel_buffer
+            .lines
+            .iter()
+            .map(|l| l.text().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // The REAL spell corpus for the misspelled "zzz": one correction + the add row
+    // (`OverlayState::new_spell` appends "Add 'zzz' to dictionary" as the last row).
+    let add_label = "Add 'zzz' to dictionary".to_string();
+    let mut v = view("zzz is a wrong word\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = vec!["Zzz".into(), add_label.clone()];
+    v.overlay_bindings = vec![String::new(), String::new()]; // the real all-empty column
+    v.overlay_selected = 0;
+    v.overlay_spell = Some((0, 0, 3));
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let short_rows = shaped_rows(&mut p);
+
+    // LEGITIMATE-ELISION CONTROL: an adversarially LONG word blows past the popup's
+    // real width cap, so the add row DOES elide — the fix widens to fit content, it
+    // does not remove the cap.
+    let long_word = "antidisestablishmentarianismandthensome".repeat(2);
+    let long_add = format!("Add '{long_word}' to dictionary");
+    let mut vl = view("x\n", 0, 0);
+    vl.overlay_active = true;
+    vl.overlay_items = vec!["x".into(), long_add.clone()];
+    vl.overlay_bindings = vec![String::new(), String::new()];
+    vl.overlay_selected = 0;
+    vl.overlay_spell = Some((0, 0, 1));
+    p.set_view(&vl);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let long_rows = shaped_rows(&mut p);
+
+    // Restore BEFORE asserting so a failure never leaks Firetail into a sibling test.
+    theme::set_active_by_name(&saved);
+    p.sync_theme();
+
+    assert!(
+        short_rows.contains(&add_label),
+        "the add-to-dictionary row must shape WHOLE at wide width (Firetail); shaped rows: {short_rows:?}"
+    );
+    assert!(
+        !short_rows.contains('…'),
+        "no row may carry an ellipsis at wide width; shaped rows: {short_rows:?}"
+    );
+    assert!(
+        long_rows.contains('…') && !long_rows.contains(&long_add),
+        "an adversarially long add-row still elides when the real width cap is exhausted; shaped rows: {long_rows:?}"
     );
 }
 

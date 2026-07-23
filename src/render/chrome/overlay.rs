@@ -391,6 +391,17 @@ impl TextPipeline {
     /// ([`TextPipeline::shape_faceted`]) shapers, which both read it. `&[]` when no
     /// column applies. One owner so a fourth column kind (or a reordering) lands in
     /// one place, never diverging the two shapers.
+    ///
+    /// NOTE (item 49) — a per-row vec of BLANK slots still counts as a present
+    /// column here (the spell popup's `overlay_bindings` — one empty binding per
+    /// suggestion + the add row): `!is_empty()` is true even when every label is
+    /// "". `rowlayout::plan` then charges the primary `1 + GAP_CHARS` cells for that
+    /// (invisible) column. The spell popup's card-width owner (`spell_overlay_
+    /// geometry`) accounts for exactly those reserved cells, so its first-class
+    /// "Add '<word>' to dictionary" row is never clipped by the phantom column at a
+    /// wide width. Leaving this precedence untouched keeps the one-owner formula law
+    /// (`chrome_geometry_owner_formulas_are_single_site`) and every takeover picker's
+    /// column behaviour intact.
     pub(in crate::render) fn overlay_right_labels(&self) -> &[String] {
         if !self.overlay_bindings.is_empty() {
             &self.overlay_bindings
@@ -636,25 +647,49 @@ impl TextPipeline {
         // corrections overflow. A calm MIN keeps a lone short suggestion from looking
         // pinched; the card stays capped small and clamped on-canvas. (Falls back to
         // the char-count estimate only if a measurement has not run yet.)
+        //
+        // ITEM 49 — MEASURE EVERY ROW IN THE ELISION'S OWN UNITS: the shaped
+        // `overlay_spell_w` is in the UI/chrome face, but the row-elision budget
+        // (`overlay_shape_text` → `rowlayout::plan`) divides `text_w` by the DOCUMENT
+        // mono `char_width` and then charges the primary for the `…` cell AND the
+        // (blank but PRESENT) right column the popup's per-row `overlay_bindings`
+        // carries — one empty slot per suggestion + the add row. On a WIDE-mono world
+        // (Firetail / Monaspace Xenon) that grid needs MORE width than the UI-face
+        // shaped measurement grants — so the first-class "Add '<word>' to dictionary"
+        // row elided at a WIDE width, floating in empty space (the user report). Floor
+        // the content width by the char-grid width of the WIDEST row plus the cells
+        // `rowlayout::plan` reserves off the top — `1` (the `…`) + `GAP_CHARS` (the
+        // secondary-column gutter) — plus one more so the integer `floor(text_w /
+        // char_width)` clears the target even when the f32 division lands a hair under
+        // a whole cell. `max()` only GROWS the card where the grid outruns the shaped
+        // width (byte-identical where the shaped face is the wider of the two); the cap
+        // below still elides a genuinely over-long row as the last resort.
+        let widest_chars = self
+            .overlay_items
+            .iter()
+            .map(|s| s.chars().count())
+            .max()
+            .unwrap_or(0);
+        let grid_slack = 1 + crate::render::rowlayout::GAP_CHARS + 1;
+        let char_grid_w = (widest_chars + grid_slack) as f32 * m.char_width;
         let content_w = if self.overlay_spell_w > 0.0 {
-            self.overlay_spell_w
+            self.overlay_spell_w.max(char_grid_w)
         } else {
-            self.overlay_items
-                .iter()
-                .map(|s| s.chars().count())
-                .max()
-                .unwrap_or(0) as f32
-                * m.char_width
+            char_grid_w
         };
         // The MIN/MAX bounds are tuned for the 1:1 capture canvas; GROW them with the
         // current zoom/DPI (the SAME grow-only `overlay_pixel_scale` the takeover
-        // card's width uses) so a long correction isn't clamped to an unzoomed 360
+        // card's width uses) so a long correction isn't clamped to an unzoomed cap
         // while its shaped `content_w` doubled under zoom — the zoom-blind card bug,
         // contextual sibling. Grow-only (`scale.max(1.0)`): byte-identical at every
-        // scale ≤ 1.0 (the shipped 0.8 default + all captures untouched).
+        // scale ≤ 1.0 (the shipped 0.8 default + all captures untouched). The MAX is
+        // wide enough to hold a whole add-to-dictionary row for an ordinary word
+        // (~24 mono cells) so it never elides at wide width (item 49); a genuinely
+        // long adversarial word still overruns it and elides — a small popup, never a
+        // takeover card.
         let scale = self.overlay_pixel_scale().max(1.0);
         let card_w = (content_w + 2.0 * pad)
-            .clamp(140.0 * scale, 360.0 * scale)
+            .clamp(140.0 * scale, 520.0 * scale)
             .min(width as f32 - 2.0 * margin);
         let text_w = card_w - 2.0 * pad;
         // At least one row tall so a (rare) flagged word with no suggestions still
