@@ -99,3 +99,68 @@ fn frost_pill_geometry_is_dpi_invariant_in_logical_space() {
         );
     }
 }
+
+/// THE 1×/2× FROST SEED LAW: the ORGANIC seed field (item 32) is authored from the
+/// zoomed glyph geometry in LOGICAL space, so a 2× surface must produce the SAME
+/// seed count with each seed's physical EXTENTS doubled — the x-span (`x1 - x0`)
+/// AND the halo radius (`r`, glyph-derived row-height fraction + the DPI-scaled
+/// skirt). Absolute origins fold in the adaptive rail's fixed physical floor (like
+/// the pill law above), so only the SPAN + RADIUS are the invariant. Without the
+/// DPI term in `frost_seed_radius`/`frost_px` the halo would keep a fixed physical
+/// size and the field's logical topology would drift across displays.
+#[test]
+fn frost_seed_geometry_is_dpi_invariant_in_logical_space() {
+    const W: f32 = 960.0;
+    const H: f32 = 640.0;
+    const ZOOM: f32 = 1.25;
+    let Some((_device, _queue, mut p)) = headless_dqp(W, H) else {
+        eprintln!("skipping frost_seed_geometry_is_dpi_invariant_in_logical_space: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+    let was_page_on = crate::page::page_on();
+    let was_measure = crate::page::measure();
+    let was_outline_on = crate::outline::outline_on();
+    let was_theme = crate::theme::active_index();
+    crate::page::set_page_on(true);
+    crate::page::set_measure(28);
+    crate::outline::set_outline_on(true);
+    let lava_idx = crate::theme::THEMES
+        .iter()
+        .position(|t| t.background.is_lava())
+        .expect("a lava world ships");
+    crate::theme::set_active(lava_idx);
+    p.sync_theme();
+
+    let mut v = view_md("# Title\n\n## Section\n\n### Detail\n", 0, 0);
+    v.zoom = ZOOM;
+    let seeds_at = |p: &mut TextPipeline, dpi: f32| {
+        p.set_size(W * dpi, H * dpi);
+        p.set_dpi(dpi);
+        p.set_view(&v);
+        p.outline_frost_seeds((H * dpi) as u32)
+    };
+    let one = seeds_at(&mut p, 1.0);
+    let two = seeds_at(&mut p, 2.0);
+
+    crate::theme::set_active(was_theme);
+    crate::outline::set_outline_on(was_outline_on);
+    crate::page::set_page_on(was_page_on);
+    crate::page::set_measure(was_measure);
+
+    assert!(!one.is_empty(), "control: the logical page seeds a frost field at 1×");
+    assert_eq!(one.len(), two.len(), "same logical headings -> same seed count");
+    for (i, (a, b)) in one.iter().zip(&two).enumerate() {
+        let (span_one, span_two) = (a[1] - a[0], b[1] - b[0]);
+        assert!(
+            (span_two - 2.0 * span_one).abs() < 0.75,
+            "seed {i} x-span: 2× physical {span_two} must double 1× {span_one}"
+        );
+        assert!(
+            (b[3] - 2.0 * a[3]).abs() < 0.75,
+            "seed {i} halo radius: 2× physical {} must double 1× {}",
+            b[3],
+            a[3]
+        );
+    }
+}

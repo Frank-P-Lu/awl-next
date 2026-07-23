@@ -64,16 +64,17 @@ struct Globals {
     // The GUTTER's local corner carve rect [left, top, right, bottom] (px), used
     // when `gutter == 1`. All-zero otherwise.
     gutter_rect: vec4<f32>,
-    // FROST params [dim, blur_px, feather_px, pill_count]: the per-entry frost
-    // pill treatment (the shipped headed-doc default). `pill_count` (w) is how
-    // many `pills` are live — 0 in every non-frost frame (non-lava world, no
-    // outline, or AWL_LAVA_FROST=off), so the frost path is inert. MUST match
-    // `lava::frost_pixel` / `lava::frost_pill_coverage`.
+    // FROST params [dim, blur_px, iso_unused, seed_count]: the organic
+    // glyph-seeded field treatment (the shipped headed-doc default). `seed_count`
+    // (w) is how many `seeds` are live — 0 in every non-frost frame (non-lava
+    // world, no margin ink, or AWL_LAVA_FROST=off), so the frost path is inert.
+    // MUST match `lava::frost_pixel` / `lava::frost_coverage`.
     frost: vec4<f32>,
-    // The FROST PILL rects [left, top, right, bottom] (px), one per drawn outline
-    // entry — the regions the lamp renders FROSTED behind. Only the first
-    // `frost.w` are live (all-zero otherwise). MUST match `lava::MAX_FROST_PILLS`.
-    pills: array<vec4<f32>, 48>,
+    // The FROST SEEDS [x0, x1, yc, r] (px), one per visible margin glyph (or per
+    // word-run under the degradation arm) — the halos whose SUMMED field the lamp
+    // renders FROSTED behind. Only the first `frost.w` are live (all-zero
+    // otherwise). MUST match `lava::MAX_FROST_SEEDS`.
+    seeds: array<vec4<f32>, 256>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -108,6 +109,12 @@ const FIELD_K: f32 = 1.2;
 const THRESHOLD: f32 = 0.5;
 const EDGE_WIDTH: f32 = 0.12;
 const CORE_WIDTH: f32 = 0.35;
+
+// ORGANIC FROST FIELD iso level + soft band — the summed glyph-halo strength at
+// which coverage crosses 0.5, and the band it ramps over. MUST match
+// `lava::FROST_ISO` / `lava::FROST_ISO_SOFT`.
+const FROST_ISO: f32 = 0.55;
+const FROST_ISO_SOFT: f32 = 0.42;
 
 // The slow lava BOB: each blob rises/falls on its own sine of `phase`, keyed off
 // its index so the lamps never move in unison (a per-blob amplitude / period /
@@ -201,6 +208,18 @@ fn rect_dist_outside(p: vec2<f32>, rect: vec4<f32>) -> f32 {
     return max(dx, dy);
 }
 
+// THE SEED HALO BUMP for one glyph/word seed [x0, x1, yc, r]: a compact-support
+// soft bump `(1 - (d/r)^2)^2` of the distance `d` to the run segment (0 within
+// the run's x-span). Summed across seeds it is the metaball field that merges
+// neighbours. MUST match `lava::frost_seed_bump`.
+fn seed_bump(p: vec2<f32>, seed: vec4<f32>) -> f32 {
+    let dx = max(max(seed.x - p.x, p.x - seed.y), 0.0);
+    let dy = p.y - seed.z;
+    let r = max(seed.w, 1.0);
+    let t = clamp(1.0 - (dx * dx + dy * dy) / (r * r), 0.0, 1.0);
+    return t * t;
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let x = in.px.x;
@@ -236,25 +255,28 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // away), so both margins' edge-glow read symmetrically.
     let could_glow = mode > 1.5 && dist_outside < 0.0 && dist_outside > -GLOW_BLEED_PX;
 
-    // FROST AMOUNT: max coverage over every drawn outline entry's pill (0 in a
-    // non-frost frame — `pill_count == 0`). A pixel inside ANY pill frosts; the
-    // lamp stays fully alive between and around them. MUST match `lava::
-    // frost_amount` / `frost_pill_coverage`.
-    let pill_count = u32(g.frost.w + 0.5);
-    let feather = max(g.frost.z, 1.0);
-    var frost_amt = 0.0;
-    for (var pi = 0u; pi < pill_count; pi = pi + 1u) {
-        let d = rect_dist_outside(in.px, g.pills[pi]);
-        let cov = 1.0 - smoothstep(-feather, 0.0, d);
-        frost_amt = max(frost_amt, cov);
-    }
-
     // Deep inside the column with no glow possible: the fragment is fully
     // TRANSPARENT so the flat base_100 page clear shows through untouched — both
-    // a legibility guarantee and a free perf win (most of a page's pixels).
+    // a legibility guarantee and a free perf win (most of a page's pixels). The
+    // frost seeds live out in the MARGIN (mask ~= 1), so the ORGANIC FROST FIELD
+    // below sits past this early-out — the per-seed loop is never paid for the
+    // page's interior pixels.
     if (mask < 0.02 && !could_glow) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
+
+    // ORGANIC FROST COVERAGE: sum every visible margin glyph's soft halo into one
+    // continuous field, then threshold it at FROST_ISO (0 in a non-frost frame —
+    // `seed_count == 0`). Because the halos SUM (never a max/union), neighbouring
+    // seeds bridge into one organic island wherever their combined field clears
+    // the iso — glyphs within a run, and nearby rows, merge in ANY direction with
+    // no per-row rule. MUST match `lava::frost_coverage`.
+    let seed_count = u32(g.frost.w + 0.5);
+    var frost_field_sum = 0.0;
+    for (var si = 0u; si < seed_count; si = si + 1u) {
+        frost_field_sum = frost_field_sum + seed_bump(in.px, g.seeds[si]);
+    }
+    let frost_amt = smoothstep(FROST_ISO - FROST_ISO_SOFT, FROST_ISO + FROST_ISO_SOFT, frost_field_sum);
 
     let field = metaball_field(in.px);
     let edge_t = smoothstep(THRESHOLD - EDGE_WIDTH, THRESHOLD + EDGE_WIDTH, field);
@@ -291,10 +313,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var out_rgb = margin_rgb;
     var out_a = mask;
 
-    // FROST PILLS: behind each drawn outline entry, soften the SMOOTH field (a
-    // blurred sample — never the dithered grid, the Mangrove palette-blur lesson)
-    // and value-dim it toward the flat ground so the dim outline ink keeps its
-    // contrast, while the lamp stays fully alive between and around the pills.
+    // FROST FIELD: behind the margin ink, soften the SMOOTH field (a blurred
+    // sample — never the dithered grid, the Mangrove palette-blur lesson) and
+    // value-dim it toward the flat ground so the dim ink keeps its contrast,
+    // while the lamp stays fully alive around the organic islands.
     // MUST match `lava::frost_pixel`.
     if (frost_amt > 0.0) {
         let fb = frost_field(in.px, g.frost.y);

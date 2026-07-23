@@ -230,6 +230,17 @@ struct OutlineLayout {
     lines: Vec<OutlineRow>,
 }
 
+/// One DRAWN outline row's ink band (device px): the column-hugging text `left`,
+/// its MEASURED `width`, the row's own `y_top`, and the fitted `label`. The shared
+/// per-row geometry both the stars keep-out rects and the organic frost seeds read
+/// (see [`TextPipeline::outline_ink_bands`]).
+struct OutlineBand {
+    left: f32,
+    width: f32,
+    y_top: f32,
+    label: String,
+}
+
 impl TextPipeline {
     /// The persistent margin OUTLINE's fully decided layout for this frame, or
     /// `None` when the outline is HIDDEN outright — the graceful-hide rule, ANY of:
@@ -422,11 +433,47 @@ impl TextPipeline {
     /// because the per-row pixel measurement genuinely shapes text (a throwaway on
     /// `outline_buffer`, re-shaped for real by the later `prepare_outline`).
     pub(in crate::render) fn lava_frost_pill_rects(&mut self, height: u32) -> Vec<[f32; 4]> {
+        let row_h = self.metrics.line_height * crate::markdown::type_scale::LABEL;
+        if row_h <= 0.0 {
+            return Vec::new();
+        }
+        let pad_x = crate::lava::frost_px(crate::lava::FROST_PILL_PAD_X, self.metrics.zoom, self.dpi);
+        let inset_y = row_h * crate::lava::FROST_PILL_INSET_Y_FRAC;
+        let mut rects = Vec::new();
+        // Each drawn row's own text band `[left, left+width]` at `y_top`, hugged with
+        // padding and inset from the line box so the lamp breathes BETWEEN rows.
+        for band in self.outline_ink_bands(height) {
+            if band.width > 0.0 {
+                rects.push([
+                    (band.left - pad_x).max(0.0),
+                    band.y_top + inset_y,
+                    band.left + band.width + pad_x,
+                    band.y_top + row_h - inset_y,
+                ]);
+            }
+            if rects.len() >= crate::lava::MAX_FROST_PILLS {
+                break;
+            }
+        }
+        rects
+    }
+
+    /// THE OUTLINE INK BANDS — one per DRAWN outline row, each carrying the row's
+    /// column-hugging text origin `left`, its MEASURED pixel `width`, the row's own
+    /// `y_top`, and the fitted `label`. The ONE owner of the outline's per-row band
+    /// geometry: both the STARS keep-out rects ([`Self::lava_frost_pill_rects`]) and
+    /// the organic FROST SEEDS ([`Self::outline_frost_seeds`]) read it, so the two
+    /// can never drift from the row they surround. Walks the SAME
+    /// [`Self::outline_layout`] + [`Self::outline_pixel_fit`] + [`outline_block_left`]
+    /// the drawn pixels ride (follow slice, group gaps, `top`/`row_h`, measured
+    /// widths, column-hugging left). `&mut self` because the per-row pixel
+    /// measurement genuinely shapes text on the throwaway `outline_buffer`.
+    fn outline_ink_bands(&mut self, height: u32) -> Vec<OutlineBand> {
         let Some(mut layout) = self.outline_layout(height) else {
             return Vec::new();
         };
         // Correct each label to its MEASURED pixel width (the same fit the draw
-        // applies), so pill widths match the drawn glyphs exactly.
+        // applies), so band widths match the drawn glyphs exactly.
         self.outline_pixel_fit(&mut layout);
         let label = crate::markdown::type_scale::LABEL;
         let row_h = self.metrics.line_height * label;
@@ -442,33 +489,84 @@ impl TextPipeline {
             .collect();
         let block_w = widths.iter().copied().fold(0.0_f32, f32::max);
         let left = outline_block_left(layout.right_edge, block_w, crate::render::TEXT_LEFT);
-        let pad_x = crate::lava::frost_px(crate::lava::FROST_PILL_PAD_X, self.metrics.zoom, self.dpi);
-        let inset_y = row_h * crate::lava::FROST_PILL_INSET_Y_FRAC;
-        let mut rects = Vec::with_capacity(layout.lines.len());
+        let mut bands = Vec::with_capacity(layout.lines.len());
         // Walk each row's own y-band (matching `outline_hit_line`'s stacking: a
-        // half-row group gap ABOVE a group-opening row, each row its own `row_h`),
-        // and hug its text extents `[left, left + width]` with padding, inset from
-        // the line box so the lamp breathes BETWEEN consecutive pills.
+        // half-row group gap ABOVE a group-opening row, each row its own `row_h`).
         let mut y = layout.top;
         for (i, row) in layout.lines.iter().enumerate() {
             if row.gap_before {
                 y += row_h * OUTLINE_GAP_ROWS;
             }
-            let w = widths[i];
-            if w > 0.0 {
-                rects.push([
-                    (left - pad_x).max(0.0),
-                    y + inset_y,
-                    left + w + pad_x,
-                    y + row_h - inset_y,
-                ]);
-            }
+            bands.push(OutlineBand {
+                left,
+                width: widths[i],
+                y_top: y,
+                label: row.label.clone(),
+            });
             y += row_h;
-            if rects.len() >= crate::lava::MAX_FROST_PILLS {
+        }
+        bands
+    }
+
+    /// THE ORGANIC FROST SEEDS for the outline (the shipped lava treatment): every
+    /// visible outline glyph (per-glyph — or per WORD-RUN under the degradation arm
+    /// [`crate::lava::FROST_SEED_PER_GLYPH`]) seeds a small close halo `[x0, x1, yc,
+    /// r]` (device px), hugging the drawn ink. [`TextPipeline::prepare_lava_layer`]
+    /// SUMS these (plus the gutter's) into one continuous field the lava renders
+    /// FROSTED behind (see `shaders/lava.wgsl`), so nearby rows/words merge into
+    /// organic islands with no per-row separation. EMPTY when the outline is HIDDEN
+    /// (byte-identical to the both-margins behaviour). The halo radius is DERIVED
+    /// FROM THE ZOOMED GLYPH GEOMETRY (the LABEL row height), so islands join/split
+    /// naturally with zoom through the continuous field, never a mode switch.
+    pub(in crate::render) fn outline_frost_seeds(&mut self, height: u32) -> Vec<[f32; 4]> {
+        let row_h = self.metrics.line_height * crate::markdown::type_scale::LABEL;
+        if row_h <= 0.0 {
+            return Vec::new();
+        }
+        let r = crate::render::frost_seed_radius(row_h, self.metrics.zoom, self.dpi);
+        let pad_x = crate::lava::frost_px(crate::lava::FROST_PILL_PAD_X, self.metrics.zoom, self.dpi);
+        let yc_off = row_h * 0.5;
+        let mut seeds = Vec::new();
+        for band in self.outline_ink_bands(height) {
+            if band.width <= 0.0 {
+                continue;
+            }
+            crate::render::push_text_seeds(
+                &mut seeds,
+                band.left - pad_x,
+                band.width + 2.0 * pad_x,
+                band.y_top + yc_off,
+                r,
+                &band.label,
+            );
+            if seeds.len() >= crate::lava::MAX_FROST_SEEDS {
+                seeds.truncate(crate::lava::MAX_FROST_SEEDS);
                 break;
             }
         }
-        rects
+        seeds
+    }
+
+    /// THE FROST SEED-CACHE KEY ROWS for the outline — a CHEAP char-level snapshot
+    /// (each fitted `label` + its group-gap / current flags + source `line`) of the
+    /// drawn outline this frame, WITHOUT the pixel-fit shaping. Read only by
+    /// [`TextPipeline::frost_seed_key`] to detect when the seeded margin text
+    /// changed (a follow-window slide, an edited heading, a reveal shift): the
+    /// pixel-fit that the real seeds ride only trims further with zoom/DPI/face,
+    /// which the key hashes separately, so this char-level view is a faithful cache
+    /// discriminator with no per-frame shaping cost.
+    pub(in crate::render) fn outline_key_rows(
+        &self,
+        height: u32,
+    ) -> Option<Vec<(String, bool, bool, usize)>> {
+        let layout = self.outline_layout(height)?;
+        Some(
+            layout
+                .lines
+                .iter()
+                .map(|r| (r.label.clone(), r.gap_before, r.current, r.line))
+                .collect(),
+        )
     }
 
     /// PERSISTENT MARGIN OUTLINE: the CURRENT heading's [`ancestor_chain`] — the

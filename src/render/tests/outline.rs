@@ -895,17 +895,31 @@ fn lava_frost_pills_follow_outline_visibility() {
         !p.lava_rail_carved(height),
         "frost default: the whole-margin carve is demoted (both margins live)"
     );
-    // ONE frost pill per drawn outline row, each aligned to its own row's y-band.
+    // ONE stars keep-out rect per drawn outline row, each aligned to its own y-band.
     let rows = p.outline_draw_report(height).expect("the outline draws");
     let pills = p.lava_frost_pill_rects(height);
     assert_eq!(
         pills.len(),
         rows.len(),
-        "one frost pill per drawn outline entry: {} pills vs {} rows",
+        "one outline keep-out rect per drawn entry: {} rects vs {} rows",
         pills.len(),
         rows.len()
     );
     let outline_top = p.outline_top_px(height).unwrap();
+    // The ORGANIC FROST SEEDS follow the same visibility: a visible outline seeds a
+    // nonzero halo field, every seed inside the outline's own vertical band.
+    let seeds = p.outline_frost_seeds(height);
+    assert!(!seeds.is_empty(), "a visible outline seeds a nonzero frost field");
+    let band_bottom = pills.last().unwrap()[3] + p.metrics.line_height;
+    for (i, s) in seeds.iter().enumerate() {
+        assert!(s[1] >= s[0], "seed {i} has a non-negative x-span: {s:?}");
+        assert!(s[3] > 0.0, "seed {i} has a positive halo radius: {s:?}");
+        assert!(
+            s[2] >= outline_top - p.metrics.line_height && s[2] <= band_bottom,
+            "seed {i} y-centre {} sits in the outline band [{outline_top}, {band_bottom}]",
+            s[2]
+        );
+    }
     let mut prev_bottom = f32::NEG_INFINITY;
     for (i, pill) in pills.iter().enumerate() {
         assert!(pill[2] > pill[0], "pill {i} has positive width: {pill:?}");
@@ -925,15 +939,17 @@ fn lava_frost_pills_follow_outline_visibility() {
         pills[0][1]
     );
 
-    // A heading-free markdown doc hides the outline => no frost pills.
+    // A heading-free markdown doc hides the outline => no frost pills OR seeds.
     p.set_view(&view_md("no headings here\n", 0, 0));
     assert!(!p.outline_visible(height));
     assert!(p.lava_frost_pill_rects(height).is_empty(), "no outline, no frost");
+    assert!(p.outline_frost_seeds(height).is_empty(), "no outline, no frost seeds");
     p.set_view(&view_md(text, 0, 0));
 
-    // Outline toggled off => no frost pills.
+    // Outline toggled off => no frost pills OR seeds.
     crate::outline::set_outline_on(false);
     assert!(p.lava_frost_pill_rects(height).is_empty(), "outline off, no frost");
+    assert!(p.outline_frost_seeds(height).is_empty(), "outline off, no frost seeds");
     crate::outline::set_outline_on(true);
 
     // The NARROWEST regime: no horizontal room for even the stub rail => the
@@ -965,31 +981,32 @@ fn lava_frost_pills_follow_outline_visibility() {
     crate::page::set_measure(80);
 }
 
-/// THE GUTTER LOCAL FROST PILL wiring ([`TextPipeline::lava_gutter_frost_rect`] —
-/// the de-uglify round). The bottom-left gutter used to drive a HARD corner carve
-/// (`lava_gutter_carve_rect` → the shader's `gutter`/`gutter_rect` globals) that
-/// dropped its band to the flat, darkest page ground — an ugly geometric dark
-/// pocket under the filename/project readout, worst on Firetail. That hard carve
-/// is now DEMOTED behind the FROST default (like `lava_rail_carved`): under the
-/// shipped default (`crate::lava::FROST_RAIL_DEFAULT` true) `lava_gutter_carve_rect`
-/// returns `None` and the gutter instead contributes a FROST PILL
-/// (`lava_gutter_frost_rect`) — the SAME bounded corner box, but rendered as a
-/// softened, value-dimmed lamp rather than carved to dead-flat ground. So a lava
-/// world + a drawn gutter (outline hidden) does NOT trigger the whole-margin carve
-/// and does NOT hard-carve its corner, but DOES return a frost-pill rect that
-/// `prepare_lava_layer` uploads into the shader's `pills` array. The rect comes
-/// from the SAME `gutter_layout` owner `prepare_gutter`/`gutter_report` ride
-/// ([`TextPipeline::gutter_visible`] as the gate), so the pill can never disagree
-/// with the drawn block. An unnamed (scratch) buffer hides the gutter (no pill); a
-/// static-ground world never frosts (capability-keyed). The composited-pixel +
-/// ink-floor law lives at the pure seam (`theme::tests::
+/// THE GUTTER ORGANIC FROST SEEDS wiring ([`TextPipeline::gutter_frost_seeds`] —
+/// the organic-field round, item 32). The bottom-left gutter used to drive a HARD
+/// corner carve (`lava_gutter_carve_rect` → the shader's `gutter`/`gutter_rect`
+/// globals) that dropped its band to the flat, darkest page ground — an ugly
+/// geometric dark pocket under the filename/project readout, worst on Firetail.
+/// That hard carve is DEMOTED behind the FROST default (like `lava_rail_carved`):
+/// under the shipped default (`crate::lava::FROST_RAIL_DEFAULT` true)
+/// `lava_gutter_carve_rect` returns `None` and the gutter instead seeds the ORGANIC
+/// FROST FIELD (`gutter_frost_seeds`) — halo seeds hugging its RIGHT-aligned ink,
+/// summed into the SAME field the outline feeds, rendered as a softened,
+/// value-dimmed lamp rather than carved to dead-flat ground. So a lava world + a
+/// drawn gutter (outline hidden) does NOT trigger the whole-margin carve and does
+/// NOT hard-carve its corner, but DOES return frost seeds `prepare_lava_layer`
+/// uploads into the shader's `seeds` array. The seeds come from the SAME
+/// `gutter_layout` owner `prepare_gutter`/`gutter_report` ride
+/// ([`TextPipeline::gutter_visible`] as the gate), so they can never disagree with
+/// the drawn block. An unnamed (scratch) buffer hides the gutter (no seeds); a
+/// static-ground world uploads no frost (capability-keyed in `prepare_lava_layer`).
+/// The composited-pixel + ink-floor law lives at the pure seam (`theme::tests::
 /// gutter_frost_pill_keeps_ink_contrast_on_every_lava_world`); THIS test pins the
-/// render-side decision that law assumes. The OUTLINE frost pills are
+/// render-side decision that law assumes. The OUTLINE frost seeds are
 /// [`lava_frost_pills_follow_outline_visibility`] above.
 #[test]
-fn lava_gutter_frost_pill_follows_gutter_visibility() {
+fn gutter_frost_seeds_follow_gutter_visibility() {
     let Some(mut p) = headless_pipeline() else {
-        eprintln!("skipping lava_gutter_frost_pill_follows_gutter_visibility: no wgpu adapter");
+        eprintln!("skipping gutter_frost_seeds_follow_gutter_visibility: no wgpu adapter");
         return;
     };
     let _g = crate::testlock::serial();
@@ -1029,28 +1046,31 @@ fn lava_gutter_frost_pill_follows_gutter_visibility() {
     // (the demoted revert path is inert) ...
     assert!(
         p.lava_gutter_carve_rect(height).is_none(),
-        "frost default: the hard gutter carve is demoted (a frost pill instead)"
+        "frost default: the hard gutter carve is demoted (organic seeds instead)"
     );
-    // ... instead it returns a FROST-PILL rect over its own block.
-    let rect = p
-        .lava_gutter_frost_rect(height)
-        .expect("lava world + drawn gutter => a frost-pill rect");
-    // The rect is the gutter's own box: left 0, right shy of the column, a bottom
-    // band (top below the canvas middle, bottom == canvas bottom).
-    assert_eq!(rect[0], 0.0, "pill left == 0 (canvas edge)");
-    assert!(rect[2] > 0.0 && rect[2] < 1900.0, "pill right hugs the column: {rect:?}");
+    // ... instead it seeds the organic frost field over its own block.
+    let seeds = p.gutter_frost_seeds(height);
     assert!(
-        rect[1] > height as f32 * 0.5 && rect[3] >= height as f32,
-        "pill is a BOTTOM band: {rect:?}"
+        !seeds.is_empty(),
+        "lava world + drawn gutter => a nonzero frost seed field"
     );
+    // The gutter seeds hug a BOTTOM band, RIGHT-aligned toward the column: every
+    // seed's y-centre sits in the bottom half and its ink stays left of the column.
+    let col_left = p.column_left();
+    for (i, s) in seeds.iter().enumerate() {
+        assert!(s[1] >= s[0], "seed {i} has a non-negative x-span: {s:?}");
+        assert!(s[3] > 0.0, "seed {i} has a positive halo radius: {s:?}");
+        assert!(s[2] > height as f32 * 0.5, "seed {i} is a BOTTOM-band seed: {s:?}");
+        assert!(s[1] <= col_left + 1.0, "seed {i} hugs the column from the margin: {s:?}");
+    }
 
-    // An UNNAMED (scratch) buffer hides the gutter => no frost pill.
+    // An UNNAMED (scratch) buffer hides the gutter => no frost seeds.
     let blank = view("plain text, not markdown\n", 0, 0);
     p.set_view(&blank);
     assert!(!p.gutter_visible(), "no name => no gutter");
     assert!(
-        p.lava_gutter_frost_rect(height).is_none(),
-        "no gutter ink => no frost pill, the lamp is un-frosted"
+        p.gutter_frost_seeds(height).is_empty(),
+        "no gutter ink => no frost seeds, the lamp is un-frosted"
     );
     assert!(p.lava_gutter_carve_rect(height).is_none(), "no gutter => no hard carve either");
     assert!(!p.lava_rail_carved(height), "no outline either => no full carve");
@@ -1060,18 +1080,21 @@ fn lava_gutter_frost_pill_follows_gutter_visibility() {
     p.set_view(&named);
     assert!(!p.gutter_visible(), "edge-to-edge hides the gutter");
     assert!(
-        p.lava_gutter_frost_rect(height).is_none(),
-        "no margins, no frost pill"
+        p.gutter_frost_seeds(height).is_empty(),
+        "no margins, no frost seeds"
     );
     crate::page::set_page_on(true);
 
-    // A static-ground world NEVER frosts, gutter drawn or not (capability-keyed).
+    // A static-ground world NEVER uploads frost, gutter drawn or not — the
+    // capability gate in `prepare_lava_layer` (`lava_params().is_some()`) suppresses
+    // it. The seed geometry itself is world-agnostic; the world gate is the
+    // capability read, asserted here the same way the outline arm above does.
     crate::theme::set_active(static_idx);
     p.set_view(&named);
     assert!(p.gutter_visible(), "control: the gutter still draws");
     assert!(
-        p.lava_gutter_frost_rect(height).is_none(),
-        "a non-lava world has no lamp to frost"
+        crate::theme::active().background.lava_params().is_none(),
+        "a non-lava world has no lava params => `prepare_lava_layer` uploads no frost"
     );
     assert!(
         p.lava_gutter_carve_rect(height).is_none(),

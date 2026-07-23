@@ -240,6 +240,48 @@ impl TextPipeline {
         Some([0.0, top, layout.avail, height as f32])
     }
 
+    /// THE ORGANIC FROST SEEDS for the bottom-left GUTTER (the shipped lava
+    /// treatment): the filename + project lines each seed halos `[x0, x1, yc, r]`
+    /// (device px) hugging their RIGHT-aligned ink near the column, so they join the
+    /// SAME summed field the outline feeds ([`TextPipeline::prepare_lava_layer`]) —
+    /// a warm organic whisper under the stack instead of the old full-width
+    /// rectangle. Seeds hug the ACTUAL ink (each line's width, right-aligned to
+    /// `avail`) rather than the whole `[0, avail]` box. `None`-empty when the gutter
+    /// is HIDDEN. Rides the SAME [`Self::gutter_layout`] owner + the shared
+    /// [`crate::render::frost_seed_radius`] / [`crate::render::push_text_seeds`] the
+    /// outline uses, so both surfaces (and both worlds) seed identically.
+    pub(in crate::render) fn gutter_frost_seeds(&self, height: u32) -> Vec<[f32; 4]> {
+        let Some(layout) = self.gutter_layout() else {
+            return Vec::new();
+        };
+        let label = crate::markdown::type_scale::LABEL;
+        let row_h = self.metrics.line_height * label;
+        if row_h <= 0.0 {
+            return Vec::new();
+        }
+        let r = crate::render::frost_seed_radius(row_h, self.metrics.zoom, self.dpi);
+        let pad_x = crate::lava::frost_px(crate::lava::FROST_PILL_PAD_X, self.metrics.zoom, self.dpi);
+        // The two stacked LABEL rows, bottom-anchored 8px up (mirrors `prepare_gutter`
+        // / `gutter_carve_rect`): name over project. Each line is RIGHT-aligned within
+        // `[0, avail]`, so its ink hugs the column at the right edge.
+        let lines_n = if layout.project.is_empty() { 1.0 } else { 2.0 };
+        let block_top = height as f32 - row_h * lines_n - 8.0;
+        // The gutter's own LABEL advance (its glyphs are the doc advance × LABEL).
+        let label_char_w = self.metrics.char_width * label;
+        let push_line = |seeds: &mut Vec<[f32; 4]>, text: &str, row: f32| {
+            if text.is_empty() {
+                return;
+            }
+            let w = (text.chars().count() as f32 * label_char_w).min(layout.avail);
+            let yc = block_top + (row + 0.5) * row_h;
+            crate::render::push_text_seeds(seeds, layout.avail - w - pad_x, w + 2.0 * pad_x, yc, r, text);
+        };
+        let mut seeds = Vec::new();
+        push_line(&mut seeds, &layout.name, 0.0);
+        push_line(&mut seeds, &layout.project, 1.0);
+        seeds
+    }
+
     /// The page-mode GUTTER state for the capture sidecar: `Some((name, project))`
     /// EXACTLY when the gutter is drawn (page mode on, a buffer name, a margin past
     /// the hard floor — the same gate as [`Self::prepare_gutter`]), else `None`.
