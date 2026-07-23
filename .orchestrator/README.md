@@ -77,7 +77,8 @@ How a brainstorm/interview session ("awl design"-type) turns talk into work:
 
 ## Cooking: parallelize by clash, run unattended (user rule, 2026-07-23)
 
-When the orchestrator is cooking a queue, the default is throughput, not caution:
+When the orchestrator is cooking a queue, the default is throughput within the
+active quota budget, not raw fan-out:
 
 1. **Parallelize by file-clash, not by fear.** Items whose file/module
    footprints are DISJOINT cook CONCURRENTLY — a few at a time (~3–4; enough to
@@ -137,3 +138,42 @@ lands. (User's word: "you can just write down the blocking decision in the queue
 and move on"; "just note that it's blocked and churn through everything else.")
 The failure this kills: asking a question and then idling the whole queue until
 it's answered.
+
+## Quota-aware model routing (user rule, 2026-07-24)
+
+The shared subscription allowance is a weekly compute budget. Choose a model by
+failure cost and task phase, not by a blanket "coding = strongest model" rule:
+
+1. **Sonnet is the production default.** Use the current Sonnet at medium effort
+   for implementation, structured research, routine diagnosis, merge
+   reconciliation, and every standing spot-check audit. Raise effort only when
+   the task's evidence demands it. A crisp brief + one known owner +
+   deterministic tests/captures is a Sonnet job even when it touches several
+   files.
+2. **Opus plans high-risk ownership work; Sonnet executes the plan.** Spend the
+   current Opus on the reasoning phase when a task migrates state/identity,
+   discovers ownership across subsystems, or could produce a locally green but
+   subtly corrupt result. The Opus output is a concrete file/owner/invariant
+   plan handed to Sonnet for implementation (`opusplan` where available).
+   Targeted Opus verification is allowed when the same hidden-risk condition
+   remains. Do not use Opus merely because a task is large, and do not use fast
+   mode for unattended work where latency has no value.
+3. **Fable judges taste only.** The implementer generates real awl captures;
+   Fable inspects those images and returns the visual call. Fable never writes
+   implementation or edits files. The implementer applies the verdict and owns
+   the gates.
+4. **Escalate from evidence, never prestige.** Promote a Sonnet task only after
+   its investigation exposes an ownership/invariant ambiguity or repeated
+   attempts fail for reasons requiring deeper reasoning. Record the reason in
+   the worker brief; model escalation is not a substitute for a sharper spec.
+5. **Budget context as well as agents.** Give each worker one self-contained
+   queue brief and a fresh bounded context. Do not keep feeding unrelated work
+   through a conversation carrying old repository reads and diffs. Avoid
+   duplicate scouts and speculative agents; parallelize independent build work
+   in the existing ~3–4 slots, then drain and clean them before the next batch.
+6. **Pace against the reset.** At dispatch, compare weekly percentage used with
+   percentage of the reset cycle elapsed. If usage is more than about ten
+   percentage points ahead, enter conservation mode: cap the next wave at 2–3
+   Sonnet workers, reserve Opus for data/state-risk planning, and skip
+   non-blocking speculative probes until the pace recovers. A separate,
+   underused taste allowance does not justify using Fable outside its role.
