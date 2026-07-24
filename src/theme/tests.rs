@@ -2577,9 +2577,23 @@ fn personality_assignments_are_exactly_the_decided_table() {
             // Brolga (the SEVENTEENTH world, the cool light pole) joins them —
             // a crisp rim off its pale sky-blue ground; deliberately NO page
             // frame (the DAWN round's 1px light-pole frame was user-rejected).
-            "Gumtree" | "Saltpan" | "Quokka" | "Brolga" => {
+            "Gumtree" | "Saltpan" | "Brolga" => {
                 RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT }
             }
+            // ITEM 70 — Quokka alone assigns the non-default printed-card caps
+            // (see `worlds::QUOKKA`'s own doc): a small rotated dot lattice
+            // rolling off toward the left content side, and a crisp 45°
+            // chamfer replacing the small rounded card corner.
+            "Quokka" => RenderCaps {
+                elevation: Elevation::Bordered,
+                card_texture: model::CardTexture::HalftoneDots {
+                    angle_deg: 18.0,
+                    cell_px: 8.0,
+                    density: 0.30,
+                },
+                card_shape: model::CardShape::Chamfered { cut_px: 11.0 },
+                ..RenderCaps::DEFAULT
+            },
             "Tawny" | "Mopoke" | "Potoroo" | "Bombora" | "Bowerbird" | "Mulga" => {
                 RenderCaps::DEFAULT
             }

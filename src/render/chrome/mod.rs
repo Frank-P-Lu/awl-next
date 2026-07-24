@@ -99,6 +99,15 @@ pub(in crate::render) fn narrowed_chamfer_px(cut_px: f32, card_w: f32, card_h: f
     cut_px.min(cap).max(0.0)
 }
 
+/// The `AWL_CARD_CAPS_FORCE` dev knob, read ONCE and memoized — see
+/// [`TextPipeline::card_shape_texture`]'s doc. Mirrors [`awl_cjk_force`]'s
+/// exact shape (env-var thread-safety footing: this runs on every card
+/// draw, not just once at startup).
+fn awl_card_caps_force() -> &'static Option<String> {
+    static ONCE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| std::env::var("AWL_CARD_CAPS_FORCE").ok())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(in crate::render) enum FloatElevation {
     /// Raised border + card, no shadow — every "elevated" summoned float
@@ -701,7 +710,28 @@ impl TextPipeline {
     /// the ONE owner so the two `ListBacking::Card` call sites can never
     /// disagree on the card's own silhouette/texture.
     pub(super) fn card_shape_texture(&self, rects: &[[f32; 4]]) -> (f32, Option<CardHalftone>) {
-        let caps = theme::active().render_caps;
+        let mut caps = theme::active().render_caps;
+        // DEV-ONLY GALLERY PROBE (mirrors `AWL_CJK_FORCE`'s "total no-op unless
+        // set" contract — no config key, no CLI flag): `AWL_CARD_CAPS_FORCE`
+        // stages Quokka's own printed-card caps down for the round's
+        // "current / type-only / type+halftone / full-chamfered" capture
+        // sequence, so each stage is a REAL render of the shipped mechanism
+        // rather than a synthetic mockup. `"flat"` forces `Flat`/`Rectangular`
+        // (the font-only stage); `"halftone"` keeps the world's own texture but
+        // forces `Rectangular` (texture, no chamfer yet). Unset (every normal
+        // run) is a no-op — the active world's own data renders untouched.
+        if let Some(force) = awl_card_caps_force() {
+            match force.as_str() {
+                "flat" => {
+                    caps.card_texture = theme::CardTexture::DEFAULT;
+                    caps.card_shape = theme::CardShape::DEFAULT;
+                }
+                "halftone" => {
+                    caps.card_shape = theme::CardShape::DEFAULT;
+                }
+                _ => {}
+            }
+        }
         let chamfer_px = match caps.card_shape {
             theme::CardShape::Rectangular => 0.0,
             theme::CardShape::Chamfered { cut_px } => {
