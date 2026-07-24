@@ -45,7 +45,7 @@ fn picker_view(align: theme::CardAnchor) -> ViewState {
 /// (`preview_move` = preview + re-anchor), the exact call the keyboard nav path
 /// runs. Sets the selection directly so the crossing is order-independent.
 fn cross_to(ov: &mut OverlayState, name: &str) {
-    let ci = ov.corpus.iter().position(|c| c == name).expect("world in corpus");
+    let ci = ov.rows.iter().position(|r| r.accept == name).expect("world in corpus");
     let pos = ov.items.iter().position(|&i| i == ci).expect("world visible on the flat lens");
     ov.selected = pos;
     crate::actions::preview_move(ov);
@@ -54,7 +54,7 @@ fn cross_to(ov: &mut OverlayState, name: &str) {
 /// A PASSIVE hover onto `name`: re-highlight + the BARE `preview_overlay` (no
 /// re-anchor) — exactly what `app/input/mouse.rs::overlay_hover` runs.
 fn hover_to(ov: &mut OverlayState, name: &str) {
-    let ci = ov.corpus.iter().position(|c| c == name).expect("world in corpus");
+    let ci = ov.rows.iter().position(|r| r.accept == name).expect("world in corpus");
     let pos = ov.items.iter().position(|&i| i == ci).expect("world visible on the flat lens");
     ov.selected = pos;
     crate::actions::preview_overlay(ov);
@@ -118,7 +118,7 @@ fn deliberate_crossing_snaps_the_card_into_the_destination_rail() {
 
     // The interaction state that must SURVIVE every crossing (item 52).
     let query_snapshot = ov.query.clone();
-    let corpus_len = ov.corpus.len();
+    let corpus_len = ov.rows.len();
 
     // A sequence spanning left → right → center → right → left, Pane and Bars.
     let mut rails: Vec<theme::CardAnchor> = Vec::new();
@@ -141,7 +141,7 @@ fn deliberate_crossing_snaps_the_card_into_the_destination_rail() {
 
         // Interaction state survived the crossing.
         assert_eq!(ov.query, query_snapshot, "{world}: the query survives the crossing");
-        assert_eq!(ov.corpus.len(), corpus_len, "{world}: the corpus survives the crossing");
+        assert_eq!(ov.rows.len(), corpus_len, "{world}: the corpus survives the crossing");
         assert_eq!(ov.selected_value(), Some(world), "{world}: the selected world is the crossing target");
 
         // PIXEL LAW: the drawn card's x-extents hug the destination rail.

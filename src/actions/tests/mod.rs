@@ -169,7 +169,7 @@ pub(super) fn settings_overlay() -> OverlayState {
         vec![],
         vec![],
     );
-    ov.bindings = crate::settings::value_cells(&Default::default());
+    ov.set_secondaries(crate::settings::value_cells(&Default::default()));
     ov
 }
 

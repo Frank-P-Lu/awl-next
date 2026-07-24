@@ -332,7 +332,7 @@ fn union_palette_lists_settings_rows_with_marker_and_current_value() {
     let mut ov = command_overlay_with_settings();
     // The full corpus is commands ++ palette-visible (non-covered) settings.
     assert_eq!(
-        ov.corpus.len(),
+        ov.rows.len(),
         crate::commands::visible_names().len() + crate::settings::palette_names().len()
     );
     for ch in ['k', 'e', 'y', 'm', 'a', 'p'] {
@@ -369,9 +369,9 @@ fn palette_settings_toggle_row_signals_setting_toggle_and_closes_the_palette() {
     let idx = ov
         .as_ref()
         .unwrap()
-        .corpus
+        .rows
         .iter()
-        .position(|c| c == "Reduce motion")
+        .position(|r| r.accept == "Reduce motion")
         .unwrap();
     ov.as_mut().unwrap().selected =
         ov.as_ref().unwrap().items.iter().position(|&i| i == idx).unwrap();
@@ -390,8 +390,13 @@ fn palette_settings_toggle_row_signals_setting_toggle_and_closes_the_palette() {
 #[test]
 fn palette_settings_picker_row_opens_sub_picker_with_command_breadcrumb() {
     let mut ov = Some(command_overlay_with_settings());
-    let idx =
-        ov.as_ref().unwrap().corpus.iter().position(|c| c == "Ambiguous CJK reads as").unwrap();
+    let idx = ov
+        .as_ref()
+        .unwrap()
+        .rows
+        .iter()
+        .position(|r| r.accept == "Ambiguous CJK reads as")
+        .unwrap();
     ov.as_mut().unwrap().selected =
         ov.as_ref().unwrap().items.iter().position(|&i| i == idx).unwrap();
     let eff = command_drive(&mut ov, &Action::Newline);
@@ -408,7 +413,7 @@ fn palette_settings_picker_row_opens_sub_picker_with_command_breadcrumb() {
 fn covered_settings_row_is_absent_from_the_palette_corpus() {
     let ov = command_overlay_with_settings();
     for (row_name, cmd_name) in crate::settings::COVERED_BY {
-        let row_count = ov.corpus.iter().filter(|c| c.as_str() == *row_name).count();
+        let row_count = ov.rows.iter().filter(|r| r.accept.as_str() == *row_name).count();
         if row_name == cmd_name {
             assert_eq!(row_count, 1, "same-named command/settings doors must collapse to one row");
         } else {
@@ -418,7 +423,7 @@ fn covered_settings_row_is_absent_from_the_palette_corpus() {
             );
         }
         assert!(
-            ov.corpus.iter().any(|c| c == cmd_name),
+            ov.rows.iter().any(|r| r.accept == *cmd_name),
             "{cmd_name:?} must still be the one door in the palette corpus"
         );
     }
@@ -429,7 +434,7 @@ fn covered_settings_row_is_absent_from_the_palette_corpus() {
 #[test]
 fn union_palette_ordinary_command_row_still_runs() {
     let mut ov = Some(command_overlay_with_settings());
-    let idx = ov.as_ref().unwrap().corpus.iter().position(|c| c == "Save").unwrap();
+    let idx = ov.as_ref().unwrap().rows.iter().position(|r| r.accept == "Save").unwrap();
     ov.as_mut().unwrap().selected =
         ov.as_ref().unwrap().items.iter().position(|&i| i == idx).unwrap();
     let eff = command_drive(&mut ov, &Action::Newline);
@@ -546,13 +551,13 @@ fn settings_value_edit_cancel_restores_the_cell_and_keeps_menu_open() {
         settings_drive(&mut overlay, &Action::InsertChar(c));
     }
     let ci = overlay.as_ref().unwrap().selected_corpus_index().unwrap();
-    let orig_cell = overlay.as_ref().unwrap().bindings[ci].clone();
+    let orig_cell = overlay.as_ref().unwrap().rows[ci].secondary.clone();
     settings_drive(&mut overlay, &Action::Newline); // arm
     for c in "999".chars() {
         settings_drive(&mut overlay, &Action::InsertChar(c));
     }
     assert_ne!(
-        overlay.as_ref().unwrap().bindings[ci],
+        overlay.as_ref().unwrap().rows[ci].secondary,
         orig_cell,
         "the row's cell shows the live typed value"
     );
@@ -561,7 +566,7 @@ fn settings_value_edit_cancel_restores_the_cell_and_keeps_menu_open() {
     assert_eq!(eff, Effect::None);
     assert!(overlay.as_ref().unwrap().value_edit.is_none());
     assert_eq!(
-        overlay.as_ref().unwrap().bindings[ci],
+        overlay.as_ref().unwrap().rows[ci].secondary,
         orig_cell,
         "cancel restores the cell"
     );
@@ -770,7 +775,7 @@ fn keep_version_opens_the_naming_minibuffer_and_enter_commits_the_name() {
         let ov = ctx.overlay.as_ref().expect("Keep version… opens the naming minibuffer");
         assert_eq!(ov.kind, OverlayKind::KeepName);
         assert!(ov.keep_edit.is_some(), "the modal keep_edit sub-state is armed at build");
-        assert_eq!(ov.corpus, vec![String::new()], "the single row opens empty (no old name)");
+        assert_eq!(ov.accepts(), vec![""], "the single row opens empty (no old name)");
         assert_eq!(
             ov.foot_hint(),
             "name this version:    Enter keep   Esc cancel",

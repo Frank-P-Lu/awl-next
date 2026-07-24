@@ -32,7 +32,8 @@ pub use build::{browse_level, build, elide_path, row_split, BuildCtx};
 pub use capture::{Capture, CaptureStage, KeepEdit, LinkEdit, LinkEditMode, RenameEdit, ValueEdit};
 #[allow(unused_imports)] // used by overlay::tests (format_hint/HintAction directly; PIN_TAG below)
 pub use kind::{format_hint, AcceptDisposition, HintAction, OverlayKind, HINT_SEP, PIN_TAG};
-pub use state::OverlayState;
+#[allow(unused_imports)] // OverlayRow/RowMeta/RowMetaTag: used by overlay::tests + item 55's follow-up
+pub use state::{OverlayRow, OverlayState, RowMeta, RowMetaTag};
 
 #[cfg(test)]
 mod tests;

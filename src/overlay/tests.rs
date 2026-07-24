@@ -68,6 +68,24 @@ fn assets_remove_asset_row_shrinks_the_list_and_keeps_the_picker_open() {
     assert_eq!(ov.item_strings(), vec!["a.png", "c.png"]);
     // The secondary column stays index-aligned (b's row is gone, not misaligned).
     assert_eq!(ov.item_bindings(), vec!["1 B · assets", "3 B · assets"]);
+    // ITEM 54 PRESERVATION LAW (removal preserves identity): with ONE typed
+    // `OverlayRow`, a `Vec::remove` carries a row's own accept + secondary
+    // together as a single element — there is no second parallel array that
+    // could drift out of step with `rows` after the shift. Assert it directly
+    // against the underlying `rows`, not just the filtered `items` view.
+    assert_eq!(ov.rows.len(), 2, "b's row is actually gone, not just hidden");
+    let want_secondary = |rel: &str| {
+        let size = if rel == "assets/a.png" { 1 } else { 3 };
+        crate::assets::secondary_label(&orphan(rel, size))
+    };
+    for row in &ov.rows {
+        assert_eq!(
+            row.secondary,
+            want_secondary(&row.accept),
+            "row {:?}'s own secondary traveled with it, never a neighbor's",
+            row.accept
+        );
+    }
     // Removing a value not present is a calm no-op.
     assert!(!ov.remove_asset_row("assets/zzz.png"));
     assert_eq!(ov.items.len(), 2);
@@ -196,7 +214,7 @@ fn switch_marks_git_children() {
     ];
     let git = vec![false, true, true];
     let is_dir = vec![true, true, true];
-    let ov = OverlayState::new_marked(
+    let mut ov = OverlayState::new_marked(
         OverlayKind::Project,
         corpus,
         git,
@@ -223,7 +241,31 @@ fn switch_marks_git_children() {
     let pn = items.iter().find(|s| s.contains("plain-notes")).unwrap();
     assert!(pn.ends_with('/'));
     // The accept value is always the RAW name (no marker).
-    assert_eq!(ov.corpus[ov.selected_corpus_index().unwrap()], "plain-notes");
+    assert_eq!(ov.rows[ov.selected_corpus_index().unwrap()].accept, "plain-notes");
+
+    // ITEM 54 PRESERVATION LAW (git/dir survive reorder): a typed query that
+    // RE-RANKS the rows must never let a git/dir marker follow the wrong row —
+    // identity now travels as ONE `OverlayRow`, not a separate array read by a
+    // (potentially shuffled) index. "repo" out-ranks "plain-notes" for both git
+    // folders, reordering the items; every reordered repo row must still carry
+    // its own git tag and directory-trailing slash.
+    ov.push('r');
+    ov.push('e');
+    ov.push('p');
+    ov.push('o');
+    let items2 = ov.item_strings();
+    let tags2 = ov.item_git_tags();
+    assert_eq!(tags2.len(), items2.len(), "git tags stay parallel after reorder");
+    assert!(
+        items2.iter().any(|s| s.starts_with("repo")),
+        "the query genuinely reordered toward the repo rows: {items2:?}"
+    );
+    for (i, s) in items2.iter().enumerate() {
+        assert!(s.ends_with('/'), "every surviving row is still a directory: {s:?}");
+        if s.contains("repo") {
+            assert_eq!(tags2[i], "git", "reordered {s:?} keeps its OWN git tag, not a neighbor's");
+        }
+    }
 }
 
 #[test]
@@ -396,11 +438,11 @@ fn command_palette_hides_finish_buffer_without_a_waiter_and_shows_it_with_one() 
     // selectable shrinks) — the row-index math `commands::visible_action_of`
     // relies on for every OTHER command stays valid.
     assert!(
-        ov_idle.corpus.contains(&"Finish file".to_string()),
+        ov_idle.accepts().contains(&"Finish file"),
         "hiding a row must not shrink the underlying corpus (index-stability)"
     );
     assert_eq!(
-        ov_idle.corpus.len(),
+        ov_idle.rows.len(),
         crate::commands::visible_names().len() + crate::settings::palette_names().len(),
         "corpus stays exactly commands::visible() + the settings union, unshrunk"
     );
@@ -799,7 +841,10 @@ fn spell_picker_lists_suggestions_and_carries_target() {
     assert!(!ov.selected_is_add_to_dictionary(), "a suggestion row is not the add row");
     assert_eq!(ov.add_word.as_deref(), Some("recieve"));
     let last = ov.items.len() - 1;
-    assert!(ov.spell_add[ov.items[last]], "the last corpus row is the add row");
+    assert!(
+        matches!(ov.rows[ov.items[last]].meta, RowMeta::SpellAdd),
+        "the last corpus row is the add row"
+    );
     // The hint names the ↵ action (replace) after the universal jump lead, flat
     // picker (no descend).
     assert_eq!(
@@ -844,9 +889,12 @@ fn spell_picker_caps_corrections_to_the_top_five_across_corpora() {
             "n={n}: the add row is always the last row"
         );
         let last_ci = *ov.items.last().unwrap();
-        assert!(ov.spell_add[last_ci], "n={n}: the last corpus entry is flagged as the add row");
+        assert!(
+            matches!(ov.rows[last_ci].meta, RowMeta::SpellAdd),
+            "n={n}: the last corpus entry is flagged as the add row"
+        );
         assert_eq!(
-            ov.spell_add.iter().filter(|&&a| a).count(),
+            ov.rows.iter().filter(|r| matches!(r.meta, RowMeta::SpellAdd)).count(),
             1,
             "n={n}: exactly one add row, never more"
         );
@@ -865,7 +913,7 @@ fn spell_picker_named_corpora_0_1_5_6_20() {
     // 0 corrections -> just the add row (always present, even with nothing to suggest).
     let ov0 = OverlayState::new_spell(mk(0), target, word.clone());
     assert_eq!(ov0.items.len(), 1, "0 corrections -> the add row alone");
-    assert!(ov0.spell_add[ov0.items[0]]);
+    assert!(matches!(ov0.rows[ov0.items[0]].meta, RowMeta::SpellAdd));
 
     // 1 correction -> 1 + add.
     let ov1 = OverlayState::new_spell(mk(1), target, word.clone());
@@ -949,11 +997,11 @@ fn command_picker_lands_on_all_then_groups_by_menu_section_and_recent() {
     assert!(!ov.items.is_empty(), "File section is non-empty");
     for (row, &ci) in ov.items.iter().enumerate() {
         assert_eq!(ov.item_sections()[row], "File");
-        assert_eq!(crate::commands::menu_section(&ov.corpus[ci]), Some("File"));
+        assert_eq!(crate::commands::menu_section(&ov.rows[ci].accept), Some("File"));
     }
     assert!(ov.item_strings().iter().any(|s| s == "Save"), "Save is a File command");
     // The Recent lens (strip index 4) reads the recency vec: seed one, see it group.
-    let undo = ov.corpus.iter().position(|c| c == "Undo").unwrap();
+    let undo = ov.rows.iter().position(|r| r.accept == "Undo").unwrap();
     ov.recent = vec![undo];
     ov.set_facet_lens(4);
     assert_eq!(ov.active_facet_id(), Some("recent"));
@@ -987,15 +1035,17 @@ fn history_picker_groups_by_session_and_today_with_injected_now() {
     // → Session lens: only "a" (at/after session start).
     ov.cycle_lens(1);
     assert_eq!(ov.active_facet_id(), Some("session"));
-    let session_ids: Vec<String> =
-        ov.items.iter().map(|&ci| ov.history_ids[ci].clone()).collect();
+    let history_id = |ov: &OverlayState, ci: usize| match &ov.rows[ci].meta {
+        RowMeta::History { id, .. } => id.clone(),
+        _ => panic!("history row must carry RowMeta::History"),
+    };
+    let session_ids: Vec<String> = ov.items.iter().map(|&ci| history_id(&ov, ci)).collect();
     assert_eq!(session_ids, vec!["a".to_string()]);
     assert!(ov.item_sections().iter().all(|s| s == "Session"));
     // → Today lens: "a" and "b" (same calendar day), never yesterday's "c".
     ov.cycle_lens(1);
     assert_eq!(ov.active_facet_id(), Some("today"));
-    let today_ids: Vec<String> =
-        ov.items.iter().map(|&ci| ov.history_ids[ci].clone()).collect();
+    let today_ids: Vec<String> = ov.items.iter().map(|&ci| history_id(&ov, ci)).collect();
     assert_eq!(today_ids, vec!["a".to_string(), "b".to_string()]);
 }
 
@@ -1082,8 +1132,8 @@ fn history_picker_named_row_shows_name_primary_and_demotes_the_timestamp() {
         None,
     );
     // Primary cells: name for the named row, "when · which" for the rest.
-    assert_eq!(ov.corpus[0], "draft A", "the name IS the primary cell");
-    assert_eq!(ov.corpus[1], "2 hr ago · edited \"Title\"", "unnamed rows unchanged");
+    assert_eq!(ov.rows[0].accept, "draft A", "the name IS the primary cell");
+    assert_eq!(ov.rows[1].accept, "2 hr ago · edited \"Title\"", "unnamed rows unchanged");
     // Secondary cells: timestamp demoted for the named row; pin tag only on the
     // unnamed pinned row.
     let binds = ov.item_bindings();
@@ -1092,7 +1142,15 @@ fn history_picker_named_row_shows_name_primary_and_demotes_the_timestamp() {
     assert_eq!(binds[1], format!("{PIN_TAG} · +3 −1"), "unnamed pinned row keeps its tag");
     assert_eq!(binds[2], "+3 −1", "plain row untouched");
     // The restore ids stay parallel — Enter/Tab on a named row reach id "3".
-    assert_eq!(ov.history_ids, vec!["3", "2", "1"]);
+    let ids: Vec<&str> = ov
+        .rows
+        .iter()
+        .map(|r| match &r.meta {
+            RowMeta::History { id, .. } => id.as_str(),
+            _ => panic!("history row must carry RowMeta::History"),
+        })
+        .collect();
+    assert_eq!(ids, vec!["3", "2", "1"]);
     // Typing the NAME finds the named row (it rides the fuzzy corpus).
     let mut ov2 = ov.clone();
     for c in "draft".chars() {
@@ -1651,9 +1709,9 @@ fn rename_minibuffer_word_delete() {
     let mut ov = OverlayState::new_rename("hello world".to_string());
     ov.rename_edit_pop_word();
     // The word-deleted value mirrors into corpus[0] (the visible editable row).
-    assert_eq!(ov.corpus[0], "hello ");
+    assert_eq!(ov.rows[0].accept, "hello ");
     ov.rename_edit_pop_word();
-    assert_eq!(ov.corpus[0], "");
+    assert_eq!(ov.rows[0].accept, "");
 }
 
 #[test]
@@ -1661,7 +1719,7 @@ fn link_minibuffer_word_delete() {
     let mut ov =
         OverlayState::new_link_edit("http://a.com/path".to_string(), LinkEditMode::Empty { at: 0 });
     ov.link_edit_pop_word(); // drops the trailing "path" segment, keeps the "/"
-    assert_eq!(ov.corpus[0], "http://a.com/");
+    assert_eq!(ov.rows[0].accept, "http://a.com/");
 }
 
 #[test]
@@ -1671,7 +1729,7 @@ fn keep_minibuffer_word_delete() {
         ov.keep_edit_push(c);
     }
     ov.keep_edit_pop_word();
-    assert_eq!(ov.corpus[0], "my great ");
+    assert_eq!(ov.rows[0].accept, "my great ");
 }
 
 // ── ITEM 10 — ONE SHARED TEXTBOX MODEL ─────────────────────────────────────
@@ -1707,9 +1765,9 @@ fn rename_minibuffer_rejects_slash_mid_string() {
     let mut ov = OverlayState::new_rename("hello".to_string());
     ov.rename_edit_word_left(); // caret -> 0 (one word)
     ov.rename_edit_push('/'); // rejected everywhere, including mid-string
-    assert_eq!(ov.corpus[0], "hello", "the / is rejected, caret position or not");
+    assert_eq!(ov.rows[0].accept, "hello", "the / is rejected, caret position or not");
     ov.rename_edit_push('X');
-    assert_eq!(ov.corpus[0], "Xhello", "a normal char still splices at the caret");
+    assert_eq!(ov.rows[0].accept, "Xhello", "a normal char still splices at the caret");
 }
 
 /// C — LINK MINIBUFFER: no character filter, INCLUDING `/`, at a mid-string
@@ -1719,7 +1777,7 @@ fn link_minibuffer_accepts_slash_mid_string() {
     let mut ov = OverlayState::new_link_edit("ab".to_string(), LinkEditMode::Empty { at: 0 });
     ov.link_edit_char_left(); // caret between 'a' and 'b'
     ov.link_edit_push('/');
-    assert_eq!(ov.corpus[0], "a/b");
+    assert_eq!(ov.rows[0].accept, "a/b");
 }
 
 /// C — KEEP-VERSION MINIBUFFER: an empty (or whitespace-only) input still
@@ -1747,20 +1805,20 @@ fn keep_minibuffer_empty_after_motion_still_targets_none() {
 #[test]
 fn settings_value_edit_filters_mid_string_and_esc_restores() {
     let mut ov = OverlayState::new(OverlayKind::Settings, vec!["Zoom".to_string()], vec![], vec![]);
-    ov.bindings = vec!["100%".to_string()];
+    ov.set_secondaries(vec!["100%".to_string()]);
     ov.start_value_edit("zoom".to_string(), "Zoom".to_string());
     assert_eq!(ov.value_edit.as_ref().unwrap().input.caret(), 4, "seeded caret at the end");
     ov.value_edit_word_left();
     assert_eq!(ov.value_edit.as_ref().unwrap().input.caret(), 0);
     // A letter is rejected at the mid-string (here, start) caret too.
     ov.value_edit_push('x');
-    assert_eq!(ov.bindings[0], "100%", "non-digit/./% rejected at any caret position");
+    assert_eq!(ov.rows[0].secondary, "100%", "non-digit/./% rejected at any caret position");
     // A digit splices at the caret.
     ov.value_edit_push('9');
-    assert_eq!(ov.bindings[0], "9100%");
+    assert_eq!(ov.rows[0].secondary, "9100%");
     // Esc restores the cell to what it showed before the edit began.
     ov.value_edit_cancel();
-    assert_eq!(ov.bindings[0], "100%", "Esc restores the original value");
+    assert_eq!(ov.rows[0].secondary, "100%", "Esc restores the original value");
     assert!(ov.value_edit.is_none());
 }
 
@@ -1769,7 +1827,7 @@ fn settings_value_edit_filters_mid_string_and_esc_restores() {
 #[test]
 fn settings_value_edit_commit_target_reads_current_value_after_motion() {
     let mut ov = OverlayState::new(OverlayKind::Settings, vec!["Zoom".to_string()], vec![], vec![]);
-    ov.bindings = vec!["50%".to_string()];
+    ov.set_secondaries(vec!["50%".to_string()]);
     ov.start_value_edit("zoom".to_string(), "Zoom".to_string());
     ov.value_edit_char_left(); // caret before the trailing '%'
     ov.value_edit_push('5'); // splices before the '%': "50%" -> "505%"
@@ -1786,10 +1844,284 @@ fn rename_minibuffer_handles_multibyte_text_end_to_end() {
     for c in "日本語".chars() {
         ov.rename_edit_push(c);
     }
-    assert_eq!(ov.corpus[0], "日本語");
+    assert_eq!(ov.rows[0].accept, "日本語");
     ov.rename_edit_char_left();
     ov.rename_edit_push('X');
-    assert_eq!(ov.corpus[0], "日本X語");
+    assert_eq!(ov.rows[0].accept, "日本X語");
     ov.rename_edit_pop();
-    assert_eq!(ov.corpus[0], "日本語");
+    assert_eq!(ov.rows[0].accept, "日本語");
+}
+
+// ── ITEM 54: typed `OverlayRow` replacing the 12 corpus-parallel arrays ────
+
+/// Build a REPRESENTATIVE overlay for `kind` — enough of a real corpus that
+/// every `RowMeta` variant [`OverlayKind::row_meta_roster`] declares for it
+/// actually gets produced at least once (Command: a hidden row + an appended
+/// settings row; Goto: a file row + an appended heading row; Spell: a
+/// suggestion + the terminal add row). Used only by
+/// [`every_kind_produces_only_its_declared_row_meta_roster`] below.
+fn representative_overlay(kind: OverlayKind) -> OverlayState {
+    match kind {
+        OverlayKind::Goto => {
+            let mut ov = OverlayState::new(
+                kind,
+                vec!["a.md".to_string(), "b.md".to_string()],
+                vec![],
+                vec![],
+            );
+            ov.attach_headings(vec![("Intro".to_string(), 3)]);
+            ov
+        }
+        OverlayKind::Project => {
+            OverlayState::new_project("/proj".to_string(), vec![("child".to_string(), false)], &[])
+        }
+        OverlayKind::Browse => OverlayState::new_marked(
+            kind,
+            vec!["a.txt".to_string()],
+            vec![false],
+            vec![false],
+            vec![],
+            vec![],
+            None,
+        ),
+        OverlayKind::Theme => OverlayState::new_theme(vec!["Tawny".to_string()], 0),
+        OverlayKind::Caret => OverlayState::new_caret(crate::caret::CaretMode::ALL[0]),
+        OverlayKind::Dictionary => OverlayState::new_dictionary(crate::spell::DictVariant::ALL[0]),
+        OverlayKind::CjkLang => {
+            OverlayState::new_cjk_lang(crate::frontmatter::DEFAULT_CJK_PRIORITY[0])
+        }
+        OverlayKind::Date => {
+            OverlayState::new_date(crate::dateformat::DateFormat::ALL[0], (2024, 1, 1))
+        }
+        OverlayKind::MoveDest => OverlayState::new_marked(
+            kind,
+            vec!["folder".to_string()],
+            vec![false],
+            vec![true],
+            vec![],
+            vec![],
+            None,
+        ),
+        OverlayKind::Command => {
+            let names = crate::commands::visible_names();
+            let n = names.len();
+            let mut hidden = vec![false; n];
+            if n > 0 {
+                hidden[0] = true; // touches CommandHidden
+            }
+            let mut ov = OverlayState::new_command(names, vec![String::new(); n], hidden);
+            ov.attach_settings_rows(
+                crate::settings::palette_names(),
+                crate::settings::palette_value_cells(&Default::default()),
+            ); // touches CommandSetting
+            ov
+        }
+        OverlayKind::Spell => OverlayState::new_spell(vec!["the".to_string()], (0, 0, 3), "teh".to_string()),
+        OverlayKind::Keybindings => OverlayState::new_keybindings(
+            crate::commands::visible_names(),
+            crate::commands::visible_effective_bindings(&[], &[]),
+        ),
+        OverlayKind::History => OverlayState::new_history(history_rows(), None, None),
+        OverlayKind::Settings => {
+            let mut ov = OverlayState::new(kind, crate::settings::visible_names(), vec![], vec![]);
+            ov.set_secondaries(crate::settings::visible_value_cells(&Default::default()));
+            ov
+        }
+        OverlayKind::Assets => OverlayState::new_assets(vec![orphan("assets/a.png", 1)]),
+        OverlayKind::Rename => OverlayState::new_rename("old.md".to_string()),
+        OverlayKind::InsertLink => {
+            OverlayState::new_link_edit(String::new(), crate::overlay::LinkEditMode::Empty { at: 0 })
+        }
+        OverlayKind::KeepName => OverlayState::new_keep_name(),
+    }
+}
+
+/// ITEM 54 — RUNTIME ROSTER LAW: build a REPRESENTATIVE overlay for EVERY
+/// `OverlayKind` and assert every produced row's `meta.tag()` sits inside
+/// that kind's declared [`OverlayKind::row_meta_roster`] — the RUNTIME half
+/// of the no-wildcard compile-time match (which only forces a NEW kind to
+/// DECLARE a roster, never that its constructors actually HONOR it). Catches
+/// the "forgot to set the metadata, the row silently stayed Plain" class of
+/// bug a pure compile-time sweep can't see.
+#[test]
+fn every_kind_produces_only_its_declared_row_meta_roster() {
+    assert_eq!(OverlayKind::ALL.len(), 18, "the kind roster itself is this sweep's scope");
+    for kind in OverlayKind::ALL {
+        let ov = representative_overlay(kind);
+        let roster = kind.row_meta_roster();
+        assert!(!roster.is_empty(), "{kind:?} must declare at least one RowMeta tag");
+        for row in &ov.rows {
+            let tag = row.meta.tag();
+            assert!(
+                roster.contains(&tag),
+                "{kind:?} produced a row with meta tag {tag:?}, not in its declared roster {roster:?}"
+            );
+        }
+    }
+}
+
+/// ITEM 54 — ROWMETA EXHAUSTIVENESS WITNESS: construct one instance of every
+/// [`RowMeta`] variant and check [`RowMeta::tag`] maps it to the matching
+/// [`RowMetaTag`]. `RowMeta::tag`'s own match is the real no-wildcard
+/// compile-time guard (a future variant fails to compile there until it's
+/// mapped); this witnesses the mapping is actually HONEST, not merely that
+/// it compiles.
+#[test]
+fn row_meta_tag_maps_every_variant_correctly() {
+    assert_eq!(RowMeta::Plain.tag(), RowMetaTag::Plain);
+    assert_eq!(RowMeta::GotoFile { time: "5m ago".to_string() }.tag(), RowMetaTag::GotoFile);
+    assert_eq!(RowMeta::GotoHeading { line: 3 }.tag(), RowMetaTag::GotoHeading);
+    assert_eq!(RowMeta::CommandSetting.tag(), RowMetaTag::CommandSetting);
+    assert_eq!(RowMeta::CommandHidden.tag(), RowMetaTag::CommandHidden);
+    assert_eq!(RowMeta::SpellAdd.tag(), RowMetaTag::SpellAdd);
+    assert_eq!(RowMeta::History { id: "1".to_string(), ts: 0 }.tag(), RowMetaTag::History);
+}
+
+/// ITEM 54 PRESERVATION LAW 2 — Go-to HEADING rows keep their `line` across a
+/// `refilter` (a typed query re-ranks/narrows `rows` into a fresh `items`
+/// view; the line must travel with ITS OWN row, never a neighbor's).
+#[test]
+fn goto_heading_rows_keep_their_line_across_refilter() {
+    let mut ov = OverlayState::new(
+        OverlayKind::Goto,
+        vec!["a.md".to_string(), "b.md".to_string()],
+        vec![],
+        vec![],
+    );
+    ov.attach_headings(vec![("Intro".to_string(), 5), ("Details".to_string(), 42)]);
+    let details_ci = ov.rows.iter().position(|r| r.accept == "Details").unwrap();
+    assert_eq!(ov.rows[details_ci].meta, RowMeta::GotoHeading { line: 42 });
+    // A query tight enough to single out "Details" re-ranks the whole list.
+    for c in "eta".chars() {
+        ov.push(c);
+    }
+    assert!(ov.items.iter().any(|&ci| ci == details_ci), "the Details row survives the query");
+    assert_eq!(
+        ov.rows[details_ci].meta,
+        RowMeta::GotoHeading { line: 42 },
+        "the line stayed with its OWN row across refilter"
+    );
+    let pos = ov.items.iter().position(|&ci| ci == details_ci).unwrap();
+    ov.selected = pos;
+    assert_eq!(ov.selected_line(), Some(42), "selected_line resolves through the survived row");
+}
+
+/// ITEM 54 PRESERVATION LAW 4 — Command palette appended SETTINGS rows keep
+/// their key (accept) + current value (secondary) across a `refilter`, and
+/// [`OverlayState::selected_setting_row`] still resolves the highlighted one
+/// correctly once the query has re-ranked the list.
+#[test]
+fn command_palette_settings_rows_keep_key_and_value_across_refilter() {
+    let mut ov = OverlayState::new_command(
+        crate::commands::visible_names(),
+        crate::commands::visible_effective_bindings(&[], &[]),
+        crate::commands::visible_hidden_mask(false),
+    );
+    ov.attach_settings_rows(
+        crate::settings::palette_names(),
+        crate::settings::palette_value_cells(&Default::default()),
+    );
+    let ci = ov.rows.iter().position(|r| r.accept == "Keymap").unwrap();
+    assert!(matches!(ov.rows[ci].meta, RowMeta::CommandSetting));
+    let value_before = ov.rows[ci].secondary.clone();
+    for c in "keym".chars() {
+        ov.push(c);
+    }
+    assert!(ov.items.iter().any(|&i| i == ci), "the Keymap row survives the query");
+    assert_eq!(ov.rows[ci].secondary, value_before, "the value traveled with its OWN row");
+    ov.selected = ov.items.iter().position(|&i| i == ci).unwrap();
+    let resolved = ov.selected_setting_row().expect("the highlighted row resolves to a SettingRow");
+    assert_eq!(resolved.name, "Keymap");
+}
+
+/// ITEM 54 PRESERVATION LAW 5 — History rows keep their restore `id` + `ts`
+/// across a LENS switch (which rebuilds `items`/`item_sections` from
+/// `rows`) AND a subsequent typed query.
+#[test]
+fn history_rows_keep_id_and_ts_across_lens_switch_and_query() {
+    const DAY: u64 = 86_400_000;
+    let now = 100 * DAY + 5_000;
+    let session_start = 100 * DAY + 3_000;
+    let row = |id: &str, ts: u64, which: &str| crate::history::TimelineRow {
+        when: "x".to_string(),
+        which: which.to_string(),
+        counts: "+0 −0".to_string(),
+        id: id.to_string(),
+        timestamp: ts,
+        pinned: false,
+        name: None,
+    };
+    let rows = vec![
+        row("a", 100 * DAY + 4_000, "fix engine"),
+        row("b", 100 * DAY + 1_000, "edit notes"),
+    ];
+    let mut ov = OverlayState::new_history(rows, Some(now), Some(session_start));
+    let a_ci = ov
+        .rows
+        .iter()
+        .position(|r| matches!(&r.meta, RowMeta::History { id, .. } if id == "a"))
+        .unwrap();
+    ov.cycle_lens(1); // -> Session
+    ov.cycle_lens(-1); // -> back to All
+    for c in "fix".chars() {
+        ov.push(c);
+    }
+    assert!(ov.items.iter().any(|&i| i == a_ci), "row a survives the lens switch + query");
+    assert_eq!(
+        ov.rows[a_ci].meta,
+        RowMeta::History { id: "a".to_string(), ts: 100 * DAY + 4_000 },
+        "id + ts stayed with row a across the lens switch and the query"
+    );
+}
+
+/// ITEM 54 PRESERVATION LAW 6 — Go-to FILE rows keep their OWN relative
+/// "last edited" time; appended HEADING rows always read the constant
+/// `"heading"` kind hint — never each other's cell, before or after a
+/// reorder.
+#[test]
+fn goto_file_rows_keep_their_own_time_and_headings_read_heading() {
+    let mut ov = OverlayState::new(
+        OverlayKind::Goto,
+        vec!["a.md".to_string(), "b.md".to_string()],
+        vec![],
+        vec![],
+    );
+    ov.set_times(vec!["5m ago".to_string(), "2h ago".to_string()]);
+    ov.attach_headings(vec![("Intro".to_string(), 1)]);
+    let strings = ov.item_strings();
+    let times = ov.item_times();
+    let a_pos = strings.iter().position(|s| s == "a.md").unwrap();
+    let b_pos = strings.iter().position(|s| s == "b.md").unwrap();
+    let h_pos = strings.iter().position(|s| s.contains("Intro")).unwrap();
+    assert_eq!(times[a_pos], "5m ago");
+    assert_eq!(times[b_pos], "2h ago");
+    assert_eq!(times[h_pos], "heading");
+    // A query that isolates "a.md" re-ranks the list; its own time must follow.
+    ov.push('a');
+    let strings2 = ov.item_strings();
+    let times2 = ov.item_times();
+    let a_pos2 = strings2.iter().position(|s| s == "a.md").expect("a.md still matches \"a\"");
+    assert_eq!(times2[a_pos2], "5m ago", "a.md's own time survives the reorder");
+}
+
+/// ITEM 54 PRESERVATION LAW 7 — a Command palette row marked
+/// [`RowMeta::CommandHidden`] never appears in `items` (unselectable), but
+/// stays a real entry in `rows` at its ORIGINAL index — the row-index math
+/// `commands::visible_action_of` relies on for every OTHER row stays intact.
+#[test]
+fn command_hidden_rows_never_reach_items_but_stay_in_rows() {
+    let names = crate::commands::visible_names();
+    let n = names.len();
+    assert!(n > 0, "the command catalog is non-empty");
+    let mut hidden = vec![false; n];
+    hidden[0] = true;
+    let hidden_name = names[0].clone();
+    let ov = OverlayState::new_command(names, vec![String::new(); n], hidden);
+    assert_eq!(ov.rows.len(), n, "a hidden row is NOT removed from rows — only from items");
+    assert!(matches!(ov.rows[0].meta, RowMeta::CommandHidden));
+    assert_eq!(ov.rows[0].accept, hidden_name, "index 0 still names the hidden command");
+    assert!(
+        !ov.item_strings().iter().any(|s| s == &hidden_name),
+        "a hidden row never appears in the SELECTABLE items"
+    );
 }

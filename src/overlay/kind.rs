@@ -334,6 +334,49 @@ impl OverlayKind {
         matches!(self, OverlayKind::Settings)
     }
 
+    /// ITEM 54 — which [`super::RowMetaTag`]s this kind's produced rows may carry:
+    /// the CLOSED roster the typed [`super::OverlayRow`] replaced the twelve old
+    /// parallel arrays with. A NO-WILDCARD match: a future kind fails to compile
+    /// here until it declares its roster, mirroring [`Self::accept_disposition`]/
+    /// [`Self::hint_actions`]/[`Self::title`]. Swept at RUNTIME by
+    /// `overlay::tests` (build a representative overlay per kind, assert every
+    /// produced row's `meta.tag()` is in this list) — this match is the
+    /// compile-time half of that law.
+    #[allow(dead_code)] // consumed only by overlay::tests's runtime roster sweep today.
+    pub fn row_meta_roster(self) -> &'static [super::RowMetaTag] {
+        use super::RowMetaTag::*;
+        match self {
+            // Go-to's file rows are ALWAYS `GotoFile` (never bare `Plain` — see
+            // `OverlayState::new_marked`'s kind-gated default); its appended
+            // document-heading rows are `GotoHeading`.
+            OverlayKind::Goto => &[GotoFile, GotoHeading],
+            // The command palette: ordinary rows `Plain`, runtime-gated rows
+            // `CommandHidden`, the union round's appended settings rows
+            // `CommandSetting`.
+            OverlayKind::Command => &[Plain, CommandHidden, CommandSetting],
+            // The spell picker: suggestion rows `Plain`, the one terminal add row
+            // `SpellAdd`.
+            OverlayKind::Spell => &[Plain, SpellAdd],
+            // The history timeline: EVERY row carries its restore id + stamp.
+            OverlayKind::History => &[History],
+            // Every other kind's rows are all `Plain` — no kind-specific payload.
+            OverlayKind::Project
+            | OverlayKind::Browse
+            | OverlayKind::Theme
+            | OverlayKind::Caret
+            | OverlayKind::Dictionary
+            | OverlayKind::CjkLang
+            | OverlayKind::Date
+            | OverlayKind::MoveDest
+            | OverlayKind::Keybindings
+            | OverlayKind::Settings
+            | OverlayKind::Assets
+            | OverlayKind::Rename
+            | OverlayKind::InsertLink
+            | OverlayKind::KeepName => &[Plain],
+        }
+    }
+
     /// True for the FILE/FOLDER pickers whose corpus entries are filesystem paths —
     /// the ones that HIDE dot-prefixed entries by default (with a `Cmd-Shift-.`
     /// reveal toggle). Goto (+ recent-files, same corpus) lists root-relative paths;

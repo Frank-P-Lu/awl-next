@@ -428,7 +428,7 @@ pub fn names() -> Vec<String> {
 /// like [`names`]; see [`visible_value_cells`] for the platform-filtered sibling.
 /// Test-only, like [`names`]: production code (`App::refresh_settings_overlay`)
 /// reads [`visible_value_cells`] instead, so a refresh stays index-coherent with
-/// `ov.corpus` (built from [`visible_names`]) even on a platform that hides a row.
+/// `ov.rows` (built from [`visible_names`]) even on a platform that hides a row.
 #[cfg(test)]
 pub fn value_cells(values: &SettingsValues) -> Vec<String> {
     SETTINGS.iter().map(|r| value_for(r, values)).collect()

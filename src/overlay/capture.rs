@@ -295,15 +295,15 @@ impl OverlayState {
     }
 
     /// SETTINGS: begin inline VALUE editing of the highlighted row. Seeds the typed
-    /// `input` from the row's CURRENT value cell (`bindings[ci]`) so the edit starts
-    /// from the shown value (backspace to change it), and stashes it as `orig` for a
-    /// clean cancel. `key`/`name` come from the single-owner [`crate::settings::value_key`]
-    /// map. A no-op if no row matches the filter.
+    /// `input` from the row's CURRENT value cell (`rows[ci].secondary`) so the edit
+    /// starts from the shown value (backspace to change it), and stashes it as
+    /// `orig` for a clean cancel. `key`/`name` come from the single-owner
+    /// [`crate::settings::value_key`] map. A no-op if no row matches the filter.
     pub fn start_value_edit(&mut self, key: String, name: String) {
         let Some(row) = self.selected_corpus_index() else {
             return;
         };
-        let orig = self.bindings.get(row).cloned().unwrap_or_default();
+        let orig = self.rows.get(row).map(|r| r.secondary.clone()).unwrap_or_default();
         self.value_edit = Some(ValueEdit { row, name, key, input: TextBox::seeded(&orig), orig });
     }
 
@@ -315,8 +315,8 @@ impl OverlayState {
             return;
         };
         let (row, text) = (ve.row, ve.input.text().to_string());
-        if let Some(cell) = self.bindings.get_mut(row) {
-            *cell = text;
+        if let Some(r) = self.rows.get_mut(row) {
+            r.secondary = text;
         }
     }
 
@@ -403,8 +403,8 @@ impl OverlayState {
     /// stashed `orig` is the source of truth). A no-op when no value edit is active.
     pub fn value_edit_cancel(&mut self) {
         if let Some(ve) = self.value_edit.take() {
-            if let Some(cell) = self.bindings.get_mut(ve.row) {
-                *cell = ve.orig;
+            if let Some(r) = self.rows.get_mut(ve.row) {
+                r.secondary = ve.orig;
             }
         }
     }
@@ -436,8 +436,8 @@ impl OverlayState {
             return;
         };
         let text = re.input.text().to_string();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
+        if let Some(row) = self.rows.get_mut(0) {
+            row.accept = text;
         }
     }
 
@@ -540,8 +540,8 @@ impl OverlayState {
             return;
         };
         let text = le.input.text().to_string();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
+        if let Some(row) = self.rows.get_mut(0) {
+            row.accept = text;
         }
     }
 
@@ -640,8 +640,8 @@ impl OverlayState {
             return;
         };
         let text = ke.input.text().to_string();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
+        if let Some(row) = self.rows.get_mut(0) {
+            row.accept = text;
         }
     }
 
