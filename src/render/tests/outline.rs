@@ -256,6 +256,98 @@ fn outline_collapsed_parent_retained_descendant_suppressed_with_a_state_marker()
     crate::page::set_measure(80);
 }
 
+/// item 74 — THE CLICK-TARGET FOLD-SPACE BUG, FIXED: `App::outline_click`
+/// (`app/input/mouse.rs`) used to hand `outline_hit_line`'s row `line` — FOLD-
+/// FILTERED space, as `section_b.line == 5` above proves — straight to
+/// `jump_to_line`, which expects a RAW document line (the same contract Go-to's
+/// Headings lens jumps by, off the unfiltered `buffer.text()` parse). So clicking a
+/// heading sitting AFTER an active fold elsewhere landed on the wrong, filtered-
+/// index line. The fix remaps the hit-tested row through `Buffer::visible_line_to_
+/// full` (`fold::visible_to_full`) before jumping — the SAME owner every other
+/// click-to-rope seam already routes through (`hit_test_char`, `fold_tail_hit`).
+///
+/// Reuses the exact fixture `outline_collapsed_parent_retained_descendant_
+/// suppressed_with_a_state_marker` pins above (fold `## Section A`, hiding `###
+/// Deep`; `## Section B` unaffected but its FILTERED line shifts to 5) and drives
+/// the REAL `outline_draw_report`/`outline_hit_line` geometry — not just the pure
+/// fold arithmetic — to get the row `App::outline_click` would receive, then proves
+/// the mapped-back line is Section B's TRUE raw document line. Also asserts the
+/// no-fold case is the identity, so today's unfolded click is byte-identical.
+#[test]
+fn outline_click_target_maps_the_fold_filtered_row_back_to_the_raw_heading_line() {
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping outline_click_target_maps_fold_filtered: no wgpu adapter");
+        return;
+    };
+    let _o = crate::testlock::serial();
+    let _g = crate::testlock::serial();
+    crate::outline::set_outline_on(true);
+    crate::page::set_measure(40);
+    crate::page::set_page_on(true);
+    p.set_size(1900.0, 900.0);
+    // 0 "# Title" / 4 "## Section A" / 8 "### Deep" / 10 "## Section B" — the same
+    // fixture the collapsed-parent test above uses.
+    let text = "# Title\n\nprose\n\n## Section A\n\nbody\n\n### Deep\n\n## Section B\n\nmore body\n";
+
+    // Ground truth: Section B's RAW document line, off the UNFOLDED heading parse —
+    // never a hand-counted magic number.
+    let raw_section_b = crate::markdown::headings(text)
+        .into_iter()
+        .find(|h| h.text == "Section B")
+        .expect("fixture has a Section B heading")
+        .line;
+    assert_eq!(raw_section_b, 10, "fixture self-check: Section B sits at raw line 10");
+
+    // Fold "## Section A" (raw line 4): hides raw lines 5..10 (5 lines, "### Deep"
+    // among them). Section B is UNAFFECTED content-wise, but its FILTERED index
+    // shifts down by those 5 hidden lines.
+    let levels = crate::fold::heading_levels(text, true);
+    let folds: std::collections::BTreeSet<usize> = [4].into_iter().collect();
+    let hidden = crate::fold::hidden_lines(&levels, &folds);
+    let tails = crate::fold::fold_tails(&levels, &folds);
+
+    let mut view = view_md(text, 0, 0);
+    crate::fold::apply_to_view(&mut view, &hidden, &tails);
+    p.set_view(&view);
+
+    // Real geometry: the drawn row for "Section B" — EXACTLY the `line`
+    // `App::outline_click` receives from `outline_hit_line` on a real click.
+    let lines = p.outline_draw_report(900).expect("outline draws");
+    let section_b_row = lines
+        .iter()
+        .find(|r| r.label.contains("Section B"))
+        .expect("Section B row present (unaffected by the fold)");
+    assert_eq!(section_b_row.line, 5, "fixture self-check: filtered row line, matching the test above");
+    assert_ne!(
+        section_b_row.line, raw_section_b,
+        "PRE-FIX EVIDENCE: the row's reported line is fold-filtered, not raw — must differ for the bug to be real"
+    );
+
+    // THE FIX: mapping the filtered row line back through `visible_to_full` (the
+    // exact owner `App::outline_click` now routes through) recovers the TRUE raw
+    // document line — the correct click-to-jump target, regardless of the fold
+    // active earlier in the document.
+    assert_eq!(
+        crate::fold::visible_to_full(&hidden, section_b_row.line),
+        raw_section_b,
+        "the mapped-back line must be Section B's TRUE raw document line"
+    );
+
+    // NO-FOLD CASE UNCHANGED: with nothing folded, the mapping is the identity —
+    // the filtered line already equals raw — so an unfolded click's resolved jump
+    // target is byte-identical to before this fix.
+    let no_hidden = crate::fold::hidden_lines(&levels, &std::collections::BTreeSet::new());
+    assert_eq!(
+        crate::fold::visible_to_full(&no_hidden, raw_section_b),
+        raw_section_b,
+        "unfolded: the mapping is the identity, so today's no-fold click target is unchanged"
+    );
+
+    crate::outline::set_outline_on(false);
+    crate::page::set_page_on(false);
+    crate::page::set_measure(80);
+}
+
 /// GRACEFUL HIDE (NARROWEST tier, post-ADAPTIVE-COLUMN): below the
 /// [`rowlayout::OUTLINE_MIN_CHARS`] margin floor the whole outline still vanishes
 /// rather than draw a useless sliver — exactly as the gutter collapses on a narrow

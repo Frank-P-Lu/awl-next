@@ -202,6 +202,24 @@ impl App {
         self.buffer.reveal_placement();
     }
 
+    /// item 74 FIX: resolve an Outline row's hit-tested line (as
+    /// `TextPipeline::outline_hit_line` returns it) to the RAW document line
+    /// `jump_to_line` must receive. `outline_hit_line`'s line is FOLD-FILTERED
+    /// space — the render shapes the fold-filtered document, and `outline_headings`
+    /// is distilled from that filtered text (see its own doc) — so a heading sitting
+    /// after an active fold elsewhere in the document reports an index shifted by
+    /// every hidden line above it. `jump_to_line` (like Go-to's Headings lens, which
+    /// jumps by the RAW `buffer.text()` parse) expects a raw document line, so the
+    /// hit-tested line is remapped here through `visible_line_to_full` — the SAME
+    /// owner `hit_test_char`/`fold_tail_hit` already route every other click-to-rope
+    /// seam through. The identity when nothing is folded, so a no-fold click's target
+    /// is byte-identical to before this fix. Split out of `outline_click` as its own
+    /// method so this pure line-space remap is unit-testable without a live GPU hit
+    /// test (`outline_click`'s pixel half is live-only).
+    pub(in crate::app) fn outline_row_target_line(&self, filtered_line: usize) -> usize {
+        self.buffer.visible_line_to_full(filtered_line)
+    }
+
     /// CLICK-TO-JUMP on a persistent MARGIN OUTLINE row: hit-test the pointer against
     /// the outline's OWN row geometry (`TextPipeline::outline_hit_line`, which folds in
     /// the whole shown/hidden gate — off / non-page / non-md / too-narrow all return
@@ -218,7 +236,7 @@ impl App {
             .as_ref()
             .and_then(|g| g.pipeline.outline_hit_line(px, py, g.config.height));
         if let Some(line) = line {
-            self.jump_to_line(line);
+            self.jump_to_line(self.outline_row_target_line(line));
             true
         } else {
             false
