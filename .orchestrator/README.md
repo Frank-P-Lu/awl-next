@@ -7,13 +7,12 @@ human collaborator all read and update the same files here.
 - `ROADMAP.md` remains the product-direction document; do not duplicate it here.
 - Tool-specific paths may point here for compatibility, but must not carry a
   second writable copy of the queue.
-- Preserve active queue entries and reports when changing tools or worktrees.
+- Preserve active queue entries when changing tools or worktrees.
 
 **Layout**
 - `queue.md` — the canonical execution queue. Siblings support it; never carry a second writable copy.
-- `reports/` — archived reports + superseded queues (`polish-queue.md`, the dated `*-REPORT` files), kept for reference, not active.
 
-**Compat symlinks** so every tool's path resolves to this one dir: `.claude/orchestrator` and `.codex/orchestrator` both → `../.orchestrator`. `CLAUDE.md` and `AGENTS.md` point at `.orchestrator/queue.md`.
+**Compat symlinks** so every tool's path resolves to this one dir: `.claude/orchestrator` and `.codex/orchestrator` both → `../.orchestrator`. `CLAUDE.md` / `AGENTS.md` reference the shared board contract.
 
 ## Claiming protocol (multi-tool coordination)
 
@@ -73,6 +72,11 @@ How a brainstorm/interview session ("awl design"-type) turns talk into work:
 5. **The user's notes (private, outside the repo) are the user's space.**
    Agents READ questionnaires and notes there when directed; they NEVER write
    there. The machine-side record lives in this repo.
+6. **One-off reports do not become a second archive.** Harvest actionable work
+   into `queue.md`, standing invariants into `CLAUDE.md` or the matching
+   technical doc, and product/taste laws into the contract docs. The working
+   report stays in its task output; git preserves any deliberately committed
+   history. Do not accumulate a `reports/` directory beside the live board.
 
 ## Cooking: parallelize by clash, run unattended (user rule)
 
@@ -99,6 +103,33 @@ active quota budget, not raw fan-out:
    genuinely user-gated items (a permission grant, an approval, a taste call the
    user reserved) wait; everything else proceeds. "If you get stuck, do
    everything else before pausing to wait for my say" (user).
+
+## Push trains and remote CI (user rule)
+
+Local gates protect a commit; remote CI protects `main`. Treat them as two
+separate gates:
+
+1. **Push small trains, not individual churn or giant batches.** Integrate 2–3
+   locally green build items serially, then push that mini-train. Queue/docs-only
+   commits ride the next train, or push at the end of a session when no build
+   train is coming. Push immediately for a CI repair, serious correctness or
+   data-loss fix, user-requested checkpoint, handoff, or release preparation.
+2. **One remote train at a time.** After every push, wait for the resulting
+   non-cancelled `main` CI run to finish before integrating the next train into
+   local `main`. Independent workers keep cooking in their worktrees while CI
+   runs; only the merge train waits. Never push over an in-flight run merely to
+   cancel it.
+3. **Red CI is live queue state.** A failing `main` run creates or updates the
+   top-priority `CI RED` queue item with the run URL, failing job/test, and first
+   known bad commit. Assign one Sonnet worker immediately. Other worktrees may
+   continue, but nothing else integrates into `main` until the fixing push is
+   remotely green. Cancelled superseded runs do not count.
+4. **Reconcile at durable boundaries.** Before dispatch, after compaction or a
+   tool/task handoff, and before answering a queue/status question, compare the
+   board with actual ahead/dirty worktrees and the latest non-cancelled `main`
+   CI result. The live orchestrator UI/scratch remains the detailed runtime
+   view; the board records only enough owner/branch/phase state for another
+   orchestrator to recover honestly.
 
 ## Execution hygiene
 
