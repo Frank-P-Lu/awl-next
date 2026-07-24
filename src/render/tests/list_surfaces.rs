@@ -219,12 +219,18 @@ fn topright_card_box_is_right_anchored_and_on_canvas_across_the_width_sweep() {
                 right <= ww - floor + 0.01,
                 "{ctx}: right edge {right} keeps a floor margin inside {ww}"
             );
-            // WIDE: the card's RIGHT edge sits one full edge inset in from the
-            // canvas right (the mirror of TopLeft's left inset).
-            if desired + 2.0 * chrome::CARD_EDGE_INSET <= ww {
+            // WIDE: the card's RIGHT edge sits one full interior-rail inset in from
+            // the canvas right (item 67 — the mirror of TopLeft's left inset). Only
+            // checked once the window is comfortably wide enough that NEITHER the
+            // width clamp (`desired <= ww - 2*floor`) NOR the rail's own floor
+            // (`rail >= floor`) is biting — a narrow `ww` can make the ideal
+            // one-third rail collapse to 0, which the general on-canvas asserts
+            // above already cover.
+            let rail = chrome::overlay_rail_inset(ww);
+            if rail >= floor && desired + rail + floor <= ww {
                 assert!(
-                    (right - (ww - chrome::CARD_EDGE_INSET)).abs() < 0.01,
-                    "{ctx}: wide window pins the right edge one inset in, got right={right}"
+                    (right - (ww - rail)).abs() < 0.01,
+                    "{ctx}: wide window pins the right edge one rail inset in, got right={right}"
                 );
             }
         }
@@ -772,10 +778,16 @@ fn bars_query_caret_overlaps_the_query_text() {
     p.sync_theme();
     crate::render::set_list_style_test_override(Some(bars(6.0, 8.0, 24.0)));
     // The full-bleed premise is a LEFT-placed card (pre-anchor default); pin the
-    // anchor to TopLeft so the query line sits at the left margin where this test's
-    // pixel windows expect it (the DEFAULT anchor is now `TopCenter` — COMPOSITION-C2 —
-    // which centres the card; the caret-Y-overlaps-text law under test is anchor-agnostic).
+    // anchor to TopLeft so the query line sits at the left INTERIOR RAIL where this
+    // test's pixel windows expect it (the DEFAULT anchor is now `TopCenter` —
+    // COMPOSITION-C2 — which centres the card; the caret-Y-overlaps-text law under
+    // test is anchor-agnostic). The pixel windows below are offset by item 67's
+    // rail inset (the card's left edge moved from the old flat ~28px edge-hug to
+    // the wider interior-rail inset at this window width).
     crate::render::set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+    let card_left = chrome::overlay_rail_inset(w as f32);
+    let old_card_left = 28.0_f32; // the pre-item-67 flat edge-hug this test was tuned against
+    let dx = (card_left - old_card_left).round() as i64;
     let mut v = view("hello world\n", 0, 0);
     v.overlay_active = true;
     v.overlay_title = "themes";
@@ -794,7 +806,7 @@ fn bars_query_caret_overlaps_the_query_text() {
     let is_amber = |q: [u8; 4]| q[0] > 180 && q[1] > 100 && q[1] < 200 && q[2] < 110;
     let (mut a_y0, mut a_y1) = (i64::MAX, i64::MIN);
     for y in 40..140 {
-        for x in 110..175 {
+        for x in (110 + dx)..(175 + dx) {
             if is_amber(idx(x, y)) {
                 a_y0 = a_y0.min(y);
                 a_y1 = a_y1.max(y);
@@ -802,16 +814,16 @@ fn bars_query_caret_overlaps_the_query_text() {
         }
     }
     assert!(a_y0 <= a_y1, "amber query caret not found near the query line");
-    // The query GLYPH band: pixels in the title text x-range (40..108) that are
-    // notably brighter than the dark room ground.
-    let ground = idx(700, 60); // empty room, above the first bar
+    // The query GLYPH band: pixels in the title text x-range (shifted by the same
+    // rail-inset delta) that are notably brighter than the dark room ground.
+    let ground = idx(700 + dx, 60); // empty room, above the first bar
     let bright = |q: [u8; 4]| {
         let d = |c: usize| (q[c] as i64 - ground[c] as i64).max(0);
         d(0) + d(1) + d(2) > 45
     };
     let (mut t_y0, mut t_y1) = (i64::MAX, i64::MIN);
     for y in 40..140 {
-        for x in 40..108 {
+        for x in (40 + dx)..(108 + dx) {
             if bright(idx(x, y)) {
                 t_y0 = t_y0.min(y);
                 t_y1 = t_y1.max(y);

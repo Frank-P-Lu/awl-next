@@ -69,20 +69,22 @@ fn anchor_of(name: &str) -> theme::CardAnchor {
         .card_anchor
 }
 
-const INSET: f32 = chrome::CARD_EDGE_INSET;
 const WW: f32 = 1200.0;
 
-/// Assert the card `[x, _, w, _]` hugs the rail its `anchor` names.
+/// Assert the card `[x, _, w, _]` hugs the rail its `anchor` names — item 67's
+/// interior-rail inset, cw-INDEPENDENT (a pure function of `WW` alone), so both
+/// arms below read the exact SAME inset regardless of the card's own width.
 fn assert_on_rail(rect: [f32; 4], anchor: theme::CardAnchor, world: &str) {
     let [cx, _, cw, _] = rect;
+    let inset = chrome::overlay_rail_inset(WW);
     match anchor {
         theme::CardAnchor::TopLeft => assert!(
-            (cx - INSET).abs() < 0.5,
-            "{world} (TopLeft): card left must hug the left edge (one inset in); got x={cx}"
+            (cx - inset).abs() < 0.5,
+            "{world} (TopLeft): card left must hug the left rail (one inset in); got x={cx}"
         ),
         theme::CardAnchor::TopRight => assert!(
-            ((cx + cw) - (WW - INSET)).abs() < 0.5,
-            "{world} (TopRight): card right must hug the right edge; got x+w={}",
+            ((cx + cw) - (WW - inset)).abs() < 0.5,
+            "{world} (TopRight): card right must hug the right rail; got x+w={}",
             cx + cw
         ),
         theme::CardAnchor::TopCenter => {

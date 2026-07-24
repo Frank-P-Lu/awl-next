@@ -1271,11 +1271,15 @@ fn overlay_card_spans_nearly_the_full_narrow_window() {
     assert!((w - (464.0 - 2.0 * floor)).abs() < 0.5, "narrow card fills the window: w={w}");
     assert!((x - floor).abs() < 0.5, "re-centered to the floor pad: x={x}");
 
-    // Default canvas: the tightened flat width cap (item 3), one edge inset in.
+    // Default canvas: the tightened flat width cap (item 3), one interior-rail
+    // inset in (item 67 — the card centers near the viewport's one-third mark).
     p.set_size(1200.0, 800.0);
     let [x, _y, w, _h] = p.overlay_card_rect().expect("overlay card");
     assert!((w - chrome::CARD_MAX_W).abs() < 0.5, "wide card holds the tightened cap: w={w}");
-    assert!((x - chrome::CARD_EDGE_INSET).abs() < 0.5, "one full edge inset in: x={x}");
+    assert!(
+        (x - chrome::overlay_rail_inset(1200.0)).abs() < 0.5,
+        "one full rail inset in: x={x}"
+    );
     set_card_anchor_test_override(None);
 }
 
@@ -1843,9 +1847,10 @@ fn overlay_card_anchor_is_data_center_default_top_left_for_statement_worlds() {
         return;
     };
     let _g = crate::testlock::serial();
-    // The composition round widened the flush 12px hug to a real edge inset.
-    let edge_inset = chrome::CARD_EDGE_INSET;
+    // Item 67: the interior-rail resolver, a real generous rail inset (not the
+    // old flush 12px hug, nor the old flat ~28px edge-hug).
     let width = 1200u32;
+    let edge_inset = chrome::overlay_rail_inset(width as f32);
 
     let mut v = view("hello\n", 0, 0);
     v.overlay_active = true;
@@ -1853,11 +1858,11 @@ fn overlay_card_anchor_is_data_center_default_top_left_for_statement_worlds() {
     v.overlay_selected = 0;
 
     // TOP-LEFT is reachable as per-world DATA (the statement/asymmetric worlds):
-    // the card's left edge sits one EDGE INSET in from the canvas edge.
+    // the card's left edge sits one INTERIOR-RAIL INSET in from the canvas edge.
     set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
     p.set_view(&v);
     let [x_tl, _y, _w, _h] = p.overlay_card_rect().expect("an open card");
-    assert!((x_tl - edge_inset).abs() < 0.01, "top-left anchor hugs the edge inset: x={x_tl}");
+    assert!((x_tl - edge_inset).abs() < 0.01, "top-left anchor hugs the rail inset: x={x_tl}");
 
     // COMPOSITION-C2 DEFAULT: TOP-CENTER — the calm/symmetric temperament most
     // worlds carry now re-centers the card under the top third.

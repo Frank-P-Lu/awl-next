@@ -11,8 +11,10 @@
 //! probes, so appearance claims are arithmetic over what the draw path lays out):
 //!
 //! 1. **ONE right edge** — a plain right-anchored card AND a secondary-bearing one
-//!    share the SAME right edge (one full `CARD_EDGE_INSET` in from the window edge);
-//!    the group grows LEFTWARD as content widens, never off the right rail.
+//!    share the SAME right edge (one full interior-rail inset in from the window
+//!    edge, item 67 — the inset is a pure function of the window width alone,
+//!    never the card's own content width); the group grows LEFTWARD as content
+//!    widens, never off the right rail.
 //! 2. **content-hug, no dead middle** — a right-anchored card is far NARROWER than
 //!    the wide `CARD_MAX_W` a left/center card holds, and the widest primary plate
 //!    sits right up against the group's right edge (no sprawling gap).
@@ -81,7 +83,7 @@ fn plain_and_secondary_right_anchored_cards_share_one_right_edge() {
     let (sec_right, sec_w) =
         right_edge(&mut p, &right_flat(&items, &["C-x", "C-c", "M-x"]));
 
-    let want = w as f32 - chrome::CARD_EDGE_INSET;
+    let want = w as f32 - chrome::overlay_rail_inset(w as f32);
     assert!(
         (plain_right - want).abs() < 0.5,
         "plain right-anchored card hugs the right edge: right={plain_right}, want {want}"
