@@ -44,31 +44,6 @@ const DIFF_PANEL_TOP: f32 = 8.0;
 /// `prepare_diff_panel`.)
 const DIFF_PANEL_BOTTOM: f32 = 14.0;
 
-/// How much of the float trio draws around a summoned card's opaque fill — the
-/// ONE elevation vocabulary every [`set_float_quads`] caller names explicitly
-/// (no bare bool a new panel can pass without thinking).
-///
-/// DARK-DEPTH OPTION C (decided 2026-07-22): this used to be a THREE-way
-/// choice (`Shadowed` / `Rimmed` / `Flat`) — `Shadowed` drew a translucent
-/// `base_content`-ink drop-shadow quad behind+below the card, `Rimmed` drew
-/// only the raised border. The drop-shadow tone was ALWAYS the world's own
-/// ink (near-white on a dark world), so on Currawong/Mangrove/etc. the
-/// "shadow" measurably BRIGHTENED the ground into a pale slab (+0.12..0.25
-/// luminance) instead of receding it — the exact bug the popover (see
-/// `popover.rs`) and the diff panel (`prepare_diff_panel` below) had already
-/// dodged by hand-picking `Rimmed`. DESIGN §5 says the quiet part out loud —
-/// "no drop-shadows… a thin value step does the work" — so the shadow quad is
-/// now RETIRED OUTRIGHT, for every world, not just the dark ones (a world
-/// that wants a stronger edge already carries `RenderCaps::elevation ==
-/// Elevation::Bordered`, a data knob, not a shadow). That collapses the old
-/// `Shadowed` and `Rimmed` arms into one identical shape, so they're merged:
-/// `Rimmed` is now the ONLY "elevated" style, drawn by every large summoned
-/// panel that used to ask for `Shadowed` (overlay cards, which-key, HUD,
-/// menus, the caret/spell float) as well as the popover / diff panel that
-/// already asked for it. `set_float_quads` still takes a `shadow` pipeline
-/// (the fields aren't deleted this round — a further cleanup is logged, not
-/// blocking) but never uploads an instance to it, for any elevation, on any
-/// world.
 /// ITEM 70's PRINTED-CARD dot texture, resolved to PHYSICAL px + a concrete
 /// sRGBA ink at the ONE call site that ever builds one
 /// ([`TextPipeline::overlay_draw_card`]'s `ListBacking::Card` arms) — the
@@ -108,6 +83,31 @@ fn awl_card_caps_force() -> &'static Option<String> {
     ONCE.get_or_init(|| std::env::var("AWL_CARD_CAPS_FORCE").ok())
 }
 
+/// How much of the float trio draws around a summoned card's opaque fill — the
+/// ONE elevation vocabulary every [`set_float_quads`] caller names explicitly
+/// (no bare bool a new panel can pass without thinking).
+///
+/// DARK-DEPTH OPTION C (decided 2026-07-22): this used to be a THREE-way
+/// choice (`Shadowed` / `Rimmed` / `Flat`) — `Shadowed` drew a translucent
+/// `base_content`-ink drop-shadow quad behind+below the card, `Rimmed` drew
+/// only the raised border. The drop-shadow tone was ALWAYS the world's own
+/// ink (near-white on a dark world), so on Currawong/Mangrove/etc. the
+/// "shadow" measurably BRIGHTENED the ground into a pale slab (+0.12..0.25
+/// luminance) instead of receding it — the exact bug the popover (see
+/// `popover.rs`) and the diff panel (`prepare_diff_panel` below) had already
+/// dodged by hand-picking `Rimmed`. DESIGN §5 says the quiet part out loud —
+/// "no drop-shadows… a thin value step does the work" — so the shadow quad is
+/// now RETIRED OUTRIGHT, for every world, not just the dark ones (a world
+/// that wants a stronger edge already carries `RenderCaps::elevation ==
+/// Elevation::Bordered`, a data knob, not a shadow). That collapses the old
+/// `Shadowed` and `Rimmed` arms into one identical shape, so they're merged:
+/// `Rimmed` is now the ONLY "elevated" style, drawn by every large summoned
+/// panel that used to ask for `Shadowed` (overlay cards, which-key, HUD,
+/// menus, the caret/spell float) as well as the popover / diff panel that
+/// already asked for it. `set_float_quads` still takes a `shadow` pipeline
+/// (the fields aren't deleted this round — a further cleanup is logged, not
+/// blocking) but never uploads an instance to it, for any elevation, on any
+/// world.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(in crate::render) enum FloatElevation {
     /// Raised border + card, no shadow — every "elevated" summoned float
@@ -515,6 +515,7 @@ impl TextPipeline {
     /// structurally allowed to be the real owner, so its park call can never
     /// race the caret-preview panel / spell popup / search panel. "Summoned,
     /// not furniture" (DESIGN §5).
+    ///
     /// `chamfer_px`/`texture` (item 70): `0.0`/`None` for every non-card
     /// caller (the caret-style preview panel, the search panel, the format
     /// popover — byte-identical); the SPELL POPUP arm of `overlay_draw_card`
