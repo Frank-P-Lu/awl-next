@@ -1,8 +1,12 @@
 # awl — live build queue
 
 > Live execution state only. Completed and superseded work is in git history
-> (`git log -p .orchestrator/queue.md`) and `.orchestrator/reports/`. Protocol,
-> claiming, worktrees, and execution hygiene live in `.orchestrator/README.md`.
+> (`git log -p .orchestrator/queue.md`). Protocol, claiming, worktrees, and
+> execution hygiene live in `.orchestrator/README.md`.
+
+## CI RED — merge train paused
+
+75. **Linux CI fails the item-72 blank-line bullet pixel witness on every pushed main after the last green train.** The first red main commit is `0ff551b`; the latest inspected run is [30053553208](https://github.com/Frank-P-Lu/awl-next/actions/runs/30053553208). All 2,749 unit tests pass, then `blank_line_after_off_cursor_empty_bullet_matches_an_ordinary_blank_line` reports `Magpie: bug caret should land on line 2`, actual sidecar line `0`. Diagnose the Linux capture/replay setup and the test's caret-placement assumption before changing product behavior; do not weaken the pixel law or special-case Magpie. Reproduce on the CI-shaped Linux path, add the narrowest deterministic regression, and require the fixing push to complete remotely green. Independent workers may continue in worktrees, but items 64 and 74 do not integrate until this clears. **TOP PRIORITY · SONNET · DISPATCH-READY.**
 
 ## Ready — current user-visible wave
 
@@ -45,7 +49,6 @@
 
 ## Monitoring — non-blocking
 
-- **CI soak acceptance:** item 53’s fix is landed. The first post-fix main run is green ([run 30006896158](https://github.com/Frank-P-Lu/awl-next/actions/runs/30006896158)); two more consecutive green main runs complete the promised 3-run acceptance.
 - **Hands-on checks still useful:** Dawn/Bilby world feel; writer-diff panel/Tab + zoom readout; phantom image resize handle; upward scrolling past images in release; right-click Add-to-dictionary summon; 2px Wagtail stipple taste.
 - **GPU memory:** no action unless the 6 GB symptom recurs; then probe the live surface with the window foregrounded.
 
