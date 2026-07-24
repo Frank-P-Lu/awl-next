@@ -246,7 +246,7 @@ fn every_settings_toggle_row_signals_its_own_setting_toggle_key() {
             row.name
         );
         let eff = settings_drive(&mut overlay, &Action::Newline);
-        let want_key = crate::settings::toggle_key(row.name).expect("a Toggle row always has a key");
+        let want_key = crate::settings::toggle_key(row.id).expect("a Toggle row always has a key");
         assert_eq!(
             eff,
             Effect::SettingToggle { key: want_key.to_string() },
@@ -278,7 +278,7 @@ fn command_overlay_with_settings() -> OverlayState {
         crate::commands::visible_hidden_mask(false),
     );
     ov.attach_settings_rows(
-        crate::settings::palette_names(),
+        crate::settings::palette_rows(),
         crate::settings::palette_value_cells(&Default::default()),
     );
     ov
@@ -412,9 +412,10 @@ fn palette_settings_picker_row_opens_sub_picker_with_command_breadcrumb() {
 #[test]
 fn covered_settings_row_is_absent_from_the_palette_corpus() {
     let ov = command_overlay_with_settings();
-    for (row_name, cmd_name) in crate::settings::COVERED_BY {
-        let row_count = ov.rows.iter().filter(|r| r.accept.as_str() == *row_name).count();
-        if row_name == cmd_name {
+    for (row_id, cmd_name) in crate::settings::COVERED_BY {
+        let row_name = crate::settings::row_of(*row_id).name;
+        let row_count = ov.rows.iter().filter(|r| r.accept.as_str() == row_name).count();
+        if row_name == *cmd_name {
             assert_eq!(row_count, 1, "same-named command/settings doors must collapse to one row");
         } else {
             assert_eq!(

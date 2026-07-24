@@ -1911,7 +1911,7 @@ fn representative_overlay(kind: OverlayKind) -> OverlayState {
             }
             let mut ov = OverlayState::new_command(names, vec![String::new(); n], hidden);
             ov.attach_settings_rows(
-                crate::settings::palette_names(),
+                crate::settings::palette_rows(),
                 crate::settings::palette_value_cells(&Default::default()),
             ); // touches CommandSetting
             ov
@@ -1971,7 +1971,10 @@ fn row_meta_tag_maps_every_variant_correctly() {
     assert_eq!(RowMeta::Plain.tag(), RowMetaTag::Plain);
     assert_eq!(RowMeta::GotoFile { time: "5m ago".to_string() }.tag(), RowMetaTag::GotoFile);
     assert_eq!(RowMeta::GotoHeading { line: 3 }.tag(), RowMetaTag::GotoHeading);
-    assert_eq!(RowMeta::CommandSetting.tag(), RowMetaTag::CommandSetting);
+    assert_eq!(
+        RowMeta::CommandSetting { id: crate::settings::SettingId::Keymap }.tag(),
+        RowMetaTag::CommandSetting
+    );
     assert_eq!(RowMeta::CommandHidden.tag(), RowMetaTag::CommandHidden);
     assert_eq!(RowMeta::SpellAdd.tag(), RowMetaTag::SpellAdd);
     assert_eq!(RowMeta::History { id: "1".to_string(), ts: 0 }.tag(), RowMetaTag::History);
@@ -2018,11 +2021,11 @@ fn command_palette_settings_rows_keep_key_and_value_across_refilter() {
         crate::commands::visible_hidden_mask(false),
     );
     ov.attach_settings_rows(
-        crate::settings::palette_names(),
+        crate::settings::palette_rows(),
         crate::settings::palette_value_cells(&Default::default()),
     );
     let ci = ov.rows.iter().position(|r| r.accept == "Keymap").unwrap();
-    assert!(matches!(ov.rows[ci].meta, RowMeta::CommandSetting));
+    assert!(matches!(ov.rows[ci].meta, RowMeta::CommandSetting { id } if id == crate::settings::SettingId::Keymap));
     let value_before = ov.rows[ci].secondary.clone();
     for c in "keym".chars() {
         ov.push(c);

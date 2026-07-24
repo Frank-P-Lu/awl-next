@@ -220,7 +220,7 @@ fn every_settings_toggle_row_dispatches_live_and_flips_its_value() {
         )
     };
     for row in &toggle_rows {
-        let key = crate::settings::toggle_key(row.name).expect("a Toggle row always has a key");
+        let key = crate::settings::toggle_key(row.id).expect("a Toggle row always has a key");
         let values0 = gather(&app);
         let before = crate::settings::value_for(row, &values0);
 
@@ -267,7 +267,7 @@ fn every_settings_toggle_row_dispatches_live_and_flips_its_value() {
 #[test]
 fn settings_corpus_includes_the_keymap_row() {
     assert!(crate::settings::visible_names().contains(&"Keymap".to_string()));
-    assert_eq!(crate::settings::toggle_key("Keymap"), Some("keymap"));
+    assert_eq!(crate::settings::toggle_key(crate::settings::SettingId::Keymap), Some("keymap"));
 }
 
 #[test]

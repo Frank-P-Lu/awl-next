@@ -1009,7 +1009,7 @@ fn dispatch_settings_row(
         // cell. A row with no key (shouldn't happen for a Toggle) is a calm no-op
         // rather than a signal.
         crate::settings::SettingKind::Toggle => {
-            let key = crate::settings::toggle_key(row.name).expect(
+            let key = crate::settings::toggle_key(row.id).expect(
                 "Toggle row always resolves its config key — settings law \
                  every_toggle_has_a_config_key_and_nothing_else_does",
             );
@@ -1022,7 +1022,7 @@ fn dispatch_settings_row(
         // builds it from the live globals (theme/caret/dictionary/keybindings), so a
         // commit reflects in the value cell when the breadcrumb re-summons.
         crate::settings::SettingKind::Picker | crate::settings::SettingKind::Submenu => {
-            let target = crate::settings::sub_overlay(row.name).expect(
+            let target = crate::settings::sub_overlay(row.id).expect(
                 "Picker/Submenu row always resolves its sub-overlay — settings law \
                  pickers_and_submenus_open_a_sub_overlay_and_nothing_else_does",
             );
@@ -1037,9 +1037,9 @@ fn dispatch_settings_row(
         // door without duplicating its mail/crash-marker machinery.
         crate::settings::SettingKind::Action => {
             *ctx.overlay = None;
-            match row.name {
-                "Report a Problem" => Effect::ReportProblem,
-                "Edit config as text" => Effect::OpenSettings,
+            match row.id {
+                crate::settings::SettingId::ReportProblem => Effect::ReportProblem,
+                crate::settings::SettingId::EditConfigAsText => Effect::OpenSettings,
                 _ => Effect::None,
             }
         }
@@ -1048,7 +1048,7 @@ fn dispatch_settings_row(
         // own modal intercept, checked above); the caller then owns the keys until
         // Enter commits / Esc cancels.
         crate::settings::SettingKind::Value => {
-            let key = crate::settings::value_key(row.name).expect(
+            let key = crate::settings::value_key(row.id).expect(
                 "Value row always resolves its config key — settings law \
                  value_and_path_keys_track_their_kinds",
             );
@@ -1063,7 +1063,7 @@ fn dispatch_settings_row(
         // `return_to = breadcrumb` + the config key stamped, so its accept writes THAT
         // key and returns rather than switching the project blindly.
         crate::settings::SettingKind::Path => {
-            let key = crate::settings::path_key(row.name).expect(
+            let key = crate::settings::path_key(row.id).expect(
                 "Path row always resolves its config key — settings law \
                  value_and_path_keys_track_their_kinds",
             );

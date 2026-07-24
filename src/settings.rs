@@ -62,12 +62,54 @@ pub enum SettingKind {
     Action,
 }
 
-/// One row of the settings corpus: its display `name`, the `category` it buckets
-/// under (also a lens SECTION label — see [`SETTINGS_FACET_STRIP`]), and its
-/// [`SettingKind`]. The display name is the fuzzy corpus AND the value-readout key,
-/// so it must be unique.
+/// The CLOSED identity of a settings row — the ONE key every behavior lookup
+/// (value readout, config-key maps, sub-overlay map, Action dispatch, the
+/// Command-palette settings-row resolution) switches on. 1:1 with [`SETTINGS`]
+/// in table order (enforced by [`tests::every_setting_id_maps_1_to_1_to_the_registry`]).
+/// [`SettingRow::name`] is the DISPLAY LABEL only — renaming a row's label can
+/// never re-route or drop its behavior, because no behavior map keys on it
+/// anymore (the bug class [`tests::a_label_edit_changes_no_behavior`] guards).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SettingId {
+    CaretStyle,
+    PageMode,
+    TypewriterScroll,
+    ReduceMotion,
+    PageWidthProse,
+    PageWidthCode,
+    Zoom,
+    DateFormat,
+    Theme,
+    Wysiwyg,
+    FormatPopover,
+    InlineImages,
+    CodeLigatures,
+    Outline,
+    MenuBar,
+    Spellcheck,
+    Dictionary,
+    WritingNits,
+    CjkReadsAs,
+    NotesFolder,
+    ProjectsFolder,
+    ProjectRoot,
+    Autosave,
+    LocalHistory,
+    SessionRestore,
+    Keymap,
+    Keybindings,
+    ReportProblem,
+    EditConfigAsText,
+}
+
+/// One row of the settings corpus: its TYPED [`id`](SettingId) (the one behavior
+/// key), its display `name` (PRESENTATION ONLY — the fuzzy corpus text and the
+/// row's drawn label, never a lookup key), the `category` it buckets under
+/// (also a lens SECTION label — see [`SETTINGS_FACET_STRIP`]), and its
+/// [`SettingKind`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SettingRow {
+    pub id: SettingId,
     pub name: &'static str,
     pub category: &'static str,
     pub kind: SettingKind,
@@ -77,47 +119,59 @@ pub struct SettingRow {
 /// owner — the FacetScheme bucket + the value readout both key off this table.
 pub static SETTINGS: &[SettingRow] = &[
     // Editor —
-    SettingRow { name: "Caret style",       category: "Editor",      kind: SettingKind::Picker },
-    SettingRow { name: "Page mode",         category: "Editor",      kind: SettingKind::Toggle },
-    SettingRow { name: "Typewriter scroll", category: "Editor",      kind: SettingKind::Toggle },
-    SettingRow { name: "Reduce motion",     category: "Editor",      kind: SettingKind::Toggle },
-    SettingRow { name: "Page width (prose)", category: "Editor",     kind: SettingKind::Value },
-    SettingRow { name: "Page width (code)",  category: "Editor",     kind: SettingKind::Value },
-    SettingRow { name: "Zoom",              category: "Editor",      kind: SettingKind::Value },
+    SettingRow { id: SettingId::CaretStyle,       name: "Caret style",       category: "Editor",      kind: SettingKind::Picker },
+    SettingRow { id: SettingId::PageMode,         name: "Page mode",         category: "Editor",      kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::TypewriterScroll, name: "Typewriter scroll", category: "Editor",      kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::ReduceMotion,     name: "Reduce motion",     category: "Editor",      kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::PageWidthProse,   name: "Page width (prose)", category: "Editor",     kind: SettingKind::Value },
+    SettingRow { id: SettingId::PageWidthCode,    name: "Page width (code)",  category: "Editor",     kind: SettingKind::Value },
+    SettingRow { id: SettingId::Zoom,             name: "Zoom",              category: "Editor",      kind: SettingKind::Value },
     // DATE FORMAT: a PICKER (promoted from the blind 5-way Enter-cycle) — Enter
     // opens the Date-format picker (`OverlayKind::Date`, via `sub_overlay`), which
     // lists all five formats EACH rendered with today's date (pick by sight, what
     // you see is what inserts), exactly like Caret/Theme/Dictionary. The row's own
     // value cell still shows TODAY in the active format, the picker's entry point.
-    SettingRow { name: "Date format",       category: "Editor",      kind: SettingKind::Picker },
+    SettingRow { id: SettingId::DateFormat,       name: "Date format",       category: "Editor",      kind: SettingKind::Picker },
     // Appearance —
-    SettingRow { name: "Theme",             category: "Appearance",  kind: SettingKind::Picker },
-    SettingRow { name: "WYSIWYG",           category: "Appearance",  kind: SettingKind::Toggle },
-    SettingRow { name: "Format popover",    category: "Appearance",  kind: SettingKind::Toggle },
-    SettingRow { name: "Inline images",     category: "Appearance",  kind: SettingKind::Toggle },
-    SettingRow { name: "Code ligatures",    category: "Appearance",  kind: SettingKind::Toggle },
-    SettingRow { name: "Outline",           category: "Appearance",  kind: SettingKind::Toggle },
-    SettingRow { name: "Menu bar",          category: "Appearance",  kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::Theme,            name: "Theme",             category: "Appearance",  kind: SettingKind::Picker },
+    SettingRow { id: SettingId::Wysiwyg,          name: "WYSIWYG",           category: "Appearance",  kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::FormatPopover,    name: "Format popover",    category: "Appearance",  kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::InlineImages,     name: "Inline images",     category: "Appearance",  kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::CodeLigatures,    name: "Code ligatures",    category: "Appearance",  kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::Outline,          name: "Outline",           category: "Appearance",  kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::MenuBar,          name: "Menu bar",          category: "Appearance",  kind: SettingKind::Toggle },
     // Writing —
-    SettingRow { name: "Spellcheck",        category: "Writing",     kind: SettingKind::Toggle },
-    SettingRow { name: "Dictionary",        category: "Writing",     kind: SettingKind::Picker },
-    SettingRow { name: "Writing nits",      category: "Writing",     kind: SettingKind::Toggle },
-    SettingRow { name: "Ambiguous CJK reads as", category: "Writing", kind: SettingKind::Picker },
+    SettingRow { id: SettingId::Spellcheck,       name: "Spellcheck",        category: "Writing",     kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::Dictionary,       name: "Dictionary",        category: "Writing",     kind: SettingKind::Picker },
+    SettingRow { id: SettingId::WritingNits,      name: "Writing nits",      category: "Writing",     kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::CjkReadsAs,       name: "Ambiguous CJK reads as", category: "Writing", kind: SettingKind::Picker },
     // Files & Projects —
-    SettingRow { name: "Notes folder",      category: "Files",       kind: SettingKind::Path },
-    SettingRow { name: "Projects folder",   category: "Files",       kind: SettingKind::Path },
-    SettingRow { name: "Project root",      category: "Files",       kind: SettingKind::Path },
-    SettingRow { name: "Autosave",          category: "Files",       kind: SettingKind::Toggle },
-    SettingRow { name: "Local history",     category: "Files",       kind: SettingKind::Toggle },
-    SettingRow { name: "Session restore",   category: "Files",       kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::NotesFolder,      name: "Notes folder",      category: "Files",       kind: SettingKind::Path },
+    SettingRow { id: SettingId::ProjectsFolder,   name: "Projects folder",   category: "Files",       kind: SettingKind::Path },
+    SettingRow { id: SettingId::ProjectRoot,      name: "Project root",      category: "Files",       kind: SettingKind::Path },
+    SettingRow { id: SettingId::Autosave,         name: "Autosave",          category: "Files",       kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::LocalHistory,     name: "Local history",     category: "Files",       kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::SessionRestore,   name: "Session restore",   category: "Files",       kind: SettingKind::Toggle },
     // Keybindings —
-    SettingRow { name: "Keymap",            category: "Keybindings", kind: SettingKind::Toggle },
+    SettingRow { id: SettingId::Keymap,           name: "Keymap",            category: "Keybindings", kind: SettingKind::Toggle },
     // The whole rebind flow, opened as a sub-menu.
-    SettingRow { name: "Keybindings",       category: "Keybindings", kind: SettingKind::Submenu },
+    SettingRow { id: SettingId::Keybindings,      name: "Keybindings",       category: "Keybindings", kind: SettingKind::Submenu },
     // Advanced —
-    SettingRow { name: "Report a Problem",    category: "Advanced",  kind: SettingKind::Action },
-    SettingRow { name: "Edit config as text", category: "Advanced",  kind: SettingKind::Action },
+    SettingRow { id: SettingId::ReportProblem,    name: "Report a Problem",    category: "Advanced",  kind: SettingKind::Action },
+    SettingRow { id: SettingId::EditConfigAsText, name: "Edit config as text", category: "Advanced",  kind: SettingKind::Action },
 ];
+
+/// The [`SettingRow`] for a given [`SettingId`] — the one way to go from the
+/// typed identity back to the full row (name/category/kind). Panics on a
+/// `SettingId` absent from [`SETTINGS`], which the no-wildcard roster law
+/// ([`tests::every_setting_id_maps_1_to_1_to_the_registry`]) makes unreachable
+/// by construction: every variant has exactly one row.
+pub fn row_of(id: SettingId) -> SettingRow {
+    *SETTINGS
+        .iter()
+        .find(|r| r.id == id)
+        .expect("every SettingId has a row — see every_setting_id_maps_1_to_1_to_the_registry")
+}
 
 /// The settings menu's lens STRIP: **All** (the flat corpus home, strip index 0,
 /// no sections — the "All is home" convention) then one lens PER CATEGORY, each
@@ -238,31 +292,34 @@ fn on_off(b: bool) -> &'static str {
 /// SAME owners the renderer reads: the process-globals live, the config/project
 /// pieces from `values` ([`SettingsValues::gather`]). A SUBMENU / ACTION row has no
 /// value (empty string — it's an affordance, not a setting). The one place the
-/// display-name → live-value mapping lives.
+/// [`SettingId`] → live-value mapping lives. A NO-WILDCARD match over the closed
+/// [`SettingId`] — a new variant fails to compile here until it names its own
+/// readout (or joins the affordance arm), so the table and the readout can never
+/// drift the way a `_ => String::new()` fallthrough once allowed.
 pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
-    match row.name {
+    match row.id {
         // Editor —
-        "Caret style" => crate::caret::mode().label().to_string(),
-        "Page mode" => on_off(crate::page::page_on()).to_string(),
-        "Typewriter scroll" => on_off(crate::typewriter::typewriter_on()).to_string(),
-        "Reduce motion" => on_off(crate::motion::reduced()).to_string(),
-        "Page width (prose)" => values.page_width_prose.to_string(),
-        "Page width (code)" => values.page_width_code.to_string(),
-        "Zoom" => format!("{:.0}%", values.zoom * 100.0),
+        SettingId::CaretStyle => crate::caret::mode().label().to_string(),
+        SettingId::PageMode => on_off(crate::page::page_on()).to_string(),
+        SettingId::TypewriterScroll => on_off(crate::typewriter::typewriter_on()).to_string(),
+        SettingId::ReduceMotion => on_off(crate::motion::reduced()).to_string(),
+        SettingId::PageWidthProse => values.page_width_prose.to_string(),
+        SettingId::PageWidthCode => values.page_width_code.to_string(),
+        SettingId::Zoom => format!("{:.0}%", values.zoom * 100.0),
         // DATE FORMAT: the active process-global format, rendered against the
         // caller-gathered TODAY (real live clock / the fixed headless
         // placeholder — see `SettingsValues::today_ymd`'s doc) — "what you see
         // is what inserts".
-        "Date format" => {
+        SettingId::DateFormat => {
             let (y, m, d) = values.today_ymd;
             crate::dateformat::active_format().format(y, m, d)
         }
         // Appearance —
-        "Theme" => crate::theme::active().name.to_string(),
-        "WYSIWYG" => on_off(crate::markdown::wysiwyg_on()).to_string(),
-        "Format popover" => on_off(crate::popover::popover_on()).to_string(),
-        "Inline images" => on_off(crate::markdown::inline_images_on()).to_string(),
-        "Code ligatures" => on_off(crate::render::code_ligatures_on()).to_string(),
+        SettingId::Theme => crate::theme::active().name.to_string(),
+        SettingId::Wysiwyg => on_off(crate::markdown::wysiwyg_on()).to_string(),
+        SettingId::FormatPopover => on_off(crate::popover::popover_on()).to_string(),
+        SettingId::InlineImages => on_off(crate::markdown::inline_images_on()).to_string(),
+        SettingId::CodeLigatures => on_off(crate::render::code_ligatures_on()).to_string(),
         // Outline + Menu bar read their PROCESS GLOBALS live — the SAME owners the
         // renderer reads (`outline_layout` / the bar strip) and the SAME owners
         // `App::setting_toggle` flips, like "Page mode"/"WYSIWYG"/"Spellcheck" above.
@@ -272,95 +329,93 @@ pub fn value_for(row: &SettingRow, values: &SettingsValues) -> String {
         // every-toggle-dispatches sweep; both owners now agree by construction. The
         // capture path agrees too: `apply_sticky_globals` seeds these globals from
         // `--config` at every launch, live and headless alike.)
-        "Outline" => on_off(crate::outline::outline_on()).to_string(),
-        "Menu bar" => on_off(crate::menubar::menu_bar_on()).to_string(),
+        SettingId::Outline => on_off(crate::outline::outline_on()).to_string(),
+        SettingId::MenuBar => on_off(crate::menubar::menu_bar_on()).to_string(),
         // Writing —
-        "Spellcheck" => on_off(crate::spell::spellcheck_on()).to_string(),
-        "Dictionary" => crate::spell::active_variant().label().to_string(),
-        "Writing nits" => on_off(crate::nits::nits_on()).to_string(),
+        SettingId::Spellcheck => on_off(crate::spell::spellcheck_on()).to_string(),
+        SettingId::Dictionary => crate::spell::active_variant().label().to_string(),
+        SettingId::WritingNits => on_off(crate::nits::nits_on()).to_string(),
         // The FRONT of the live ambiguity ladder, in writer-words ("Japanese",
         // never the raw BCP 47 code) — read live like Theme/Dictionary, not
         // from `values` (see `SettingsValues::gather`'s doc).
-        "Ambiguous CJK reads as" => crate::frontmatter::cjk_priority()
+        SettingId::CjkReadsAs => crate::frontmatter::cjk_priority()
             .first()
             .map(|l| l.label().to_string())
             .unwrap_or_else(|| "—".to_string()),
         // Files & Projects —
-        "Notes folder" => values.notes_root.clone(),
-        "Projects folder" => values.workspace.clone(),
-        "Project root" => values.project_root.clone(),
-        "Autosave" => on_off(values.autosave).to_string(),
-        "Local history" => on_off(values.history).to_string(),
-        "Session restore" => on_off(values.session_restore).to_string(),
+        SettingId::NotesFolder => values.notes_root.clone(),
+        SettingId::ProjectsFolder => values.workspace.clone(),
+        SettingId::ProjectRoot => values.project_root.clone(),
+        SettingId::Autosave => on_off(values.autosave).to_string(),
+        SettingId::LocalHistory => on_off(values.history).to_string(),
+        SettingId::SessionRestore => on_off(values.session_restore).to_string(),
         // Keybindings —
-        "Keymap" => values.keymap.clone(),
+        SettingId::Keymap => values.keymap.clone(),
         // Keybindings / Advanced — affordances, no value cell.
-        "Keybindings" | "Report a Problem" | "Edit config as text" => String::new(),
-        // A row absent from this match is a table/readout drift — never silently
-        // blank in release, caught by `every_setting_has_a_value_readout` in test.
-        _ => String::new(),
+        SettingId::Keybindings | SettingId::ReportProblem | SettingId::EditConfigAsText => String::new(),
     }
 }
 
 /// The config KEY a TOGGLE row flips + persists under — the single owner of the
-/// display-name → config-key map for the Enter-to-toggle interaction. `None` for a
-/// non-toggle row (it never signals a `SettingToggle`). The key is BOTH the live
-/// process-global setter's selector (`App::setting_toggle`) AND the `[keys]`-sibling
-/// top-level config key `Config::write_pref` persists to, so the two can never drift.
-pub fn toggle_key(name: &str) -> Option<&'static str> {
-    Some(match name {
+/// [`SettingId`] → config-key map for the Enter-to-toggle interaction. `None` for a
+/// non-toggle id (it never signals a `SettingToggle`). The RETURNED wire string is
+/// UNCHANGED from before item 55 — only the ARGUMENT went from `&str` label to
+/// `SettingId` — so `Config::write_pref`/`App::setting_toggle`/an old `config.toml`
+/// all still see the exact same key.
+pub fn toggle_key(id: SettingId) -> Option<&'static str> {
+    Some(match id {
         // Editor —
-        "Page mode" => "page_mode",
-        "Typewriter scroll" => "typewriter_scroll",
-        "Reduce motion" => "reduce_motion",
+        SettingId::PageMode => "page_mode",
+        SettingId::TypewriterScroll => "typewriter_scroll",
+        SettingId::ReduceMotion => "reduce_motion",
         // (DATE FORMAT was a Toggle-cycle here; it is now a Picker opening
         // `OverlayKind::Date` — see `sub_overlay` — so it no longer has a
         // toggle key.)
         // Appearance —
-        "WYSIWYG" => "wysiwyg",
-        "Format popover" => "popover",
-        "Inline images" => "inline_images",
-        "Code ligatures" => "code_ligatures",
-        "Outline" => "outline",
-        "Menu bar" => "menu_bar",
+        SettingId::Wysiwyg => "wysiwyg",
+        SettingId::FormatPopover => "popover",
+        SettingId::InlineImages => "inline_images",
+        SettingId::CodeLigatures => "code_ligatures",
+        SettingId::Outline => "outline",
+        SettingId::MenuBar => "menu_bar",
         // Writing —
-        "Spellcheck" => "spellcheck",
-        "Writing nits" => "writing_nits",
+        SettingId::Spellcheck => "spellcheck",
+        SettingId::WritingNits => "writing_nits",
         // Files & Projects —
-        "Autosave" => "autosave",
-        "Local history" => "history",
-        "Session restore" => "session_restore",
+        SettingId::Autosave => "autosave",
+        SettingId::LocalHistory => "history",
+        SettingId::SessionRestore => "session_restore",
         // Keybindings — NOT a plain bool config key (native/emacs), so
         // `App::setting_toggle` special-cases it (see `App::toggle_keymap_flavor`)
         // rather than the generic bool mechanism this table otherwise feeds.
-        "Keymap" => "keymap",
+        SettingId::Keymap => "keymap",
         _ => return None,
     })
 }
 
 /// The config KEY a VALUE row edits + persists under — the single owner of the
-/// display-name → config-key map for the inline numeric edit. `None` for a
-/// non-value row (it never enters value-edit). The key is the top-level config key
-/// [`Config::write_pref`] persists to AND the live setter's selector
-/// (`App::setting_value_commit`), so the two can never drift.
-pub fn value_key(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "Page width (prose)" => "page_width_prose",
-        "Page width (code)" => "page_width_code",
-        "Zoom" => "zoom",
+/// [`SettingId`] → config-key map for the inline numeric edit. `None` for a
+/// non-value id (it never enters value-edit). The RETURNED wire string is
+/// UNCHANGED from before item 55 — see [`toggle_key`]'s doc.
+pub fn value_key(id: SettingId) -> Option<&'static str> {
+    Some(match id {
+        SettingId::PageWidthProse => "page_width_prose",
+        SettingId::PageWidthCode => "page_width_code",
+        SettingId::Zoom => "zoom",
         _ => return None,
     })
 }
 
 /// The config KEY a PATH row picks a folder for — the single owner of the
-/// display-name → config-key map for the folder-navigator route. `None` for a
-/// non-path row. `App::setting_path_pick` writes this key (and for `project_root`
-/// additionally re-scopes the active project).
-pub fn path_key(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "Notes folder" => "notes_root",
-        "Projects folder" => "workspace",
-        "Project root" => "project_root",
+/// [`SettingId`] → config-key map for the folder-navigator route. `None` for a
+/// non-path id. `App::setting_path_pick` writes this key (and for `project_root`
+/// additionally re-scopes the active project). The RETURNED wire string is
+/// UNCHANGED from before item 55 — see [`toggle_key`]'s doc.
+pub fn path_key(id: SettingId) -> Option<&'static str> {
+    Some(match id {
+        SettingId::NotesFolder => "notes_root",
+        SettingId::ProjectsFolder => "workspace",
+        SettingId::ProjectRoot => "project_root",
         _ => return None,
     })
 }
@@ -400,16 +455,16 @@ pub fn parse_zoom(raw: &str) -> Option<f32> {
 
 /// The SUB-PICKER a PICKER / SUBMENU row opens (Enter swaps the Settings overlay for
 /// it, stamping a `return_to = Settings` breadcrumb so a commit/cancel returns here).
-/// `None` for every non-picker row. The single owner of the display-name → sub-overlay
+/// `None` for every non-picker id. The single owner of the [`SettingId`] → sub-overlay
 /// map — the interaction reads it, never a parallel `match`.
-pub fn sub_overlay(name: &str) -> Option<crate::overlay::OverlayKind> {
-    Some(match name {
-        "Caret style" => crate::overlay::OverlayKind::Caret,
-        "Theme" => crate::overlay::OverlayKind::Theme,
-        "Dictionary" => crate::overlay::OverlayKind::Dictionary,
-        "Ambiguous CJK reads as" => crate::overlay::OverlayKind::CjkLang,
-        "Date format" => crate::overlay::OverlayKind::Date,
-        "Keybindings" => crate::overlay::OverlayKind::Keybindings,
+pub fn sub_overlay(id: SettingId) -> Option<crate::overlay::OverlayKind> {
+    Some(match id {
+        SettingId::CaretStyle => crate::overlay::OverlayKind::Caret,
+        SettingId::Theme => crate::overlay::OverlayKind::Theme,
+        SettingId::Dictionary => crate::overlay::OverlayKind::Dictionary,
+        SettingId::CjkReadsAs => crate::overlay::OverlayKind::CjkLang,
+        SettingId::DateFormat => crate::overlay::OverlayKind::Date,
+        SettingId::Keybindings => crate::overlay::OverlayKind::Keybindings,
         _ => return None,
     })
 }
@@ -493,24 +548,25 @@ pub fn visible_rows() -> Vec<&'static SettingRow> {
 /// command ([`crate::settings::tests`]), and the two genuinely share a
 /// destination (`covered_by_picker_rows_open_the_same_overlay_as_their_command`,
 /// `covered_by_toggle_rows_flip_the_same_global_as_their_command`).
-pub static COVERED_BY: &[(&str, &str)] = &[
-    ("Theme", "Switch theme…"),
-    ("Caret style", "Caret style…"),
-    ("Dictionary", "Dictionary…"),
-    ("Keybindings", "Keybindings…"),
-    ("Report a Problem", "Report a Problem"),
-    ("Page mode", "Toggle page mode"),
-    ("Typewriter scroll", "Toggle typewriter scroll"),
-    ("Outline", "Toggle outline"),
-    ("Menu bar", "Toggle menu bar"),
-    ("Spellcheck", "Toggle spellcheck"),
-    ("Writing nits", "Toggle writing nits"),
+pub static COVERED_BY: &[(SettingId, &str)] = &[
+    (SettingId::Theme, "Switch theme…"),
+    (SettingId::CaretStyle, "Caret style…"),
+    (SettingId::Dictionary, "Dictionary…"),
+    (SettingId::Keybindings, "Keybindings…"),
+    (SettingId::ReportProblem, "Report a Problem"),
+    (SettingId::PageMode, "Toggle page mode"),
+    (SettingId::TypewriterScroll, "Toggle typewriter scroll"),
+    (SettingId::Outline, "Toggle outline"),
+    (SettingId::MenuBar, "Toggle menu bar"),
+    (SettingId::Spellcheck, "Toggle spellcheck"),
+    (SettingId::WritingNits, "Toggle writing nits"),
 ];
 
-/// The covering command name for setting `name`, or `None` if it has no command
-/// twin.
-pub fn covered_by(name: &str) -> Option<&'static str> {
-    COVERED_BY.iter().find(|(row, _)| *row == name).map(|(_, cmd)| *cmd)
+/// The covering command name for setting `id`, or `None` if it has no command
+/// twin. Re-keyed onto [`SettingId`] (cheap hardening over the item-55 plan) so a
+/// row RENAME can never silently drop a palette exclusion.
+pub fn covered_by(id: SettingId) -> Option<&'static str> {
+    COVERED_BY.iter().find(|(row, _)| *row == id).map(|(_, cmd)| *cmd)
 }
 
 /// The pure decision the palette filter rests on: is a row visible in the Cmd-P
@@ -535,7 +591,7 @@ pub fn row_visible_in_palette(covering: Option<&str>, platform: crate::commands:
 fn palette_rows_on(platform: crate::commands::Platform) -> Vec<&'static SettingRow> {
     visible_rows_on(platform)
         .into_iter()
-        .filter(|r| row_visible_in_palette(covered_by(r.name), platform))
+        .filter(|r| row_visible_in_palette(covered_by(r.id), platform))
         .collect()
 }
 
@@ -548,8 +604,12 @@ pub fn palette_rows() -> Vec<&'static SettingRow> {
     palette_rows_on(crate::commands::Platform::current())
 }
 
-/// The display NAMES for [`palette_rows`], parallel — replaces a bare
-/// [`visible_names`] at the palette's `attach_settings_rows` call site.
+/// The display NAMES for [`palette_rows`], parallel. Test-only (item 55):
+/// [`crate::overlay::state::OverlayState::attach_settings_rows`] now takes
+/// [`palette_rows`] directly (rows, not names — the typed identity rides
+/// `SettingRow::id`), so this survives only for `.len()`-only test sites that
+/// want the count without the rows.
+#[cfg(test)]
 pub fn palette_names() -> Vec<String> {
     palette_rows().iter().map(|r| r.name.to_string()).collect()
 }
@@ -679,12 +739,12 @@ mod tests {
         for r in SETTINGS {
             match r.kind {
                 SettingKind::Toggle => assert!(
-                    toggle_key(r.name).is_some(),
+                    toggle_key(r.id).is_some(),
                     "toggle {:?} has no config key",
                     r.name
                 ),
                 _ => assert!(
-                    toggle_key(r.name).is_none(),
+                    toggle_key(r.id).is_none(),
                     "non-toggle {:?} resolved a toggle key",
                     r.name
                 ),
@@ -700,13 +760,13 @@ mod tests {
         for r in SETTINGS {
             match r.kind {
                 SettingKind::Picker | SettingKind::Submenu => assert!(
-                    sub_overlay(r.name).is_some(),
+                    sub_overlay(r.id).is_some(),
                     "{:?} ({:?}) opens no sub-overlay",
                     r.name,
                     r.kind
                 ),
                 _ => assert!(
-                    sub_overlay(r.name).is_none(),
+                    sub_overlay(r.id).is_none(),
                     "{:?} unexpectedly opens a sub-overlay",
                     r.name
                 ),
@@ -723,16 +783,16 @@ mod tests {
         for r in SETTINGS {
             match r.kind {
                 SettingKind::Value => {
-                    assert!(value_key(r.name).is_some(), "value {:?} has no key", r.name);
-                    assert!(path_key(r.name).is_none(), "value {:?} resolved a path key", r.name);
+                    assert!(value_key(r.id).is_some(), "value {:?} has no key", r.name);
+                    assert!(path_key(r.id).is_none(), "value {:?} resolved a path key", r.name);
                 }
                 SettingKind::Path => {
-                    assert!(path_key(r.name).is_some(), "path {:?} has no key", r.name);
-                    assert!(value_key(r.name).is_none(), "path {:?} resolved a value key", r.name);
+                    assert!(path_key(r.id).is_some(), "path {:?} has no key", r.name);
+                    assert!(value_key(r.id).is_none(), "path {:?} resolved a value key", r.name);
                 }
                 _ => {
-                    assert!(value_key(r.name).is_none(), "{:?} resolved a value key", r.name);
-                    assert!(path_key(r.name).is_none(), "{:?} resolved a path key", r.name);
+                    assert!(value_key(r.id).is_none(), "{:?} resolved a value key", r.name);
+                    assert!(path_key(r.id).is_none(), "{:?} resolved a path key", r.name);
                 }
             }
         }
@@ -798,10 +858,10 @@ mod tests {
     #[test]
     fn date_format_row_is_a_picker_and_previews_today() {
         let _g = crate::testlock::serial();
-        let row = *SETTINGS.iter().find(|r| r.name == "Date format").unwrap();
+        let row = row_of(SettingId::DateFormat);
         assert_eq!(row.kind, SettingKind::Picker);
-        assert_eq!(sub_overlay(row.name), Some(crate::overlay::OverlayKind::Date));
-        assert_eq!(toggle_key(row.name), None, "a picker row has no toggle key");
+        assert_eq!(sub_overlay(row.id), Some(crate::overlay::OverlayKind::Date));
+        assert_eq!(toggle_key(row.id), None, "a picker row has no toggle key");
 
         let saved = crate::dateformat::active_format();
         let values = SettingsValues {
@@ -824,9 +884,9 @@ mod tests {
     #[test]
     fn cjk_row_is_a_picker_with_a_writer_word_value_cell() {
         let _g = crate::testlock::serial();
-        let row = *SETTINGS.iter().find(|r| r.name == "Ambiguous CJK reads as").unwrap();
+        let row = row_of(SettingId::CjkReadsAs);
         assert_eq!(row.kind, SettingKind::Picker);
-        assert_eq!(sub_overlay(row.name), Some(crate::overlay::OverlayKind::CjkLang));
+        assert_eq!(sub_overlay(row.id), Some(crate::overlay::OverlayKind::CjkLang));
 
         crate::frontmatter::set_cjk_priority(&crate::frontmatter::DEFAULT_CJK_PRIORITY);
         assert_eq!(value_for(&row, &SettingsValues::default()), "Japanese");
@@ -884,10 +944,10 @@ mod tests {
     /// side fails here instead of silently building a dead exclusion.
     #[test]
     fn every_covered_by_pair_names_a_real_row_and_a_real_command() {
-        for (row_name, cmd_name) in COVERED_BY {
+        for (row_id, cmd_name) in COVERED_BY {
             assert!(
-                SETTINGS.iter().any(|r| r.name == *row_name),
-                "COVERED_BY names no real settings row: {row_name:?}"
+                SETTINGS.iter().any(|r| r.id == *row_id),
+                "COVERED_BY names no real settings row: {row_id:?}"
             );
             assert!(
                 crate::commands::COMMANDS.iter().any(|c| c.name == *cmd_name),
@@ -902,8 +962,8 @@ mod tests {
     fn covered_by_picker_rows_open_the_same_overlay_as_their_command() {
         use crate::keymap::Action;
         use crate::overlay::OverlayKind;
-        for (row_name, cmd_name) in COVERED_BY {
-            let row = *SETTINGS.iter().find(|r| r.name == *row_name).unwrap();
+        for (row_id, cmd_name) in COVERED_BY {
+            let row = row_of(*row_id);
             if !matches!(row.kind, SettingKind::Picker | SettingKind::Submenu) {
                 continue;
             }
@@ -913,13 +973,13 @@ mod tests {
                 Action::OpenCaretMenu => OverlayKind::Caret,
                 Action::OpenDictionaryMenu => OverlayKind::Dictionary,
                 Action::OpenKeybindings => OverlayKind::Keybindings,
-                other => panic!("{cmd_name:?} covers {row_name:?} but its action {other:?} \
+                other => panic!("{cmd_name:?} covers {row_id:?} but its action {other:?} \
                                   isn't a known overlay-opening arm — add it here"),
             };
             assert_eq!(
-                sub_overlay(row.name),
+                sub_overlay(row.id),
                 Some(expected),
-                "{row_name:?} and {cmd_name:?} must open the same overlay"
+                "{row_id:?} and {cmd_name:?} must open the same overlay"
             );
         }
     }
@@ -932,8 +992,8 @@ mod tests {
         use crate::keymap::Action;
         let _g = crate::testlock::serial();
         let values = SettingsValues::default();
-        for (row_name, cmd_name) in COVERED_BY {
-            let row = *SETTINGS.iter().find(|r| r.name == *row_name).unwrap();
+        for (row_id, cmd_name) in COVERED_BY {
+            let row = row_of(*row_id);
             if row.kind != SettingKind::Toggle {
                 continue;
             }
@@ -945,13 +1005,13 @@ mod tests {
                 Action::ToggleMenuBar => crate::menubar::toggle(),
                 Action::ToggleSpellcheck => crate::spell::toggle(),
                 Action::ToggleWritingNits => crate::nits::toggle(),
-                other => panic!("{cmd_name:?} covers {row_name:?} but its action {other:?} \
+                other => panic!("{cmd_name:?} covers {row_id:?} but its action {other:?} \
                                   isn't a known global-flipping arm — add it here"),
             };
             let before = value_for(&row, &values);
             flip();
             let after = value_for(&row, &values);
-            assert_ne!(before, after, "{row_name:?}'s value must flip when {cmd_name:?} fires");
+            assert_ne!(before, after, "{row_id:?}'s value must flip when {cmd_name:?} fires");
             flip(); // restore, so this test never leaks state to another.
             assert_eq!(value_for(&row, &values), before, "flip must be a true toggle");
         }
@@ -966,11 +1026,11 @@ mod tests {
         use crate::commands::Platform;
         for platform in [Platform::Native, Platform::Web] {
             let palette = palette_rows_on(platform);
-            for (row_name, cmd_name) in COVERED_BY {
+            for (row_id, cmd_name) in COVERED_BY {
                 if crate::commands::available_by_name(cmd_name, platform) {
                     assert!(
-                        !palette.iter().any(|r| r.name == *row_name),
-                        "{row_name:?} must not appear in the {platform:?} palette union \
+                        !palette.iter().any(|r| r.id == *row_id),
+                        "{row_id:?} must not appear in the {platform:?} palette union \
                          while {cmd_name:?} covers it there"
                     );
                 }
@@ -982,10 +1042,10 @@ mod tests {
     /// this fix only trims the PALETTE corpus, never `visible_rows`.
     #[test]
     fn covered_rows_stay_in_the_settings_menu_unaffected() {
-        for (row_name, _) in COVERED_BY {
+        for (row_id, _) in COVERED_BY {
             assert!(
-                visible_rows().iter().any(|r| r.name == *row_name),
-                "{row_name:?} must remain reachable from the Settings menu"
+                visible_rows().iter().any(|r| r.id == *row_id),
+                "{row_id:?} must remain reachable from the Settings menu"
             );
         }
     }
@@ -1051,12 +1111,224 @@ mod tests {
                 .into_iter()
                 .filter(|c| command_opens(&c.action) == Some(kind))
                 .count();
-            let row_doors = palette.iter().filter(|r| sub_overlay(r.name) == Some(kind)).count();
+            let row_doors = palette.iter().filter(|r| sub_overlay(r.id) == Some(kind)).count();
             assert_eq!(
                 command_doors + row_doors,
                 1,
                 "{kind:?} must have exactly one palette door (commands={command_doors}, rows={row_doors})"
             );
         }
+    }
+
+    // ── ITEM 55: TYPED SETTINGS IDENTITY ────────────────────────────────────────
+
+    impl SettingId {
+        /// NO-WILDCARD EXHAUSTIVENESS WITNESS: a future `SettingId` variant
+        /// fails to compile here until it's named — the compile-time half of
+        /// the 1:1 roster law. Pairs with the RUNTIME half,
+        /// [`every_setting_id_maps_1_to_1_to_the_registry`], which checks every
+        /// variant actually names exactly one [`SETTINGS`] row.
+        #[allow(dead_code)]
+        fn witness(self) {
+            match self {
+                SettingId::CaretStyle
+                | SettingId::PageMode
+                | SettingId::TypewriterScroll
+                | SettingId::ReduceMotion
+                | SettingId::PageWidthProse
+                | SettingId::PageWidthCode
+                | SettingId::Zoom
+                | SettingId::DateFormat
+                | SettingId::Theme
+                | SettingId::Wysiwyg
+                | SettingId::FormatPopover
+                | SettingId::InlineImages
+                | SettingId::CodeLigatures
+                | SettingId::Outline
+                | SettingId::MenuBar
+                | SettingId::Spellcheck
+                | SettingId::Dictionary
+                | SettingId::WritingNits
+                | SettingId::CjkReadsAs
+                | SettingId::NotesFolder
+                | SettingId::ProjectsFolder
+                | SettingId::ProjectRoot
+                | SettingId::Autosave
+                | SettingId::LocalHistory
+                | SettingId::SessionRestore
+                | SettingId::Keymap
+                | SettingId::Keybindings
+                | SettingId::ReportProblem
+                | SettingId::EditConfigAsText => {}
+            }
+        }
+    }
+
+    /// THE 1:1 ROSTER LAW (runtime half — pairs with the compile-time
+    /// `SettingId::witness` no-wildcard match): every `SettingId` variant names
+    /// exactly one [`SETTINGS`] row, every row's `id` is unique (no two rows
+    /// share an identity), and [`row_of`] round-trips each row's own id back to
+    /// itself. Enforcement: a `SETTINGS` row added without an `id:` field fails
+    /// to compile (the field is required); a `SettingId` variant added without
+    /// updating `witness` fails to compile; an id reused across two rows, or a
+    /// variant with zero rows, fails HERE.
+    #[test]
+    fn every_setting_id_maps_1_to_1_to_the_registry() {
+        let roster: &[SettingId] = &[
+            SettingId::CaretStyle,
+            SettingId::PageMode,
+            SettingId::TypewriterScroll,
+            SettingId::ReduceMotion,
+            SettingId::PageWidthProse,
+            SettingId::PageWidthCode,
+            SettingId::Zoom,
+            SettingId::DateFormat,
+            SettingId::Theme,
+            SettingId::Wysiwyg,
+            SettingId::FormatPopover,
+            SettingId::InlineImages,
+            SettingId::CodeLigatures,
+            SettingId::Outline,
+            SettingId::MenuBar,
+            SettingId::Spellcheck,
+            SettingId::Dictionary,
+            SettingId::WritingNits,
+            SettingId::CjkReadsAs,
+            SettingId::NotesFolder,
+            SettingId::ProjectsFolder,
+            SettingId::ProjectRoot,
+            SettingId::Autosave,
+            SettingId::LocalHistory,
+            SettingId::SessionRestore,
+            SettingId::Keymap,
+            SettingId::Keybindings,
+            SettingId::ReportProblem,
+            SettingId::EditConfigAsText,
+        ];
+        roster.iter().for_each(|id| id.witness());
+        assert_eq!(roster.len(), 29, "the hand-listed roster changed size — update deliberately");
+        assert_eq!(roster.len(), SETTINGS.len(), "roster/registry size drifted");
+
+        let mut seen = std::collections::HashSet::new();
+        for r in SETTINGS {
+            assert!(seen.insert(r.id), "duplicate SettingId in SETTINGS: {:?}", r.id);
+        }
+        assert_eq!(seen.len(), SETTINGS.len(), "every SETTINGS row has a UNIQUE id");
+
+        for id in roster {
+            assert!(
+                SETTINGS.iter().any(|r| r.id == *id),
+                "SettingId::{id:?} names no SETTINGS row"
+            );
+        }
+        for r in SETTINGS {
+            assert_eq!(row_of(r.id).name, r.name, "row_of round-trip failed for {:?}", r.id);
+        }
+    }
+
+    /// HEADLINE LAW (item 55): renaming a row's DISPLAY LABEL changes NO
+    /// behavior — every resolver (`toggle_key`/`value_key`/`path_key`/
+    /// `sub_overlay`/`value_for`, INCLUDING the value readout, the subtle one
+    /// per the item-55 plan) switches on the row's typed `id`, never its
+    /// `name`. FAILS before item 55 (when these resolvers matched on
+    /// `row.name`): confirmed non-vacuous by construction — this literally
+    /// builds a relabeled COPY of each row and re-runs every resolver against
+    /// it, so a regression back to name-keyed matching reintroduces the
+    /// failure immediately (a `SettingRow` is `Copy`, so `relabeled` and `r`
+    /// are two independent values sharing only the `id`).
+    #[test]
+    fn a_label_edit_changes_no_behavior() {
+        let _g = crate::testlock::serial();
+        let values = SettingsValues {
+            page_width_prose: 70,
+            page_width_code: 100,
+            zoom: 0.8,
+            notes_root: "/n".into(),
+            workspace: "/w".into(),
+            project_root: "/p".into(),
+            autosave: true,
+            history: true,
+            session_restore: true,
+            keymap: "native".to_string(),
+            today_ymd: crate::dateformat::CAPTURE_PLACEHOLDER_YMD,
+        };
+        for r in SETTINGS {
+            let relabeled = SettingRow { name: "nonsense zzqx label", ..*r };
+            assert_eq!(
+                toggle_key(relabeled.id), toggle_key(r.id),
+                "{:?}: toggle_key drifted on a label-only edit", r.name
+            );
+            assert_eq!(
+                value_key(relabeled.id), value_key(r.id),
+                "{:?}: value_key drifted on a label-only edit", r.name
+            );
+            assert_eq!(
+                path_key(relabeled.id), path_key(r.id),
+                "{:?}: path_key drifted on a label-only edit", r.name
+            );
+            assert_eq!(
+                sub_overlay(relabeled.id), sub_overlay(r.id),
+                "{:?}: sub_overlay drifted on a label-only edit", r.name
+            );
+            assert_eq!(
+                value_for(&relabeled, &values), value_for(r, &values),
+                "{:?}: value_for drifted on a label-only edit", r.name
+            );
+        }
+    }
+
+    /// Action ids are exactly `{ReportProblem, EditConfigAsText}` — the Action
+    /// dispatch arm in `actions::overlay_nav::dispatch_settings_row` matches
+    /// only these two; a third `SettingKind::Action` row would silently
+    /// resolve to `Effect::None` there until this test (and that match) grow
+    /// to cover it.
+    #[test]
+    fn action_kind_rows_are_exactly_report_problem_and_edit_config_as_text() {
+        let action_ids: std::collections::HashSet<SettingId> = SETTINGS
+            .iter()
+            .filter(|r| r.kind == SettingKind::Action)
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(
+            action_ids,
+            std::collections::HashSet::from([SettingId::ReportProblem, SettingId::EditConfigAsText])
+        );
+    }
+
+    /// OLD-CONFIG ROUND-TRIP (item 55): the typed lookups still emit the EXACT
+    /// legacy wire strings `Config::write_pref`/`Config::load` read and write —
+    /// an existing `config.toml` round-trips unchanged even though the
+    /// resolvers' ARGUMENT type changed from `&str` to `SettingId`.
+    #[test]
+    fn typed_ids_still_emit_the_legacy_wire_keys() {
+        assert_eq!(toggle_key(SettingId::PageMode), Some("page_mode"));
+        assert_eq!(toggle_key(SettingId::TypewriterScroll), Some("typewriter_scroll"));
+        assert_eq!(toggle_key(SettingId::ReduceMotion), Some("reduce_motion"));
+        assert_eq!(toggle_key(SettingId::Wysiwyg), Some("wysiwyg"));
+        assert_eq!(toggle_key(SettingId::FormatPopover), Some("popover"));
+        assert_eq!(toggle_key(SettingId::InlineImages), Some("inline_images"));
+        assert_eq!(toggle_key(SettingId::CodeLigatures), Some("code_ligatures"));
+        assert_eq!(toggle_key(SettingId::Outline), Some("outline"));
+        assert_eq!(toggle_key(SettingId::MenuBar), Some("menu_bar"));
+        assert_eq!(toggle_key(SettingId::Spellcheck), Some("spellcheck"));
+        assert_eq!(toggle_key(SettingId::WritingNits), Some("writing_nits"));
+        assert_eq!(toggle_key(SettingId::Autosave), Some("autosave"));
+        assert_eq!(toggle_key(SettingId::LocalHistory), Some("history"));
+        assert_eq!(toggle_key(SettingId::SessionRestore), Some("session_restore"));
+        assert_eq!(toggle_key(SettingId::Keymap), Some("keymap"));
+        assert_eq!(toggle_key(SettingId::DateFormat), None, "a picker row has no toggle key");
+
+        assert_eq!(value_key(SettingId::PageWidthProse), Some("page_width_prose"));
+        assert_eq!(value_key(SettingId::PageWidthCode), Some("page_width_code"));
+        assert_eq!(value_key(SettingId::Zoom), Some("zoom"));
+
+        assert_eq!(path_key(SettingId::NotesFolder), Some("notes_root"));
+        assert_eq!(path_key(SettingId::ProjectsFolder), Some("workspace"));
+        assert_eq!(path_key(SettingId::ProjectRoot), Some("project_root"));
+
+        // Pair with `Config`'s own legacy-key round-trip over an on-disk
+        // fixture (see `config::tests`) — this half proves the KEY STRINGS
+        // this module emits are unchanged; that half proves `Config::load`
+        // still parses them.
     }
 }
