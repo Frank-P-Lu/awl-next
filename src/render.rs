@@ -1590,20 +1590,48 @@ pub(crate) fn frost_seed_radius(row_h: f32, zoom: f32, dpi: f32) -> f32 {
         + crate::lava::frost_px(crate::lava::FROST_FEATHER_PX, zoom, dpi)
 }
 
+/// THE PUNCTUATION-AWARE, BOUNDED PER-RUN RADIUS (item 61): a run's own halo
+/// radius, given the row's radius ceiling `r_row` ([`frost_seed_radius`]) and
+/// the run's MEASURED ink width `run_ink_w` (device px, before any end
+/// padding). Three ceilings, the tightest wins:
+///  - `r_row` — the row-height radius (unchanged for ordinary text; also the
+///    floor a punctuation-derived bound can never exceed).
+///  - the run's OWN ink half-width (× [`crate::lava::FROST_RUN_INK_RADIUS_FRAC`])
+///    plus `skirt` — so a short/punctuation run's halo is DERIVED FROM ITS OWN
+///    ADVANCE GEOMETRY rather than the row's, never dwarfing a narrow glyph
+///    into a disproportionate round bump.
+///  - `skirt` × [`crate::lava::FROST_END_RADIUS_SKIRTS`] — the BOUNDED END-PAD
+///    ceiling, independent of row height, so a long single-run label's
+///    end-of-ink overshoot never grows past a fixed skirt multiple no matter
+///    how tall the margin type is.
+/// A normal multi-word run's ink half-width and the end-pad ceiling both sit
+/// at or above `r_row` in practice, so `min()` is a no-op there — row/nearby-run
+/// merging is byte-identical to before this round for ordinary text.
+pub(crate) fn frost_run_radius(r_row: f32, run_ink_w: f32, skirt: f32) -> f32 {
+    let ink_bound = run_ink_w * crate::lava::FROST_RUN_INK_RADIUS_FRAC + skirt;
+    let end_cap = skirt * crate::lava::FROST_END_RADIUS_SKIRTS;
+    r_row.min(ink_bound).min(end_cap)
+}
+
 /// Push FROST SEEDS `[x0, x1, yc, r]` for one drawn text run spanning
-/// `[left, left+width]` (device px) at row centre `yc`, halo radius `r`, given its
-/// fitted `label`. PER-GLYPH ([`crate::lava::FROST_SEED_PER_GLYPH`]) scatters one
-/// point seed per non-space glyph cell evenly across the MEASURED run — the ideal
-/// bumpy hug; the NAMED DEGRADATION ARM emits one capsule seed per whitespace-
-/// delimited WORD RUN (far fewer per-pixel seeds), both anchored to the SAME
-/// measured extent so word gaps fall where the ink's do. ONE owner shared by the
-/// outline + gutter seed builders, so both worlds and both surfaces seed identically.
+/// `[left, left+width]` (device px) at row centre `yc`, ROW-HEIGHT radius
+/// ceiling `r_row`, zoom/DPI-scaled `skirt` ([`crate::lava::FROST_FEATHER_PX`]),
+/// given its fitted `label`. PER-GLYPH ([`crate::lava::FROST_SEED_PER_GLYPH`])
+/// scatters one point seed per non-space glyph cell evenly across the MEASURED
+/// run — the ideal bumpy hug; the NAMED DEGRADATION ARM emits one capsule seed
+/// per whitespace-delimited WORD RUN (far fewer per-pixel seeds), both anchored
+/// to the SAME measured extent so word gaps fall where the ink's do. EACH
+/// emitted seed's radius is the PUNCTUATION-AWARE, BOUNDED [`frost_run_radius`]
+/// derived from that seed's OWN measured ink width, not a blanket per-row
+/// value — see that function's own doc. ONE owner shared by the outline +
+/// gutter seed builders, so both worlds and both surfaces seed identically.
 pub(crate) fn push_text_seeds(
     seeds: &mut Vec<[f32; 4]>,
     left: f32,
     width: f32,
     yc: f32,
-    r: f32,
+    r_row: f32,
+    skirt: f32,
     label: &str,
 ) {
     let chars: Vec<char> = label.chars().collect();
@@ -1619,6 +1647,7 @@ pub(crate) fn push_text_seeds(
                 continue; // a space seeds no halo — the ink's gaps stay open
             }
             let cx = left + (i as f32 + 0.5) * cw;
+            let r = frost_run_radius(r_row, cw, skirt);
             seeds.push([cx, cx, yc, r]);
         }
     } else {
@@ -1632,6 +1661,8 @@ pub(crate) fn push_text_seeds(
             while i < n && !chars[i].is_whitespace() {
                 i += 1;
             }
+            let run_ink_w = (i - start) as f32 * cw;
+            let r = frost_run_radius(r_row, run_ink_w, skirt);
             seeds.push([left + start as f32 * cw, left + i as f32 * cw, yc, r]);
         }
     }

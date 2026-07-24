@@ -170,6 +170,33 @@ pub const FROST_PILL_INSET_Y_FRAC: f32 = 0.1;
 /// island structure, with no explicit per-row rule.
 pub const FROST_SEED_RADIUS_FRAC: f32 = 0.62;
 
+/// THE PUNCTUATION-AWARE RUN RADIUS FRACTION (item 61): a run's halo radius is
+/// bounded by its OWN measured ink half-width (times this fraction) plus the
+/// skirt, so a run whose ink is narrow relative to the row-height radius — an
+/// isolated `&`, a single-letter heading — gets a halo sized to ITS OWN
+/// geometry instead of the full row-height fraction ([`FROST_SEED_RADIUS_FRAC`]),
+/// which otherwise dwarfs a short run into a disproportionate round bump (a
+/// seed's `(1 - (d/r)^2)^2` falloff is symmetric, so a near-zero-ink run at a
+/// large `r` reads as a bare circle centred on the glyph, not a close hug). A
+/// long/normal run's ink half-width already exceeds this bound, so `min()` is a
+/// no-op there — the row-height radius (and its row/nearby-run merge behaviour)
+/// is UNCHANGED for ordinary text. See [`crate::render::push_text_seeds`].
+pub const FROST_RUN_INK_RADIUS_FRAC: f32 = 0.5;
+
+/// THE BOUNDED END-PAD CEILING (item 61), expressed as a multiple of the skirt
+/// ([`FROST_FEATHER_PX`], zoom/DPI-scaled): the ABSOLUTE most a run's halo may
+/// reach past its own measured ink, independent of the row-height radius
+/// ([`FROST_SEED_RADIUS_FRAC`] × row height). Without this ceiling a run's
+/// end-of-label overshoot grows with the row's own line-height (tall margin
+/// type, a deep heading ladder rung) with no relation to how long the label
+/// actually is — a long single-run label ("Button-free", no internal
+/// whitespace to break it into smaller runs) would carry the SAME oversized
+/// skirt past its final glyph as a one-character run. Tuned so a typical
+/// multi-word row's own radius sits at or under the ceiling (byte-identical
+/// merge behaviour for ordinary text — see `docs/render.md`), while a tall
+/// margin type / large zoom no longer inflates the endcap without bound.
+pub const FROST_END_RADIUS_SKIRTS: f32 = 3.0;
+
 /// THE FIELD ISO LEVEL: the summed seed halo strength at which the organic frost
 /// coverage crosses 0.5. A lone seed peaks at 1.0 at its core, so ISO < 1 gives a
 /// halo out past the seed; two seeds each contributing ~ISO/2 in the gap between

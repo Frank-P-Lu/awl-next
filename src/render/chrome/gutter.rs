@@ -259,7 +259,8 @@ impl TextPipeline {
         if row_h <= 0.0 {
             return Vec::new();
         }
-        let r = crate::render::frost_seed_radius(row_h, self.metrics.zoom, self.dpi);
+        let r_row = crate::render::frost_seed_radius(row_h, self.metrics.zoom, self.dpi);
+        let skirt = crate::lava::frost_px(crate::lava::FROST_FEATHER_PX, self.metrics.zoom, self.dpi);
         let pad_x = crate::lava::frost_px(crate::lava::FROST_PILL_PAD_X, self.metrics.zoom, self.dpi);
         // The two stacked LABEL rows, bottom-anchored 8px up (mirrors `prepare_gutter`
         // / `gutter_carve_rect`): name over project. Each line is RIGHT-aligned within
@@ -274,7 +275,15 @@ impl TextPipeline {
             }
             let w = (text.chars().count() as f32 * label_char_w).min(layout.avail);
             let yc = block_top + (row + 0.5) * row_h;
-            crate::render::push_text_seeds(seeds, layout.avail - w - pad_x, w + 2.0 * pad_x, yc, r, text);
+            crate::render::push_text_seeds(
+                seeds,
+                layout.avail - w - pad_x,
+                w + 2.0 * pad_x,
+                yc,
+                r_row,
+                skirt,
+                text,
+            );
         };
         let mut seeds = Vec::new();
         push_line(&mut seeds, &layout.name, 0.0);
