@@ -140,6 +140,19 @@ fn fold_tail_hangs_after_the_first_visual_row_when_the_heading_wraps() {
         eprintln!("no GPU adapter; skipping fold-tail wrap regression law");
         return;
     };
+    // PAGE MODE globals are process-wide (`crate::page::page_on`/`measure`, which
+    // `text_wrap_width`/`text_left` below read live): serialize with every other
+    // page-touching test, mirroring this file's own `fold_chevron_*` siblings.
+    // Without this, dozens of siblings elsewhere (`render::tests::outline::*` in
+    // particular) that correctly hold `serial()` while their OWN body runs at
+    // `measure(40)` still race a reader that never takes the lock at all — the
+    // guard only excludes OTHER lock-holders, so an unguarded reader sails
+    // straight through their locked critical section and catches page geometry
+    // mid-mutation. Confirmed empirically: paired alone with any one of six
+    // different `outline::` tests (each independently correctly-guarded), this
+    // test still fails ~1/25 runs with the exact reported signature
+    // (`ceiling=844.80005`, i.e. a `measure(40)` mid-flight read).
+    let _g = crate::testlock::serial();
     // A single H1 line long enough to wrap at the default 1200px canvas (H1's
     // scaled-up glyphs make even a fairly ordinary sentence wrap).
     let doc = "# A rather long section heading that keeps going for quite a while indeed so it wraps here\nbody one\nbody two\n";
