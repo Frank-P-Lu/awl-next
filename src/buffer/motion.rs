@@ -4,7 +4,7 @@
 //! kill flag like mg. Carved out of `buffer.rs` verbatim — inherent methods on
 //! [`Buffer`].
 
-use super::{is_word_char, Buffer};
+use super::Buffer;
 
 impl Buffer {
     // --- Motion -----------------------------------------------------------
@@ -82,29 +82,16 @@ impl Buffer {
     pub fn forward_word(&mut self) {
         self.clear_kill_flag();
         self.goal_col = None;
-        let len = self.rope.len_chars();
-        let mut i = self.cursor;
-        // Skip non-word chars, then skip word chars.
-        while i < len && !is_word_char(self.rope.char(i)) {
-            i += 1;
-        }
-        while i < len && is_word_char(self.rope.char(i)) {
-            i += 1;
-        }
-        self.cursor = i;
+        // ONE owner of the word-MOTION boundary (`super::word_forward_boundary`),
+        // shared with `crate::textbox::TextBox::word_right` — see that fn's doc
+        // for why this must stay distinct from the word-DELETE rule.
+        self.cursor =
+            super::word_forward_boundary(self.cursor, self.rope.len_chars(), |i| self.rope.char(i));
     }
 
     pub fn backward_word(&mut self) {
         self.clear_kill_flag();
         self.goal_col = None;
-        let mut i = self.cursor;
-        // Skip non-word chars going left, then skip word chars going left.
-        while i > 0 && !is_word_char(self.rope.char(i - 1)) {
-            i -= 1;
-        }
-        while i > 0 && is_word_char(self.rope.char(i - 1)) {
-            i -= 1;
-        }
-        self.cursor = i;
+        self.cursor = super::word_backward_boundary(self.cursor, |i| self.rope.char(i));
     }
 }

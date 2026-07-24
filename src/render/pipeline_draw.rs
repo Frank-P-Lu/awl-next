@@ -471,6 +471,11 @@ impl TextPipeline {
             search_replace_active: false,
             search_replacement: String::new(),
             search_editing_replacement: false,
+            // ITEM 10 — `usize::MAX`: the "unspecified caret" sentinel
+            // (`ViewState::base`'s own default), clamped to the field's END by
+            // the render path until the first real `set_view` overwrites it.
+            search_query_caret: usize::MAX,
+            search_replacement_caret: usize::MAX,
             overlay_rows,
             overlay_bars,
             overlay_lens_underline,
@@ -562,6 +567,7 @@ impl TextPipeline {
             overlay_align: None,
             overlay_crisp: false,
             overlay_query: String::new(),
+            overlay_query_caret: usize::MAX,
             overlay_title: "",
             overlay_row_path_splits: false,
             overlay_items: Vec::new(),

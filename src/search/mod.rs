@@ -10,6 +10,8 @@
 // guard, so the two drivers cannot drift.
 pub mod keys;
 
+use crate::textbox::TextBox;
+
 /// A single match as a half-open CHAR range `[start, end)` into the document.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Match {
@@ -45,7 +47,8 @@ pub enum StepOutcome {
 /// Live isearch state. Owned by `App` as `Option<SearchState>`; the query is its
 /// OWN String, never spliced into the rope.
 pub struct SearchState {
-    query: String,
+    /// ITEM 10 — the search needle + its CHAR-index caret, one shared [`TextBox`].
+    query: TextBox,
     /// Default false (case-insensitive).
     case_sensitive: bool,
     /// All matches for the current query, in buffer order.
@@ -61,9 +64,12 @@ pub struct SearchState {
     /// a replace fires, so a search that never reveals replace behaves exactly as
     /// before.
     replace_active: bool,
-    /// The replacement text — its OWN String like `query`, never spliced into the
-    /// rope until replace-current / replace-all is invoked.
-    replacement: String,
+    /// ITEM 10 — the replacement text + its OWN CHAR-index caret, one shared
+    /// [`TextBox`] like `query` — never spliced into the rope until
+    /// replace-current / replace-all is invoked, and its caret/word motion
+    /// NEVER recomputes or jumps (the deliberate query/replacement asymmetry —
+    /// see [`Self::push_replace_char`]'s own doc).
+    replacement: TextBox,
     /// Which field typing edits: `false` = the search query (default), `true` = the
     /// replacement. Tab / Cmd-Option-F flip it (revealing the replace field the
     /// first time).
@@ -81,14 +87,14 @@ impl SearchState {
     /// The query is empty and there are no matches yet.
     pub fn start(origin: usize, direction: Direction) -> Self {
         Self {
-            query: String::new(),
+            query: TextBox::new(),
             case_sensitive: false,
             matches: Vec::new(),
             current: None,
             direction,
             origin,
             replace_active: false,
-            replacement: String::new(),
+            replacement: TextBox::new(),
             editing_replacement: false,
             wrap_armed: None,
         }
@@ -105,7 +111,7 @@ impl SearchState {
     pub fn start_with_query(origin: usize, direction: Direction, query: &str, haystack: &str) -> Self {
         let mut s = Self::start(origin, direction);
         if !query.is_empty() {
-            s.query = query.to_string();
+            s.query = TextBox::seeded(query);
             s.recompute(haystack);
         }
         s
@@ -114,12 +120,35 @@ impl SearchState {
     // --- query editing (each recomputes matches + re-picks current) ---------
 
     pub fn push_char(&mut self, c: char, haystack: &str) {
-        self.query.push(c);
+        self.query.insert(c);
         self.recompute(haystack);
     }
 
     pub fn pop_char(&mut self, haystack: &str) {
-        self.query.pop();
+        self.query.delete_back();
+        self.recompute(haystack);
+    }
+
+    /// ITEM 10 — QUERY char/word caret motion. Pure motion, so it does NOT
+    /// recompute the match set (the text is unchanged) — the caller still
+    /// re-anchors the visible caret from `self`, never the buffer.
+    pub fn query_char_left(&mut self) {
+        self.query.char_left();
+    }
+    pub fn query_char_right(&mut self) {
+        self.query.char_right();
+    }
+    pub fn query_word_left(&mut self) {
+        self.query.word_left();
+    }
+    pub fn query_word_right(&mut self) {
+        self.query.word_right();
+    }
+
+    /// ITEM 10 — QUERY ⌥⌫ word-delete: the word-DELETE rule (DISTINCT from the
+    /// motion above), so it DOES recompute — an edit, like `pop_char`.
+    pub fn query_delete_word_back(&mut self, haystack: &str) {
+        self.query.delete_word_back();
         self.recompute(haystack);
     }
 
@@ -137,7 +166,7 @@ impl SearchState {
         // action" that DISARMS the two-press wrap: the boundary state machine only
         // chains across consecutive same-direction steps.
         self.wrap_armed = None;
-        self.matches = find_all(haystack, &self.query, self.case_sensitive);
+        self.matches = find_all(haystack, self.query.text(), self.case_sensitive);
         self.current = if self.matches.is_empty() {
             None
         } else {
@@ -264,15 +293,38 @@ impl SearchState {
         self.editing_replacement = false;
     }
 
-    /// Append a char to the replacement field. The replacement is NOT searched,
-    /// so the match set is unchanged (no recompute).
+    /// Insert a char at the replacement field's caret. The replacement is NOT
+    /// searched, so the match set is unchanged (no recompute) — the deliberate
+    /// query/replacement asymmetry (`SearchState`'s own doc): this is the ONE
+    /// field item 10 must NEVER wire into a recompute/jump.
     pub fn push_replace_char(&mut self, c: char) {
-        self.replacement.push(c);
+        self.replacement.insert(c);
     }
 
-    /// Drop the last char of the replacement field (Backspace in the replace field).
+    /// Delete the char before the replacement field's caret (Backspace there).
+    /// NO recompute, mirroring [`Self::push_replace_char`].
     pub fn pop_replace_char(&mut self) {
-        self.replacement.pop();
+        self.replacement.delete_back();
+    }
+
+    /// ITEM 10 — REPLACEMENT char/word caret motion + word-delete. NONE of
+    /// these ever recompute or jump — the replacement is never searched, and a
+    /// replace commit reads its CURRENT text regardless of where the caret
+    /// sits. Preserves the deliberate query/replacement asymmetry.
+    pub fn replacement_char_left(&mut self) {
+        self.replacement.char_left();
+    }
+    pub fn replacement_char_right(&mut self) {
+        self.replacement.char_right();
+    }
+    pub fn replacement_word_left(&mut self) {
+        self.replacement.word_left();
+    }
+    pub fn replacement_word_right(&mut self) {
+        self.replacement.word_right();
+    }
+    pub fn replacement_delete_word_back(&mut self) {
+        self.replacement.delete_word_back();
     }
 
     /// RE-ANCHOR the search at `origin` and recompute FORWARD against `haystack`.
@@ -292,11 +344,12 @@ impl SearchState {
     pub fn replace_current_text(&mut self, haystack: &str) -> Option<String> {
         let m = self.current_match()?;
         let chars: Vec<char> = haystack.chars().collect();
-        let mut out = String::with_capacity(haystack.len() + self.replacement.len());
+        let replacement = self.replacement.text();
+        let mut out = String::with_capacity(haystack.len() + replacement.len());
         out.extend(chars[..m.start].iter());
-        out.push_str(&self.replacement);
+        out.push_str(replacement);
         out.extend(chars[m.end..].iter());
-        let resume = m.start + self.replacement.chars().count();
+        let resume = m.start + replacement.chars().count();
         self.refind(resume, &out);
         Some(out)
     }
@@ -311,11 +364,12 @@ impl SearchState {
             return haystack.to_string();
         }
         let chars: Vec<char> = haystack.chars().collect();
+        let replacement = self.replacement.text();
         let mut out = String::with_capacity(haystack.len());
         let mut prev = 0usize;
         for m in &self.matches {
             out.extend(chars[prev..m.start].iter());
-            out.push_str(&self.replacement);
+            out.push_str(replacement);
             prev = m.end;
         }
         out.extend(chars[prev..].iter());
@@ -334,7 +388,7 @@ impl SearchState {
 
     /// The current replacement text (for the panel render + the sidecar).
     pub fn replacement(&self) -> &str {
-        &self.replacement
+        self.replacement.text()
     }
 
     // --- accessors for App + render + capture -------------------------------
@@ -345,7 +399,19 @@ impl SearchState {
 
     #[allow(dead_code)]
     pub fn query(&self) -> &str {
-        &self.query
+        self.query.text()
+    }
+
+    /// ITEM 10 — the query field's CHAR-index caret, for the panel render's
+    /// mid-string caret placement (glyph-scan, `render/chrome/panel.rs`).
+    pub fn query_caret(&self) -> usize {
+        self.query.caret()
+    }
+
+    /// ITEM 10 — the replacement field's CHAR-index caret, mirroring
+    /// [`Self::query_caret`].
+    pub fn replacement_caret(&self) -> usize {
+        self.replacement.caret()
     }
 
     #[allow(dead_code)]

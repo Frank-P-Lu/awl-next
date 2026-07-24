@@ -5,6 +5,7 @@
 //! item's path is unchanged -- only the file it lives in moved.
 
 use super::{OverlayKind, OverlayState};
+use crate::textbox::TextBox;
 
 /// Which phase of a Keybindings CAPTURE we are in (carried by [`Capture`]). Drives
 /// what the next key does and what the card prompts.
@@ -93,9 +94,12 @@ pub struct ValueEdit {
     pub name: String,
     /// The config key the commit writes ("page_width_prose"/"page_width_code"/"zoom").
     pub key: String,
-    /// The text typed so far (digits, plus a single `.`/`%` for zoom). Seeded from
-    /// the row's current value cell so a typed edit starts from the shown value.
-    pub input: String,
+    /// ITEM 10 — the text typed so far (digits, plus a single `.`/`%` for zoom)
+    /// plus its CHAR-index caret, one shared [`TextBox`]. Seeded from the row's
+    /// current value cell (caret at END) so a typed edit starts from the shown
+    /// value. The digit/`.`/`%` FILTER stays here in [`OverlayState::value_edit_push`]
+    /// — `TextBox::insert` itself accepts any char.
+    pub input: TextBox,
     /// The cell value at edit start, restored verbatim on cancel (the core can't
     /// re-gather the config, so it stashes the original here).
     pub orig: String,
@@ -111,8 +115,10 @@ pub struct ValueEdit {
 /// [`super::overlay_nav`]'s `rename_edit`-first check (`actions/overlay_nav.rs`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenameEdit {
-    /// The text typed so far, seeded from the file's current name.
-    pub input: String,
+    /// ITEM 10 — the text typed so far + its CHAR-index caret, seeded (caret at
+    /// END) from the file's current name. The `/`-REJECT filter stays here in
+    /// [`OverlayState::rename_edit_push`] — `TextBox::insert` itself accepts any char.
+    pub input: TextBox,
     /// The name at edit start (unused by the core beyond equality — the CALLER's
     /// own "unchanged input is a no-op" gate reads it via `Effect::RenameNoteCommit`
     /// naming the typed value; kept here so a future cancel-restore path, or a test,
@@ -126,7 +132,7 @@ impl RenameEdit {
     /// Keybindings capture's own `Capture::prompt` rides, so the minibuffer's typing
     /// state is `--keys`-verifiable with ZERO new sidecar plumbing.
     pub fn prompt(&self) -> String {
-        format!("rename to: {}   Enter commit   Esc cancel", self.input)
+        format!("rename to: {}   Enter commit   Esc cancel", self.input.text())
     }
 }
 
@@ -156,9 +162,11 @@ pub enum LinkEditMode {
 /// accepted (the one difference from `RenameEdit::push`'s `/`-rejection).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkEdit {
-    /// The text typed so far, seeded from the prefill (existing link's URL in
-    /// EDIT mode; else the clipboard/kill head IF it looks like a URL; else empty).
-    pub input: String,
+    /// ITEM 10 — the text typed so far + its CHAR-index caret, seeded (caret at
+    /// END) from the prefill (existing link's URL in EDIT mode; else the
+    /// clipboard/kill head IF it looks like a URL; else empty). NO character
+    /// filter — `TextBox::insert` accepts any char, a URL legitimately contains `/`.
+    pub input: TextBox,
     pub mode: LinkEditMode,
 }
 
@@ -168,7 +176,7 @@ impl LinkEdit {
     /// [`RenameEdit::prompt`] rides, so the URL-typing state is `--keys`-verifiable
     /// with ZERO new sidecar plumbing.
     pub fn prompt(&self) -> String {
-        format!("link to: {}   Enter commit   Esc cancel", self.input)
+        format!("link to: {}   Enter commit   Esc cancel", self.input.text())
     }
 }
 
@@ -181,9 +189,10 @@ impl LinkEdit {
 /// friction behavior — while Enter with text commits a NAMED point.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeepEdit {
-    /// The text typed so far. Seeded EMPTY (a fresh point is being marked —
-    /// there is no old name to edit).
-    pub input: String,
+    /// ITEM 10 — the text typed so far + its CHAR-index caret, one shared
+    /// [`TextBox`]. Seeded EMPTY (a fresh point is being marked — there is no
+    /// old name to edit). NO character filter, mirroring [`LinkEdit::input`].
+    pub input: TextBox,
 }
 
 impl KeepEdit {
@@ -193,7 +202,7 @@ impl KeepEdit {
     /// `--keys`-verifiable with ZERO new sidecar plumbing. "Enter keep" holds for
     /// an empty input too (a blank Enter IS the plain keep).
     pub fn prompt(&self) -> String {
-        format!("name this version: {}   Enter keep   Esc cancel", self.input)
+        format!("name this version: {}   Enter keep   Esc cancel", self.input.text())
     }
 }
 
@@ -295,59 +304,98 @@ impl OverlayState {
             return;
         };
         let orig = self.bindings.get(row).cloned().unwrap_or_default();
-        self.value_edit = Some(ValueEdit { row, name, key, input: orig.clone(), orig });
+        self.value_edit = Some(ValueEdit { row, name, key, input: TextBox::seeded(&orig), orig });
     }
 
-    /// SETTINGS VALUE EDIT: append `c` to the typed value when it is valid — a digit
+    /// SETTINGS VALUE EDIT: mirror the row's field text into its own display cell —
+    /// the tail every value-edit mutator below shares (push/pop/pop_word/motion all
+    /// end by re-showing the live typed value). A no-op when no value edit is active.
+    fn value_edit_mirror(&mut self) {
+        let Some(ve) = self.value_edit.as_ref() else {
+            return;
+        };
+        let (row, text) = (ve.row, ve.input.text().to_string());
+        if let Some(cell) = self.bindings.get_mut(row) {
+            *cell = text;
+        }
+    }
+
+    /// SETTINGS VALUE EDIT: insert `c` at the caret when it is valid — a digit
     /// always, or a SINGLE `.`/`%` (zoom) — and mirror the new text into the row's own
-    /// value cell so the edit is visible. Any other char is ignored (calm). A no-op
+    /// value cell so the edit is visible. Any other char is ignored (calm); the
+    /// FILTER stays here — [`TextBox::insert`] itself accepts any char. A no-op
     /// when no value edit is active.
     pub fn value_edit_push(&mut self, c: char) {
         let Some(ve) = self.value_edit.as_mut() else {
             return;
         };
+        let text = ve.input.text();
         let ok = c.is_ascii_digit()
-            || (c == '.' && !ve.input.contains('.'))
-            || (c == '%' && !ve.input.contains('%'));
+            || (c == '.' && !text.contains('.'))
+            || (c == '%' && !text.contains('%'));
         if ok {
-            ve.input.push(c);
+            ve.input.insert(c);
         }
-        let (row, text) = (ve.row, ve.input.clone());
-        if let Some(cell) = self.bindings.get_mut(row) {
-            *cell = text;
-        }
+        self.value_edit_mirror();
     }
 
-    /// SETTINGS VALUE EDIT: delete the last typed char, mirroring the change into the
-    /// row's cell. A no-op when no value edit is active.
+    /// SETTINGS VALUE EDIT: delete the char before the caret, mirroring the change
+    /// into the row's cell. A no-op when no value edit is active.
     pub fn value_edit_pop(&mut self) {
         let Some(ve) = self.value_edit.as_mut() else {
             return;
         };
-        ve.input.pop();
-        let (row, text) = (ve.row, ve.input.clone());
-        if let Some(cell) = self.bindings.get_mut(row) {
-            *cell = text;
-        }
+        ve.input.delete_back();
+        self.value_edit_mirror();
     }
 
-    /// SETTINGS VALUE EDIT: ⌥⌫ word-delete — drop the trailing word, mirroring the
-    /// change into the row's cell. A no-op when no value edit is active.
+    /// SETTINGS VALUE EDIT: ⌥⌫ word-delete — drop the trailing word (the word-DELETE
+    /// rule, [`TextBox::delete_word_back`]), mirroring the change into the row's
+    /// cell. A no-op when no value edit is active.
     pub fn value_edit_pop_word(&mut self) {
         let Some(ve) = self.value_edit.as_mut() else {
             return;
         };
-        super::nav::truncate_trailing_word(&mut ve.input);
-        let (row, text) = (ve.row, ve.input.clone());
-        if let Some(cell) = self.bindings.get_mut(row) {
-            *cell = text;
+        ve.input.delete_word_back();
+        self.value_edit_mirror();
+    }
+
+    /// ITEM 10 — SETTINGS VALUE EDIT char/word motion + forward word-delete: move
+    /// (or forward-delete from) the caret WITHOUT editing backward, mirroring the
+    /// cell afterward (motion never changes the text, but the mirror stays cheap
+    /// + uniform with the edits above). A no-op when no value edit is active.
+    pub fn value_edit_char_left(&mut self) {
+        if let Some(ve) = self.value_edit.as_mut() {
+            ve.input.char_left();
         }
+    }
+    pub fn value_edit_char_right(&mut self) {
+        if let Some(ve) = self.value_edit.as_mut() {
+            ve.input.char_right();
+        }
+    }
+    pub fn value_edit_word_left(&mut self) {
+        if let Some(ve) = self.value_edit.as_mut() {
+            ve.input.word_left();
+        }
+    }
+    pub fn value_edit_word_right(&mut self) {
+        if let Some(ve) = self.value_edit.as_mut() {
+            ve.input.word_right();
+        }
+    }
+    pub fn value_edit_delete_word_forward(&mut self) {
+        let Some(ve) = self.value_edit.as_mut() else {
+            return;
+        };
+        ve.input.delete_word_forward();
+        self.value_edit_mirror();
     }
 
     /// SETTINGS VALUE EDIT commit target: the `(config key, typed value)` to persist,
     /// consumed when Enter commits. `None` when no value edit is active.
     pub fn value_edit_target(&self) -> Option<(String, String)> {
-        self.value_edit.as_ref().map(|v| (v.key.clone(), v.input.clone()))
+        self.value_edit.as_ref().map(|v| (v.key.clone(), v.input.text().to_string()))
     }
 
     /// SETTINGS VALUE EDIT cancel: drop the edit and RESTORE the row's cell to the
@@ -375,60 +423,95 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        s.rename_edit = Some(RenameEdit { input: current_name.clone(), orig: current_name });
+        s.rename_edit = Some(RenameEdit { input: TextBox::seeded(&current_name), orig: current_name });
         s
     }
 
-    /// RENAME MINIBUFFER: append `c` to the typed filename UNLESS it is `/` — a
-    /// path separator would let a typed name silently escape into a different
+    /// RENAME MINIBUFFER: mirror the typed filename into `corpus[0]` — RENAME has
+    /// no separate `bindings` secondary column, so the live-typed name IS the
+    /// primary cell. The tail every mutator below shares. A no-op when no rename
+    /// edit is active.
+    fn rename_edit_mirror(&mut self) {
+        let Some(re) = self.rename_edit.as_ref() else {
+            return;
+        };
+        let text = re.input.text().to_string();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
+    /// RENAME MINIBUFFER: insert `c` at the caret UNLESS it is `/` — a path
+    /// separator would let a typed name silently escape into a different
     /// directory, which this verb (a same-directory rename) never does; every other
     /// character is accepted (unlike `value_edit_push`'s digit-only filter — a
-    /// filename is free text). Mirrors the row's own display cell into `corpus[0]`
-    /// directly (RENAME has no separate `bindings` secondary column — the live-typed
-    /// name IS the primary cell). A no-op when no rename edit is active.
+    /// filename is free text). The FILTER stays here — `TextBox::insert` itself
+    /// accepts any char. A no-op when no rename edit is active.
     pub fn rename_edit_push(&mut self, c: char) {
         let Some(re) = self.rename_edit.as_mut() else {
             return;
         };
         if c != '/' {
-            re.input.push(c);
+            re.input.insert(c);
         }
-        let text = re.input.clone();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
-        }
+        self.rename_edit_mirror();
     }
 
-    /// RENAME MINIBUFFER: ⌥⌫ word-delete — drop the trailing word, mirroring the
-    /// change into `corpus[0]`. A no-op when no rename edit is active.
+    /// RENAME MINIBUFFER: ⌥⌫ word-delete — drop the trailing word (the word-DELETE
+    /// rule), mirroring the change into `corpus[0]`. A no-op when no rename edit is
+    /// active.
     pub fn rename_edit_pop_word(&mut self) {
         let Some(re) = self.rename_edit.as_mut() else {
             return;
         };
-        super::nav::truncate_trailing_word(&mut re.input);
-        let text = re.input.clone();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
-        }
+        re.input.delete_word_back();
+        self.rename_edit_mirror();
     }
 
-    /// RENAME MINIBUFFER: delete the last typed char, mirroring the change into
-    /// `corpus[0]`. A no-op when no rename edit is active.
+    /// RENAME MINIBUFFER: delete the char before the caret, mirroring the change
+    /// into `corpus[0]`. A no-op when no rename edit is active.
     pub fn rename_edit_pop(&mut self) {
         let Some(re) = self.rename_edit.as_mut() else {
             return;
         };
-        re.input.pop();
-        let text = re.input.clone();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
+        re.input.delete_back();
+        self.rename_edit_mirror();
+    }
+
+    /// ITEM 10 — RENAME MINIBUFFER char/word motion + forward word-delete. A
+    /// no-op when no rename edit is active.
+    pub fn rename_edit_char_left(&mut self) {
+        if let Some(re) = self.rename_edit.as_mut() {
+            re.input.char_left();
         }
+    }
+    pub fn rename_edit_char_right(&mut self) {
+        if let Some(re) = self.rename_edit.as_mut() {
+            re.input.char_right();
+        }
+    }
+    pub fn rename_edit_word_left(&mut self) {
+        if let Some(re) = self.rename_edit.as_mut() {
+            re.input.word_left();
+        }
+    }
+    pub fn rename_edit_word_right(&mut self) {
+        if let Some(re) = self.rename_edit.as_mut() {
+            re.input.word_right();
+        }
+    }
+    pub fn rename_edit_delete_word_forward(&mut self) {
+        let Some(re) = self.rename_edit.as_mut() else {
+            return;
+        };
+        re.input.delete_word_forward();
+        self.rename_edit_mirror();
     }
 
     /// RENAME MINIBUFFER commit target: the typed filename, consumed when Enter
     /// commits. `None` when no rename edit is active.
     pub fn rename_edit_target(&self) -> Option<String> {
-        self.rename_edit.as_ref().map(|re| re.input.clone())
+        self.rename_edit.as_ref().map(|re| re.input.text().to_string())
     }
 
     /// LINKS V2: summon the Cmd-K minibuffer — build the fresh overlay, pre-filled
@@ -446,54 +529,90 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        s.link_edit = Some(LinkEdit { input: prefill, mode });
+        s.link_edit = Some(LinkEdit { input: TextBox::seeded(&prefill), mode });
         s
     }
 
-    /// LINK MINIBUFFER: append `c` to the typed URL — NO character filter (unlike
+    /// LINK MINIBUFFER: mirror the typed URL into `corpus[0]`. A no-op when no
+    /// link edit is active.
+    fn link_edit_mirror(&mut self) {
+        let Some(le) = self.link_edit.as_ref() else {
+            return;
+        };
+        let text = le.input.text().to_string();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
+    /// LINK MINIBUFFER: insert `c` at the caret — NO character filter (unlike
     /// [`Self::rename_edit_push`]'s `/`-rejection: a URL legitimately contains `/`).
     /// Mirrors the change into `corpus[0]`. A no-op when no link edit is active.
     pub fn link_edit_push(&mut self, c: char) {
         let Some(le) = self.link_edit.as_mut() else {
             return;
         };
-        le.input.push(c);
-        let text = le.input.clone();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
-        }
+        le.input.insert(c);
+        self.link_edit_mirror();
     }
 
-    /// LINK MINIBUFFER: delete the last typed char, mirroring the change into
-    /// `corpus[0]`. A no-op when no link edit is active.
+    /// LINK MINIBUFFER: delete the char before the caret, mirroring the change
+    /// into `corpus[0]`. A no-op when no link edit is active.
     pub fn link_edit_pop(&mut self) {
         let Some(le) = self.link_edit.as_mut() else {
             return;
         };
-        le.input.pop();
-        let text = le.input.clone();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
-        }
+        le.input.delete_back();
+        self.link_edit_mirror();
     }
 
-    /// LINK MINIBUFFER: ⌥⌫ word-delete — drop the trailing word of the URL,
-    /// mirroring the change into `corpus[0]`. A no-op when no link edit is active.
+    /// LINK MINIBUFFER: ⌥⌫ word-delete — drop the trailing word of the URL (the
+    /// word-DELETE rule), mirroring the change into `corpus[0]`. A no-op when no
+    /// link edit is active.
     pub fn link_edit_pop_word(&mut self) {
         let Some(le) = self.link_edit.as_mut() else {
             return;
         };
-        super::nav::truncate_trailing_word(&mut le.input);
-        let text = le.input.clone();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
+        le.input.delete_word_back();
+        self.link_edit_mirror();
+    }
+
+    /// ITEM 10 — LINK MINIBUFFER char/word motion + forward word-delete. A no-op
+    /// when no link edit is active.
+    pub fn link_edit_char_left(&mut self) {
+        if let Some(le) = self.link_edit.as_mut() {
+            le.input.char_left();
         }
+    }
+    pub fn link_edit_char_right(&mut self) {
+        if let Some(le) = self.link_edit.as_mut() {
+            le.input.char_right();
+        }
+    }
+    pub fn link_edit_word_left(&mut self) {
+        if let Some(le) = self.link_edit.as_mut() {
+            le.input.word_left();
+        }
+    }
+    pub fn link_edit_word_right(&mut self) {
+        if let Some(le) = self.link_edit.as_mut() {
+            le.input.word_right();
+        }
+    }
+    pub fn link_edit_delete_word_forward(&mut self) {
+        let Some(le) = self.link_edit.as_mut() else {
+            return;
+        };
+        le.input.delete_word_forward();
+        self.link_edit_mirror();
     }
 
     /// LINK MINIBUFFER commit target: the typed URL + the mode it applies to,
     /// consumed when Enter commits. `None` when no link edit is active.
     pub fn link_edit_target(&self) -> Option<(String, LinkEditMode)> {
-        self.link_edit.as_ref().map(|le| (le.input.clone(), le.mode.clone()))
+        self.link_edit
+            .as_ref()
+            .map(|le| (le.input.text().to_string(), le.mode.clone()))
     }
 
     /// NAMED SAVE POINTS: summon the "Keep version…" minibuffer — build the
@@ -510,49 +629,83 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        s.keep_edit = Some(KeepEdit { input: String::new() });
+        s.keep_edit = Some(KeepEdit { input: TextBox::new() });
         s
     }
 
-    /// KEEP-VERSION MINIBUFFER: append `c` to the typed name — NO character
-    /// filter (a name is free display text; even `/` is fine — it never becomes
-    /// a path, unlike [`Self::rename_edit_push`]'s rejection). Mirrors the
-    /// change into `corpus[0]`. A no-op when no keep edit is active.
+    /// KEEP-VERSION MINIBUFFER: mirror the typed name into `corpus[0]`. A no-op
+    /// when no keep edit is active.
+    fn keep_edit_mirror(&mut self) {
+        let Some(ke) = self.keep_edit.as_ref() else {
+            return;
+        };
+        let text = ke.input.text().to_string();
+        if let Some(cell) = self.corpus.get_mut(0) {
+            *cell = text;
+        }
+    }
+
+    /// KEEP-VERSION MINIBUFFER: insert `c` at the caret — NO character filter (a
+    /// name is free display text; even `/` is fine — it never becomes a path,
+    /// unlike [`Self::rename_edit_push`]'s rejection). Mirrors the change into
+    /// `corpus[0]`. A no-op when no keep edit is active.
     pub fn keep_edit_push(&mut self, c: char) {
         let Some(ke) = self.keep_edit.as_mut() else {
             return;
         };
-        ke.input.push(c);
-        let text = ke.input.clone();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
-        }
+        ke.input.insert(c);
+        self.keep_edit_mirror();
     }
 
-    /// KEEP-VERSION MINIBUFFER: delete the last typed char, mirroring the change
-    /// into `corpus[0]`. A no-op when no keep edit is active.
+    /// KEEP-VERSION MINIBUFFER: delete the char before the caret, mirroring the
+    /// change into `corpus[0]`. A no-op when no keep edit is active.
     pub fn keep_edit_pop(&mut self) {
         let Some(ke) = self.keep_edit.as_mut() else {
             return;
         };
-        ke.input.pop();
-        let text = ke.input.clone();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
-        }
+        ke.input.delete_back();
+        self.keep_edit_mirror();
     }
 
-    /// KEEP-VERSION MINIBUFFER: ⌥⌫ word-delete — drop the trailing word, mirroring
-    /// the change into `corpus[0]`. A no-op when no keep edit is active.
+    /// KEEP-VERSION MINIBUFFER: ⌥⌫ word-delete — drop the trailing word (the
+    /// word-DELETE rule), mirroring the change into `corpus[0]`. A no-op when no
+    /// keep edit is active.
     pub fn keep_edit_pop_word(&mut self) {
         let Some(ke) = self.keep_edit.as_mut() else {
             return;
         };
-        super::nav::truncate_trailing_word(&mut ke.input);
-        let text = ke.input.clone();
-        if let Some(cell) = self.corpus.get_mut(0) {
-            *cell = text;
+        ke.input.delete_word_back();
+        self.keep_edit_mirror();
+    }
+
+    /// ITEM 10 — KEEP-VERSION MINIBUFFER char/word motion + forward word-delete.
+    /// A no-op when no keep edit is active.
+    pub fn keep_edit_char_left(&mut self) {
+        if let Some(ke) = self.keep_edit.as_mut() {
+            ke.input.char_left();
         }
+    }
+    pub fn keep_edit_char_right(&mut self) {
+        if let Some(ke) = self.keep_edit.as_mut() {
+            ke.input.char_right();
+        }
+    }
+    pub fn keep_edit_word_left(&mut self) {
+        if let Some(ke) = self.keep_edit.as_mut() {
+            ke.input.word_left();
+        }
+    }
+    pub fn keep_edit_word_right(&mut self) {
+        if let Some(ke) = self.keep_edit.as_mut() {
+            ke.input.word_right();
+        }
+    }
+    pub fn keep_edit_delete_word_forward(&mut self) {
+        let Some(ke) = self.keep_edit.as_mut() else {
+            return;
+        };
+        ke.input.delete_word_forward();
+        self.keep_edit_mirror();
     }
 
     /// KEEP-VERSION MINIBUFFER commit target: the OPTIONAL typed name, consumed
@@ -561,7 +714,7 @@ impl OverlayState {
     /// when no keep edit is active at all.
     pub fn keep_edit_target(&self) -> Option<Option<String>> {
         let ke = self.keep_edit.as_ref()?;
-        let trimmed = ke.input.trim();
+        let trimmed = ke.input.text().trim();
         Some((!trimmed.is_empty()).then(|| trimmed.to_string()))
     }
 }

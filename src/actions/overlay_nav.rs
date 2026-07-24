@@ -51,6 +51,28 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 ctx.overlay.as_mut().unwrap().rename_edit_pop_word();
                 return Effect::None;
             }
+            // ITEM 10 — char/word caret motion + forward word-delete, routed
+            // through the shared TextBox (previously swallowed no-ops here).
+            Action::ForwardChar => {
+                ctx.overlay.as_mut().unwrap().rename_edit_char_right();
+                return Effect::None;
+            }
+            Action::BackwardChar => {
+                ctx.overlay.as_mut().unwrap().rename_edit_char_left();
+                return Effect::None;
+            }
+            Action::ForwardWord => {
+                ctx.overlay.as_mut().unwrap().rename_edit_word_right();
+                return Effect::None;
+            }
+            Action::BackwardWord => {
+                ctx.overlay.as_mut().unwrap().rename_edit_word_left();
+                return Effect::None;
+            }
+            Action::DeleteWordForward => {
+                ctx.overlay.as_mut().unwrap().rename_edit_delete_word_forward();
+                return Effect::None;
+            }
             Action::Newline => {
                 let target = ctx.overlay.as_ref().unwrap().rename_edit_target();
                 *ctx.overlay = None;
@@ -90,6 +112,27 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             // ⌥⌫ / C-⌫ delete a whole WORD of the URL, matching the buffer.
             Action::DeleteWordBackward => {
                 ctx.overlay.as_mut().unwrap().link_edit_pop_word();
+                return Effect::None;
+            }
+            // ITEM 10 — char/word caret motion + forward word-delete.
+            Action::ForwardChar => {
+                ctx.overlay.as_mut().unwrap().link_edit_char_right();
+                return Effect::None;
+            }
+            Action::BackwardChar => {
+                ctx.overlay.as_mut().unwrap().link_edit_char_left();
+                return Effect::None;
+            }
+            Action::ForwardWord => {
+                ctx.overlay.as_mut().unwrap().link_edit_word_right();
+                return Effect::None;
+            }
+            Action::BackwardWord => {
+                ctx.overlay.as_mut().unwrap().link_edit_word_left();
+                return Effect::None;
+            }
+            Action::DeleteWordForward => {
+                ctx.overlay.as_mut().unwrap().link_edit_delete_word_forward();
                 return Effect::None;
             }
             Action::Newline => {
@@ -134,6 +177,27 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
                 ctx.overlay.as_mut().unwrap().keep_edit_pop_word();
                 return Effect::None;
             }
+            // ITEM 10 — char/word caret motion + forward word-delete.
+            Action::ForwardChar => {
+                ctx.overlay.as_mut().unwrap().keep_edit_char_right();
+                return Effect::None;
+            }
+            Action::BackwardChar => {
+                ctx.overlay.as_mut().unwrap().keep_edit_char_left();
+                return Effect::None;
+            }
+            Action::ForwardWord => {
+                ctx.overlay.as_mut().unwrap().keep_edit_word_right();
+                return Effect::None;
+            }
+            Action::BackwardWord => {
+                ctx.overlay.as_mut().unwrap().keep_edit_word_left();
+                return Effect::None;
+            }
+            Action::DeleteWordForward => {
+                ctx.overlay.as_mut().unwrap().keep_edit_delete_word_forward();
+                return Effect::None;
+            }
             Action::Newline => {
                 let target = ctx.overlay.as_ref().unwrap().keep_edit_target();
                 *ctx.overlay = None;
@@ -169,6 +233,27 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             // ⌥⌫ / C-⌫ delete a whole WORD, matching the document buffer.
             Action::DeleteWordBackward => {
                 ctx.overlay.as_mut().unwrap().value_edit_pop_word();
+                return Effect::None;
+            }
+            // ITEM 10 — char/word caret motion + forward word-delete.
+            Action::ForwardChar => {
+                ctx.overlay.as_mut().unwrap().value_edit_char_right();
+                return Effect::None;
+            }
+            Action::BackwardChar => {
+                ctx.overlay.as_mut().unwrap().value_edit_char_left();
+                return Effect::None;
+            }
+            Action::ForwardWord => {
+                ctx.overlay.as_mut().unwrap().value_edit_word_right();
+                return Effect::None;
+            }
+            Action::BackwardWord => {
+                ctx.overlay.as_mut().unwrap().value_edit_word_left();
+                return Effect::None;
+            }
+            Action::DeleteWordForward => {
+                ctx.overlay.as_mut().unwrap().value_edit_delete_word_forward();
                 return Effect::None;
             }
             Action::Newline => {
@@ -714,6 +799,23 @@ pub(super) fn overlay_intercept(ctx: &mut ActionCtx, action: &Action) -> Effect 
             dispose_after_accept(ctx);
             return eff;
         }
+        // ITEM 10 — the query's own CHAR-index caret moves on WORD motion only
+        // (plain L/R stay lens/descend/list, claimed above): Ctrl/Opt-Right
+        // walks the caret forward a word within the typed filter text, sharing
+        // `crate::buffer::word_forward_boundary` with the document's own M-f
+        // (the DISTINCT rule from `pop_word`'s word-DELETE boundary). A pure
+        // caret move — no refilter (the text is unchanged) — followed by the
+        // same live-preview re-apply every selection-adjacent move makes.
+        Action::ForwardWord => {
+            ctx.overlay.as_mut().unwrap().query_word_right();
+            preview_move(ctx.overlay.as_mut().unwrap());
+            return Effect::None;
+        }
+        Action::BackwardWord => {
+            ctx.overlay.as_mut().unwrap().query_word_left();
+            preview_move(ctx.overlay.as_mut().unwrap());
+            return Effect::None;
+        }
         Action::ToggleHiddenFiles => {
             // Cmd-Shift-. : REVEAL / re-hide dot-prefixed entries in THIS picker (the
             // Finder convention). A no-op for a non-file picker (`toggle_hidden`
@@ -1064,7 +1166,7 @@ pub(super) fn move_dest_value(ov: &OverlayState) -> Option<String> {
         }
     }
     // No folder highlighted: a typed name becomes a NEW folder at this level.
-    let q = ov.query.trim();
+    let q = ov.query.text().trim();
     if !q.is_empty() {
         return Some(join_browse(ov.browse_dir.as_deref(), q));
     }

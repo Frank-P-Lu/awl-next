@@ -130,6 +130,7 @@ mod stars;
 mod stats;
 mod streaks;
 mod syntax;
+mod textbox;
 mod theme;
 // THE THEME-SWITCH SETTLE-LATENCY readout (debug-mode, live-only): a once-per-switch
 // felt-latency + per-phase breakdown, pure-formatted here, fed real millis by the

@@ -1162,7 +1162,7 @@ pub(crate) fn overlay_capture_info(
         // ITEM 45: the alignment the overlay froze at summon, so the capture places
         // the card exactly where the live picker did.
         align: ov.align,
-        query: ov.query.clone(),
+        query: ov.query.text().to_string(),
         items: ov.item_strings(),
         empty: ov.empty_notice(),
         bindings: ov.item_bindings(),

@@ -3392,6 +3392,10 @@ pub struct TextPipeline {
     search_replace_active: bool,
     search_replacement: String,
     search_editing_replacement: bool,
+    /// ITEM 10 — the two fields' CHAR-index carets (copied from ViewState in
+    /// `set_view`), for the mid-string glyph-scan caret placement.
+    search_query_caret: usize,
+    search_replacement_caret: usize,
     /// The selected-ROW highlight quad behind the overlay's chosen candidate
     /// (same rounded SelectionPipeline primitive as match/selection). The band
     /// COLOR comes from the ONE `highlight_treatment` owner: the muted selection
@@ -3798,6 +3802,9 @@ pub struct TextPipeline {
     /// crisp (no blur backdrop). Drives both the render path and [`Self::dims_doc`].
     overlay_crisp: bool,
     overlay_query: String,
+    /// ITEM 10 — mirror of [`ViewState::overlay_query_caret`]: the query's
+    /// CHAR-index caret, for the mid-string glyph-scan caret placement.
+    overlay_query_caret: usize,
     /// Mirror of [`ViewState::overlay_title`]: this picker's quiet input-line prefix.
     overlay_title: &'static str,
     /// Mirror of [`ViewState::overlay_row_path_splits`] (item 66): does the open
