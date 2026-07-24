@@ -39,6 +39,7 @@ mod oracle;
 mod outline;
 mod overlay_align_law;
 mod overlay_personality;
+mod overlay_rail_thirds_law;
 mod reanchor_crossing_law;
 mod overlay_right_hug_law;
 mod page_frame;

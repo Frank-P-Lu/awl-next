@@ -154,15 +154,16 @@ fn awl_overlay_align_knob_parses_left_center_right() {
 // ---------------------------------------------------------------------------
 
 /// A right-aligned card genuinely RIGHT-anchors: at a comfortable window its
-/// right edge hugs the window's right margin (one full `CARD_EDGE_INSET` in),
-/// the mirror of a left-aligned card hugging the LEFT edge — so the row column
-/// (`card_x + card_w`, one `hpad` shy of the card's right edge) reads flush to
-/// the right rail. Center sits, well, centered between the two.
+/// right edge sits one full interior-rail inset (item 67) in from the window's
+/// right margin, the mirror of a left-aligned card sitting one rail inset in
+/// from the LEFT edge — so the row column (`card_x + card_w`, one `hpad` shy of
+/// the card's right edge) reads flush to the right rail. Center sits, well,
+/// centered between the two.
 #[test]
 fn right_anchor_hugs_the_right_edge_left_hugs_the_left() {
     let ww = 1200.0_f32;
     let desired = chrome::CARD_MAX_W; // comfortable — no fill regime
-    let inset = chrome::CARD_EDGE_INSET;
+    let inset = chrome::overlay_rail_inset(ww);
 
     let (lx, lw) = chrome::overlay_card_box_policy(theme::CardAnchor::TopLeft, ww, desired);
     let (cx, cw) = chrome::overlay_card_box_policy(theme::CardAnchor::TopCenter, ww, desired);
@@ -184,8 +185,17 @@ fn right_anchor_hugs_the_right_edge_left_hugs_the_left() {
 
     // Genuinely three distinct rails, monotonic left→center→right.
     assert!(lx < cx && cx < rx, "left({lx}) < center({cx}) < right({rx})");
-    // And the right card sits fully in the right HALF (its whole body past centre).
-    assert!(rx > ww * 0.5, "the right-anchored card body sits in the right half: x={rx}");
+    // And the right card's CENTER sits well past the viewport midpoint — item 67's
+    // generous interior rail means the wide card's BODY may now straddle the
+    // midline (breathing room, not a corner hug), but the card unmistakably
+    // reads as a RIGHT rail: its center sits near the two-thirds mark, not the
+    // half mark.
+    let rcx = rx + rw * 0.5;
+    assert!(
+        rcx > ww * 0.5 + 1.0,
+        "the right-anchored card's CENTER sits right of the midpoint: center={rcx}, mid={}",
+        ww * 0.5
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +275,7 @@ fn frozen_right_alignment_renders_against_the_right_edge() {
         return;
     };
     let ww = 1200.0_f32;
-    let inset = chrome::CARD_EDGE_INSET;
+    let inset = chrome::overlay_rail_inset(ww);
     let mut v = view("hello\n", 0, 0);
     v.overlay_active = true;
     v.overlay_items = vec!["Alpha".into(), "Beta".into()];
@@ -320,7 +330,7 @@ fn fable_right_picks_ship_right_anchor_and_render_against_the_right_edge() {
         return;
     };
     let ww = 1200.0_f32;
-    let inset = chrome::CARD_EDGE_INSET;
+    let inset = chrome::overlay_rail_inset(ww);
     let restore = theme::active().name;
     set_card_anchor_test_override(None); // the world's OWN data drives placement
 
@@ -345,8 +355,14 @@ fn fable_right_picks_ship_right_anchor_and_render_against_the_right_edge() {
             rx + rw,
             ww - inset
         );
-        // Its whole body sits past centre — genuinely a right rail, not a nudge.
-        assert!(rx > ww * 0.5, "{world}'s right-anchored card body sits in the right half: x={rx}");
+        // Its CENTER sits well past the viewport midpoint — genuinely a right
+        // rail (near the two-thirds mark), not a nudge (item 67's generous rail
+        // may let a wide card's body straddle the midline; the center never does).
+        let rcx = rx + rw * 0.5;
+        assert!(
+            rcx > ww * 0.5 + 1.0,
+            "{world}'s right-anchored card center sits right of the midpoint: center={rcx}"
+        );
     }
 
     theme::set_active_by_name(restore).unwrap();

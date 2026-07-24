@@ -19,17 +19,39 @@ use super::*;
 /// rendering (the document, gutter, HUD, ornaments) is untouched.
 pub(in crate::render) const OVERLAY_UI_SCALE: f32 = 0.85;
 
-/// EDGE-INSET token (device px): the calm margin the summoned card holds off the
-/// window's edges when TOP-LEFT anchored, echoing the page column's own
-/// left-margin rhythm so the card reads as *placed*, not stuck in the corner
-/// (composition round item 2 — the old flush 12px hug was too tight for the
-/// top-left anchor to read as deliberate). Collapses toward
-/// [`CARD_EDGE_INSET_FLOOR`] as the window narrows, then the card re-centers and
-/// fills (item 7) — see [`overlay_card_box_policy`].
-pub(in crate::render) const CARD_EDGE_INSET: f32 = 28.0;
 /// The smallest edge pad the card keeps as the window tightens (the narrow +
 /// narrowest regimes of [`overlay_card_box_policy`]).
 pub(in crate::render) const CARD_EDGE_INSET_FLOOR: f32 = 10.0;
+
+/// ITEM 67 — THE ONE GLOBAL RESOLVER of the summoned card's INTERIOR-RAIL inset
+/// (device px). Supersedes the old flush ~28px edge-hug (composition round item
+/// 2): `TopLeft`/`TopRight` are now SYMMETRIC INTERIOR rails whose card CENTERS
+/// sit near the viewport's one-third / two-thirds marks when the card holds a
+/// comfortable ("reference") width — generous outer breathing room instead of a
+/// corner hug, still unmistakably left/right.
+///
+/// A pure function of the WINDOW WIDTH ALONE — never the anchor, never the
+/// caller's actual `desired_w` — so:
+/// - it is the exact SAME number [`overlay_card_box_policy`]'s `TopLeft` arm and
+///   its `TopRight` arm both read, which is what makes the left/right MIRROR law
+///   hold BY CONSTRUCTION (`ww - inset - cw == inset`), independent of the card's
+///   actual content width — item 51's right-anchor content-hug still shares ONE
+///   right edge across a plain and a secondary-bearing card, unchanged;
+/// - it feeds the SAME `full -> anchored_max -> floor -> free` clamp chain the
+///   old fixed constant did, so the narrow-window collapse (toward
+///   [`CARD_EDGE_INSET_FLOOR`], then the re-centering fill regime) stays
+///   perfectly CONTINUOUS — no breakpoint jump, no per-anchor branch, no fourth
+///   user-facing anchor.
+///
+/// The reference width is [`CARD_MAX_W`] (the flat cap): a comfortable flat card
+/// CENTERS almost exactly at `ww/3` (`TopLeft`) or `2*ww/3` (`TopRight`); a wider
+/// (faceted) or narrower (content-hugged) card centers a little off that mark —
+/// same as the old fixed-inset design let width changes shift the center, only
+/// the EDGE itself stays pinned to this one value. `TopCenter` does not read this
+/// at all (it stays the exact `free * 0.5` viewport-midpoint law, untouched).
+pub(in crate::render) fn overlay_rail_inset(ww: f32) -> f32 {
+    (ww / 3.0 - CARD_MAX_W * 0.5).max(0.0)
+}
 /// The FLAT card's tightest WIDTH cap (device px) — the ONE width owner the
 /// composition round tightened (item 3; the card used to sprawl to half the
 /// window). A single dial the gallery A/Bs.
@@ -96,8 +118,8 @@ const OVERLAY_FOOTER_PAD: f32 = 5.0;
 /// width `ww`, the card's WIDE desired width, return its `(left, width)`.
 ///
 /// THREE REGIMES (the `adaptive_column` idiom, applied to the takeover card):
-/// - WIDE — hold the desired width; sit one full [`CARD_EDGE_INSET`] in from the
-///   anchored edge (item 2's page-margin rhythm).
+/// - WIDE — hold the desired width; sit one full [`overlay_rail_inset`] in from
+///   the anchored edge (item 67 — the interior-rail thirds law).
 /// - NARROW — the edge inset COLLAPSES toward [`CARD_EDGE_INSET_FLOOR`] so the
 ///   card keeps its width as the window tightens (it slides toward the edge
 ///   before it shrinks).
@@ -111,7 +133,7 @@ pub(in crate::render) fn overlay_card_box_policy(
     desired_w: f32,
 ) -> (f32, f32) {
     let floor = CARD_EDGE_INSET_FLOOR;
-    let full = CARD_EDGE_INSET;
+    let full = overlay_rail_inset(ww);
     // Never wider than the window minus a floor pad each side (the fill ceiling).
     let cw = desired_w.min((ww - 2.0 * floor).max(0.0));
     let free = (ww - cw).max(0.0);
@@ -223,8 +245,9 @@ impl TextPipeline {
     /// about where the card sits OR how wide it is:
     /// - the per-world ANCHOR ([`theme::CardAnchor`], via
     ///   [`crate::render::effective_card_anchor`] so the gallery probe A/Bs it);
-    /// - the EDGE-INSET rhythm ([`CARD_EDGE_INSET`], item 2 — a real left margin
-    ///   echoing the page column, not the old flush corner hug);
+    /// - the INTERIOR-RAIL inset ([`overlay_rail_inset`], item 67 — the card
+    ///   centers near the viewport's one-third / two-thirds mark, not a flush
+    ///   corner hug);
     /// - the NARROW-WINDOW fallback (item 7 — the inset collapses toward
     ///   [`CARD_EDGE_INSET_FLOOR`], then the card re-centers and fills), all in
     ///   the pure policy [`overlay_card_box_policy`].

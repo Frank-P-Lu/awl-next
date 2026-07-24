@@ -376,7 +376,7 @@ pub(in crate::render) use overlay::OVERLAY_UI_SCALE;
 // can reach them without naming the private `overlay` submodule (test-only).
 #[cfg(test)]
 pub(in crate::render) use overlay::{
-    overlay_card_box_policy, overlay_card_fill_regime, CARD_EDGE_INSET, CARD_EDGE_INSET_FLOOR,
+    overlay_card_box_policy, overlay_card_fill_regime, overlay_rail_inset, CARD_EDGE_INSET_FLOOR,
     CARD_MAX_W, CARD_MAX_W_FACETED,
 };
 // The card-DRAW half of the summoned overlay (shape + upload + composite): the

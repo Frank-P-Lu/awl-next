@@ -132,12 +132,15 @@ fn inset_anchor_sweeps_from_topleft_through_center_to_right_pinned() {
         i5[0],
         tc[0]
     );
-    // 1.0: right edge = canvas width - the edge inset (CARD_EDGE_INSET, 28, the
-    // composition round's page-margin rhythm — up from the old flush 12).
+    // 1.0: right edge = canvas width - the interior-rail inset (item 67's
+    // `overlay_rail_inset`, cw-independent — the card centers near the
+    // viewport's two-thirds mark, generous breathing room over the old flush
+    // ~28px edge-hug).
     let right = i1[0] + i1[2];
+    let want_right = 1200.0 - chrome::overlay_rail_inset(1200.0);
     assert!(
-        (right - (1200.0 - 28.0)).abs() < 0.51,
-        "Inset 1.0 pins the card's right edge one edge-inset in (right {right})"
+        (right - want_right).abs() < 0.51,
+        "Inset 1.0 pins the card's right edge one rail-inset in (right {right}, want {want_right})"
     );
     // Monotone: the dial genuinely sweeps rightward.
     assert!(i0[0] < i5[0] && i5[0] < i1[0], "x_frac sweeps monotonically right");

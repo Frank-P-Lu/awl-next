@@ -81,12 +81,13 @@ fn overlay_card_box_stays_on_canvas_across_the_width_sweep() {
             }
         }
     }
-    // WIDE: the top-left card holds the FULL edge inset (item 2's page rhythm).
+    // WIDE: the top-left card holds the FULL interior-rail inset (item 67 — the
+    // card centers near the viewport's one-third mark).
     let (left, _) = chrome::overlay_card_box_policy(theme::CardAnchor::TopLeft, 1200.0, chrome::CARD_MAX_W);
+    let want_inset = chrome::overlay_rail_inset(1200.0);
     assert!(
-        (left - chrome::CARD_EDGE_INSET).abs() < 0.01,
-        "a wide window seats the card one full edge inset ({}) in, got {left}",
-        chrome::CARD_EDGE_INSET
+        (left - want_inset).abs() < 0.01,
+        "a wide window seats the card one full rail inset ({want_inset}) in, got {left}"
     );
 }
 
