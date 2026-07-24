@@ -5,6 +5,7 @@
 //! `chrome_overlay` for the gutter + caret-preview-panel tests.
 
 use super::super::*;
+use super::pixeldiff::Region;
 use super::{headless_dqp, headless_pipeline, pixeldiff, view};
 
 /// The CONTEXTUAL SPELL PANEL: the spell overlay renders as a SMALL floating panel
@@ -257,6 +258,147 @@ fn spell_add_to_dictionary_row_renders_whole_at_wide_width() {
     assert!(
         long_rows.contains('…') && !long_rows.contains(&long_add),
         "an adversarially long add-row still elides when the real width cap is exhausted; shaped rows: {long_rows:?}"
+    );
+}
+
+/// ITEM 64 — the spell popup's fixed, TERMINAL "Add '<word>' to dictionary" row
+/// visually SEPARATES from the ranked corrections above it: REAL GPU pixels, not
+/// state (the sidecar is a state oracle only). On a PROPORTIONAL world (Gumtree)
+/// where `muted` reads clearly apart from full content ink, this renders three
+/// corrections + the add row, samples the REAL glyph ink of an UNSELECTED
+/// correction row and the UNSELECTED add row (neither is the hovered/selected
+/// row 0, so both read their plain resting-state ink, not a selection-band
+/// flip), and asserts the add row's ink (a) differs from the correction's and
+/// (b) genuinely RECEDES toward the popup's own `base_300` card ground — the
+/// same figure/ground-by-value proof shape as
+/// `checked_task_body_recedes_from_open_task_body_real_pixels_item_29`
+/// (`markdown.rs`). Byte-identical card fill is read straight from
+/// `theme::base_300()` (not sampled) because the float-panel border rim sits
+/// OUTSIDE the card rect entirely (`set_float_quads_rects`'s `[x-1,y-1,w+2,h+2]`
+/// ring), so every pixel inside `overlay_card_rect()` is pure fill except the
+/// glyphs — exactly what `menu_bar_row_zero_is_pure_ground_never_a_blend_with_content_underneath`
+/// already established for the SAME `Rgba8UnormSrgb` readback path.
+#[test]
+fn spell_add_row_ink_visually_separates_from_a_correction_real_pixels() {
+    let _g = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping spell_add_row_ink_visually_separates_from_a_correction_real_pixels: no wgpu adapter"
+        );
+        return;
+    };
+    let w = 1200u32;
+    let h = 800u32;
+    theme::set_active_by_name("Gumtree").unwrap();
+    p.sync_theme();
+
+    // The real corpus shape: 3 corrections + the add row (item 64's cap allows up
+    // to 5; 3 is enough to exercise an ordinary mid-list correction).
+    let add_label = "Add 'teh' to dictionary".to_string();
+    let mut v = view("teh quick brown fox\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = vec!["the".into(), "tea".into(), "ten".into(), add_label.clone()];
+    v.overlay_selected = 0; // the TOP suggestion is focused — neither compared row is it
+    v.overlay_spell = Some((0, 0, 3));
+    p.set_view(&v);
+    p.prepare(&device, &queue, w, h).unwrap();
+    let pixels = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+
+    let [cx, cy, cw, _ch] = p.overlay_card_rect().expect("the spell overlay has a card");
+    let pad = 10.0_f32; // spell_overlay_geometry's own inner padding (documented there too)
+    let lh = p.overlay_lh();
+    let text_left = cx + pad;
+    let text_top = cy + pad;
+    let row_region =
+        |row: usize| Region::new(text_left, text_top + row as f32 * lh, (cw - 2.0 * pad).max(1.0), lh);
+
+    let bg = theme::base_300().rgba_bytes(); // the popup's own opaque card fill
+    let correction_ink =
+        pixeldiff::dominant_ink_color(&pixels, w as i64, h as i64, row_region(1), bg, 18)
+            .expect("the unselected correction row ('tea') must paint SOME ink");
+    let add_ink = pixeldiff::dominant_ink_color(&pixels, w as i64, h as i64, row_region(3), bg, 18)
+        .expect("the unselected add row must paint SOME ink");
+
+    assert_ne!(
+        correction_ink, add_ink,
+        "the add row ({add_ink:?}) must not render in the SAME ink as a correction \
+         ({correction_ink:?}) — indistinguishable ink is exactly the shape item 64's \
+         'visually separated' requirement bans"
+    );
+    let dist_to_bg = |c: [u8; 4]| -> i64 { (0..3).map(|k| (c[k] as i64 - bg[k] as i64).abs()).sum() };
+    let corr_d = dist_to_bg(correction_ink);
+    let add_d = dist_to_bg(add_ink);
+    assert!(
+        add_d + 30 <= corr_d,
+        "the add row must RECEDE toward the card ground relative to a correction: add_d={add_d} \
+         should sit well under correction_d={corr_d} (add_ink={add_ink:?} correction_ink={correction_ink:?} bg={bg:?})"
+    );
+
+    theme::set_active(theme::DEFAULT_THEME);
+    p.sync_theme();
+}
+
+/// ITEM 64 — the add row elides ONLY at the REAL NARROW CAP, never at ordinary
+/// desktop width: the completing half of item 49's own pair
+/// (`spell_add_to_dictionary_row_renders_whole_at_wide_width`), which proved an
+/// ADVERSARIALLY LONG word still elides at a WIDE canvas. This proves the other
+/// axis — the SAME ordinary-length label ("Add 'teh' to dictionary", the exact
+/// shape item 49's wide-width half already confirms renders whole at 1200px) —
+/// elides once the CANVAS itself genuinely narrows, via the popup's own
+/// `card_w` clamp (`.min(width as f32 - 2*margin)` in `spell_overlay_geometry`).
+/// So "elides only at the real narrow cap" holds on both the word-length axis
+/// AND the window-width axis, not just the one item 49 already covered.
+#[test]
+fn spell_add_row_elides_only_at_a_genuinely_narrow_width() {
+    let _g = crate::testlock::serial();
+    let Some((device, queue, mut p)) = headless_dqp(1200.0, 800.0) else {
+        eprintln!(
+            "skipping spell_add_row_elides_only_at_a_genuinely_narrow_width: no wgpu adapter"
+        );
+        return;
+    };
+
+    let shaped_rows = |p: &mut TextPipeline| -> String {
+        p.panel_buffer
+            .lines
+            .iter()
+            .map(|l| l.text().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let add_label = "Add 'teh' to dictionary".to_string();
+    let mut v = view("teh quick brown fox\n", 0, 0);
+    v.overlay_active = true;
+    v.overlay_items = vec!["the".into(), "tea".into(), add_label.clone()];
+    v.overlay_selected = 0;
+    v.overlay_spell = Some((0, 0, 3));
+
+    // ORDINARY DESKTOP WIDTH: the label renders WHOLE (reconfirming item 49's
+    // own law at this test's own corpus, before narrowing the canvas below).
+    p.set_size(1200.0, 800.0);
+    p.set_view(&v);
+    p.prepare(&device, &queue, 1200, 800).unwrap();
+    let wide_rows = shaped_rows(&mut p);
+    assert!(
+        wide_rows.contains(&add_label),
+        "ordinary desktop width: the add row must render WHOLE; got {wide_rows:?}"
+    );
+    assert!(!wide_rows.contains('…'), "ordinary desktop width: no row may elide; got {wide_rows:?}");
+
+    // THE REAL NARROW CAP: the SAME view, only the canvas shrinks — the popup's
+    // own on-canvas clamp now genuinely can't seat the label whole.
+    p.set_size(220.0, 800.0);
+    p.set_view(&v);
+    p.prepare(&device, &queue, 220, 800).unwrap();
+    let narrow_rows = shaped_rows(&mut p);
+    assert!(
+        narrow_rows.contains('…'),
+        "a genuinely narrow canvas must elide the add row; got {narrow_rows:?}"
+    );
+    assert!(
+        !narrow_rows.contains(&add_label),
+        "a genuinely narrow canvas must NOT still render the add row whole; got {narrow_rows:?}"
     );
 }
 

@@ -899,8 +899,23 @@ impl TextPipeline {
                 Some(rows) => rows.contains(&row),
                 None => row == sel_vis,
             };
+            // ITEM 64 — the spell popup's fixed, terminal "Add '<word>' to
+            // dictionary" row recedes to MUTED ink (unselected) so it reads as
+            // VISUALLY SEPARATED from the ranked corrections above it — the same
+            // figure/ground-by-value language the directory-prefix split already
+            // uses two lines below, no new drawn rule, no new geometry, no new
+            // metadata array. `header_rows == 0` is the established spell-only
+            // signal (`over_overlay_query` reads the same fact); the add row is
+            // ALWAYS the corpus's terminal entry (`OverlayState::new_spell` /
+            // the `nav.rs` refilter exemption), so `row + 1 == rows.len()`
+            // identifies it structurally. The one-bit `Some(c) if flip` arm is
+            // untouched, so a focused/hovered add row still gets the SAME
+            // selection treatment (band + ink-flip) as every other row — the
+            // muting is purely the row's UNSELECTED resting state.
+            let is_spell_add_row = !has_query && row + 1 == rows.len();
             let (name_c, dir_c) = match selected_ink {
                 Some(c) if flip => (c, c),
+                _ if is_spell_add_row => (muted, muted),
                 _ => (ink, muted),
             };
             // ITEM 66: the muted-directory/content-filename split only applies to a
