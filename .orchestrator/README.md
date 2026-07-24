@@ -172,7 +172,10 @@ failure cost and task phase, not by a blanket "coding = strongest model" rule:
    in the existing ~3–4 slots, then drain and clean them before the next batch.
 6. **Pace against the reset.** At dispatch, compare weekly percentage used with
    percentage of the reset cycle elapsed. If usage is more than about ten
-   percentage points ahead, enter conservation mode: cap the next wave at 2–3
-   Sonnet workers, reserve Opus for data/state-risk planning, and skip
-   non-blocking speculative probes until the pace recovers. A separate,
-   underused taste allowance does not justify using Fable outside its role.
+   percentage points ahead, enter conservation mode by reducing compute per
+   completed task, not throughput: keep the normal 3–4 independent workers
+   cooking, use Sonnet at medium effort by default, reserve Opus for qualifying
+   data/state-risk planning, and avoid duplicate scouts, repeated speculative
+   attempts, and unbounded inherited context. Defer work only when intentionally
+   moving an optional task beyond the reset. A separate, underused taste
+   allowance does not justify using Fable outside its role.
