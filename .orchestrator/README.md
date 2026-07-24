@@ -18,7 +18,7 @@ human collaborator all read and update the same files here.
 
 The board only prevents double-work if claims are visible BEFORE work starts. Any tool (Codex, Claude Code, human) picking up an item:
 
-1. **Claim first, work second.** Edit the item's status line in `queue.md` to `🟡 IN PROGRESS — <owner> (codex|claude|human), <date>, branch <name>` and COMMIT that board edit to main before writing any code. An uncommitted claim is invisible to the other tool.
+1. **Claim first, work second.** Edit the item's status line in `queue.md` to `🟡 IN PROGRESS — <owner> (codex|claude|human), branch <name>` and COMMIT that board edit to main before writing any code. An uncommitted claim is invisible to the other tool; git already records when it happened.
 2. **Work in a worktree, never the main tree.** Branch off local `main`, name the branch on the claim line. The main working tree belongs to merge gates and the human's live session.
 3. **Re-read the board before firing.** A claim may have landed since you last looked. `git pull`-equivalent for us is just re-reading `queue.md` at HEAD.
 4. **Land = suite-gated merge to local main** (full `cargo test`, both conventions for keymap-adjacent work) + flip the board line to `✅ LANDED @ <sha>` in the same session. Push per the push policy (public repo — push after green trains).
@@ -57,7 +57,7 @@ How a brainstorm/interview session ("awl design"-type) turns talk into work:
    ambiguous, the designer asks until the intent is unambiguous — a guess never
    gets built into a queue item.
 2. **Decisions land as queue items.** Each crystallized decision becomes a
-   self-contained item (or a `DECIDED <date>` line folded into an existing
+   self-contained item (or a `DECIDED` line folded into an existing
    item) — a worker must receive the decided thing, never the open question.
 3. **The commit message is the session record.** Board-decision edits are
    committed to main with a subject starting `orchestrator: decisions` —
@@ -129,7 +129,8 @@ separate gates:
    board with actual ahead/dirty worktrees and the latest non-cancelled `main`
    CI result. The live orchestrator UI/scratch remains the detailed runtime
    view; the board records only enough owner/branch/phase state for another
-   orchestrator to recover honestly.
+   orchestrator to recover honestly. Do not copy transient agent counts,
+   timers, token usage, or scratch narration into the board.
 
 ## Execution hygiene
 
