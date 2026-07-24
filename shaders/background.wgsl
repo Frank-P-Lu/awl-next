@@ -204,11 +204,26 @@ fn tri_tone_mix(coord: f32, b1: f32, b2: f32, aa: f32) -> vec3<f32> {
     return mix(tone01, g.c_to.rgb, m2);
 }
 
+// ITEM 69 FOLLOW-UP (audit finding): the plain corner-to-corner projection
+// below reads fine at a NARROW or SQUARE canvas, but at a wide CANONICAL
+// aspect (~1200x800) the projection is dominated by the width term, so a
+// fixed-pixel margin sliver near x=0 or x=viewport.x sees only a sliver of
+// the full [0,1] range and NEVER crosses a boundary — both margins degrade to
+// one flat tone, even though the mid-field scanline still shows all three
+// bands. Re-anchoring the coordinate on the VIEWPORT'S OWN CENTER (instead of
+// the top-left corner) makes the left/right margins mirror-symmetric, and
+// `BANDS_MARGIN_SPAN` widens the span past the plain diagonal so each
+// margin's crossing lands back inside the visible canvas at canonical size —
+// the same crop/scale behavior the type's own doc promises for responsive
+// views. Tuned so canonical's margins each catch a crossing while the
+// existing mid-field ">15% per band" law still holds comfortably.
+const BANDS_MARGIN_SPAN: f32 = 1.35;
 fn bands_rgb(px: vec2<f32>) -> vec3<f32> {
     let a = g.params.y;
     let dir = vec2<f32>(cos(a), sin(a));
-    let extent = max(dot(g.viewport, dir), 1.0);
-    let t = clamp(dot(px, dir) / extent, 0.0, 1.0);
+    let center = g.viewport * 0.5;
+    let extent = max(dot(g.viewport, dir), 1.0) * BANDS_MARGIN_SPAN;
+    let t = clamp(dot(px - center, dir) / extent + 0.5, 0.0, 1.0);
     let aa = 1.5 / extent;
     return tri_tone_mix(t, 1.0 / 3.0, 2.0 / 3.0, aa);
 }

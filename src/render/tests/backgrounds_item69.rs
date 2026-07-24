@@ -254,6 +254,41 @@ fn gumtree_narrow_canonical_wide_still_show_exactly_three_bands_that_scale_not_t
     );
 }
 
+/// AUDIT REGRESSION (Fable, item 69 follow-up): at the CANONICAL capture
+/// canvas (a wide ~1200x800 aspect, not square like the test above), a
+/// full-height 16px-wide margin sliver on EITHER side of the page column must
+/// show at least two of the three tones — i.e. it catches a band edge
+/// in-viewport. Before the center-anchored re-scale in `bands_rgb`, the wide
+/// aspect ratio pushed BOTH margins' entire vertical extent into one flat
+/// corner of the field (left always tone0, right always tone2), so the
+/// default window size silently degraded the whole grass-band idea to two
+/// flat tones even though the mid-field scanline still read as three bands.
+#[test]
+fn gumtree_canonical_margin_slivers_each_catch_a_band_edge() {
+    let Some((device, queue)) = headless_dq() else {
+        eprintln!("skipping gumtree_canonical_margin_slivers_each_catch_a_band_edge: no wgpu adapter");
+        return;
+    };
+    let _g = crate::testlock::serial();
+
+    let (w, h) = (crate::capture::CANVAS_WIDTH, crate::capture::CANVAS_HEIGHT);
+    let desc = bg_desc_for(theme::GUMTREE.background);
+    let pixels = render_bg(&device, &queue, desc, w, h, 0.0, 0.0);
+    let tones = gumtree_tones();
+
+    // A representative column near each edge, well inside a 16px margin
+    // sliver (the same order of magnitude a page-mode margin actually is).
+    for (label, x) in [("left", 8u32), ("right", w - 8)] {
+        let seq = scan_col(&pixels, w, h, x, tones);
+        assert!(
+            seq.len() >= 2,
+            "{label} margin sliver at x={x} shows only ONE tone top-to-bottom \
+             (run sequence {seq:?}) — the band field degenerated to a flat fill \
+             at the canonical viewport size"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // BOMBORA — Waves
 // ---------------------------------------------------------------------------
