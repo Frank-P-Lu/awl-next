@@ -41,7 +41,13 @@ swatch. Eighteen ship today (eleven dark, seven light; `theme::THEMES`), each wi
   `every_world_has_a_real_margin_gradient`). The sixteenth ground is **`Lava`** —
   awl's first TIME-VARYING background, a slow metaball "lava lamp" in the margins
   (Firetail warm, Mangrove cool) — see §3's "The `Background::Lava` law" and
-  DESIGN.md §3's ambient-motion amendment.
+  DESIGN.md §3's ambient-motion amendment. Item 69 (2026-07) added two more
+  reusable static grounds authored as three-tone FIELDS, not whisper-marks: **`Bands`**
+  (three broad tone-on-tone diagonal bands spanning the whole margin — Gumtree's
+  cut-paper grass) and **`Waves`** (three stacked, non-overlapping, phase-offset
+  scalloped wave tiers — Bombora's swell). Both compute their final color directly
+  from three world-supplied tones (the ground ladder itself) rather than mixing a
+  low-coverage mark over a two-color gradient.
 - **A CJK fallback** matched to its character: serif worlds get the mincho list,
   sans/mono worlds get the gothic list (`cjk_fallback_matches_world_character`).
   Generalized to a per-script `FontId` ladder (ja/zh-Hans/zh-Hant/ko) by the

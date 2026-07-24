@@ -188,12 +188,14 @@ fn every_world_has_a_valid_background() {
         assert_eq!(bg.from().a, 0xFF, "{} background from must be opaque", t.name);
         assert_eq!(bg.to().a, 0xFF, "{} background to must be opaque", t.name);
         assert_eq!(bg.tint().a, 0xFF, "{} background tint must be opaque", t.name);
-        assert!(bg.shader_id() <= 4, "{} bad shader id", t.name);
+        // 0..=4 the five original static grounds (Lava also degrades to 0 for
+        // this base-margin pass), 5=Bands, 6=Waves (item 69).
+        assert!(bg.shader_id() <= 6, "{} bad shader id", t.name);
     }
     // Every STATIC ground type is still exercised across the worlds.
     let used: std::collections::HashSet<&str> =
         THEMES.iter().map(|t| t.background.as_str()).collect();
-    for p in ["gradient", "dots", "starfield", "pinstripe", "stripes"] {
+    for p in ["gradient", "dots", "starfield", "pinstripe", "stripes", "bands", "waves"] {
         assert!(used.contains(p), "ground {p} unused by any world");
     }
     // Stripes stays Potoroo's alone.
@@ -203,6 +205,67 @@ fn every_world_has_a_valid_background() {
         .map(|t| t.name)
         .collect();
     assert_eq!(stripes, ["Potoroo"], "Stripes is Potoroo's alone");
+    // Bands stays Gumtree's alone; Waves stays Bombora's alone (item 69 — each
+    // is reusable DATA, but only one world currently picks it).
+    let bands: Vec<&str> = THEMES
+        .iter()
+        .filter(|t| matches!(t.background, Background::Bands { .. }))
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(bands, ["Gumtree"], "Bands is Gumtree's alone");
+    let waves: Vec<&str> = THEMES
+        .iter()
+        .filter(|t| matches!(t.background, Background::Waves { .. }))
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(waves, ["Bombora"], "Waves is Bombora's alone");
+    // Mulga is the roster's SOLE remaining shipping Starfield world — Bombora's
+    // former Starfield became Waves (item 69).
+    let starfield: Vec<&str> = THEMES
+        .iter()
+        .filter(|t| matches!(t.background, Background::Starfield { .. }))
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(starfield, ["Mulga"], "Starfield is Mulga's alone since item 69");
+    // ITEM 69 PALETTE LAW: Gumtree's Bands and Bombora's Waves use ONLY their
+    // OWN ground ladder — `tones` is exactly `[base_100, base_200, base_300]`,
+    // no separately-tuned tint (unlike the retired Dots/Starfield tints they
+    // replace) — and the three rungs are pairwise distinct (a real tone-on-tone
+    // field, not a flat repeat).
+    match GUMTREE.background {
+        Background::Bands { tones, .. } => {
+            assert_eq!(tones, [GUMTREE.base_100, GUMTREE.base_200, GUMTREE.base_300],
+                "Gumtree's Bands tones must be exactly its own ground ladder");
+            assert_ne!(tones[0], tones[1]);
+            assert_ne!(tones[1], tones[2]);
+            assert_ne!(tones[0], tones[2]);
+        }
+        _ => panic!("Gumtree must ship Background::Bands"),
+    }
+    match BOMBORA.background {
+        Background::Waves { tones } => {
+            assert_eq!(tones, [BOMBORA.base_100, BOMBORA.base_200, BOMBORA.base_300],
+                "Bombora's Waves tones must be exactly its own ground ladder");
+            assert_ne!(tones[0], tones[1]);
+            assert_ne!(tones[1], tones[2]);
+            assert_ne!(tones[0], tones[2]);
+        }
+        _ => panic!("Bombora must ship Background::Waves"),
+    }
+    // Gumtree's band angle sits in the requested 30-35° grass cut, and is its
+    // OWN angle — never Potoroo's Stripes angle (the two diagonal grounds must
+    // never read as siblings).
+    match GUMTREE.background {
+        Background::Bands { angle, .. } => {
+            let deg = angle.to_degrees();
+            assert!((30.0..=35.0).contains(&deg), "Gumtree band angle {deg:.1}° escaped 30-35°");
+            match POTOROO.background {
+                Background::Stripes { angle: pa, .. } => assert_ne!(angle, pa, "Gumtree Bands and Potoroo Stripes must not share an angle"),
+                _ => panic!("Potoroo must ship Background::Stripes"),
+            }
+        }
+        _ => unreachable!(),
+    }
     // PROXIMITY-SCALED Dots (`edge: true`) rode Mangrove alone, and Mangrove
     // folded into a lava ground (2026-07), so no world carries proximity Dots
     // now — the `edge: bool` machinery is intact but currently unassigned (like
@@ -220,7 +283,8 @@ fn every_world_has_a_valid_background() {
 /// Firetail (warm, undithered) and Mangrove (cool deepsea, dithered), both with
 /// the Glow edge (the probe's agent pick). Pins the roster + each world's edge/
 /// dither config, and that every OTHER world stays a STATIC ground (shader id
-/// 0..=4) so the lava layer is dormant there and their captures are unaffected.
+/// 0..=6, item 69's Bands/Waves included) so the lava layer is dormant there
+/// and their captures are unaffected.
 #[test]
 fn exactly_firetail_and_mangrove_ship_lava() {
     let _lock = crate::testlock::serial();
@@ -232,7 +296,7 @@ fn exactly_firetail_and_mangrove_ship_lava() {
     assert_eq!(lava, ["Mangrove", "Firetail"], "exactly Mangrove + Firetail are lava worlds");
     for t in THEMES.iter().filter(|t| !t.background.is_lava()) {
         assert!(
-            t.background.shader_id() <= 4,
+            t.background.shader_id() <= 6,
             "{}: a non-lava world stays a static ground",
             t.name
         );
@@ -586,12 +650,14 @@ fn outline_frost_pills_keep_ink_contrast_on_every_lava_world() {
     for t in THEMES.iter() {
         // NO-WILDCARD: a future ground variant must decide its frost story here.
         let (ground, blob_lo, blob_hi) = match t.background {
-            // The five static grounds carry no lava — no frost.
+            // The seven static grounds carry no lava — no frost.
             Background::Gradient { .. }
             | Background::Dots { .. }
             | Background::Starfield { .. }
             | Background::Pinstripe { .. }
-            | Background::Stripes { .. } => continue,
+            | Background::Stripes { .. }
+            | Background::Bands { .. }
+            | Background::Waves { .. } => continue,
             Background::Lava { ground, blob_lo, blob_hi, .. } => (ground, blob_lo, blob_hi),
         };
         // FROST-AS-CAPABILITY: read the WORLD's own recipe (`render_caps.frost`),
@@ -716,12 +782,14 @@ fn gutter_frost_pill_keeps_ink_contrast_on_every_lava_world() {
     for t in THEMES.iter() {
         // NO-WILDCARD: a future ground variant must decide its frost story here.
         let (ground, blob_lo, blob_hi) = match t.background {
-            // The five static grounds carry no lava — no frost, byte-identical.
+            // The seven static grounds carry no lava — no frost, byte-identical.
             Background::Gradient { .. }
             | Background::Dots { .. }
             | Background::Starfield { .. }
             | Background::Pinstripe { .. }
-            | Background::Stripes { .. } => continue,
+            | Background::Stripes { .. }
+            | Background::Bands { .. }
+            | Background::Waves { .. } => continue,
             Background::Lava { ground, blob_lo, blob_hi, .. } => (ground, blob_lo, blob_hi),
         };
         // FROST-AS-CAPABILITY: the WORLD's own recipe (`render_caps.frost`), so a

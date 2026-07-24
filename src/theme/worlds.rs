@@ -53,12 +53,19 @@ pub const GUMTREE: Theme = Theme {
     primary_content: Srgb::rgb(0xFB, 0xEC, 0xEC),
     error: Srgb::rgb(0xC0, 0x39, 0x2B),
     selection: Srgb::rgba(0x88, 0x8F, 0x5D, 0x52),
-    background: Background::Dots {
-        from: Srgb::rgb(0xCF, 0xF3, 0xCC),
-        to: Srgb::rgb(0xB7, 0xEF, 0xB4),
-        dir: (0.7, 0.7),
-        tint: Srgb::rgb(0x93, 0xA8, 0x7A),
-        edge: false,
+    // GRASS-BANDS (item 69) — three large tone-on-tone diagonal bands across
+    // the WHOLE margin field (cut-paper grass), not a repeating dot-grid
+    // wallpaper. ONLY the eucalyptus ground ladder — `base_100`/`base_200`/
+    // `base_300` verbatim, no separately-tuned tint — at a ~32° cut (cf.
+    // Potoroo's Stripes at 0.6rad/34°, deliberately its own angle+shape so the
+    // two diagonal grounds never read as siblings).
+    background: Background::Bands {
+        tones: [
+            Srgb::rgb(0xE4, 0xF8, 0xE2),
+            Srgb::rgb(0xCF, 0xF3, 0xCC),
+            Srgb::rgb(0xB7, 0xEF, 0xB4),
+        ],
+        angle: 0.56,
     },
     font: "Literata",
     // Literary serif world → the slab-serif Monaspace Xenon: a mono that keeps a
@@ -354,11 +361,17 @@ pub const BOMBORA: Theme = Theme {
     // highlighted"). Lifted L + alpha within the SAME violet hue family (~251°, still
     // ≥30° off the amber primary) to clear the contrast law.
     selection: Srgb::rgba(0x60, 0x50, 0xA8, 0x60),
-    background: Background::Starfield {
-        from: Srgb::rgb(0x15, 0x0A, 0x2C),
-        to: Srgb::rgb(0x24, 0x15, 0x40),
-        dir: (0.0, 1.0),
-        tint: Srgb::rgb(0x7A, 0x6C, 0xA8),
+    // WAVE-TIERS (item 69) — three stacked, non-overlapping shallow wave tiers
+    // (wide scalloped crests, phase-offset so they layer) replacing the static
+    // starfield. ONLY the violet ground ladder — `base_100`/`base_200`/
+    // `base_300` verbatim — top tier to bottom. Mulga stays the roster's sole
+    // shipping `Starfield` world.
+    background: Background::Waves {
+        tones: [
+            Srgb::rgb(0x15, 0x0A, 0x2C),
+            Srgb::rgb(0x24, 0x15, 0x40),
+            Srgb::rgb(0x3C, 0x36, 0x54),
+        ],
     },
     // EB Garamond — a classic Garamond serif; distinct from Bilby's Newsreader
     // so the two share no face.

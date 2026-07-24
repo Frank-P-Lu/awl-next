@@ -370,7 +370,14 @@ pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 // absent from that list before this bump (descendant suppression was already
 // structural too) — this bump only SURFACES the fold/outline correlation a
 // capture can now assert directly instead of cross-referencing `folds` by hand.
-pub const SCHEMA_VERSION: u32 = 180;
+// `/181` — item 69 (Gumtree grass-bands + Bombora wave-tiers): `page.background`
+// gains two new tagged arms, `{ "kind": "bands", tones: [c0,c1,c2], angle }`
+// (three broad tone-on-tone diagonal bands, Gumtree) and `{ "kind": "waves",
+// tones: [c0,c1,c2] }` (three stacked non-overlapping wave tiers, Bombora) —
+// same "report the world's own authored data verbatim" shape as every other
+// arm (mirrors `/168`'s Lava bump). Every OTHER world's `page.background`
+// content is byte-unchanged; only the schema string bumps.
+pub const SCHEMA_VERSION: u32 = 181;
 
 /// `awl-capture/N` — the `--screenshot` single frame (caret block absent).
 pub fn schema_plain() -> String {

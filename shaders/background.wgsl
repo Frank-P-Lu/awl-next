@@ -29,14 +29,17 @@ struct Globals {
     // stripe angle.
     dir: vec2<f32>,
     // Procedural margin ground: 0=plain gradient, 1=dots, 2=starfield,
-    // 3=pinstripe, 4=stripes. Matches `Background::shader_id` in src/theme.rs.
+    // 3=pinstripe, 4=stripes, 5=bands, 6=waves. Matches `Background::shader_id`
+    // in src/theme/model.rs.
     shader: u32,
     pad: u32,
-    // Mark/band tint (LINEAR rgb; a is the max coverage of the marks/band).
+    // Mark/band tint (LINEAR rgb; a is the max coverage of the marks/band). For
+    // shader 5/6 (Bands/Waves) this is the MIDDLE of three authored tones —
+    // `c_from`/`c_pat`/`c_to` read as tones 0/1/2 (see `bands_rgb`/`waves_rgb`).
     c_pat: vec4<f32>,
     // Per-ground params: params.x = Dots proximity flag (0/1), params.y = the
-    // Stripes angle (radians), .zw reserved. Both are 0 for every unchanged
-    // ground, so those grounds take their exact original code path.
+    // Stripes/Bands angle (radians), .zw reserved. Both are 0 for every
+    // unchanged ground, so those grounds take their exact original code path.
     params: vec4<f32>,
 };
 
@@ -174,6 +177,65 @@ fn pattern_coverage(px: vec2<f32>) -> f32 {
     return 0.0;
 }
 
+// --- 5: BANDS — EXACTLY THREE broad, tone-on-tone diagonal bands spanning the
+// WHOLE margin field (cut-paper grass, not a repeating stripe-tile). Unlike
+// `pattern_coverage`'s whisper-marks-over-a-gradient grounds, this (and
+// `waves_rgb` below) computes the FINAL rgb directly — the three tones ARE the
+// field, not a low-coverage overlay — so `fs_main` branches to it before the
+// base-gradient/dither/pattern-overlay pipeline runs (see the early-return
+// there). Pure function of pixel position: static, no time, no assets. ---
+//
+// `coord` projects `px` onto the band direction (`params.y` = angle, the same
+// slot Stripes uses); `extent` is that SAME projection of the full viewport
+// rect, so `t = coord / extent` lands in [0,1] over the WHOLE canvas — the two
+// boundaries at 1/3 and 2/3 are therefore FRACTIONS of the viewport, not a
+// fixed pixel period, so a narrower/wider page CROPS OR SCALES the identical
+// three-band field instead of tiling more stripes into it. A small smoothstep
+// (`aa`, ~1.5px in `t`-space) feathers each boundary — "crisp-but-quiet": a
+// tight edge, but between three low-mutual-contrast ladder rungs.
+// Shared by `bands_rgb`/`waves_rgb`: three world tones (c_from/c_pat/c_to),
+// split at two boundaries along `coord` with a shared antialias half-width
+// `aa` — the ONE owner of the "two-boundary tri-tone mix" both fields do,
+// only their boundary/coord math differs.
+fn tri_tone_mix(coord: f32, b1: f32, b2: f32, aa: f32) -> vec3<f32> {
+    let m1 = smoothstep(b1 - aa, b1 + aa, coord);
+    let m2 = smoothstep(b2 - aa, b2 + aa, coord);
+    let tone01 = mix(g.c_from.rgb, g.c_pat.rgb, m1);
+    return mix(tone01, g.c_to.rgb, m2);
+}
+
+fn bands_rgb(px: vec2<f32>) -> vec3<f32> {
+    let a = g.params.y;
+    let dir = vec2<f32>(cos(a), sin(a));
+    let extent = max(dot(g.viewport, dir), 1.0);
+    let t = clamp(dot(px, dir) / extent, 0.0, 1.0);
+    let aa = 1.5 / extent;
+    return tri_tone_mix(t, 1.0 / 3.0, 2.0 / 3.0, aa);
+}
+
+// --- 6: WAVES — THREE stacked, NON-OVERLAPPING shallow wave tiers (wide
+// scalloped crests, horizontally phase-offset tier-to-tier so they read as
+// layered swells, never a grid). Tier geometry (amplitude/wavelength/phase) is
+// a FIXED constant, never per-world data — every `Waves` world shares this
+// exact shape (only the three tones differ). Static: pure function of `px`. ---
+//
+// The viewport height splits into thirds; each of the two boundaries between
+// tiers is that third's y plus a sine wobble in x (a "scallop"), with tier 2's
+// boundary carrying a DIFFERENT phase than tier 1's so the two crest-lines
+// visibly drift apart ("layer") instead of tracking each other like a grid.
+// The wobble amplitude is held well under a third of the viewport height for
+// any real window, so the two boundaries never cross — the three tiers stay
+// NON-OVERLAPPING by construction.
+const WAVE_AMP: f32 = 22.0;
+const WAVE_FREQ: f32 = 0.024166097; // 2*pi / 260px — wide, shallow scallops
+const WAVE_PHASE_1: f32 = 0.0;
+const WAVE_PHASE_2: f32 = 2.4;
+fn waves_rgb(px: vec2<f32>) -> vec3<f32> {
+    let b1 = g.viewport.y * (1.0 / 3.0) + WAVE_AMP * sin(px.x * WAVE_FREQ + WAVE_PHASE_1);
+    let b2 = g.viewport.y * (2.0 / 3.0) + WAVE_AMP * sin(px.x * WAVE_FREQ + WAVE_PHASE_2);
+    return tri_tone_mix(px.y, b1, b2, 1.5);
+}
+
 // BANDING KILL — the classic 8x8 ordered (Bayer) dither matrix, values 0..64.
 // A pure function of PIXEL POSITION alone (no time, no random), so the headless
 // capture stays deterministic. Rust mirror + full derivation notes:
@@ -227,6 +289,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Inside the page column: punch a hole so the flat base_100 clear shows.
     if (in.px.x >= g.col_left && in.px.x < g.col_left + g.col_w) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    // 5/6: BANDS / WAVES compute their own final rgb directly (three opaque
+    // authored tones ARE the field) — bypass the gradient/dither/pattern-
+    // overlay pipeline below entirely, which every OTHER ground still takes
+    // unchanged (byte-identical).
+    if (g.shader == 5u) {
+        return vec4<f32>(bands_rgb(in.px), 1.0);
+    }
+    if (g.shader == 6u) {
+        return vec4<f32>(waves_rgb(in.px), 1.0);
     }
     // Margin: evaluate the gradient along `dir`. UV is centered so the diagonal
     // worlds read symmetrically; t is clamped to [0,1].
