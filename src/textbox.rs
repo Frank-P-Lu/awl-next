@@ -275,13 +275,24 @@ mod tests {
     /// sweeps: plain ASCII, CJK (multibyte, no combining), a combining
     /// grapheme cluster (base + U+0301 COMBINING ACUTE — two Rust `char`s,
     /// ONE visual glyph, exercising that both models step by SCALAR not
-    /// grapheme), and an emoji (multibyte, single scalar here).
+    /// grapheme), an emoji (multibyte, single scalar here), and a
+    /// PUNCTUATION-ADJACENT fixture ending "word, " — its trailing char is
+    /// whitespace immediately preceded by punctuation, the ONE shape where
+    /// word MOTION (`word_backward_boundary`: collapse ALL non-word chars —
+    /// space AND punctuation — before hitting a word char) and word DELETE
+    /// (`word_delete_backward_boundary`: collapse whitespace only, then ONE
+    /// token of the resulting class) actually disagree. `"hello world foo"`
+    /// etc. never place punctuation next to a boundary, so the motion/delete
+    /// rules coincide on them — a `word_left` mis-wired to the delete
+    /// boundary would pass this whole table without this fixture (see the
+    /// module doc's "two word rules" trap).
     fn fixtures() -> Vec<(&'static str, &'static str)> {
         vec![
             ("ascii", "hello world foo"),
             ("cjk", "日本語 text 二つ目"),
             ("combining", "cafe\u{0301} au lait\u{0301} noir"),
             ("emoji", "hi 🎉 there 🚀 world"),
+            ("punct", "abc, "),
         ]
     }
 
