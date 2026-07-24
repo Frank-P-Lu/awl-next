@@ -54,12 +54,17 @@ const BUG_DOC: &str = "- \n\nsomething\n";
 const CONTROL_DOC: &str = "a\n\nsomething\n";
 
 /// Spawn the real binary for one `--screenshot` capture of `doc`, moving the
-/// caret to line 2 ("something") first via `--keys "C-n C-n"` — OFF the first
-/// line, so an unordered marker there conceals to its bullet glyph (the
+/// caret to line 2 ("something") first via `--keys "Down Down"` — OFF the
+/// first line, so an unordered marker there conceals to its bullet glyph (the
 /// precise state the vision-smoke and the fix target: reveal-on-cursor keeps
 /// the marker's own line's nits showing on-cursor, matching the raw text still
-/// being visible there — never the bug). Returns `false` iff no GPU adapter
-/// was available (mirrors the suite's `adapter_available()` tolerance).
+/// being visible there — never the bug). Plain `Down` (`NamedKey::ArrowDown =>
+/// Action::NextLine`, keymap.rs) is a static, convention-INDEPENDENT arm — unlike
+/// `C-n`, which is the Linux-native "New note" chord that displaces emacs
+/// next-line on `Convention::Linux` (see `docs/config.md`'s `linux_keep_emacs`
+/// door) and left this exact test failing under CI's real Linux convention
+/// (item 75) while passing on a macOS dev box. Returns `false` iff no GPU
+/// adapter was available (mirrors the suite's `adapter_available()` tolerance).
 fn capture(out: &Path, doc: &Path, theme: &str) -> bool {
     let output = Command::new(env!("CARGO_BIN_EXE_awl"))
         .arg("--theme")
@@ -67,7 +72,7 @@ fn capture(out: &Path, doc: &Path, theme: &str) -> bool {
         .arg("--screenshot")
         .arg(out)
         .arg("--keys")
-        .arg("C-n C-n")
+        .arg("Down Down")
         .arg(doc)
         .env_remove("AWL_CJK_FORCE")
         .env_remove("AWL_CONFIG")
