@@ -136,6 +136,58 @@ pub fn intercept(
         // Cmd-F / Cmd-Shift-F), so you can pass over a match you don't want changed.
         Key::Named(NamedKey::ArrowDown) => return step(search, buffer, Direction::Forward),
         Key::Named(NamedKey::ArrowUp) => return step(search, buffer, Direction::Backward),
+        // ITEM 10 — Left/Right move the FOCUSED field's own caret (char, or a
+        // WORD at a time held with Alt/Option) — previously a no-op. Pure
+        // motion: never recomputes/jumps, on EITHER field (the replacement
+        // NEVER does regardless; the query's text is unchanged by a move).
+        Key::Named(NamedKey::ArrowLeft) => {
+            if let Some(st) = search.as_mut() {
+                if editing_replacement {
+                    if alt {
+                        st.replacement_word_left();
+                    } else {
+                        st.replacement_char_left();
+                    }
+                } else if alt {
+                    st.query_word_left();
+                } else {
+                    st.query_char_left();
+                }
+            }
+        }
+        Key::Named(NamedKey::ArrowRight) => {
+            if let Some(st) = search.as_mut() {
+                if editing_replacement {
+                    if alt {
+                        st.replacement_word_right();
+                    } else {
+                        st.replacement_char_right();
+                    }
+                } else if alt {
+                    st.query_word_right();
+                } else {
+                    st.query_char_right();
+                }
+            }
+        }
+        // ITEM 10 — ⌥⌫ word-delete (the word-DELETE rule, distinct from the
+        // word-MOTION arrows above): checked BEFORE the plain-Backspace arm so
+        // Alt wins. The replacement's word-delete NEVER recomputes/jumps
+        // (mirrors `pop_replace_char`'s own asymmetry); the query's DOES (an
+        // edit, like `pop_char`).
+        Key::Named(NamedKey::Backspace) if alt => {
+            if editing_replacement {
+                if let Some(st) = search.as_mut() {
+                    st.replacement_delete_word_back();
+                }
+            } else {
+                let hay = buffer.text();
+                if let Some(st) = search.as_mut() {
+                    st.query_delete_word_back(&hay);
+                }
+                jump_to_current(search, buffer);
+            }
+        }
         Key::Named(NamedKey::Backspace) => {
             if editing_replacement {
                 if let Some(st) = search.as_mut() {

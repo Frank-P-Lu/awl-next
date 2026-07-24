@@ -886,7 +886,7 @@ fn dictionary_picker_absent_by_default_and_open_does_not_preview() {
         active: true,
         mode: ov.kind.as_str(),
         title: ov.kind.title(),
-        query: ov.query.clone(),
+        query: ov.query.text().to_string(),
         items: ov.item_strings(),
         bindings: ov.item_bindings(),
         git: ov.item_git_tags(),

@@ -951,3 +951,48 @@ fn palette_query_word_delete_routes_through_apply_core() {
     drive_eff(&mut overlay, &Action::DeleteWordBackward);
     assert_eq!(overlay.as_ref().unwrap().query, "foo ");
 }
+
+/// ITEM 10 — END-TO-END: `Action::ForwardWord`/`BackwardWord` move the
+/// PALETTE QUERY's caret through the real `apply_core` → `overlay_intercept`
+/// seam (previously a swallowed no-op), while plain `Action::NextLine` /
+/// `PreviousLine` (Up/Down — the list-move actions every kind shares) still
+/// move the SELECTED ROW, never the query caret. Proves the routing this item
+/// added without disturbing the pre-existing list-navigation arms.
+#[test]
+fn palette_query_word_motion_routes_through_apply_core_list_move_untouched() {
+    let names = crate::commands::names();
+    let hidden = vec![false; names.len()];
+    let mut overlay =
+        Some(OverlayState::new_command(names, crate::commands::bindings(), hidden));
+    for c in "foo bar".chars() {
+        drive_eff(&mut overlay, &Action::InsertChar(c));
+    }
+    assert_eq!(overlay.as_ref().unwrap().query.caret(), 7, "caret sits at the end after typing");
+    drive_eff(&mut overlay, &Action::BackwardWord);
+    assert_eq!(overlay.as_ref().unwrap().query.caret(), 4, "word_left lands before \"bar\"");
+    // A subsequent insert splices at the mid-string caret, not the end.
+    drive_eff(&mut overlay, &Action::InsertChar('X'));
+    assert_eq!(overlay.as_ref().unwrap().query, "foo Xbar");
+    drive_eff(&mut overlay, &Action::ForwardWord);
+    assert_eq!(
+        overlay.as_ref().unwrap().query.caret(),
+        overlay.as_ref().unwrap().query.text().chars().count(),
+        "word_right walks back to the end"
+    );
+    // Clear the query back to empty (the full command list ranks, > 1 row) so
+    // NextLine has somewhere real to move — proving plain list-move is
+    // UNCHANGED by item 10: it moves the selection, never the query caret.
+    for _ in 0..8 {
+        drive_eff(&mut overlay, &Action::DeleteBackward);
+    }
+    assert_eq!(overlay.as_ref().unwrap().query, "");
+    let caret_before = overlay.as_ref().unwrap().query.caret();
+    let selected_before = overlay.as_ref().unwrap().selected;
+    drive_eff(&mut overlay, &Action::NextLine);
+    assert_eq!(overlay.as_ref().unwrap().query.caret(), caret_before, "list move never touches the caret");
+    assert_ne!(
+        overlay.as_ref().unwrap().selected,
+        selected_before,
+        "NextLine still moves the selection (more than one command exists)"
+    );
+}

@@ -532,6 +532,8 @@ impl TextPipeline {
         self.search_replace_active = view.search_replace_active;
         self.search_replacement = view.search_replacement.clone();
         self.search_editing_replacement = view.search_editing_replacement;
+        self.search_query_caret = view.search_query_caret;
+        self.search_replacement_caret = view.search_replacement_caret;
         // FORMAT POPOVER: mirror the model (built by the App / capture probe); the
         // geometry is (re)computed in `prepare_popover`, which also parks the quads
         // when this is `None`.
@@ -570,6 +572,7 @@ impl TextPipeline {
         }
         self.overlay_crisp = view.overlay_crisp;
         self.overlay_query = view.overlay_query.clone();
+        self.overlay_query_caret = view.overlay_query_caret;
         self.overlay_title = view.overlay_title;
         self.overlay_row_path_splits = view.overlay_row_path_splits;
         self.overlay_items = view.overlay_items.clone();

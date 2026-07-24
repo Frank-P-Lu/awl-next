@@ -841,6 +841,72 @@ fn bars_query_caret_overlaps_the_query_text() {
     theme::set_active(theme::DEFAULT_THEME);
 }
 
+/// ITEM 10 — D: the picker's amber query caret places at its OWN CHAR-index
+/// caret (`ViewState::overlay_query_caret`), not always the query's END.
+/// Renders the SAME query three times — caret at the START (char 0), the
+/// MIDDLE (char 3), and the END (char 6, the pre-item-10 ONLY position) — and
+/// proves by PIXEL ARITHMETIC that the caret's measured X strictly advances
+/// begin < mid < end (the Wagtail lesson: appearance is asserted over the
+/// PNG's pixels, never the sidecar/geometry alone).
+#[test]
+fn overlay_query_caret_places_at_begin_mid_end_char_index() {
+    let (w, h) = (1200u32, 800u32);
+    let _g = crate::testlock::serial();
+    crate::render::set_card_anchor_test_override(Some(theme::CardAnchor::TopLeft));
+    theme::set_active_by_name("Bowerbird").unwrap();
+
+    let is_amber = |q: [u8; 4]| q[0] > 180 && q[1] > 100 && q[1] < 200 && q[2] < 110;
+    // The caret's mean X over a tall strip spanning the whole query line —
+    // wide enough to catch the caret at any of the three tested char indices.
+    let caret_mean_x = |caret_char: usize| -> Option<i64> {
+        let Some((device, queue, mut p)) = headless_dqp(w as f32, h as f32) else {
+            return None;
+        };
+        let mut v = view("hello world\n", 0, 0);
+        v.overlay_active = true;
+        v.overlay_title = ""; // bare "› " sigil — no title prefix to account for
+        v.overlay_items = (0..4).map(|i| format!("Command {i}")).collect();
+        v.overlay_selected = 0;
+        v.overlay_query = "abcxyz".to_string(); // 6 ASCII chars, mono-ish spacing
+        v.overlay_query_caret = caret_char;
+        p.set_view(&v);
+        p.prepare(&device, &queue, w, h).unwrap();
+        let px = pixeldiff::render_frame(&mut p, &device, &queue, w, h);
+        let idx = |x: i64, y: i64| px[(y * w as i64 + x) as usize];
+        let mut xs = Vec::new();
+        for y in 40..140 {
+            for x in 30..260 {
+                if is_amber(idx(x, y)) {
+                    xs.push(x);
+                }
+            }
+        }
+        assert!(!xs.is_empty(), "no amber caret pixels found for caret_char={caret_char}");
+        Some(xs.iter().sum::<i64>() / xs.len() as i64)
+    };
+
+    let Some(x_begin) = caret_mean_x(0) else {
+        eprintln!("skipping overlay_query_caret_places_at_begin_mid_end_char_index: no wgpu adapter");
+        crate::render::set_card_anchor_test_override(None);
+        theme::set_active(theme::DEFAULT_THEME);
+        return;
+    };
+    let x_mid = caret_mean_x(3).unwrap();
+    let x_end = caret_mean_x(6).unwrap();
+
+    assert!(
+        x_begin < x_mid,
+        "the BEGIN caret (char 0, x={x_begin}) must sit strictly left of the MID caret (char 3, x={x_mid})"
+    );
+    assert!(
+        x_mid < x_end,
+        "the MID caret (char 3, x={x_mid}) must sit strictly left of the END caret (char 6, x={x_end})"
+    );
+
+    crate::render::set_card_anchor_test_override(None);
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 /// POSTER BARS KEEP THE LIVE PAGE (real pixels): Mangrove, Firetail, and
 /// Cassowary all ship the shared Bars treatment. Every centered list kind must
 /// therefore leave meaningful source glyphs untouched inside its own layout

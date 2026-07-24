@@ -981,6 +981,19 @@ pub(super) fn overlay_query_center(text_top: f32, line_height: f32) -> f32 {
     text_top + line_height * 0.5
 }
 
+/// ITEM 10 — the BYTE offset of CHAR index `caret_char` within `text`
+/// (`caret_char` may equal `text.chars().count()`, yielding `text.len()`), the
+/// ONE conversion the panel's ([`TextPipeline::panel_shape_text`]) and the
+/// overlay's ([`TextPipeline::overlay_place_caret`]) mid-string caret math both
+/// route through, so a caret placed on multibyte text (CJK / combining / emoji)
+/// never mistakes a byte offset for a char index.
+pub(super) fn field_caret_byte(text: &str, caret_char: usize) -> usize {
+    if caret_char == 0 {
+        return 0;
+    }
+    text.char_indices().nth(caret_char).map(|(b, _)| b).unwrap_or(text.len())
+}
+
 /// The ONE bounded scroll-WINDOW owner shared by EVERY summoned picker — the flat
 /// pickers (over `items`), the contextual spell popup (over its suggestion rows), AND
 /// the faceted/grouped path (over the DISPLAY plan, headers + rows counted together).

@@ -195,6 +195,44 @@ pub(crate) fn word_delete_forward_boundary(
     j
 }
 
+/// The ONE owner of the WORD-MOTION forward boundary (M-f / Ctrl/Opt-Right /
+/// [`crate::buffer::motion`]'s `Buffer::forward_word`): from char index
+/// `cursor`, skip any run of NON-word chars, then skip the WORD-char run that
+/// follows, returning the char index reached. `len` is the char length of the
+/// text; `char_at(i)` yields the char at `i` (`cursor <= i < len`).
+///
+/// DISTINCT from [`word_delete_forward_boundary`] — motion and delete are
+/// different rules (skip-then-skip vs. one-token-plus-its-introducing-
+/// whitespace) that must never be conflated; see that function's own doc.
+/// Abstracted over the storage so [`Buffer::forward_word`] (rope-backed) and
+/// [`crate::textbox::TextBox::word_right`] (a plain `String`) share the SAME
+/// rule instead of the textbox silently drifting from the document's own M-f.
+pub(crate) fn word_forward_boundary(cursor: usize, len: usize, char_at: impl Fn(usize) -> char) -> usize {
+    let mut i = cursor;
+    while i < len && !is_word_char(char_at(i)) {
+        i += 1;
+    }
+    while i < len && is_word_char(char_at(i)) {
+        i += 1;
+    }
+    i
+}
+
+/// The ONE owner of the WORD-MOTION backward boundary — the exact mirror of
+/// [`word_forward_boundary`], shared by [`Buffer::backward_word`] and
+/// [`crate::textbox::TextBox::word_left`]. `char_at(i)` yields the char at
+/// `i` (`0 <= i < cursor`).
+pub(crate) fn word_backward_boundary(cursor: usize, char_at: impl Fn(usize) -> char) -> usize {
+    let mut i = cursor;
+    while i > 0 && !is_word_char(char_at(i - 1)) {
+        i -= 1;
+    }
+    while i > 0 && is_word_char(char_at(i - 1)) {
+        i -= 1;
+    }
+    i
+}
+
 /// One recorded edit, the unit of undo. We store the CHANGE (op-based history),
 /// not a whole-document snapshot, so memory is proportional to what was edited.
 /// At char index `start`, the text `removed` was replaced by the text `inserted`.

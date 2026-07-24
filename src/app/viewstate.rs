@@ -166,6 +166,8 @@ impl App {
             search_replace_active,
             search_replacement,
             search_editing_replacement,
+            search_query_caret,
+            search_replacement_caret,
         ) = self.search_view_fields();
 
         // KEYED (the completed-word-lag fix's second half): filter the cache down
@@ -217,6 +219,8 @@ impl App {
             search_replace_active,
             search_replacement,
             search_editing_replacement,
+            search_query_caret,
+            search_replacement_caret,
             overlay_active: self.overlay.is_some(),
             // ITEM 45: carry the alignment FROZEN at summon (`OverlayState::align`)
             // straight through — read verbatim every frame, so a live theme-preview
@@ -241,8 +245,16 @@ impl App {
             overlay_query: self
                 .overlay
                 .as_ref()
-                .map(|o| o.query.clone())
+                .map(|o| o.query.text().to_string())
                 .unwrap_or_default(),
+            // ITEM 10 — TEXTBOX MODEL: the picker query's CHAR-index caret, so the
+            // render path can place a mid-string caret (glyph-scan) instead of always
+            // pinning it to the query's end.
+            overlay_query_caret: self
+                .overlay
+                .as_ref()
+                .map(|o| o.query.caret())
+                .unwrap_or(0),
             overlay_title: self
                 .overlay
                 .as_ref()
@@ -400,6 +412,8 @@ impl App {
             view.search_replace_active = false;
             view.search_replacement = String::new();
             view.search_editing_replacement = false;
+            view.search_query_caret = 0;
+            view.search_replacement_caret = 0;
             // A history preview shows a DIFFERENT version's text; the popover's
             // spans would index the wrong bytes, so it never rides a preview frame.
             view.popover = None;
@@ -606,6 +620,7 @@ impl App {
     /// each match CHAR range -> ((l,c),(l,c)) so highlight quads reuse the
     /// selection-rect geometry; the current match is shown only by the real amber
     /// caret (already moved onto it by `handle_search_key`). `None` search -> empty.
+    #[allow(clippy::type_complexity)]
     fn search_view_fields(
         &self,
     ) -> (
@@ -617,6 +632,8 @@ impl App {
         bool,
         String,
         bool,
+        usize,
+        usize,
     ) {
         if let Some(st) = self.search.as_ref() {
             let matches = st
@@ -638,6 +655,10 @@ impl App {
                 st.is_replace_active(),
                 st.replacement().to_string(),
                 st.is_editing_replacement(),
+                // ITEM 10 — the two fields' CHAR-index carets, so the panel can
+                // place a mid-string caret (glyph-scan) instead of always the end.
+                st.query_caret(),
+                st.replacement_caret(),
             )
         } else {
             (
@@ -649,6 +670,8 @@ impl App {
                 false,
                 String::new(),
                 false,
+                0,
+                0,
             )
         }
     }

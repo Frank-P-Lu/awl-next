@@ -517,6 +517,63 @@ fn replace_caret_rides_the_reserved_cell_after_the_replacement_text() {
     );
 }
 
+/// ITEM 10 — D: the find/replace panel's amber caret places at its OWN
+/// CHAR-index caret (`ViewState::search_query_caret` /
+/// `search_replacement_caret`), not always the field's end. Computes
+/// `caret_x` via the SAME `panel_shape_text` + `panel_layout` seam the
+/// renderer draws from (the geometry that becomes the pixel), on a
+/// PROPORTIONAL world, for the caret at the field's START (char 0), MIDDLE
+/// (char 3), and END (char 6) — proving x strictly advances begin < mid < end
+/// on BOTH the find query and the replacement field.
+#[test]
+fn panel_caret_places_at_begin_mid_end_char_index_both_fields() {
+    let _t = crate::testlock::serial();
+    crate::theme::set_active_by_name("Gumtree").unwrap();
+    let Some(mut p) = headless_pipeline() else {
+        eprintln!("skipping panel_caret_places_at_begin_mid_end_char_index_both_fields: no wgpu adapter");
+        return;
+    };
+    let width = 1200u32;
+
+    let caret_x_at = |p: &mut TextPipeline, v: &ViewState| -> f32 {
+        p.set_view(v);
+        let shape = p.panel_shape_text(width);
+        p.panel_layout(width, shape.caret_byte, shape.caret_fallback_chars, shape.caret_row).3
+    };
+
+    // The FIND query field.
+    let mut v = view("hello\n", 0, 0);
+    v.search_active = true;
+    v.search_query = "abcxyz".into();
+    v.search_editing_replacement = false;
+    v.search_query_caret = 0;
+    let fx_begin = caret_x_at(&mut p, &v);
+    v.search_query_caret = 3;
+    let fx_mid = caret_x_at(&mut p, &v);
+    v.search_query_caret = 6;
+    let fx_end = caret_x_at(&mut p, &v);
+    assert!(fx_begin < fx_mid, "find: begin ({fx_begin}) < mid ({fx_mid})");
+    assert!(fx_mid < fx_end, "find: mid ({fx_mid}) < end ({fx_end})");
+
+    // The REPLACEMENT field.
+    let mut v = view("hello\n", 0, 0);
+    v.search_active = true;
+    v.search_query = "hello".into();
+    v.search_replace_active = true;
+    v.search_replacement = "abcxyz".into();
+    v.search_editing_replacement = true;
+    v.search_replacement_caret = 0;
+    let rx_begin = caret_x_at(&mut p, &v);
+    v.search_replacement_caret = 3;
+    let rx_mid = caret_x_at(&mut p, &v);
+    v.search_replacement_caret = 6;
+    let rx_end = caret_x_at(&mut p, &v);
+    assert!(rx_begin < rx_mid, "replace: begin ({rx_begin}) < mid ({rx_mid})");
+    assert!(rx_mid < rx_end, "replace: mid ({rx_mid}) < end ({rx_end})");
+
+    theme::set_active(theme::DEFAULT_THEME);
+}
+
 /// CLICK-TO-SWITCH-FIELD: the pure `panel_hit` maps a physical pointer to the
 /// find/replace field it lands on, from the SAME `panel_layout` the fields draw
 /// from (no parallel geometry). Row 0 = find, row 1 = replace (present only once

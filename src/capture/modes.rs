@@ -293,6 +293,13 @@ pub(super) fn settled_viewstate(
     vstate.search_replace_active = opts.search_replace_active;
     vstate.search_replacement = opts.search_replacement.clone();
     vstate.search_editing_replacement = opts.search_editing_replacement;
+    // ITEM 10 — this synthetic capture-opts path (`CaptureOpts`/`OverlayInfo`)
+    // has no caret concept of its own (a `--keys` replay's word-motion caret
+    // isn't threaded through it yet), so both fields render their caret at the
+    // END — the ONE position every field always rendered at before item 10, so
+    // this stays byte-identical to the pre-item-10 capture behavior.
+    vstate.search_query_caret = vstate.search_query.chars().count();
+    vstate.search_replacement_caret = vstate.search_replacement.chars().count();
     vstate.overlay_active = opts.overlay.as_ref().map(|o| o.active).unwrap_or(false);
     // ITEM 45 (overlay ALIGNMENT as personality data): the alignment the overlay
     // FROZE at summon rides through verbatim (`None` when no overlay is open), so the
@@ -328,6 +335,10 @@ pub(super) fn settled_viewstate(
         .map(|o| o.mode == "theme" || o.mode == "caret" || o.mode == "history")
         .unwrap_or(false);
     vstate.overlay_query = opts.overlay.as_ref().map(|o| o.query.clone()).unwrap_or_default();
+    // ITEM 10 — mirrors the search fields above: `OverlayInfo` carries no caret
+    // yet, so this synthetic path always renders it at the END (byte-identical
+    // to pre-item-10, where the query caret was ALWAYS the end).
+    vstate.overlay_query_caret = vstate.overlay_query.chars().count();
     // The modal-prompt minibuffers (Rename/InsertLink/KeepName) already orient via
     // their own `foot_hint`, so the render path skips the title prefix for them —
     // consulted through the ONE owner (`OverlayKind::draws_title_prefix`, resolved

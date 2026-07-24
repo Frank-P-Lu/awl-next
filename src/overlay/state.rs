@@ -5,6 +5,7 @@
 //! lives in moved.
 
 use super::{Capture, KeepEdit, LinkEdit, OverlayKind, RenameEdit, ValueEdit, PIN_TAG};
+use crate::textbox::TextBox;
 
 /// The row LABEL for the spell picker's "Add to dictionary" affordance — the ONE
 /// owner of its wording, so the built row, the tests, and any future re-summon
@@ -46,7 +47,11 @@ pub struct OverlayState {
     /// read instead of the live world — so an unfrozen live read still can't relocate the
     /// card (the alignment-is-data grep-law), only a deliberate `reanchor` can.
     pub align: crate::theme::CardAnchor,
-    pub query: String,
+    /// ITEM 10 — the fuzzy filter text + its CHAR-index caret, one shared
+    /// [`TextBox`]. Plain L/R still lens/descend/list (never routed through
+    /// the model); only word-motion (Ctrl/Opt-arrow) and typing/backspace
+    /// move the caret within it — see `actions/overlay_nav.rs`.
+    pub query: TextBox,
     /// The full unfiltered candidate corpus (stable order), RAW accept values.
     pub corpus: Vec<String>,
     /// Parallel to `corpus`: entry is a git repo (gets a marker).
@@ -283,7 +288,7 @@ impl OverlayState {
             // knob then the active world's data; the render path reads THIS frozen
             // value thereafter, never the live world (so previewing holds the card).
             align: crate::render::effective_card_anchor(),
-            query: String::new(),
+            query: TextBox::new(),
             corpus,
             git,
             is_dir,

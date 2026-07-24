@@ -11,7 +11,7 @@ impl OverlayState {
     /// Re-rank `corpus` against the current query into `items`, clamping the
     /// selection. Called after every query edit.
     pub fn refilter(&mut self) {
-        let mut scored = fuzzy::rank(&self.query, &self.corpus, |i| {
+        let mut scored = fuzzy::rank(self.query.text(), &self.corpus, |i| {
             if self.open.contains(&i) {
                 Tier::Open
             } else if self.recent.contains(&i) {
@@ -157,34 +157,49 @@ impl OverlayState {
         self.item_sections.clone()
     }
 
-    /// Append a char to the query and refilter. A query edit re-ranks the list, so the
-    /// selection + scroll reset to the TOP (the best match).
+    /// Insert a char at the query's caret and refilter. A query edit re-ranks the
+    /// list, so the selection + scroll reset to the TOP (the best match).
     pub fn push(&mut self, c: char) {
-        self.query.push(c);
+        self.query.insert(c);
         self.selected = 0;
         self.scroll = 0;
         self.refilter();
     }
 
-    /// Remove the last query char and refilter.
+    /// Backspace the query (deletes the char BEFORE its caret) and refilter.
     pub fn pop(&mut self) {
-        self.query.pop();
+        self.query.delete_back();
         self.selected = 0;
         self.scroll = 0;
         self.refilter();
     }
 
     /// ⌥⌫ (M-Backspace / DeleteWordBackward): remove the trailing WORD from the
-    /// query — one whitespace/punct run + one word — then refilter. Shares the
-    /// document buffer's exact word-delete boundary rule (the minibuffer caret is
-    /// implicitly at the end of the append/pop query, so the boundary is computed
-    /// from `query.len()`), so ⌥⌫ means the same thing in the palette as in the
-    /// text. A NO-OP on an empty query (nothing to remove).
+    /// query — one whitespace/punct run + one word — then refilter. Routes through
+    /// [`TextBox::delete_word_back`], the SAME word-DELETE boundary rule the
+    /// document buffer's own word-delete uses (`crate::buffer::
+    /// word_delete_backward_boundary`), so ⌥⌫ means the same thing in the palette
+    /// as in the text. A NO-OP on an empty query (nothing to remove).
     pub fn pop_word(&mut self) {
-        truncate_trailing_word(&mut self.query);
+        self.query.delete_word_back();
         self.selected = 0;
         self.scroll = 0;
         self.refilter();
+    }
+
+    /// ITEM 10 — word MOTION right (Ctrl/Opt-Right while typing a filter):
+    /// moves the query's caret WITHOUT editing the text or refiltering — plain
+    /// L/R stay lens/descend/list (`actions/overlay_nav.rs`'s own gate); only
+    /// word-motion reaches the caret at all, since arrows are claimed. Shares
+    /// [`crate::buffer::word_forward_boundary`] with the document's own M-f —
+    /// the DISTINCT rule from `pop_word`'s word-DELETE boundary above.
+    pub fn query_word_right(&mut self) {
+        self.query.word_right();
+    }
+
+    /// ITEM 10 — word MOTION left, the mirror of [`Self::query_word_right`].
+    pub fn query_word_left(&mut self) {
+        self.query.word_left();
     }
 
     /// Cmd-Shift-. : REVEAL / re-hide dot-prefixed entries in THIS file picker (the
@@ -511,19 +526,5 @@ impl OverlayState {
                 }
             })
             .collect()
-    }
-}
-
-/// Remove the trailing word (its preceding non-word run + the word itself) from a
-/// minibuffer input `s`, in place — the ⌥⌫ word-delete shared by EVERY overlay
-/// input (the fuzzy query + the Rename / Link / Keep / Settings-value edits).
-/// Routes through the document buffer's ONE word-delete boundary owner
-/// ([`crate::buffer::word_delete_backward_boundary`]) so the minibuffer can never
-/// disagree with the text about where a word ends. A NO-OP on an empty string.
-pub(super) fn truncate_trailing_word(s: &mut String) {
-    let chars: Vec<char> = s.chars().collect();
-    let keep = crate::buffer::word_delete_backward_boundary(chars.len(), |i| chars[i]);
-    if keep < chars.len() {
-        *s = chars[..keep].iter().collect();
     }
 }

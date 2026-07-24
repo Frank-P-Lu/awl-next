@@ -90,6 +90,16 @@ pub struct ViewState {
     /// Which field the amber caret rides: `false` = the search query (row 0),
     /// `true` = the replacement (row 1).
     pub search_editing_replacement: bool,
+    /// ITEM 10 — the query field's CHAR-index caret (`TextBox::caret`), so the
+    /// panel places a MID-STRING caret at the real shaped glyph advance instead
+    /// of always the field's end. `usize::MAX` (the [`ViewState::base`] default,
+    /// and every scaffold that never mentions this field) is the "unspecified"
+    /// sentinel — the render path's `.min(len_chars)` clamp turns it into the
+    /// field's END, byte-identical to every pre-item-10 render.
+    pub search_query_caret: usize,
+    /// ITEM 10 — the replacement field's CHAR-index caret, mirroring
+    /// `search_query_caret` (including the `usize::MAX` = "end" sentinel).
+    pub search_replacement_caret: usize,
     /// True while the summoned navigation OVERLAY is open (go-to / switch). Drives
     /// drawing the overlay card + candidate list + selected-row highlight.
     pub overlay_active: bool,
@@ -110,9 +120,17 @@ pub struct ViewState {
     /// highlighted VERSION in the document itself. Every other full overlay
     /// (`false`) gets the cached frosted-blur backdrop.
     pub overlay_crisp: bool,
-    /// The overlay's live query string (shown on the query line, with the amber
-    /// caret at its end). Empty when no overlay.
+    /// The overlay's live query string (shown on the query line). Empty when no
+    /// overlay.
     pub overlay_query: String,
+    /// ITEM 10 — the query's CHAR-index caret (`TextBox::caret`), so the amber
+    /// caret places at the real shaped glyph advance for a MID-STRING position
+    /// (reached via word-motion; plain L/R stay lens/descend/list), not always
+    /// the query's end. `usize::MAX` (the [`ViewState::base`] default) is the
+    /// "unspecified" sentinel, clamped by the render path to the query's END —
+    /// byte-identical to every pre-item-10 render (and to every scaffold that
+    /// never mentions this field).
+    pub overlay_query_caret: usize,
     /// THE OVERLAY-TITLES ROUND: this picker's short self-announcement
     /// ([`crate::overlay::OverlayKind::title`]), drawn as a quiet MUTED prefix
     /// ("<title> › ") before the query text on the picker's own input line. Empty
@@ -333,10 +351,17 @@ impl ViewState {
             search_replace_active: false,
             search_replacement: String::new(),
             search_editing_replacement: false,
+            // ITEM 10 — `usize::MAX`: the "unspecified caret" sentinel, clamped
+            // to the field's END by the render path (byte-identical to every
+            // pre-item-10 render). `sync_view` (the one live-state authority)
+            // always overwrites this with a real char index.
+            search_query_caret: usize::MAX,
+            search_replacement_caret: usize::MAX,
             overlay_active: false,
             overlay_align: None,
             overlay_crisp: false,
             overlay_query: String::new(),
+            overlay_query_caret: usize::MAX,
             overlay_title: "",
             overlay_row_path_splits: false,
             overlay_items: Vec::new(),

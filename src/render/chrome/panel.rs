@@ -179,25 +179,32 @@ impl TextPipeline {
         self.panel_buffer
             .shape_until_scroll(&mut self.font_system, false);
 
-        // Byte offset + char-prefix of the FOCUSED field's reserved caret cell, so
-        // the amber caret tracks the real shaped advance on whichever row has focus.
-        // The offset is LINE-relative (cosmic-text's `LayoutGlyph::start` counts from
-        // each line's own origin, resetting to 0 after every `\n`), so the replace
-        // row's cell is `REPLACE_LABEL.len() + replacement.len()` WITHIN line 1 — NOT
-        // a buffer-global offset carrying the find row's bytes, which would never
-        // match a line-1 glyph and drop the caret onto the hardcoded-pitch fallback.
-        // `panel_layout` scopes its glyph scan to `caret_row`, so a line-relative
-        // offset can never false-match the identically-numbered byte on the find row.
+        // ITEM 10 — byte offset + char-prefix of the FOCUSED field's caret, at
+        // its OWN CHAR-index position (`TextBox::caret`, mid-string reachable via
+        // char/word motion) — not always the field's end. The offset is
+        // LINE-relative (cosmic-text's `LayoutGlyph::start` counts from each
+        // line's own origin, resetting to 0 after every `\n`), so the replace
+        // row's cell is `REPLACE_LABEL.len() + <byte offset within replacement>`
+        // WITHIN line 1 — NOT a buffer-global offset carrying the find row's
+        // bytes, which would never match a line-1 glyph and drop the caret onto
+        // the hardcoded-pitch fallback. `panel_layout` scopes its glyph scan to
+        // `caret_row`, so a line-relative offset can never false-match the
+        // identically-numbered byte on the find row. At the field's END (the
+        // pre-item-10 ONLY position) the target byte lands on the reserved
+        // trailing cell (`gap`/the replace row's own trailing space), exactly as
+        // before; mid-field it lands on a real shaped glyph of the field's own text.
         let (caret_byte, caret_fallback_chars, caret_row) = if editing_replacement {
+            let caret_char = self.search_replacement_caret.min(replacement.chars().count());
             (
-                REPLACE_LABEL.len() + replacement.len(),
-                REPLACE_LABEL.chars().count() + replacement.chars().count(),
+                REPLACE_LABEL.len() + field_caret_byte(&replacement, caret_char),
+                REPLACE_LABEL.chars().count() + caret_char,
                 1.0_f32,
             )
         } else {
+            let caret_char = self.search_query_caret.min(query.chars().count());
             (
-                FIND_LABEL.len() + query.len(),
-                FIND_LABEL.chars().count() + query.chars().count(),
+                FIND_LABEL.len() + field_caret_byte(&query, caret_char),
+                FIND_LABEL.chars().count() + caret_char,
                 0.0_f32,
             )
         };

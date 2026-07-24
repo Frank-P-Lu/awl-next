@@ -483,10 +483,14 @@ impl TextPipeline {
         Ok(())
     }
 
-    /// Place the one amber caret: a resting block at the end of the query line. Read
-    /// the first shaped row's width so the caret lands at the query end on a
-    /// proportional world face too (not a fixed `char_width` assumption); fall back
-    /// to fixed-pitch if shaping yielded no run.
+    /// Place the one amber caret: at the query's OWN CHAR-index caret (item 10) —
+    /// a MID-STRING position (reached via word-motion; plain L/R stay
+    /// lens/descend/list) reads the glyph the caret's byte offset shaped to; the
+    /// END position (every field's ONLY position before item 10) has no glyph
+    /// starting there, so it falls back to the first shaped row's WIDTH, exactly
+    /// the pre-item-10 placement — proportional-face-correct either way (not a
+    /// fixed `char_width` assumption); the ultimate fallback (no shaped run at
+    /// all) stays the hardcoded-pitch estimate.
     ///
     /// The contextual SPELL panel has NO query line to edit, so its caret is PARKED
     /// (nothing drawn) — the suggestions are picked by click / arrows + Enter, not by
@@ -505,12 +509,20 @@ impl TextPipeline {
         }
         let m = self.metrics;
         let sigil = "› ";
+        // The prefix byte-length actually SHAPED before the query text on line 0
+        // — the title prefix ("<title> › ") when drawn, else the bare sigil —
+        // mirroring `overlay_shape_text`'s own span choice exactly, so the target
+        // byte this scans for lands on the SAME line-relative offset the shaper used.
+        let title_prefix = self.overlay_title_prefix(geom);
+        let prefix_len = if title_prefix.is_empty() { sigil.len() } else { title_prefix.len() };
+        let caret_char = self.overlay_query_caret.min(self.overlay_query.chars().count());
+        let target_byte = prefix_len + field_caret_byte(&self.overlay_query, caret_char);
+        let first_run = self.panel_buffer.layout_runs().next();
         let caret_x = geom.text_left
-            + self
-                .panel_buffer
-                .layout_runs()
-                .next()
-                .map(|r| r.line_w)
+            + first_run
+                .as_ref()
+                .and_then(|r| r.glyphs.iter().find(|g| g.start == target_byte).map(|g| g.x))
+                .or_else(|| first_run.as_ref().map(|r| r.line_w))
                 .unwrap_or_else(|| {
                     m.char_width
                         * (sigil.chars().count() + self.overlay_query.chars().count()) as f32
