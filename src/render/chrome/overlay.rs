@@ -659,9 +659,11 @@ impl TextPipeline {
         let gap = 6.0; // the breath between the word and the panel
         let n_items = self.overlay_items.len();
         // Same window model as the centered card via the shared `scroll_window` owner,
-        // capped by the spell popup's own `overlay_window_rows` (8 — the former inline
-        // `MAX_ROWS`; byte-identical, since the overlay-owned scroll hint already keeps
-        // `sel` visible).
+        // capped by the spell popup's own `overlay_window_rows` (item 64's
+        // `MAX_SUGGESTIONS + 1` — the former inline `MAX_ROWS`; byte-identical, since
+        // the overlay-owned scroll hint already keeps `sel` visible). The corpus itself
+        // never exceeds the cap (`new_spell` truncates), so this window can never be
+        // forced to scroll — "no scrolling" is structural, not just a UI choice.
         let (top_idx, visible) = scroll_window(
             n_items,
             self.overlay_selected,

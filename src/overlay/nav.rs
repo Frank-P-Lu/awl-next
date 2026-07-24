@@ -37,17 +37,28 @@ impl OverlayState {
                 .then_with(|| a.index.cmp(&b.index))
         });
         let mut ranked: Vec<usize> = scored.into_iter().map(|r| r.index).collect();
-        // SPELL "Add to dictionary" EXEMPTION: the add row acts on the TARGETED
-        // word, not the typed query, so a fuzzy filter that dropped it (its label
-        // didn't match what you typed) re-appends it at the END — it is always
-        // reachable while the spell picker is open. Inert for every other kind
-        // (`spell_add` empty).
+        // SPELL "Add to dictionary" EXEMPTION (ITEM 64 — always the TERMINAL row):
+        // the add row acts on the TARGETED word, not the typed query, so it must
+        // stay reachable — and stay LAST, right after the trailing correction —
+        // for the whole life of the picker, not just while the query drops it.
+        // A query can also fuzzy-MATCH the add label itself (e.g. typing "add");
+        // left to the plain ranker its `ci == 0` boundary bonus can out-score every
+        // correction and float it to the TOP, which would silently break "reachable
+        // right after the last correction". So this drops the add row from wherever
+        // ranking put it (present or absent) and re-appends it at the END
+        // unconditionally — the corrections keep the ranker's order among
+        // themselves, the add row simply always trails them. Inert for every other
+        // kind (`spell_add` empty).
         if self.spell_add.iter().any(|&a| a) {
-            for (ci, &is_add) in self.spell_add.iter().enumerate() {
-                if is_add && !ranked.contains(&ci) {
-                    ranked.push(ci);
-                }
-            }
+            let add_rows: Vec<usize> = self
+                .spell_add
+                .iter()
+                .enumerate()
+                .filter(|&(_, &is_add)| is_add)
+                .map(|(ci, _)| ci)
+                .collect();
+            ranked.retain(|ci| !add_rows.contains(ci));
+            ranked.extend(add_rows);
         }
         // RUNTIME-GATED ROW FILTER (Command palette only, today): drop any corpus
         // entry marked `hidden` (e.g. "Finish file" with no daemon `--wait` client

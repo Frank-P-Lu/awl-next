@@ -785,16 +785,23 @@ impl OverlayState {
     /// the accept can map it to a buffer char range and replace it. The list may be
     /// empty (the engine had no suggestion); the picker still summons (the word IS
     /// flagged), and Enter on an empty list is a no-op close.
-    /// Build the SPELL-SUGGESTION picker (Cmd-`;`): the corpus is the ordered
-    /// corrections for `word` (the misspelled text at `target`'s span), plus ONE
-    /// appended "Add '<word>' to dictionary" row — the same surface, no new chrome
-    /// class. The add row is flagged in `spell_add` (always the LAST corpus entry)
-    /// and carries `word` in `add_word` so the accept can emit
-    /// [`crate::actions::Effect::AddToDictionary`]; it is present even when the
-    /// suggestion list is EMPTY (so a word with no correction can still be added).
-    pub fn new_spell(suggestions: Vec<String>, target: (usize, usize, usize), word: String) -> Self {
+    /// Build the SPELL-SUGGESTION picker (Cmd-`;`): a compact CONTEXT MENU (item
+    /// 64). The corpus is the dictionary's ordered corrections for `word` (the
+    /// misspelled text at `target`'s span), TRUNCATED to the top
+    /// [`OverlayKind::MAX_SUGGESTIONS`] (ranking/order preserved — a longer list
+    /// simply has its tail dropped, never scrolled or elided-with-a-button), plus
+    /// ONE appended "Add '<word>' to dictionary" row — the same surface, no new
+    /// chrome class. The add row is flagged in `spell_add` (always the LAST corpus
+    /// entry — [`crate::overlay::nav`]'s refilter keeps it terminal even under a
+    /// query that out-ranks it) and carries `word` in `add_word` so the accept can
+    /// emit [`crate::actions::Effect::AddToDictionary`]; it is present even when
+    /// the suggestion list is EMPTY (so a word with no correction can still be
+    /// added) — the picker always shows at least the one add row.
+    pub fn new_spell(mut suggestions: Vec<String>, target: (usize, usize, usize), word: String) -> Self {
+        suggestions.truncate(OverlayKind::MAX_SUGGESTIONS);
         let n = suggestions.len();
-        // Corpus = suggestions ++ the add row; `spell_add` marks only the last.
+        // Corpus = (at most MAX_SUGGESTIONS) suggestions ++ the add row;
+        // `spell_add` marks only the last.
         let mut corpus = suggestions;
         corpus.push(add_to_dictionary_label(&word));
         let mut spell_add = vec![false; n];

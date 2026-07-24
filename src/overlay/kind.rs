@@ -81,11 +81,15 @@ pub enum OverlayKind {
     /// order == the corpus order, so the selected corpus index maps straight back
     /// to `COMMANDS[i]`.
     Command,
-    /// The SPELL-SUGGESTION picker (Cmd-`;`): lists the spellchecker's ordered
-    /// corrections for the misspelled word the cursor is on. Enter REPLACES that
-    /// word with the chosen suggestion (a single undoable edit). Flat + transient;
-    /// it carries `spell_target` — the word's `(line, start_col, end_col)` span —
-    /// so the accept can locate the word to swap.
+    /// The SPELL-SUGGESTION picker (Cmd-`;`): a compact CONTEXT MENU — the
+    /// spellchecker's ordered corrections for the misspelled word the cursor is
+    /// on, capped to the top [`Self::MAX_SUGGESTIONS`] (item 64: no scrolling, no
+    /// hidden sixth suggestion), plus the always-present, always-TERMINAL
+    /// "Add '<word>' to dictionary" row ([`crate::overlay::state::add_to_dictionary_label`]).
+    /// Enter REPLACES the word with the chosen suggestion (a single undoable edit),
+    /// or — on the add row — emits [`crate::actions::Effect::AddToDictionary`]
+    /// instead. Flat + transient; it carries `spell_target` — the word's `(line,
+    /// start_col, end_col)` span — so the accept can locate the word to swap.
     Spell,
     /// The GAME-STYLE REBIND MENU (Cmd-P → "Keybindings…"): lists EVERY command +
     /// its two current bindings (like the palette's binding column), fuzzy-filterable.
@@ -347,17 +351,31 @@ impl OverlayKind {
         )
     }
 
+    /// ITEM 64 — the spell picker's correction CAP: at most this many corrections
+    /// show, best-first, before the fixed "Add '<word>' to dictionary" row. A
+    /// dictionary offering more (6, 20, …) simply has its tail dropped — no
+    /// scrolling, scrollbar, More/ellipsis button, or hidden sixth suggestion; the
+    /// picker is a compact context menu, not a browsable list. The ONE owner both
+    /// [`crate::overlay::state::OverlayState::new_spell`] (which truncates the
+    /// incoming corrections) and [`Self::window_rows`] (which sizes the popup's
+    /// row window to exactly this + the add row, so "no scrolling" is structural —
+    /// the window can never hold more than the cap admits) read, so a future
+    /// re-tune of the cap can't leave the two disagreeing.
+    pub const MAX_SUGGESTIONS: usize = 5;
+
     /// The per-kind visible ROW CAP — the ONE owner of each picker's window size, read by
     /// BOTH [`OverlayState::window_rows`] (the hover / keyboard / scroll math) AND the
     /// render pipeline's drawn window (threaded via
     /// [`crate::render::ViewState::overlay_window_rows`]), so the two can never disagree
-    /// about which rows are on screen. The contextual SPELL popup stays compact (8); the
-    /// flat THEME picker sizes to the whole world roster so every world is browsable
-    /// without a scroll (the render path then reduces it to fit the canvas); every other
-    /// centered picker shows up to 12.
+    /// about which rows are on screen. The contextual SPELL popup stays compact — exactly
+    /// [`Self::MAX_SUGGESTIONS`] corrections plus the one always-present add row, item
+    /// 64's structural "no scrolling" guarantee (the corpus itself never exceeds this, so
+    /// the window can never be forced to scroll); the flat THEME picker sizes to the whole
+    /// world roster so every world is browsable without a scroll (the render path then
+    /// reduces it to fit the canvas); every other centered picker shows up to 12.
     pub fn window_rows(self) -> usize {
         match self {
-            OverlayKind::Spell => 8,
+            OverlayKind::Spell => Self::MAX_SUGGESTIONS + 1,
             OverlayKind::Theme => crate::theme::THEMES.len(),
             _ => 12,
         }

@@ -156,9 +156,10 @@ pub struct ViewState {
     /// hover hit-test share ONE window and can never disagree.
     pub overlay_scroll: usize,
     /// The per-kind visible-ROW CAP from the ONE owner
-    /// [`crate::overlay::OverlayState::window_rows`] (8 for the contextual spell popup,
-    /// 12 for the flat + most faceted pickers, larger for the theme picker which shows
-    /// every world). The pipeline uses it as the window cap for BOTH the flat card and
+    /// [`crate::overlay::OverlayState::window_rows`] (item 64's `MAX_SUGGESTIONS + 1`
+    /// for the contextual spell popup, 12 for the flat + most faceted pickers, larger
+    /// for the theme picker which shows every world). The pipeline uses it as the
+    /// window cap for BOTH the flat card and
     /// the faceted/grouped card (over items), so the drawn rows can never disagree with
     /// the hover / keyboard item-window that `window_rows` also drives. Defaults to 12
     /// when no overlay is open (inert — nothing is drawn).
