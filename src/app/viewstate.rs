@@ -281,9 +281,9 @@ impl App {
                 .unwrap_or_default(),
             overlay_selected: self.overlay.as_ref().map(|o| o.selected).unwrap_or(0),
             overlay_scroll: self.overlay.as_ref().map(|o| o.scroll).unwrap_or(0),
-            // The per-kind visible-row cap (8 spell / 12 flat+faceted / more for theme),
-            // the ONE owner the pipeline windows against so the drawn rows match the
-            // hover/keyboard item-window exactly.
+            // The per-kind visible-row cap (item 64's MAX_SUGGESTIONS + 1 for spell /
+            // 12 flat+faceted / more for theme), the ONE owner the pipeline windows
+            // against so the drawn rows match the hover/keyboard item-window exactly.
             overlay_window_rows: self.overlay.as_ref().map(|o| o.window_rows()).unwrap_or(12),
             overlay_hint: self
                 .overlay

@@ -364,16 +364,25 @@ pub(super) fn settled_viewstate(
     vstate.overlay_git = opts.overlay.as_ref().map(|o| o.git.clone()).unwrap_or_default();
     vstate.overlay_selected = opts.overlay.as_ref().map(|o| o.selected_index).unwrap_or(0);
     // Scroll window: keep the selection visible with the same min-scroll math
-    // `OverlayState::scroll_to_selected` uses (8-row cap for the spell popup, else 12),
-    // so a JSON-driven capture windows a long list identically to the live picker. The
-    // pipeline re-clamps to the item count, so this needs no `n_items` here.
+    // `OverlayState::scroll_to_selected` uses (item 64's row cap for the spell
+    // popup, else 12), so a JSON-driven capture windows a long list identically to
+    // the live picker. The pipeline re-clamps to the item count, so this needs no
+    // `n_items` here.
     let spell_panel = opts.overlay.as_ref().map(|o| o.mode == "spell").unwrap_or(false);
     let theme_panel = opts.overlay.as_ref().map(|o| o.mode == "theme").unwrap_or(false);
-    let win = if spell_panel { 8 } else { 12 };
-    // The per-kind visible-row cap, mirroring `OverlayState::window_rows` (spell = 8,
-    // theme shows every world = 64, else 12) so a JSON-driven capture windows the faceted
-    // card exactly as the live picker does. The item-space scroll HINT stays the
-    // min-scroll form below; the cap is what bounds the drawn window.
+    // Reads the SAME `OverlayKind::window_rows` owner as `overlay_window_rows`
+    // below, rather than a second hand-copied magic number, so a re-tune of the
+    // spell cap can't leave the scroll HINT and the drawn window disagreeing.
+    let win = if spell_panel {
+        crate::overlay::OverlayKind::Spell.window_rows()
+    } else {
+        12
+    };
+    // The per-kind visible-row cap, mirroring `OverlayState::window_rows` (spell =
+    // item 64's MAX_SUGGESTIONS + 1, theme shows every world = 64, else 12) so a
+    // JSON-driven capture windows the faceted card exactly as the live picker
+    // does. The item-space scroll HINT stays the min-scroll form below; the cap is
+    // what bounds the drawn window.
     vstate.overlay_window_rows = if spell_panel {
         crate::overlay::OverlayKind::Spell.window_rows()
     } else if theme_panel {

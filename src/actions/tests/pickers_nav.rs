@@ -200,6 +200,143 @@ fn spell_add_row_survives_a_typed_query_that_matches_no_suggestion() {
     assert!(ov.selected_is_add_to_dictionary(), "the surviving row is the add row");
 }
 
+/// ITEM 64 — the add row must stay the TERMINAL row ("immediately reachable right
+/// after the last correction") for EVERY query, not just one that drops it out of
+/// the fuzzy ranking entirely. A query that the add row's OWN label matches well —
+/// "ad" is a tight, boundary-anchored subsequence of "Add '...' to dictionary" — can
+/// out-score a correction under the plain fuzzy ranker (verified below: "sad"/"bad"
+/// score 35, the add label scores 55 for this exact query, via `fuzzy::score`), which
+/// would float it ABOVE a correction if refilter only re-appended a row the ranker
+/// had DROPPED. It must still land last.
+#[test]
+fn spell_add_row_stays_last_even_when_it_outranks_a_correction() {
+    let mut ov = OverlayState::new_spell(
+        vec!["sad".into(), "bad".into()],
+        (0, 0, 3),
+        "xyz".into(),
+    );
+    // Sanity: the add row's own label really does out-score a correction here —
+    // otherwise this test would pass by accident regardless of the fix. `corpus`
+    // (unfiltered) still holds the full label at this point (before `push`).
+    let add_label = ov.corpus.last().cloned().unwrap();
+    assert!(
+        crate::fuzzy::score("ad", &add_label) > crate::fuzzy::score("ad", "sad"),
+        "test setup: the add label must out-score a correction for this to be a real regression check"
+    );
+    for c in "ad".chars() {
+        ov.push(c);
+    }
+    assert!(ov.items.len() >= 2, "the query matched at least one correction too");
+    let last_ci = *ov.items.last().unwrap();
+    assert!(
+        ov.spell_add[last_ci],
+        "the add row stays last even though it out-scores a correction"
+    );
+    // And it is the ONLY add-flagged row among the displayed items.
+    assert_eq!(
+        ov.items.iter().filter(|&&ci| ov.spell_add[ci]).count(),
+        1,
+        "exactly one add row shows"
+    );
+}
+
+/// ITEM 64 — ARROW-KEY navigation reaches the add row (not just a simulated
+/// click that sets `selected` directly): pressing Down once per correction lands
+/// exactly on the add row, immediately after the last one, and Enter there ADDS
+/// the word rather than replacing it — the real `NextLine`/`Newline` path a
+/// keyboard user drives, through the pure core.
+#[test]
+fn arrow_key_down_reaches_the_add_row_and_enter_adds_the_word() {
+    let mut buffer = Buffer::from_str("teh quick brown\n");
+    let suggestions = vec!["the".to_string(), "tea".to_string(), "ten".to_string()];
+    let n = suggestions.len();
+    let mut overlay: Option<OverlayState> =
+        Some(OverlayState::new_spell(suggestions, (0, 0, 3), "teh".into()));
+    let mut shift = false;
+    let mut zoom = 1.0;
+    let mut search = None;
+    let mut make_overlay = |_: OverlayKind| None;
+    let mut browse_to = |kind: OverlayKind, rel: Option<String>| browse_level(kind, rel);
+    let mut ctx = ActionCtx {
+        buffer: &mut buffer,
+        shift_selecting: &mut shift,
+        zoom: &mut zoom,
+        search: &mut search,
+        scroll_page_lines: 1,
+        overlay: &mut overlay,
+        make_overlay: &mut make_overlay,
+        browse_to: &mut browse_to,
+        oracle: None,
+    };
+    assert_eq!(ctx.overlay.as_ref().unwrap().selected_value(), Some("the"), "initial focus is the top suggestion");
+    // Press Down exactly `n` times: from suggestion 0, that lands on item index
+    // `n` — the add row, immediately after the last (`n`-th) correction.
+    for _ in 0..n {
+        apply_core(&mut ctx, &Action::NextLine, false);
+    }
+    assert!(
+        ctx.overlay.as_ref().unwrap().selected_is_add_to_dictionary(),
+        "after {n} Down presses (one per correction) the add row is selected"
+    );
+    // One more Down is a no-op (clamped at the list end) — the add row stays reachable
+    // and selected, never scrolling past it into nothing.
+    apply_core(&mut ctx, &Action::NextLine, false);
+    assert!(ctx.overlay.as_ref().unwrap().selected_is_add_to_dictionary());
+    // Enter on it ADDS, never replaces.
+    let eff = apply_core(&mut ctx, &Action::Newline, false);
+    assert!(matches!(&eff, Effect::AddToDictionary(w) if w == "teh"), "{eff:?}");
+    assert!(overlay.is_none(), "accepting the add row closes the panel");
+    assert_eq!(buffer.text(), "teh quick brown\n", "arrow-driven add never edits the buffer");
+}
+
+/// ITEM 64 — HOVER reaches the add row through the same `hover_select` mechanic
+/// every picker row uses (the mouse-move path, distinct from a click's `Newline`
+/// accept): hovering the add row's absolute item index highlights it.
+#[test]
+fn hover_reaches_the_add_row() {
+    let mut ov = OverlayState::new_spell(
+        vec!["the".into(), "tea".into(), "ten".into()],
+        (0, 0, 3),
+        "teh".into(),
+    );
+    assert!(!ov.selected_is_add_to_dictionary(), "starts on a suggestion");
+    let add_index = ov.items.len() - 1;
+    assert!(ov.hover_select(add_index), "hovering the add row's index moves the selection");
+    assert!(ov.selected_is_add_to_dictionary(), "hover landed on the add row");
+}
+
+/// ITEM 64 — FILTERING interacts correctly with the new top-five cap: typing a
+/// query that matches only a handful of a LARGER (already-truncated-to-5) set of
+/// corrections narrows the list, and the add row still survives, still last.
+#[test]
+fn filtering_narrows_the_capped_corrections_and_the_add_row_persists() {
+    // 6 real corrections offered by the dictionary; `new_spell` already trims this
+    // to the top 5 before the query ever runs, so the corpus itself never carries
+    // the 6th.
+    let mut ov = OverlayState::new_spell(
+        vec![
+            "alpha".into(),
+            "algae".into(),
+            "almanac".into(),
+            "amethyst".into(),
+            "anchor".into(),
+            "anvil".into(), // the 6th — dropped before filtering ever sees it
+        ],
+        (0, 0, 3),
+        "alfa".into(),
+    );
+    assert_eq!(ov.items.len(), 6, "top 5 + add, before any query");
+    // "al" narrows to the corrections that contain it, plus the (exempt) add row.
+    for c in "al".chars() {
+        ov.push(c);
+    }
+    let rows = ov.item_strings();
+    assert!(rows.len() < 6, "the query narrowed the correction set: {rows:?}");
+    assert!(!rows.iter().any(|s| s == "anvil"), "the dropped 6th correction was never in the corpus to match");
+    let last_ci = *ov.items.last().unwrap();
+    assert!(ov.spell_add[last_ci], "the add row still survives filtering, still last");
+}
+
 #[test]
 fn command_palette_run_action_reopens_into_overlay() {
     // The re-dispatch: feeding the run_action (OpenGoto) back through the core
