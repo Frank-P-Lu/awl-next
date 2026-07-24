@@ -16,6 +16,7 @@ mod backgrounds_item69;
 mod build_integrity;
 mod caret;
 mod caret_block;
+mod card_texture_shape;
 mod chrome_overlay;
 mod chrome_panels;
 mod cjk;

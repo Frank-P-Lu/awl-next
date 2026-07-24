@@ -20,6 +20,7 @@ All SIL Open Font License 1.1. Full per-face table, subsetting notes, and licens
 | Literata | The Literata Project Authors | SIL OFL 1.1 | github.com/googlefonts/literata |
 | Monaspace Xenon | GitHub, Inc. | SIL OFL 1.1 | github.com/githubnext/monaspace |
 | Newsreader | The Newsreader Project Authors | SIL OFL 1.1 | github.com/productiontype/Newsreader |
+| Sour Gummy | The Sour Gummy Project Authors | SIL OFL 1.1 | github.com/eifetx/Sour-Gummy-Fonts, Google Fonts |
 | Zilla Slab | The Mozilla Foundation | SIL OFL 1.1 | github.com/typotheque/zilla-slab |
 | Junicode | Peter S. Baker | SIL OFL 1.1 | github.com/psb1558/Junicode-font |
 | Awl Marks² | EB Garamond / Noto Sans Symbols 2 / Iosevka / Junicode Project Authors | SIL OFL 1.1 (composed) | see `assets/fonts/LICENSES.md` |

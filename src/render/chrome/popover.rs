@@ -144,6 +144,8 @@ impl TextPipeline {
                         height,
                         Some(geom.card),
                         FloatElevation::Rimmed,
+                        0.0,
+                        None,
                     );
                 }
                 // A value-step wash behind each LIT button (never amber) — a pill
@@ -217,7 +219,16 @@ impl TextPipeline {
                 // caret preview / search card) — never clear it out from
                 // under them just because POPOVER has nothing to show.
                 if touch_float {
-                    self.prepare_float_panel(device, queue, width, height, None, FloatElevation::Rimmed);
+                    self.prepare_float_panel(
+                        device,
+                        queue,
+                        width,
+                        height,
+                        None,
+                        FloatElevation::Rimmed,
+                        0.0,
+                        None,
+                    );
                 }
                 self.popover_wash.prepare(device, queue, width, height, &[]);
                 self.popover_hl_wash.prepare(device, queue, width, height, &[]);

@@ -913,6 +913,14 @@ pub struct RenderCaps {
     /// `faint`/`muted` ladder rungs) on every world; only a `Background::Lava`
     /// world's own glow-lit writing column needs a lift, dialed per-world here.
     pub fold_afford: FoldAfford,
+    /// ITEM 70's PRINTED-CARD dial: see [`CardTexture`]'s own doc.
+    /// [`CardTexture::DEFAULT`] (`Flat`, byte-identical) on every world but
+    /// Quokka, whose card fill dials `HalftoneDots` as one-line DATA.
+    pub card_texture: CardTexture,
+    /// ITEM 70's PRINTED-CARD dial: see [`CardShape`]'s own doc.
+    /// [`CardShape::DEFAULT`] (`Rectangular`, byte-identical) on every world
+    /// but Quokka, whose card silhouette dials `Chamfered` as one-line DATA.
+    pub card_shape: CardShape,
 }
 
 /// Default value of [`RenderCaps::spell_underline_gap`] — the gap every world
@@ -1004,6 +1012,73 @@ impl FoldAfford {
     pub const DEFAULT: FoldAfford = FoldAfford { chevron_lift: 0.0, tail_lift: 0.0 };
 }
 
+/// ITEM 70's PRINTED-CARD capability: what material a [`ListBacking::Card`]
+/// surface's FILL draws over its flat color. `Flat` (byte-identical to before
+/// this field existed) on every world but Quokka. `HalftoneDots` lays a small
+/// rotated dot lattice over the fill, strongest at the card's far/right
+/// decorative side and rolling off before the left-aligned content-heavy
+/// side — never composited on the border/shadow surfaces, only the fill (the
+/// ONE render consumer is `render::chrome::mod::prepare_panel_card_elevation`
+/// + the spell-popup card arm, gated on [`ListBacking::Card`] alone — never a
+/// world-name branch, the `theme_caps_law` grep-law bans one under
+/// `src/render/`). The dot's own INK is never carried here: it is DERIVED at
+/// render time from the theme's own surface ladder
+/// ([`crate::theme::derive::card_texture_ink`]) — this struct only carries
+/// the lattice's geometry/intensity, never a color, so "raw color / amber" is
+/// structurally unreachable from this cap alone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CardTexture {
+    /// No texture — the plain flat fill. Every world but Quokka.
+    Flat,
+    /// A rotated dot lattice (item 70, Quokka's printed-card identity).
+    HalftoneDots {
+        /// Lattice rotation, degrees (~15-20° per the round's spec).
+        angle_deg: f32,
+        /// Lattice pitch, LOGICAL px (scaled to physical px — zoom × DPI —
+        /// by the one render consumer, never baked in here).
+        cell_px: f32,
+        /// Overall ink-intensity ceiling `[0,1]` the dot's own derived color
+        /// composites at, at full coverage + full rolloff.
+        density: f32,
+    },
+}
+
+impl CardTexture {
+    /// `Flat` — every world but Quokka, byte-identical to before this cap
+    /// existed (zero shader branches taken, zero extra draw work).
+    pub const DEFAULT: CardTexture = CardTexture::Flat;
+}
+
+/// ITEM 70's PRINTED-CARD capability: the SILHOUETTE a [`ListBacking::Card`]
+/// surface's fill/border/shadow trio shares (all three read the SAME cap, so
+/// a card's edge is one consistent eight-edge boundary — see
+/// `shaders/selection.wgsl`'s `sd_card_rect`). `Rectangular` (byte-identical
+/// rounded-rect, the pre-existing shape) on every world but Quokka.
+/// `Chamfered` cuts a crisp 45° corner that many px deep, replacing (not
+/// composing with) the rounded corner. The ONE render consumer narrows
+/// `cut_px` on a narrow layout before it can steal text room (see
+/// `render::chrome::effective_card_shape`) — this cap always carries the
+/// world's AUTHORED (unreduced) cut.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CardShape {
+    /// The pre-existing small rounded-rect corner. Every world but Quokka.
+    Rectangular,
+    /// A crisp 45° chamfered rectangle (item 70, Quokka's printed-card
+    /// identity).
+    Chamfered {
+        /// The AUTHORED chamfer depth, LOGICAL px (~10-12px per the round's
+        /// spec) — narrowed on a small card by the one render consumer,
+        /// never mutated here.
+        cut_px: f32,
+    },
+}
+
+impl CardShape {
+    /// `Rectangular` — every world but Quokka, byte-identical to before this
+    /// cap existed.
+    pub const DEFAULT: CardShape = CardShape::Rectangular;
+}
+
 impl RenderCaps {
     pub const DEFAULT: RenderCaps = RenderCaps {
         selection_style: SelectionStyle::Fill,
@@ -1054,6 +1129,10 @@ impl RenderCaps {
         // on every world until a lava world dials its own — see
         // [`FoldAfford`]'s own doc.
         fold_afford: FoldAfford::DEFAULT,
+        // ITEM 70: `Flat`/`Rectangular` (byte-identical) on every world until
+        // Quokka dials its printed-card texture/silhouette.
+        card_texture: CardTexture::DEFAULT,
+        card_shape: CardShape::DEFAULT,
     };
 
 }

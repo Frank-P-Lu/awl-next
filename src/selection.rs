@@ -49,10 +49,26 @@ struct Globals {
     /// ONE WAGTAIL HIGHLIGHT TEXTURE's three consumers raise it to ~2 logical
     /// px via [`Self::set_dither_cell`]. Unused by an `fs_invert` pipeline.
     cell: f32,
-    /// Std140 tail padding so the uniform struct size is a 16-byte multiple
-    /// (viewport 8 + corner 4 + dither 4 + stroke 4 + cell 4 + pad 8 = 32).
-    /// MUST match the trailing `_pad: f32` in the WGSL `Globals`.
-    _pad: [f32; 2],
+    /// CHAMFER (item 70) — see `shaders/selection.wgsl`'s `sd_card_rect`:
+    /// `0.0` (construction default) is the ORIGINAL rounded-rect silhouette,
+    /// byte-identical for every world/pipeline but Quokka's card family.
+    chamfer: f32,
+    /// HALFTONE density ceiling (item 70) — see `shaders/selection.wgsl`'s
+    /// `fs_main`: `0.0` (construction default) draws no dot texture.
+    halftone: f32,
+    /// HALFTONE lattice rotation, radians (item 70).
+    halftone_angle: f32,
+    /// HALFTONE lattice pitch, PHYSICAL px (item 70).
+    halftone_cell: f32,
+    /// Std140 tail padding so `dot_color` (a vec4, 16-byte aligned) lands on
+    /// a 16-byte boundary — MUST match the equal-sized `_pad2: vec2<f32>` in
+    /// the WGSL `Globals` (see that struct's doc for the exact byte math).
+    _pad2: [f32; 2],
+    /// HALFTONE dot ink (item 70), LINEAR RGBA — derived Rust-side from the
+    /// theme's own surface ladder (`theme::derive::card_texture_ink`), never
+    /// a raw/amber literal. `[0.0; 4]` (construction default, fully
+    /// transparent) is a no-op paired with `halftone == 0.0`.
+    dot_color: [f32; 4],
 }
 
 /// The selection render pipeline: an instanced quad draw, BEFORE the caret +
@@ -98,6 +114,24 @@ pub struct SelectionPipeline {
     /// reads as deliberate dithered pixels rather than fine noise. Meaningless
     /// on an `fs_invert` pipeline.
     dither_cell: f32,
+    /// Chamfer depth (px) uploaded into `Globals::chamfer` each `prepare`
+    /// (item 70). `0.0` (construction default) is the ORIGINAL rounded-rect
+    /// silhouette — byte-identical for every pipeline that never calls
+    /// [`Self::set_chamfer`] (every world but Quokka's card family).
+    chamfer: f32,
+    /// HALFTONE density ceiling `[0,1]` uploaded into `Globals::halftone`
+    /// (item 70). `0.0` (construction default) draws no dot texture.
+    halftone: f32,
+    /// HALFTONE lattice rotation (radians) uploaded into
+    /// `Globals::halftone_angle` (item 70).
+    halftone_angle: f32,
+    /// HALFTONE lattice pitch (PHYSICAL px) uploaded into
+    /// `Globals::halftone_cell` (item 70).
+    halftone_cell: f32,
+    /// HALFTONE dot ink (LINEAR RGBA) uploaded into `Globals::dot_color`
+    /// (item 70) — set via [`Self::set_halftone`], always a theme-ladder
+    /// derived color (see that fn's doc).
+    dot_color: [f32; 4],
 }
 
 /// The ORIGINAL straight-alpha over-blend (`fs_main`'s non-dither path and
@@ -298,6 +332,11 @@ impl SelectionPipeline {
             corner,
             stroke: 0.0,
             dither_cell: 1.0,
+            chamfer: 0.0,
+            halftone: 0.0,
+            halftone_angle: 0.0,
+            halftone_cell: 6.0,
+            dot_color: [0.0; 4],
         }
     }
 
@@ -361,6 +400,50 @@ impl SelectionPipeline {
     /// mode change never leaves it stale.
     pub fn set_stroke(&mut self, stroke: f32) {
         self.stroke = stroke.max(0.0);
+    }
+
+    /// Set the CHAMFER depth (px, item 70) the NEXT `prepare` uploads into
+    /// `Globals::chamfer`. `0.0` (the construction default, and the value
+    /// every pipeline but Quokka's card family carries) restores the ORIGINAL
+    /// rounded-rect silhouette — byte-identical. `> 0.0` cuts a crisp 45°
+    /// corner that deep, replacing the rounded corner (see
+    /// `shaders/selection.wgsl`'s `sd_card_rect`). Set every frame from the
+    /// draw path (`render::chrome::effective_card_shape`), narrow-reduced
+    /// there, never re-derived here.
+    pub fn set_chamfer(&mut self, chamfer_px: f32) {
+        self.chamfer = chamfer_px.max(0.0);
+    }
+
+    /// The current CHAMFER depth (`0.0` = the rounded-rect silhouette). A
+    /// cheap headless assertion hook mirroring [`Self::stroke`] (used by the
+    /// render tests; no non-test caller in the shipping binary).
+    #[allow(dead_code)]
+    pub fn chamfer(&self) -> f32 {
+        self.chamfer
+    }
+
+    /// Set the HALFTONE dot texture (item 70) the NEXT `prepare` uploads into
+    /// `Globals::halftone`/`halftone_angle`/`halftone_cell`/`dot_color`.
+    /// `density <= 0.0` disables the texture entirely (`Globals::halftone`
+    /// stays `0.0`, `fs_main`'s composite is skipped outright — byte-identical
+    /// to a pipeline that never calls this, the default every pipeline but
+    /// Quokka's card FILL carries). `ink` MUST already be a theme-ladder
+    /// derived sRGBA color (`theme::derive::card_texture_ink`) — this setter
+    /// does no derivation of its own, it only converts to linear (mirroring
+    /// [`Self::set_color`]) and uploads what the caller computed.
+    pub fn set_halftone(&mut self, density: f32, angle_rad: f32, cell_px: f32, ink: [u8; 4]) {
+        self.halftone = density.clamp(0.0, 1.0);
+        self.halftone_angle = angle_rad;
+        self.halftone_cell = cell_px.max(1.0);
+        self.dot_color = srgba_u8_to_linear(ink);
+    }
+
+    /// The current HALFTONE density ceiling (`0.0` = off). A cheap headless
+    /// assertion hook mirroring [`Self::dither`] (used by the render tests;
+    /// no non-test caller in the shipping binary).
+    #[allow(dead_code)]
+    pub fn halftone(&self) -> f32 {
+        self.halftone
     }
 
     /// How many quad instances the last `prepare` uploaded (0 = nothing drawn). A cheap
@@ -449,7 +532,12 @@ impl SelectionPipeline {
             dither: self.dither,
             stroke: self.stroke,
             cell: self.dither_cell,
-            _pad: [0.0; 2],
+            chamfer: self.chamfer,
+            halftone: self.halftone,
+            halftone_angle: self.halftone_angle,
+            halftone_cell: self.halftone_cell,
+            _pad2: [0.0; 2],
+            dot_color: self.dot_color,
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
 
@@ -490,7 +578,12 @@ impl SelectionPipeline {
             dither: self.dither,
             stroke: self.stroke,
             cell: self.dither_cell,
-            _pad: [0.0; 2],
+            chamfer: self.chamfer,
+            halftone: self.halftone,
+            halftone_angle: self.halftone_angle,
+            halftone_cell: self.halftone_cell,
+            _pad2: [0.0; 2],
+            dot_color: self.dot_color,
         };
         queue.write_buffer(&self.globals_buf, 0, bytemuck_lite::bytes_of(&globals));
 

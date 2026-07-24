@@ -60,10 +60,43 @@ struct Globals {
     // placard stipple, the always-on page frame at density 1.0) stays
     // byte-identical. THE ONE WAGTAIL HIGHLIGHT TEXTURE's three consumers
     // raise it to ~2 logical px (`render::spans::wagtail_stipple_cell_px`,
-    // Retina-aware). Unused by `fs_invert`. Std140 pads the struct to a
-    // 32-byte multiple (`_pad` below) so the uniform stays aligned.
+    // Retina-aware). Unused by `fs_invert`.
     cell: f32,
-    _pad: f32,
+    // CHAMFER (item 70, Quokka printed-card round): `0.0` = the original
+    // ROUNDED-RECT silhouette (`g.corner`, byte-identical to before this
+    // field existed — every world but Quokka). `> 0.0` cuts a crisp 45°
+    // diagonal off each of the 4 corners this many PIXELS deep, replacing
+    // (not composing with) the rounded corner — see `sd_card_rect` below.
+    // Shared by `fs_main` AND `fs_invert` (the ONE silhouette both read), and
+    // uploaded identically to the fill/border/shadow pipelines of a card so
+    // the eight-edge boundary (4 straight + 4 chamfer edges) agrees across
+    // all three surfaces.
+    chamfer: f32,
+    // HALFTONE (item 70): `0.0` = no dot texture (every world but Quokka's
+    // card FILL — border/shadow pipelines always leave this `0.0`, texture
+    // is a fill-only decoration). `> 0.0` is the overall ink-intensity
+    // ceiling (`[0,1]`) a rotated dot lattice composites over the plain fill
+    // — see `halftone_coverage` below. Meaningless on `fs_invert` (1-bit
+    // worlds never carry a card texture) and inside the dither/stroke
+    // branches (mutually exclusive fill modes).
+    halftone: f32,
+    // Lattice rotation, radians (~15-20° per item 70's spec — see
+    // `render::theme::derive` for the Rust-side owner of the exact angle).
+    halftone_angle: f32,
+    // Lattice pitch, PHYSICAL px — the center-to-center spacing of dots.
+    halftone_cell: f32,
+    // Std140 pad: `chamfer`..`halftone_cell` sit at 24..40, so `dot_color`
+    // (a vec4, 16-byte aligned) needs an 8-byte gap to land on 48. MUST
+    // match the equal-sized `_pad2: [f32; 2]` in `src/selection.rs::Globals`
+    // — the Rust struct has no automatic std140 padding, so it fills this
+    // gap by hand.
+    _pad2: vec2<f32>,
+    // The halftone dot's own ink color (LINEAR RGBA) — derived Rust-side
+    // from the theme's own surface-ladder rung (`theme::derive::
+    // card_texture_ink`, e.g. `muted`), NEVER a raw/amber literal baked into
+    // this shader. Alpha is the dot's OWN peak coverage-multiplier (combines
+    // with `halftone` + the coverage/rolloff terms below).
+    dot_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -127,6 +160,57 @@ fn sd_round_rect(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0, 0.0))) - r;
 }
 
+// THE ONE CARD SILHOUETTE (item 70): `chamfer <= 0.0` is byte-identical to a
+// bare `sd_round_rect(p, b, r)` call — every world but Quokka, and every
+// non-card surface (selection wash, caret, bars, chips…) that never uploads a
+// nonzero `chamfer`. `chamfer > 0.0` REPLACES the rounded corner with a crisp
+// 45° cut `chamfer` px deep on each of the 4 corners: intersect the plain box
+// SDF with a diamond `|x| + |y| <= (b.x + b.y - chamfer)`, whose boundary
+// passes through `(b.x - chamfer, b.y)` and `(b.x, b.y - chamfer)` — exactly a
+// `chamfer`-px cut along BOTH edges at each corner, an octagon (4 straight +
+// 4 diagonal edges). `max()` of two true SDFs is their CSG intersection.
+fn sd_card_rect(p: vec2<f32>, b: vec2<f32>, r: f32, chamfer: f32) -> f32 {
+    if (chamfer > 0.0) {
+        let d_box = sd_round_rect(p, b, 0.0);
+        let d_diag = (abs(p.x) + abs(p.y) - (b.x + b.y - chamfer)) * 0.70710678;
+        return max(d_box, d_diag);
+    }
+    return sd_round_rect(p, b, r);
+}
+
+// THE ONE HALFTONE LATTICE (item 70, Quokka's printed-card texture): a
+// rotated dot grid sampled at the ABSOLUTE canvas pixel `px` (not the
+// instance-local position) — the SAME reason the Bayer dither branch above
+// reads `in.px` rather than `in.local`: a card drawn as TWO quad instances
+// (SPLIT-PANE's upper/lower surfaces) shares one continuous phase across the
+// open gap between them instead of each restarting at its own local origin.
+// Returns a soft `[0,1]` dot coverage (dot radius a fixed 0.30 of the cell,
+// ~1px feather in the rotated lattice space — adequate at the cell sizes this
+// texture uses, several px or larger).
+fn halftone_coverage(px: vec2<f32>, angle: f32, cell: f32) -> f32 {
+    let c = max(cell, 1.0);
+    let ca = cos(angle);
+    let sa = sin(angle);
+    let rp = vec2<f32>(px.x * ca + px.y * sa, px.y * ca - px.x * sa);
+    let cellp = rp - c * floor(rp / c) - vec2<f32>(c * 0.5, c * 0.5);
+    let dist = length(cellp);
+    let r = c * 0.30;
+    return 1.0 - smoothstep(r - 1.0, r + 1.0, dist);
+}
+
+// THE ONE HORIZONTAL ROLLOFF (item 70): "strongest at the far/right
+// decorative side, rolling off before the left-aligned content-heavy side" —
+// a pure function of `tx`, the instance-LOCAL x fraction in `[-1, 1]`
+// (`-1` = the card's own left edge, `1` = its own right edge). Per-INSTANCE
+// (not absolute canvas x), so a split card's upper/lower surfaces — which
+// share the same width/left-right extent as the unsplit card, only their
+// vertical center differs — roll off identically; only the dot PHASE
+// (`halftone_coverage`'s `px`) needs the absolute-canvas trick above, not
+// this shape gate.
+fn halftone_rolloff(tx: f32) -> f32 {
+    return smoothstep(-0.35, 0.55, tx);
+}
+
 // THE ONE WAGTAIL HIGHLIGHT TEXTURE's Bayer matrix — identical values to
 // `background.wgsl`'s copy (both mirror `src/render/dither.rs::BAYER8`; see
 // that file's module doc for why the small cross-file/cross-language
@@ -162,7 +246,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Clamp the corner radius to the smaller half-extent so thin/short rects
     // stay sane.
     let r = min(g.corner, min(in.hsize.x, in.hsize.y));
-    let d = sd_round_rect(in.local, in.hsize, r);
+    let d = sd_card_rect(in.local, in.hsize, r, g.chamfer);
 
     if (g.dither > 0.0) {
         // THE ONE WAGTAIL HIGHLIGHT TEXTURE: a HARD-edged (no smoothstep —
@@ -194,8 +278,24 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let ring = clamp(fill - inner, 0.0, 1.0) * in.color.a;
         return vec4<f32>(in.color.rgb, ring);
     }
+    var rgb = in.color.rgb;
+    // THE ONE HALFTONE COMPOSITE (item 70): only inside the silhouette
+    // (`d <= 0.0`), only when `g.halftone > 0.0` (Quokka's card fill alone —
+    // every other pipeline/world uploads `0.0`, a total no-op that leaves
+    // `rgb` untouched, byte-identical). Ink mixes toward the derived
+    // `dot_color` by the dot's own coverage × the horizontal rolloff × the
+    // overall density ceiling × the dot's own alpha — never a raw/amber
+    // literal, never a clock (both `halftone_coverage`/`halftone_rolloff` are
+    // pure functions of position alone).
+    if (g.halftone > 0.0 && d <= 0.0) {
+        let tx = clamp(in.local.x / max(in.hsize.x, 1.0), -1.0, 1.0);
+        let roll = halftone_rolloff(tx);
+        let cov = halftone_coverage(in.px, g.halftone_angle, g.halftone_cell);
+        let ink = cov * roll * g.halftone * g.dot_color.a;
+        rgb = mix(rgb, g.dot_color.rgb, clamp(ink, 0.0, 1.0));
+    }
     let a = clamp(fill, 0.0, 1.0) * in.color.a;
-    return vec4<f32>(in.color.rgb, a);
+    return vec4<f32>(rgb, a);
 }
 
 // TRUE INVERSE-VIDEO (one-bit worlds only): this entry point is used ONLY by
@@ -230,7 +330,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_invert(in: VsOut) -> @location(0) vec4<f32> {
     let r = min(g.corner, min(in.hsize.x, in.hsize.y));
-    let d = sd_round_rect(in.local, in.hsize, r);
+    let d = sd_card_rect(in.local, in.hsize, r, g.chamfer);
     if (d > 0.0) {
         discard;
     }

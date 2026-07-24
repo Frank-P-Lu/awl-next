@@ -51,7 +51,8 @@ pub use cjk::{
 pub(crate) use cjk::EMBEDDED_CJK_FAMILIES;
 pub use color::Srgb;
 pub use derive::{
-    active, active_index, background, base_100, base_200, base_300, base_content, error, faint,
+    active, active_index, background, base_100, base_200, base_300, base_content,
+    card_texture_ink, error, faint,
     fold_afford_chevron_ink, fold_afford_tail_ink,
     heatmap_colors, image_reveal_scrim, muted, overlay_band_overlap, overlay_bar_unselected,
     overlay_bars_scrim,
@@ -77,10 +78,11 @@ pub use model::{Lens, RoleOverrides, ThemeTags};
 // bundle type + one field's enum); every non-test in-crate caller today reaches
 // them through `Theme::render_caps.<field>` rather than this bare re-export.
 pub use model::{
-    AmbientStyle, Backdrop, BandResponse, BarCoverage, BarExtent, CardAnchor, CaretBlockStyle,
-    ChipVariant, ChromeFace, DecorativeWash, Elevation, FacetStyle, FoldAfford, Frost, HighlightTexture, HighlightTreatment,
-    ImageReveal, ListBacking, ListStyle, MotionJuice, OverlayEntrance, PageFrame, PaneSplit,
-    PlacardCorner, PlacardInk, RenderCaps, SelectionStyle, TitleStyle,
+    AmbientStyle, Backdrop, BandResponse, BarCoverage, BarExtent, CardAnchor, CardShape,
+    CardTexture, CaretBlockStyle, ChipVariant, ChromeFace, DecorativeWash, Elevation, FacetStyle,
+    FoldAfford, Frost, HighlightTexture, HighlightTreatment, ImageReveal, ListBacking, ListStyle,
+    MotionJuice, OverlayEntrance, PageFrame, PaneSplit, PlacardCorner, PlacardInk, RenderCaps,
+    SelectionStyle, TitleStyle,
 };
 #[allow(unused_imports)] // the per-world ornament/bullet data: public API
 // surface, no NON-TEST in-crate caller today.

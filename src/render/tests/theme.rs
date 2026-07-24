@@ -123,14 +123,14 @@ fn theme_preview_color_split_defers_reshape_and_revert_leaves_none() {
     assert_eq!(p.shaped_font, "IBM Plex Mono", "still shaped in the opening face");
     assert!(
         p.needs_theme_reshape(),
-        "the deferred font change is pending (Quokka is Fira Sans)"
+        "the deferred font change is pending (Quokka is Sour Gummy)"
     );
 
     // SETTLE: the one deferred reshape lands. Exactly one reshape, and the
     // shaped state is identical to the synchronous `sync_theme` route.
     p.sync_theme_font();
     assert_eq!(p.reshape_count, n + 1, "the settle pays exactly ONE reshape");
-    assert_eq!(p.shaped_font, "Fira Sans");
+    assert_eq!(p.shaped_font, "Sour Gummy");
     let deferred_x = p.caret_target_xy().0;
     let Some(mut q) = headless_pipeline() else { return };
     q.sync_theme(); // synchronous full switch to the same (Quokka) world
@@ -158,7 +158,7 @@ fn theme_preview_color_split_defers_reshape_and_revert_leaves_none() {
         p.reshape_count, m,
         "a stray deferred reshape after the revert must be a strict no-op"
     );
-    assert_eq!(p.shaped_font, "Fira Sans");
+    assert_eq!(p.shaped_font, "Sour Gummy");
 
     // Restore the default world so other tests see a clean global.
     theme::set_active(theme::DEFAULT_THEME);
@@ -196,7 +196,7 @@ fn code_mono_switch_reshapes_effective_face() {
     // A CODE buffer on Quokka shapes in the world's mono companion.
     theme::set_active_by_name("Quokka").unwrap();
     p.sync_theme();
-    assert_eq!(theme::active().font, "Fira Sans");
+    assert_eq!(theme::active().font, "Sour Gummy");
     assert_eq!(theme::active().mono, "IBM Plex Mono");
     let mut code = view("fn main() { let x = 1; }", 0, 0);
     code.syn_lang = Some(crate::syntax::Lang::Rust);
@@ -408,7 +408,7 @@ fn mono_world_shapes_uniform_pitch() {
 /// 700 — a subsetting/name-fixup mistake (the exact failure the CJK round guards
 /// against for its faces) that renamed the face or left it at weight 400 would
 /// silently keep the fallback bug. This asserts the font-DB fact directly for all
-/// 14 (including Fira Sans / Bitter, registered but not yet assigned to any world,
+/// 15 (including Fira Sans / Bitter, registered but not yet assigned to any world,
 /// so the resolution tests below can't reach them through a theme switch).
 #[test]
 fn bold_display_faces_register_under_their_family_names_at_weight_700() {
@@ -427,6 +427,7 @@ fn bold_display_faces_register_under_their_family_names_at_weight_700() {
         "EB Garamond",
         "Fira Sans",
         "Bitter",
+        "Sour Gummy",
         // Mono display faces (the mono-bolds round).
         "IBM Plex Mono",
         "JetBrains Mono",
@@ -469,6 +470,7 @@ fn markdown_bold_resolves_to_a_real_bold_face_never_the_mono_fallback() {
         "iA Writer Quattro S",
         "Fraunces 9pt",
         "EB Garamond",
+        "Sour Gummy",
     ];
     let mut checked = 0usize;
     for t in theme::THEMES.iter() {

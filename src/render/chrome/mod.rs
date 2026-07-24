@@ -44,6 +44,45 @@ const DIFF_PANEL_TOP: f32 = 8.0;
 /// `prepare_diff_panel`.)
 const DIFF_PANEL_BOTTOM: f32 = 14.0;
 
+/// ITEM 70's PRINTED-CARD dot texture, resolved to PHYSICAL px + a concrete
+/// sRGBA ink at the ONE call site that ever builds one
+/// ([`TextPipeline::overlay_draw_card`]'s `ListBacking::Card` arms) — the
+/// primitive [`set_float_quads_rects`]/[`set_float_quads`] plumbing stays a
+/// dumb float-carrier, never re-deriving theme state itself. `None` (every
+/// non-Quokka card, every which-key/HUD/menu/popover/diff-panel float) draws
+/// no texture at all — `fs_main`'s `g.halftone` stays `0.0`.
+#[derive(Clone, Copy)]
+pub(in crate::render) struct CardHalftone {
+    pub density: f32,
+    pub angle_rad: f32,
+    pub cell_px: f32,
+    pub ink: [u8; 4],
+}
+
+/// THE ONE CHAMFER NARROWING RULE (item 70): "narrow layouts reduce the
+/// chamfer before it can steal text room." A pure cap — the AUTHORED cut
+/// (already DPI-scaled to physical px by the caller) never exceeds 40% of
+/// the card's own smaller physical dimension. 40% (not a tighter fraction)
+/// is deliberate: a Split Pane's UPPER query surface is legitimately SHORT
+/// by design (one text line + padding, ~50-90px) without being "narrow" in
+/// the sense this rule targets — a tighter cap would shrink its chamfer on
+/// every ordinary picker, not just a genuinely small surface. Only a truly
+/// tiny card (below roughly `2 * cut_px / 0.4`, e.g. ~55px at the round's
+/// 11px cut — the spell popup at its smallest) ever gets reduced.
+pub(in crate::render) fn narrowed_chamfer_px(cut_px: f32, card_w: f32, card_h: f32) -> f32 {
+    let cap = card_w.min(card_h).max(0.0) * 0.40;
+    cut_px.min(cap).max(0.0)
+}
+
+/// The `AWL_CARD_CAPS_FORCE` dev knob, read ONCE and memoized — see
+/// [`TextPipeline::card_shape_texture`]'s doc. Mirrors [`awl_cjk_force`]'s
+/// exact shape (env-var thread-safety footing: this runs on every card
+/// draw, not just once at startup).
+fn awl_card_caps_force() -> &'static Option<String> {
+    static ONCE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| std::env::var("AWL_CARD_CAPS_FORCE").ok())
+}
+
 /// How much of the float trio draws around a summoned card's opaque fill — the
 /// ONE elevation vocabulary every [`set_float_quads`] caller names explicitly
 /// (no bare bool a new panel can pass without thinking).
@@ -107,6 +146,8 @@ fn set_float_quads(
     height: u32,
     rect: Option<[f32; 4]>,
     elevation: FloatElevation,
+    chamfer_px: f32,
+    texture: Option<CardHalftone>,
 ) {
     // A single-rect float delegates to the multi-rect owner (SPLIT-PANE round);
     // `None` parks both border/card empty (an empty slice).
@@ -121,6 +162,8 @@ fn set_float_quads(
         height,
         one.as_ref().map(|r| &r[..]).unwrap_or(&[]),
         elevation,
+        chamfer_px,
+        texture,
     );
 }
 
@@ -133,6 +176,12 @@ fn set_float_quads(
 /// 1-bit world's card would be an invisible black-on-black rect without it). A
 /// unified card / spell popup passes ONE rect, byte-identical to the historical
 /// single-quad path. `shadow` is always parked (dark-depth Option C).
+///
+/// `chamfer_px` (item 70) is the ONE silhouette every surface in this trio
+/// shares — `0.0` (every caller but the two `ListBacking::Card` sites in
+/// `overlay_rows.rs`) is the ORIGINAL rounded-rect corner, byte-identical.
+/// `texture` (item 70) is the halftone dot recipe, applied ONLY to `card`
+/// (the fill) — `None` everywhere but Quokka's card fill.
 #[allow(clippy::too_many_arguments)]
 fn set_float_quads_rects(
     shadow: &mut SelectionPipeline,
@@ -144,7 +193,19 @@ fn set_float_quads_rects(
     height: u32,
     rects: &[[f32; 4]],
     elevation: FloatElevation,
+    chamfer_px: f32,
+    texture: Option<CardHalftone>,
 ) {
+    // THE ONE SILHOUETTE (item 70): fill/border/shadow all share the SAME
+    // chamfer, so their eight-edge boundaries trace identically even though
+    // only `card` ever carries the dot texture.
+    shadow.set_chamfer(chamfer_px);
+    border.set_chamfer(chamfer_px);
+    card.set_chamfer(chamfer_px);
+    match texture {
+        Some(t) => card.set_halftone(t.density, t.angle_rad, t.cell_px, t.ink),
+        None => card.set_halftone(0.0, 0.0, 1.0, [0; 4]),
+    }
     // RETIRED (dark-depth Option C, 2026-07-22): the shadow quad never
     // uploads an instance any more — see `FloatElevation`'s doc. Parked once,
     // up front, regardless of `rects`/`elevation`.
@@ -454,6 +515,13 @@ impl TextPipeline {
     /// structurally allowed to be the real owner, so its park call can never
     /// race the caret-preview panel / spell popup / search panel. "Summoned,
     /// not furniture" (DESIGN §5).
+    ///
+    /// `chamfer_px`/`texture` (item 70): `0.0`/`None` for every non-card
+    /// caller (the caret-style preview panel, the search panel, the format
+    /// popover — byte-identical); the SPELL POPUP arm of `overlay_draw_card`
+    /// is the one caller that ever passes a real chamfer/texture (Quokka's
+    /// "small card popup").
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn prepare_float_panel(
         &mut self,
         device: &wgpu::Device,
@@ -462,6 +530,8 @@ impl TextPipeline {
         height: u32,
         rect: Option<[f32; 4]>,
         elevation: FloatElevation,
+        chamfer_px: f32,
+        texture: Option<CardHalftone>,
     ) {
         set_float_quads(
             &mut self.float_shadow,
@@ -473,6 +543,8 @@ impl TextPipeline {
             height,
             rect,
             elevation,
+            chamfer_px,
+            texture,
         );
     }
 
@@ -517,6 +589,8 @@ impl TextPipeline {
             height,
             rect,
             FloatElevation::Rimmed, // shadow parked; rim + card carry the depth
+            0.0,  // item 70: the diff panel is a document preview, never a Quokka card
+            None,
         );
         // FOCUS CUE — refine the rim `set_float_quads` just drew: the panel's own
         // value by default, stepped up to content ink AND widened 1→2px when Tab
@@ -608,6 +682,7 @@ impl TextPipeline {
         } else {
             FloatElevation::Flat
         };
+        let (chamfer_px, texture) = self.card_shape_texture(rects);
         set_float_quads_rects(
             &mut self.panel_shadow,
             &mut self.panel_border,
@@ -618,7 +693,70 @@ impl TextPipeline {
             height,
             rects,
             elevation,
+            chamfer_px,
+            texture,
         );
+    }
+
+    /// ITEM 70's ONE RESOLVER — the active world's `render_caps.card_shape`/
+    /// `card_texture` (`RenderCaps::DEFAULT` on every world but Quokka),
+    /// converted from the AUTHORED logical dials into the PHYSICAL px this
+    /// frame's `SelectionPipeline` calls want: the chamfer scales by DPI then
+    /// narrows to the smallest of `rects` ([`narrowed_chamfer_px`]); the
+    /// texture's cell scales by DPI and its ink is derived fresh from the
+    /// theme ladder ([`theme::card_texture_ink`]) — never cached, so a live
+    /// theme switch re-derives it for free. Read by BOTH
+    /// `prepare_panel_card_elevation` (the plain Pane picker) and
+    /// `overlay_draw_card`'s SPELL-popup arm (Quokka's "small card popup") —
+    /// the ONE owner so the two `ListBacking::Card` call sites can never
+    /// disagree on the card's own silhouette/texture.
+    pub(super) fn card_shape_texture(&self, rects: &[[f32; 4]]) -> (f32, Option<CardHalftone>) {
+        let mut caps = theme::active().render_caps;
+        // DEV-ONLY GALLERY PROBE (mirrors `AWL_CJK_FORCE`'s "total no-op unless
+        // set" contract — no config key, no CLI flag): `AWL_CARD_CAPS_FORCE`
+        // stages Quokka's own printed-card caps down for the round's
+        // "current / type-only / type+halftone / full-chamfered" capture
+        // sequence, so each stage is a REAL render of the shipped mechanism
+        // rather than a synthetic mockup. `"flat"` forces `Flat`/`Rectangular`
+        // (the font-only stage); `"halftone"` keeps the world's own texture but
+        // forces `Rectangular` (texture, no chamfer yet). Unset (every normal
+        // run) is a no-op — the active world's own data renders untouched.
+        if let Some(force) = awl_card_caps_force() {
+            match force.as_str() {
+                "flat" => {
+                    caps.card_texture = theme::CardTexture::DEFAULT;
+                    caps.card_shape = theme::CardShape::DEFAULT;
+                }
+                "halftone" => {
+                    caps.card_shape = theme::CardShape::DEFAULT;
+                }
+                _ => {}
+            }
+        }
+        let chamfer_px = match caps.card_shape {
+            theme::CardShape::Rectangular => 0.0,
+            theme::CardShape::Chamfered { cut_px } => {
+                let physical_cut = cut_px * self.dpi.max(1.0);
+                rects
+                    .iter()
+                    .map(|&[_, _, w, h]| narrowed_chamfer_px(physical_cut, w, h))
+                    .fold(f32::INFINITY, f32::min)
+                    .min(physical_cut)
+                    .max(0.0)
+            }
+        };
+        let texture = match caps.card_texture {
+            theme::CardTexture::Flat => None,
+            theme::CardTexture::HalftoneDots { angle_deg, cell_px, density } => {
+                Some(CardHalftone {
+                    density,
+                    angle_rad: angle_deg.to_radians(),
+                    cell_px: cell_px * self.dpi.max(1.0),
+                    ink: theme::card_texture_ink().rgba_bytes(),
+                })
+            }
+        };
+        (chamfer_px, texture)
     }
 }
 

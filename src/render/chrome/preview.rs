@@ -64,7 +64,16 @@ impl TextPipeline {
             (Some(look), Some((rect, text_left, row_cy))) => (look, rect, text_left, row_cy),
             _ => {
                 // Picker closed: park the panel, the caret quad(s), and the sample text.
-                self.prepare_float_panel(device, queue, width, height, None, FloatElevation::Rimmed);
+                self.prepare_float_panel(
+                    device,
+                    queue,
+                    width,
+                    height,
+                    None,
+                    FloatElevation::Rimmed,
+                    0.0,
+                    None,
+                );
                 self.caret_preview_pipeline.prepare_empty();
                 self.caret_preview_glyph_pipeline.clear();
                 self.park_preview_text(device, queue, width, height)?;
@@ -72,7 +81,16 @@ impl TextPipeline {
             }
         };
         self.caret_demo.mode = look;
-        self.prepare_float_panel(device, queue, width, height, Some(rect), FloatElevation::Rimmed);
+        self.prepare_float_panel(
+            device,
+            queue,
+            width,
+            height,
+            Some(rect),
+            FloatElevation::Rimmed,
+            0.0,
+            None,
+        );
 
         // Shape the sample line into the preview buffer (calm content ink, world face).
         //

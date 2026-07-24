@@ -73,6 +73,9 @@ URL) — the authoritative ground truth, not an assumption.
 | `MonaspaceXenon-Bold.ttf` | Monaspace Xenon | GitHub, Inc. (copyright in name ID 7) | Monaspace, Monaspace Xenon (+ Argon/Neon/Radon/Krypton) | SIL OFL 1.1 | github.com/githubnext/monaspace (variable, instanced `wght=700 wdth=100 slnt=0`) |
 | `ArchivoBlack-Regular.ttf` | Archivo Black | The Archivo Black Project Authors | — | SIL OFL 1.1 | github.com/Omnibus-Type/ArchivoBlack (Google Fonts ofl/archivoblack, static Black, subset to Latin + punctuation) |
 | `AbrilFatface-Regular.ttf` | Abril Fatface | TypeTogether (www.type-together.com) | Abril, Abril Fatface | SIL OFL 1.1 | github.com/google/fonts (ofl/abrilfatface, static Regular, subset to Latin + punctuation) |
+| `SourGummy-Regular.ttf` | Sour Gummy | The Sour Gummy Project Authors | — | SIL OFL 1.1 | github.com/eifetx/Sour-Gummy-Fonts (Google Fonts ofl/sourgummy, variable `wdth,wght`, instanced `wght=400 wdth=100`, Latin+punctuation subset) |
+| `SourGummy-Bold.ttf` | Sour Gummy | The Sour Gummy Project Authors | — | SIL OFL 1.1 | github.com/eifetx/Sour-Gummy-Fonts (instanced `wght=700 wdth=100`, same subset — item 70's real Bold companion) |
+| `SourGummy-Black.ttf` | Sour Gummy | The Sour Gummy Project Authors | — | SIL OFL 1.1 | github.com/eifetx/Sour-Gummy-Fonts (instanced `wght=900 wdth=100`, same subset — item 70's bundled 900 heavy candidate, see below) |
 | `AwlMarks.ttf` | Awl Marks | EB Garamond, Noto (Adobe), Iosevka (Renzhi Li), Junicode (Peter S. Baker) — Project Authors, per glyph source | — | SIL OFL 1.1 (composed from OFL sources — see note below) | github.com/octaviopardo/EBGaramond12; github.com/notofonts (Noto Sans Symbols 2); github.com/be5invis/Iosevka; github.com/psb1558/Junicode-font |
 
 Most faces here are single-weight instances (Regular, except IBM Plex Mono which
@@ -124,6 +127,47 @@ table (nameID 0 copyright + nameID 13 license, unchanged by the subset), and
 subset with `pyftsubset` to Latin (U+0020–017F) + typographic/code punctuation.
 Abril is registered but assigned to no world's data yet (gallery-only, pending
 the user's veto pass); Firetail alone names Archivo Black on its `chrome_face`.
+
+**`SourGummy-{Regular,Bold,Black}.ttf` provenance (item 70, Quokka's
+printed-card round):** Sour Gummy is a bouncy, gummy-lettered display face —
+Quokka's new Latin display face (`Theme::font`), replacing Fira Sans; IBM Plex
+Mono (code) and the Klee One/LXGW WenKai CJK companions are unchanged. Fetched
+from `google/fonts` `ofl/sourgummy` (upstream github.com/eifetx/Sour-Gummy-Fonts),
+a variable font on two axes (`wdth` 100-125, `wght` 100-900), its OFL 1.1 grant
+re-read from the downloaded file's own name table (nameID 0 copyright + nameID 13
+license, unchanged by instancing/subsetting — never assumed). Following the
+established instance/subset path (`fonttools varLib.instancer --update-name-table`
+pinning `wdth=100`, then `pyftsubset`): THREE static instances at `wght=400`
+(Regular, Quokka's prose face), `wght=700` (Bold, subfamily "Bold",
+`usWeightClass 700`, the bold `fsSelection`/`macStyle` bits set — the REAL
+`**bold**`/heading companion `FONT_THEME_BOLD_FACES` registers under the
+IDENTICAL family name "Sour Gummy"), and `wght=900` (Black, subfamily "Black",
+`usWeightClass 900` — the round's REQUIRED second heavy candidate, a genuine
+instance at that weight, not relabelled 700 metadata). All three share the exact
+same 335-codepoint subset — Latin (U+0020-017F) + a fuller typographic
+punctuation set matching the OTHER bundled prose faces (Literata/Newsreader's
+own coverage: modifier letters, dead-key combining diacritics, en/em dash,
+curly + low-9 quotes, dagger/double-dagger, bullet, ellipsis, primes,
+guillemets, fraction slash, euro, trademark, up/down arrows, minus, division
+slash) — broader than the narrower ArchivoBlack/AbrilFatface CHROME-only
+punctuation set above, since Sour Gummy shapes real document prose/headings,
+not just overlay chrome. DOCUMENTED GAP (mirrors the `Fraunces9pt-Bold.ttf`
+precedent): 21 of the requested codepoints are absent from the upstream Sour
+Gummy source itself (currency ¤, soft hyphen, plus-minus, micro sign, a few
+rare Latin Extended-A letters, modifier apostrophes, two rare combining marks,
+thin/zero-width space, primes, up/down arrows) — no instance can carry them;
+every other requested codepoint is present, identically, across all three
+weights. Native+wasm size delta: +157,220 bytes (0.150 MB) — the three
+~52 KB subset instances (a variable-font source with two axes, subset before
+instancing would be smaller still, but the established path instances first
+so each weight's own hinting/outlines stay faithful to that named instance).
+Normal operation resolves `**bold**`/headings to the 700 file
+(`weight_diff == 0`); the bundled 900 file stays addressable-but-unselected
+unless the dev-only `AWL_SOURGUMMY_HEAVY_FORCE=900` knob (mirrors
+`AWL_CJK_FORCE`'s "total no-op unless set" contract — see `render.rs`'s
+`apply_sourgummy_heavy_force`) prunes the 700 face so the same request falls
+through to the 900 file instead — the mechanism the round's 700-vs-900 taste
+captures were shot through.
 
 **`AwlMarks.ttf` provenance (composed from OFL sources):** the rebuilt symbol /
 ornament face is a hand-merged subset — decomposed glyph outlines copied from

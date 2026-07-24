@@ -23,7 +23,7 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 | **Bilby**      | palest rose-gold dawn       | Gradient          | Newsreader          | Monaspace Xenon | EB Garamond · ❧ ☙ ❦                           | Dawn  | Refined  | Literary  | Warm    |
 | **Magpie**     | paper-white, high-contrast  | Pinstripe         | Bitter              | Monaspace Xenon | Junicode · quatrefoil / lattice / damask-tile | Day   | Everyday | Literary  | Neutral |
 | **Saltpan**    | warm ecru salt-flat         | Pinstripe         | Fraunces            | Monaspace Xenon | Junicode · running-vine / vine-scroll ×2      | Dawn  | Refined  | Literary  | Warm    |
-| **Quokka**     | warm peach reef             | Dots              | Fira Sans           | IBM Plex Mono   | Awl Marks · ✿ ❀ ✽                             | Dawn  | Everyday | Modern    | Warm    |
+| **Quokka**     | warm peach reef             | Dots              | Sour Gummy          | IBM Plex Mono   | Awl Marks · ✿ ❀ ✽                             | Dawn  | Everyday | Modern    | Warm    |
 | **Galah**      | dusty-pink                  | Gradient          | Figtree             | IBM Plex Mono   | Awl Marks · ❁ ❂ ✿                             | Dawn  | Everyday | Modern    | Warm    |
 | **Potoroo**    | dark burnt-orange           | Stripes           | Monaspace Xenon     | Monaspace Xenon | Awl Marks · ✶ ✦ ◆                             | Dusk  | Humble   | Technical | Warm    |
 | **Mopoke**     | warm charcoal               | Dots              | iA Writer Quattro S | IBM Plex Mono   | Junicode · damask / candelabra / damask-tile  | Dusk  | Humble   | Modern    | Warm    |
@@ -108,8 +108,11 @@ Fraunces' characterful old-style serif on warm sand; Monaspace Xenon for code.
 Dawn · Refined · Literary · Warm.
 
 ### Quokka
-**A sunlit peach reef — friendly, warm, modern.**
-Fira Sans' warm humanist sans on warm peach; Klee One for Japanese; IBM Plex Mono for code.
+**A sunlit peach reef — friendly, warm, modern, deliberately playful.**
+Sour Gummy's bouncy display face on warm peach; Klee One for Japanese; IBM Plex Mono for code.
+Its summoned cards are a printed-card statement — a crisp 45° chamfered
+silhouette and a small rotated halftone-dot texture, strongest at the card's
+right decorative edge and rolling off before the left content column.
 Dawn · Everyday · Modern · Warm.
 
 ### Galah
@@ -214,7 +217,8 @@ Regular) on every face; and headings deliberately use size, not weight.
 
 ### Display sans
 - **IBM Plex Sans** — IBM's neutral humanist workhorse: clear, unfussy, corporate-calm. *(awl's cool-sans face, worn at both value poles — dark Bowerbird's midnight navy and light Brolga's pale sky.)*
-- **Fira Sans** — a warm, friendly humanist sans: rounder and more personable than corporate-calm Plex.
+- **Fira Sans** — a warm, friendly humanist sans: rounder and more personable than corporate-calm Plex. *(Registered, currently unassigned.)*
+- **Sour Gummy** — a bouncy, gummy-lettered display face with real playful character. *(Quokka's own pick — its printed-card identity: a chamfered card silhouette + a rotated halftone-dot texture pair with the face.)*
 - **Figtree** — a soft, rounded geometric sans with a friendly contemporary warmth.
 - **iA Writer Quattro S** — a duospaced writing face (proportional look, monospace rhythm) tuned for calm drafting.
 
