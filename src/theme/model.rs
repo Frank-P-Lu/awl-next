@@ -1144,6 +1144,25 @@ pub enum Background {
         edge: LavaEdge,
         dithered: bool,
     },
+    /// THREE broad, tone-on-tone diagonal BANDS spanning the WHOLE margin field
+    /// — cut-paper grass, not a repeating stripe-tile (item 69). `tones` are
+    /// three rungs of the world's OWN ground ladder (low mutual contrast: the
+    /// "tone-on-tone" read); `angle` (radians, ~0.5-0.6 for a 30-35° cut) sets
+    /// the diagonal. The two boundaries are FRACTIONS (1/3, 2/3) of the full
+    /// diagonal projection of the VIEWPORT — not a periodic tile — so the SAME
+    /// three authored shapes crop/scale at any page width instead of
+    /// restarting or repeating into wallpaper (see `shaders/background.wgsl`'s
+    /// `bands_rgb`). Reusable data: any world may pick `Bands`, not just Gumtree.
+    Bands { tones: [Srgb; 3], angle: f32 },
+    /// THREE stacked, NON-OVERLAPPING shallow WAVE TIERS — wide scalloped
+    /// crests, horizontally phase-offset tier to tier so they read as layered
+    /// swells, never a grid (item 69). `tones` are three ground-ladder rungs,
+    /// top tier to bottom. Tier geometry (crest width/height, the vertical
+    /// thirds, each boundary's own phase) is FIXED shader math, not per-world
+    /// data — every `Waves` world shares the identical shape (see
+    /// `shaders/background.wgsl`'s `waves_rgb`). Reusable data: any world may
+    /// pick `Waves`, not just Bombora.
+    Waves { tones: [Srgb; 3] },
 }
 
 /// The [`Background::Lava`] margin-boundary treatment — how the metaball field
@@ -1198,6 +1217,8 @@ impl Background {
             // then overdraws the margins opaquely. See `crate::background`'s
             // `background_desc` (which reads these accessors) + `crate::lava`.
             Background::Lava { .. } => 0,
+            Background::Bands { .. } => 5,
+            Background::Waves { .. } => 6,
         }
     }
     /// Lowercase variant name for the capture sidecar.
@@ -1209,6 +1230,8 @@ impl Background {
             Background::Pinstripe { .. } => "pinstripe",
             Background::Stripes { .. } => "stripes",
             Background::Lava { .. } => "lava",
+            Background::Bands { .. } => "bands",
+            Background::Waves { .. } => "waves",
         }
     }
     /// Gradient START endpoint. For [`Background::Lava`] this is the margin
@@ -1221,6 +1244,11 @@ impl Background {
             | Background::Pinstripe { from, .. }
             | Background::Stripes { from, .. } => *from,
             Background::Lava { ground, .. } => *ground,
+            // BANDS/WAVES carry no gradient — `tones[0]` (the field's first
+            // authored tone) fills the same "opaque margin-ground endpoint" slot
+            // every law over `from()`/`to()` (opacity, non-degenerate-gradient)
+            // reads generically.
+            Background::Bands { tones, .. } | Background::Waves { tones } => tones[0],
         }
     }
     /// Gradient END endpoint. For [`Background::Lava`] this equals [`Self::from`]
@@ -1234,19 +1262,28 @@ impl Background {
             | Background::Pinstripe { to, .. }
             | Background::Stripes { to, .. } => *to,
             Background::Lava { ground, .. } => *ground,
+            // The field's LAST authored tone — see `from()`'s doc. `tones[0] !=
+            // tones[2]` on every shipping `Bands`/`Waves` world (the non-degenerate
+            // margin-gradient law), since the three ladder rungs are distinct.
+            Background::Bands { tones, .. } | Background::Waves { tones } => tones[2],
         }
     }
     /// Gradient DIRECTION (a roughly unit UV vector). For [`Background::Stripes`]
-    /// it is DERIVED from `angle` so the gradient runs ALONG the stripe angle. For
-    /// [`Background::Lava`] the base fill is flat, so `dir` is an inert placeholder.
+    /// and [`Background::Bands`] it is DERIVED from `angle` so the gradient/band
+    /// cut runs ALONG the same diagonal. For [`Background::Lava`] and
+    /// [`Background::Waves`] the base fill has no single travel direction, so
+    /// `dir` is an inert placeholder (non-zero, to clear the "real gradient"
+    /// sanity law — the vertical `(0,1)` Lava already uses).
     pub fn dir(&self) -> (f32, f32) {
         match self {
             Background::Gradient { dir, .. }
             | Background::Dots { dir, .. }
             | Background::Starfield { dir, .. }
             | Background::Pinstripe { dir, .. } => *dir,
-            Background::Stripes { angle, .. } => (angle.cos(), angle.sin()),
-            Background::Lava { .. } => (0.0, 1.0),
+            Background::Stripes { angle, .. } | Background::Bands { angle, .. } => {
+                (angle.cos(), angle.sin())
+            }
+            Background::Lava { .. } | Background::Waves { .. } => (0.0, 1.0),
         }
     }
     /// The marks/band tint: the dot / star / pinstripe tint, or the stripe band.
@@ -1262,6 +1299,11 @@ impl Background {
             Background::Stripes { band, .. } => *band,
             Background::Gradient { from, .. } => *from,
             Background::Lava { ground, .. } => *ground,
+            // The field's MIDDLE authored tone (`shaders/background.wgsl`'s
+            // `bands_rgb`/`waves_rgb` read `c_from`/`c_pat`/`c_to` as tones 0/1/2
+            // respectively — the SAME three uniform color slots every other
+            // ground already uploads, so no new pipeline plumbing is needed).
+            Background::Bands { tones, .. } | Background::Waves { tones } => tones[1],
         }
     }
     /// PROXIMITY-SCALING flag — only [`Background::Dots`] honors it (`true` =>
@@ -1269,10 +1311,10 @@ impl Background {
     pub fn edge(&self) -> bool {
         matches!(self, Background::Dots { edge: true, .. })
     }
-    /// Stripe angle in radians (0 for the non-stripe grounds).
+    /// Stripe/Bands angle in radians (0 for every other ground).
     pub fn angle(&self) -> f32 {
         match self {
-            Background::Stripes { angle, .. } => *angle,
+            Background::Stripes { angle, .. } | Background::Bands { angle, .. } => *angle,
             _ => 0.0,
         }
     }

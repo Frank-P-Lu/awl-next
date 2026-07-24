@@ -21,13 +21,16 @@ struct Globals {
     from: [f32; 4],
     to: [f32; 4],
     dir: [f32; 2],
-    /// Procedural ground discriminant (see `Background::shader_id`).
+    /// Procedural ground discriminant: 0=gradient, 1=dots, 2=starfield,
+    /// 3=pinstripe, 4=stripes, 5=bands, 6=waves (see `Background::shader_id`).
     shader: u32,
     _pad: u32,
     /// Mark/band tint (linear rgb) + its max coverage in `a`.
     pat: [f32; 4],
     /// Extra per-ground params: `params.x` = edge/proximity flag (0/1, Dots),
-    /// `params.y` = stripe angle in radians (Stripes), `.zw` reserved.
+    /// `params.y` = stripe/band angle in radians (Stripes, Bands), `.zw`
+    /// reserved. Bands/Waves read `from`/`to`/`tint` above as their three
+    /// authored TONES (not a gradient) — no new uniform slots needed.
     params: [f32; 4],
 }
 

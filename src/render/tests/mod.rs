@@ -12,6 +12,7 @@
 
 use super::*;
 
+mod backgrounds_item69;
 mod build_integrity;
 mod caret;
 mod caret_block;

@@ -19,7 +19,7 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 
 | World          | Ground                      | Margin background | Display             | Mono            | Ornament (`---`/`***`/`___`)                  | Time  | Register | Voice     | Temp    |
 | -------------- | --------------------------- | ----------------- | ------------------- | --------------- | --------------------------------------------- | ----- | -------- | --------- | ------- |
-| **Gumtree**    | pale eucalyptus-green       | Dots              | Literata            | Monaspace Xenon | Junicode · botanical sprig / spray / fleur    | Day   | Refined  | Literary  | Cool    |
+| **Gumtree**    | pale eucalyptus-green       | Bands             | Literata            | Monaspace Xenon | Junicode · botanical sprig / spray / fleur    | Day   | Refined  | Literary  | Cool    |
 | **Bilby**      | palest rose-gold dawn       | Gradient          | Newsreader          | Monaspace Xenon | EB Garamond · ❧ ☙ ❦                           | Dawn  | Refined  | Literary  | Warm    |
 | **Magpie**     | paper-white, high-contrast  | Pinstripe         | Bitter              | Monaspace Xenon | Junicode · quatrefoil / lattice / damask-tile | Day   | Everyday | Literary  | Neutral |
 | **Saltpan**    | warm ecru salt-flat         | Pinstripe         | Fraunces            | Monaspace Xenon | Junicode · running-vine / vine-scroll ×2      | Dawn  | Refined  | Literary  | Warm    |
@@ -27,7 +27,7 @@ is). Cohesion is "does this all agree with one line of prose," nothing fancier.
 | **Galah**      | dusty-pink                  | Gradient          | Figtree             | IBM Plex Mono   | Awl Marks · ❁ ❂ ✿                             | Dawn  | Everyday | Modern    | Warm    |
 | **Potoroo**    | dark burnt-orange           | Stripes           | Monaspace Xenon     | Monaspace Xenon | Awl Marks · ✶ ✦ ◆                             | Dusk  | Humble   | Technical | Warm    |
 | **Mopoke**     | warm charcoal               | Dots              | iA Writer Quattro S | IBM Plex Mono   | Junicode · damask / candelabra / damask-tile  | Dusk  | Humble   | Modern    | Warm    |
-| **Bombora**    | dark violet                 | Starfield         | EB Garamond         | Monaspace Xenon | EB Garamond · ☙ ❧ ❦                           | Night | Refined  | Literary  | Cool    |
+| **Bombora**    | dark violet                 | Waves             | EB Garamond         | Monaspace Xenon | EB Garamond · ☙ ❧ ❦                           | Night | Refined  | Literary  | Cool    |
 | **Mulga**      | blackish-olive              | Starfield         | Zilla Slab          | Monaspace Xenon | Junicode · ⁂ ⁑ ❦                              | Night | Everyday | Literary  | Cool    |
 | **Bowerbird**  | midnight-navy               | Dots              | IBM Plex Sans       | JetBrains Mono  | Awl Marks · ❂ ✴ ◈                             | Night | Everyday | Modern    | Cool    |
 | **Brolga**     | pale sky-blue               | Gradient          | IBM Plex Sans       | IBM Plex Mono   | Awl Marks · ✧ ✴ ⬥                             | Day   | —        | —         | Cool    |
@@ -51,11 +51,13 @@ uses the world's own quiet palette, and never spends the caret accent.
 | Background | What it draws | Shipping worlds |
 | ---------- | ------------- | --------------- |
 | **Gradient** | A directional colour blend with no built-in marks. | Bilby, Currawong, Galah, Brolga, Wagtail |
-| **Dots** | A regular grid of small round dots over a gradient. All shipping dot worlds currently use the uniform form; the available page-edge proximity form is unassigned. | Gumtree, Quokka, Mopoke, Bowerbird, Tawny |
-| **Starfield** | Deterministically scattered dots with occasional four-point sparkles. Static in captures and independent of the caret. | Bombora, Mulga |
+| **Dots** | A regular grid of small round dots over a gradient. All shipping dot worlds currently use the uniform form; the available page-edge proximity form is unassigned. | Quokka, Mopoke, Bowerbird, Tawny |
+| **Starfield** | Deterministically scattered dots with occasional four-point sparkles. Static in captures and independent of the caret. | Mulga |
 | **Pinstripe** | Fine parallel print/ledger lines over a gradient. | Magpie, Saltpan, Cassowary |
 | **Stripes** | A diagonal striped band concentrated at the page boundary and dissolved outward into the margin. | Potoroo |
 | **Lava** | A slow metaball field in the margins. Reduce Motion can still it; deterministic captures use a fixed phase. Firetail is smooth wine; Mangrove is dithered deep-sea blue. | Firetail, Mangrove |
+| **Bands** (item 69) | Exactly three large, tone-on-tone diagonal bands spanning the WHOLE margin field — cut-paper grass, not a repeating stripe-tile. Static; the ONLY colors are the world's own ground-ladder rungs. | Gumtree |
+| **Waves** (item 69) | Exactly three stacked, non-overlapping shallow wave tiers — wide scalloped crests, horizontally phase-offset so they layer instead of gridding. Static; the world's own ground-ladder rungs. | Bombora |
 
 Currawong's base margin background is **Gradient**. Its slowly appearing and
 dying stars are a separate ambient Frame layer, not the static **Starfield**

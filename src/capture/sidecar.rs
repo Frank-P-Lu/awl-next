@@ -1166,6 +1166,17 @@ fn background_json(bg: crate::theme::Background, lava_phase: f32) -> String {
             "{{ \"kind\": \"lava\", \"ground\": {}, \"blob_lo\": {}, \"blob_hi\": {}, \"edge\": \"{}\", \"dithered\": {}, \"phase\": {} }}",
             hex(ground), hex(blob_lo), hex(blob_hi), edge.as_str(), dithered, lava_phase
         ),
+        // ITEM 69: three authored tones (the ground ladder), not a gradient —
+        // `tones` serializes as a 3-array so a reviewer reads back exactly what
+        // the theme declared, same spirit as every other arm above.
+        Background::Bands { tones, angle } => format!(
+            "{{ \"kind\": \"bands\", \"tones\": [{}, {}, {}], \"angle\": {} }}",
+            hex(tones[0]), hex(tones[1]), hex(tones[2]), angle
+        ),
+        Background::Waves { tones } => format!(
+            "{{ \"kind\": \"waves\", \"tones\": [{}, {}, {}] }}",
+            hex(tones[0]), hex(tones[1]), hex(tones[2])
+        ),
     }
 }
 
