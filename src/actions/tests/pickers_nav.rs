@@ -218,7 +218,7 @@ fn spell_add_row_stays_last_even_when_it_outranks_a_correction() {
     // Sanity: the add row's own label really does out-score a correction here —
     // otherwise this test would pass by accident regardless of the fix. `corpus`
     // (unfiltered) still holds the full label at this point (before `push`).
-    let add_label = ov.corpus.last().cloned().unwrap();
+    let add_label = ov.rows.last().map(|r| r.accept.clone()).unwrap();
     assert!(
         crate::fuzzy::score("ad", &add_label) > crate::fuzzy::score("ad", "sad"),
         "test setup: the add label must out-score a correction for this to be a real regression check"
@@ -229,12 +229,15 @@ fn spell_add_row_stays_last_even_when_it_outranks_a_correction() {
     assert!(ov.items.len() >= 2, "the query matched at least one correction too");
     let last_ci = *ov.items.last().unwrap();
     assert!(
-        ov.spell_add[last_ci],
+        matches!(ov.rows[last_ci].meta, crate::overlay::RowMeta::SpellAdd),
         "the add row stays last even though it out-scores a correction"
     );
     // And it is the ONLY add-flagged row among the displayed items.
     assert_eq!(
-        ov.items.iter().filter(|&&ci| ov.spell_add[ci]).count(),
+        ov.items
+            .iter()
+            .filter(|&&ci| matches!(ov.rows[ci].meta, crate::overlay::RowMeta::SpellAdd))
+            .count(),
         1,
         "exactly one add row shows"
     );
@@ -334,7 +337,10 @@ fn filtering_narrows_the_capped_corrections_and_the_add_row_persists() {
     assert!(rows.len() < 6, "the query narrowed the correction set: {rows:?}");
     assert!(!rows.iter().any(|s| s == "anvil"), "the dropped 6th correction was never in the corpus to match");
     let last_ci = *ov.items.last().unwrap();
-    assert!(ov.spell_add[last_ci], "the add row still survives filtering, still last");
+    assert!(
+        matches!(ov.rows[last_ci].meta, crate::overlay::RowMeta::SpellAdd),
+        "the add row still survives filtering, still last"
+    );
 }
 
 #[test]
@@ -1017,12 +1023,12 @@ fn theme_hover_previews_world_but_does_not_reanchor_the_card() {
     // Find a world whose rail DIFFERS from the frozen one (a real crossing).
     let ov = overlay.as_mut().unwrap();
     let target_ci = ov
-        .corpus
+        .rows
         .iter()
-        .position(|name| {
+        .position(|row| {
             crate::theme::THEMES
                 .iter()
-                .find(|t| &t.name == name)
+                .find(|t| t.name == row.accept)
                 .map(|t| t.render_caps.card_anchor != frozen)
                 .unwrap_or(false)
         })

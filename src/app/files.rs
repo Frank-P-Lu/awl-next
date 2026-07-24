@@ -461,9 +461,9 @@ impl App {
     /// process-globals are re-read live inside the readout). A no-op if the settings
     /// menu isn't the open overlay. Reads through [`crate::settings::visible_value_cells`]
     /// — the SAME platform-filtered view `overlay::build`'s own `OverlayKind::Settings`
-    /// branch seeds `ov.bindings` from — never the raw unfiltered
-    /// [`crate::settings::value_cells`]; on native the two coincide (nothing is
-    /// filtered), but a refresh must stay index-coherent with `ov.corpus`
+    /// branch seeds each row's `secondary` from (via `set_secondaries`) — never the raw
+    /// unfiltered [`crate::settings::value_cells`]; on native the two coincide (nothing
+    /// is filtered), but a refresh must stay index-coherent with `ov.rows`
     /// (`visible_names()`) even on web, where "Edit config as text" is hidden.
     pub(super) fn refresh_settings_overlay(&mut self) {
         let values = crate::settings::SettingsValues::gather(
@@ -474,7 +474,7 @@ impl App {
         );
         if let Some(ov) = self.overlay.as_mut() {
             if ov.kind == crate::overlay::OverlayKind::Settings {
-                ov.bindings = crate::settings::visible_value_cells(&values);
+                ov.set_secondaries(crate::settings::visible_value_cells(&values));
             }
         }
     }
@@ -1095,7 +1095,7 @@ impl App {
         if let Some(ov) = self.overlay.as_mut() {
             if ov.kind == crate::overlay::OverlayKind::Keybindings {
                 ov.capture = None;
-                ov.bindings = crate::commands::effective_bindings(&keys, &keep);
+                ov.set_secondaries(crate::commands::effective_bindings(&keys, &keep));
                 ov.notice = notice;
             }
         }

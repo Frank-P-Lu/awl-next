@@ -63,7 +63,7 @@ fn rescan_file_index_picks_up_a_file_created_after_the_last_scan() {
     let ov = crate::overlay::build(crate::overlay::OverlayKind::Goto, &build_ctx)
         .expect("Goto always summons");
     assert!(
-        ov.corpus.contains(&"b.txt".to_string()),
+        ov.accepts().contains(&"b.txt"),
         "the new file is listed"
     );
 }

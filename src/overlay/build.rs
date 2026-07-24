@@ -211,7 +211,7 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
                 Vec::new(),
                 Vec::new(),
             );
-            ov.bindings = crate::settings::visible_value_cells(&ctx.settings_values);
+            ov.set_secondaries(crate::settings::visible_value_cells(&ctx.settings_values));
             Some(ov)
         }
         // Asset cleaner: the caller-scanned orphan list. ALWAYS summons (like

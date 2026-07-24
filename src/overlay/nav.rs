@@ -4,14 +4,15 @@
 //! the former `overlay.rs` monolith (2026-07 code-organization pass); every
 //! item's path is unchanged -- only the file it lives in moved.
 
-use super::{OverlayKind, OverlayState};
+use super::{OverlayKind, OverlayState, RowMeta};
 use crate::fuzzy::{self, Tier};
 
 impl OverlayState {
-    /// Re-rank `corpus` against the current query into `items`, clamping the
+    /// Re-rank `rows` against the current query into `items`, clamping the
     /// selection. Called after every query edit.
     pub fn refilter(&mut self) {
-        let mut scored = fuzzy::rank(self.query.text(), &self.corpus, |i| {
+        let accepts = self.accepts();
+        let mut scored = fuzzy::rank(self.query.text(), &accepts, |i| {
             if self.open.contains(&i) {
                 Tier::Open
             } else if self.recent.contains(&i) {
@@ -48,27 +49,26 @@ impl OverlayState {
         // ranking put it (present or absent) and re-appends it at the END
         // unconditionally — the corrections keep the ranker's order among
         // themselves, the add row simply always trails them. Inert for every other
-        // kind (`spell_add` empty).
-        if self.spell_add.iter().any(|&a| a) {
+        // kind (no row ever carries `RowMeta::SpellAdd`).
+        if self.rows.iter().any(|r| matches!(r.meta, RowMeta::SpellAdd)) {
             let add_rows: Vec<usize> = self
-                .spell_add
+                .rows
                 .iter()
                 .enumerate()
-                .filter(|&(_, &is_add)| is_add)
+                .filter(|(_, r)| matches!(r.meta, RowMeta::SpellAdd))
                 .map(|(ci, _)| ci)
                 .collect();
             ranked.retain(|ci| !add_rows.contains(ci));
             ranked.extend(add_rows);
         }
-        // RUNTIME-GATED ROW FILTER (Command palette only, today): drop any corpus
-        // entry marked `hidden` (e.g. "Finish file" with no daemon `--wait` client
-        // actively waiting — see `commands::visible_hidden_mask`). `corpus` itself
-        // stays untouched — only what's rankable/selectable shrinks — so the
-        // row-index math `commands::visible_action_of` relies on stays valid. A
-        // no-op (`hidden` empty) for every kind but the Command palette.
-        if !self.hidden.is_empty() {
-            ranked.retain(|&i| !self.hidden.get(i).copied().unwrap_or(false));
-        }
+        // RUNTIME-GATED ROW FILTER (Command palette only, today): drop any row
+        // marked `RowMeta::CommandHidden` (e.g. "Finish file" with no daemon
+        // `--wait` client actively waiting — see `commands::visible_hidden_mask`).
+        // `rows` itself stays untouched — only what's rankable/selectable shrinks —
+        // so the row-index math `commands::visible_action_of` relies on stays
+        // valid. A no-op (no row ever carries the tag) for every kind but the
+        // Command palette.
+        ranked.retain(|&i| !matches!(self.rows.get(i).map(|r| &r.meta), Some(RowMeta::CommandHidden)));
         // DOTFILE DISPLAY FILTER (file pickers only, gated on `show_hidden`): drop any
         // corpus entry whose basename / ancestor component starts with `.` (except
         // `.env*`). The full corpus is untouched — this is purely what's SHOWN — so
@@ -81,9 +81,9 @@ impl OverlayState {
         // likewise exempt (a heading title is prose, not a dotfile path).
         if !self.show_hidden && self.kind.hides_dotfiles() {
             ranked.retain(|&i| {
-                self.corpus[i] == "."
-                    || self.heading.get(i).copied().unwrap_or(false)
-                    || !crate::index::is_hidden_entry(&self.corpus[i])
+                self.rows[i].accept == "."
+                    || matches!(self.rows[i].meta, RowMeta::GotoHeading { .. })
+                    || !crate::index::is_hidden_entry(&self.rows[i].accept)
             });
         }
         // HEADINGS-LENS GATE (Go-to only): a REFINEMENT lens other than Headings
@@ -92,10 +92,12 @@ impl OverlayState {
         // is the UNIFIED DEFAULT (item 11): it keeps heading rows IN, mixed with
         // file rows and ranked together by the same fuzzy score, so one query can
         // reach either kind. The Headings lens re-admits them exclusively via its
-        // own bucket ([`crate::index::goto_bucket`]). Inert when `heading` is empty
-        // (every other picker, and a Go-to over a buffer with no headings).
-        if !self.heading.is_empty() && self.facet_lens != 0 && self.active_facet_id() != Some("headings") {
-            ranked.retain(|&i| !self.heading.get(i).copied().unwrap_or(false));
+        // own bucket ([`crate::index::goto_bucket`]). A no-op for every other kind
+        // (no row ever carries `RowMeta::GotoHeading`) and for a Go-to over a
+        // buffer with no headings.
+        if self.kind == OverlayKind::Goto && self.facet_lens != 0 && self.active_facet_id() != Some("headings")
+        {
+            ranked.retain(|&i| !matches!(self.rows[i].meta, RowMeta::GotoHeading { .. }));
         }
         // FACETING picker under a real lens (strip index != 0, the All home): GROUP the
         // (fuzzy-matched) items into the lens's sections, in section order, preserving
@@ -109,22 +111,26 @@ impl OverlayState {
             let mut sections = Vec::with_capacity(ranked.len());
             for sect in sc.strip[self.facet_lens].sections {
                 for &ci in &ranked {
+                    let row = &self.rows[ci];
                     // OPT-OUT faceting: an item with `None` on this lens yields `None`
                     // here, matching no section, so it is omitted from the lens (still
                     // reachable under All). Only `Some(section)` items are placed. The
                     // bucket sees the accept string PLUS the universal dir/git flags
                     // (the file pickers' Folders / Files / Git lenses key off them).
                     let fi = crate::facets::FacetItem {
-                        accept: &self.corpus[ci],
-                        is_dir: self.is_dir.get(ci).copied().unwrap_or(false),
-                        is_git: self.git.get(ci).copied().unwrap_or(false),
+                        accept: &row.accept,
+                        is_dir: row.is_dir,
+                        is_git: row.git,
                         // Command palette's Recent lens: reuse the recency tier vec.
                         recent: self.recent.contains(&ci),
                         // Go-to's Headings lens: this row is an appended doc heading.
-                        heading: self.heading.get(ci).copied().unwrap_or(false),
+                        heading: matches!(row.meta, RowMeta::GotoHeading { .. }),
                         // History's Session / Today lenses: the per-row stamp + the
                         // picker-global reference clocks (all `None` headless → inert).
-                        ts: self.facet_ts.get(ci).copied(),
+                        ts: match row.meta {
+                            RowMeta::History { ts, .. } => Some(ts),
+                            _ => None,
+                        },
                         now: self.facet_now,
                         session_start: self.facet_session_start,
                     };
@@ -330,8 +336,8 @@ impl OverlayState {
         }
     }
 
-    /// The corpus index currently highlighted (into `corpus`/`git`/`is_dir`), or
-    /// `None` when no item matches.
+    /// The corpus index currently highlighted (into `rows`), or `None` when no item
+    /// matches.
     pub fn selected_corpus_index(&self) -> Option<usize> {
         self.items.get(self.selected).copied()
     }
@@ -340,27 +346,30 @@ impl OverlayState {
     /// or `None` when no item matches / the row carries no line. Read only when the
     /// highlighted row IS a heading ([`Self::selected_is_heading`]).
     pub fn selected_line(&self) -> Option<usize> {
-        self.selected_corpus_index()
-            .and_then(|i| self.lines.get(i).copied())
+        let i = self.selected_corpus_index()?;
+        match self.rows.get(i)?.meta {
+            RowMeta::GotoHeading { line } => Some(line),
+            _ => None,
+        }
     }
 
     /// True when the highlighted Go-to row is a document HEADING (the Headings lens),
     /// so the accept JUMPS to [`Self::selected_line`] instead of opening a file. `false`
-    /// for an ordinary file row and every non-Go-to picker (empty `heading` vec).
+    /// for an ordinary file row and every non-Go-to picker.
     pub fn selected_is_heading(&self) -> bool {
         self.selected_corpus_index()
-            .map(|i| self.heading.get(i).copied().unwrap_or(false))
+            .map(|i| matches!(self.rows.get(i).map(|r| &r.meta), Some(RowMeta::GotoHeading { .. })))
             .unwrap_or(false)
     }
 
     /// True when the highlighted Spell row is the appended "Add '<word>' to
-    /// dictionary" affordance (`spell_add[i]`), so the accept ADDS the word to the
-    /// personal dictionary instead of replacing it with a suggestion. `false` for a
-    /// suggestion row and every non-Spell picker (empty `spell_add`). The word to
-    /// add is [`Self::add_word`].
+    /// dictionary" affordance (`RowMeta::SpellAdd`), so the accept ADDS the word to
+    /// the personal dictionary instead of replacing it with a suggestion. `false`
+    /// for a suggestion row and every non-Spell picker. The word to add is
+    /// [`Self::add_word`].
     pub fn selected_is_add_to_dictionary(&self) -> bool {
         self.selected_corpus_index()
-            .map(|i| self.spell_add.get(i).copied().unwrap_or(false))
+            .map(|i| matches!(self.rows.get(i).map(|r| &r.meta), Some(RowMeta::SpellAdd)))
             .unwrap_or(false)
     }
 
@@ -368,10 +377,11 @@ impl OverlayState {
     /// no item matches / this isn't a history picker / an empty history (no rows to
     /// restore). Enter maps this to a restore.
     pub fn selected_history_id(&self) -> Option<&str> {
-        self.selected_corpus_index()
-            .and_then(|i| self.history_ids.get(i))
-            .map(|s| s.as_str())
-            .filter(|s| !s.is_empty())
+        let i = self.selected_corpus_index()?;
+        match &self.rows.get(i)?.meta {
+            RowMeta::History { id, .. } if !id.is_empty() => Some(id.as_str()),
+            _ => None,
+        }
     }
 
     /// The caret LOOK the highlighted row selects (Caret picker only), or `None`
@@ -388,14 +398,12 @@ impl OverlayState {
     /// The RAW corpus string currently highlighted (the accept value), or `None`
     /// when no item matches.
     pub fn selected_value(&self) -> Option<&str> {
-        self.selected_corpus_index().map(|i| self.corpus[i].as_str())
+        self.selected_corpus_index().map(|i| self.rows[i].accept.as_str())
     }
 
     /// True when the highlighted entry is a directory (Browse: Enter descends).
     pub fn selected_is_dir(&self) -> bool {
-        self.selected_corpus_index()
-            .map(|i| self.is_dir[i])
-            .unwrap_or(false)
+        self.selected_corpus_index().map(|i| self.rows[i].is_dir).unwrap_or(false)
     }
 
     /// The DISPLAY string for corpus entry `i`: the raw value plus a trailing
@@ -404,31 +412,32 @@ impl OverlayState {
     /// primary cell stays the clean folder name; the accept value is always the raw
     /// corpus string.
     fn display_of(&self, i: usize) -> String {
+        let row = &self.rows[i];
         // ASSET CLEANER: the corpus holds the root-relative PATH (the accept/trash key
         // + fuzzy corpus, so typing a folder narrows), but the primary cell shows just
         // the leaf FILE NAME — its parent dir rides the secondary column. Every other
         // picker displays its raw corpus value.
         if self.kind == OverlayKind::Assets {
-            let rel = &self.corpus[i];
+            let rel = &row.accept;
             return rel.rsplit('/').next().unwrap_or(rel).to_string();
         }
         // THE UNION ROUND: a settings row (appended to the Command palette's
         // corpus by `attach_settings_rows`) draws the `§ ` marker glyph before its
         // name — `crate::overlay::row_split` recognizes the SAME prefix constant
         // and mutes it, exactly like a file row's directory prefix.
-        if self.kind == OverlayKind::Command && self.is_setting.get(i).copied().unwrap_or(false) {
-            return format!("{}{}", OverlayKind::SETTINGS_MARKER_PREFIX, self.corpus[i]);
+        if matches!(row.meta, RowMeta::CommandSetting) {
+            return format!("{}{}", OverlayKind::SETTINGS_MARKER_PREFIX, row.accept);
         }
         // ITEM 11's UNIFIED LIST: a Go-to HEADING row (appended after the file rows
         // by `attach_headings`) draws the `❡ ` marker glyph before its (already
         // depth-indented) title — the mirror-image of the settings marker above —
         // so it reads apart from a file row at a glance once the default `All` list
         // mixes both kinds together.
-        if self.kind == OverlayKind::Goto && self.heading.get(i).copied().unwrap_or(false) {
-            return format!("{}{}", OverlayKind::HEADING_MARKER_PREFIX, self.corpus[i]);
+        if matches!(row.meta, RowMeta::GotoHeading { .. }) {
+            return format!("{}{}", OverlayKind::HEADING_MARKER_PREFIX, row.accept);
         }
-        let mut s = self.corpus[i].clone();
-        if self.is_dir.get(i).copied().unwrap_or(false) {
+        let mut s = row.accept.clone();
+        if row.is_dir {
             s.push('/');
         }
         s
@@ -450,18 +459,12 @@ impl OverlayState {
     /// secondary column at all (byte-identical to a plain picker). For a picker kind
     /// that never marks git (theme / command / …) every flag is false → empty vec.
     pub fn item_git_tags(&self) -> Vec<String> {
-        if !self.items.iter().any(|&i| self.git.get(i).copied().unwrap_or(false)) {
+        if !self.items.iter().any(|&i| self.rows[i].git) {
             return Vec::new();
         }
         self.items
             .iter()
-            .map(|&i| {
-                if self.git.get(i).copied().unwrap_or(false) {
-                    "git".to_string()
-                } else {
-                    String::new()
-                }
-            })
+            .map(|&i| if self.rows[i].git { "git".to_string() } else { String::new() })
             .collect()
     }
 
@@ -498,32 +501,30 @@ impl OverlayState {
         }
     }
 
-    /// The filtered BINDING labels, in the same row order as [`item_strings`]
-    /// (Command palette only; empty/blank for every other kind). Lets the render
-    /// + sidecar show each command's chord beside its name without re-deriving it.
+    /// The filtered SECONDARY-column labels, in the same row order as
+    /// [`item_strings`] (Command palette chords, look/variant descriptions,
+    /// setting values, changed-counts, … — empty for a kind that draws no
+    /// secondary column). Lets the render + sidecar show each row's secondary
+    /// cell without re-deriving it.
     pub fn item_bindings(&self) -> Vec<String> {
-        self.items
-            .iter()
-            .map(|&i| self.bindings.get(i).cloned().unwrap_or_default())
-            .collect()
+        self.items.iter().map(|&i| self.rows[i].secondary.clone()).collect()
     }
 
     /// The filtered relative-time LABELS, in the same row order as [`item_strings`]
     /// (go-to picker only; empty for every other kind and in headless capture). A
-    /// HEADING row (see [`Self::heading`]) carries no mtime — since item 11's unified
-    /// `All` list mixes heading rows in among file rows, its cell reads the constant
-    /// `"heading"` KIND HINT instead, the rowlayout SECONDARY-cell disambiguator that
-    /// tells a heading row apart from a file row at a glance (a file row's cell is
-    /// its relative edit time live, or blank in headless where mtime is never read).
+    /// HEADING row (see [`RowMeta::GotoHeading`]) carries no mtime — since item 11's
+    /// unified `All` list mixes heading rows in among file rows, its cell reads the
+    /// constant `"heading"` KIND HINT instead, the rowlayout SECONDARY-cell
+    /// disambiguator that tells a heading row apart from a file row at a glance (a
+    /// file row's cell is its relative edit time live, or blank in headless where
+    /// mtime is never read).
     pub fn item_times(&self) -> Vec<String> {
         self.items
             .iter()
-            .map(|&i| {
-                if self.heading.get(i).copied().unwrap_or(false) {
-                    "heading".to_string()
-                } else {
-                    self.times.get(i).cloned().unwrap_or_default()
-                }
+            .map(|&i| match &self.rows[i].meta {
+                RowMeta::GotoHeading { .. } => "heading".to_string(),
+                RowMeta::GotoFile { time } => time.clone(),
+                _ => String::new(),
             })
             .collect()
     }

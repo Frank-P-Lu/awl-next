@@ -120,14 +120,18 @@ pub struct Ranked {
 /// the textual score so the product-model hierarchy is honored. Results are
 /// sorted best-first; ties break by the candidate's original order (stable),
 /// giving deterministic output for capture verification.
-pub fn rank(
+///
+/// ITEM 54 — generic over `S: AsRef<str>` (not just `String`) so a caller
+/// already holding `Vec<&str>` (`OverlayState::accepts`) can pass it straight
+/// through as `&[&str]` — no per-call `String` clone to satisfy the signature.
+pub fn rank<S: AsRef<str>>(
     query: &str,
-    candidates: &[String],
+    candidates: &[S],
     mut tier: impl FnMut(usize) -> Tier,
 ) -> Vec<Ranked> {
     let mut out: Vec<Ranked> = Vec::new();
     for (i, c) in candidates.iter().enumerate() {
-        if let Some(s) = score(query, c) {
+        if let Some(s) = score(query, c.as_ref()) {
             out.push(Ranked {
                 index: i,
                 score: s + tier(i).bias(),

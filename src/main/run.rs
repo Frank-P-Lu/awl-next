@@ -2140,7 +2140,7 @@ mod tests {
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         let ov = res.overlay.expect("Rename note… opens the minibuffer overlay");
         assert_eq!(ov.kind, crate::overlay::OverlayKind::Rename);
-        assert_eq!(ov.corpus, vec!["old.md2".to_string()], "typing extends the seeded name");
+        assert_eq!(ov.accepts(), vec!["old.md2"], "typing extends the seeded name");
         assert_eq!(
             ov.foot_hint(),
             "rename to: old.md2   Enter commit   Esc cancel",
@@ -2186,7 +2186,7 @@ mod tests {
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         let ov = res.overlay.expect("Keep version… opens the naming minibuffer");
         assert_eq!(ov.kind, crate::overlay::OverlayKind::KeepName);
-        assert_eq!(ov.corpus, vec!["draft".to_string()], "typing builds the name from empty");
+        assert_eq!(ov.accepts(), vec!["draft"], "typing builds the name from empty");
         assert_eq!(
             ov.foot_hint(),
             "name this version: draft   Enter keep   Esc cancel",
@@ -2247,7 +2247,7 @@ mod tests {
         let res = replay_keys(&mut buffer, &keys, &[], &root, None, &root, &Config::empty(), None);
         let ov = res.overlay.expect("Cmd-K opens the link minibuffer");
         assert_eq!(ov.kind, crate::overlay::OverlayKind::InsertLink);
-        assert_eq!(ov.corpus, vec!["https://".to_string()]);
+        assert_eq!(ov.accepts(), vec!["https://"]);
         assert_eq!(
             ov.foot_hint(),
             "link to: https://   Enter commit   Esc cancel",
@@ -2690,7 +2690,7 @@ mod tests {
             .position(|r| r.name == "Ambiguous CJK reads as")
             .unwrap();
         assert_eq!(
-            ov.bindings[row_idx], "Korean",
+            ov.rows[row_idx].secondary, "Korean",
             "the re-summoned Settings menu's value cell is FRESH, in writer-words"
         );
 

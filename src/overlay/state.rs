@@ -14,16 +14,118 @@ pub fn add_to_dictionary_label(word: &str) -> String {
     format!("Add '{word}' to dictionary")
 }
 
-/// Live overlay state. `corpus` is the full candidate list (the RAW accept
-/// values — root-relative paths for Goto, child names for Project, entry names
-/// for Browse); `items` is the fuzzy-filtered + ranked view of it that the panel
-/// shows. `selected` indexes into `items`. `open_tier`/`recent_tier` mark which
-/// corpus entries get a ranking bias (open buffer > recently opened > corpus).
-///
-/// `git`/`is_dir` are parallel to `corpus`: `git[i]` marks an entry that is a
-/// git repo (Project children, Browse folders) so the row gets a small marker;
-/// `is_dir[i]` marks a directory so Browse knows Enter should DESCEND rather than
-/// open. For Goto every entry is a file (both default false).
+/// ITEM 54 — ONE typed row, replacing the former TWELVE corpus-parallel arrays
+/// (`corpus`/`git`/`is_dir`/`bindings`/`times`/`lines`/`heading`/`spell_add`/
+/// `history_ids`/`facet_ts`/`is_setting`/`hidden`). Every metadata read routes
+/// through a row's own field or its [`RowMeta`] — never a separate array by
+/// index — so a reorder or removal carries a row's identity as ONE element
+/// (structurally impossible to separate a row from its own metadata, the
+/// headline bug class the parallel-array shape invited).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlayRow {
+    /// The RAW accept value (also the fuzzy corpus text): a root-relative path,
+    /// a child/entry name, a world/look/variant/format label, a command name, a
+    /// history row's main column, …
+    pub accept: String,
+    /// The SECONDARY (right) column: a chord label, a look/variant description,
+    /// a changed-count, a size + parent dir, a setting's current value, … Empty
+    /// when this kind draws no secondary column for this row.
+    pub secondary: String,
+    /// This entry is a directory (Browse: Enter descends).
+    pub is_dir: bool,
+    /// This entry is a git repo (gets a marker).
+    pub git: bool,
+    /// The row's KIND-SPECIFIC payload — see [`RowMeta`]. A row carries EXACTLY
+    /// one variant; which variants a given [`OverlayKind`] may produce is the
+    /// CLOSED roster [`OverlayKind::row_meta_roster`] declares.
+    pub meta: RowMeta,
+}
+
+impl OverlayRow {
+    /// A PLAIN row carrying just its accept text — every optional field at its
+    /// off default (no secondary, no dir/git marker, [`RowMeta::Plain`]). The
+    /// common shape most pickers' rows start from.
+    fn plain(accept: String) -> Self {
+        Self { accept, secondary: String::new(), is_dir: false, git: false, meta: RowMeta::Plain }
+    }
+}
+
+/// A row's KIND-SPECIFIC metadata — CLOSED: a row carries EXACTLY one variant,
+/// never a combination (mutual exclusivity holds per row: a Command row is one
+/// of `Plain`/`CommandHidden`/`CommandSetting`; a Spell row is `Plain`/
+/// `SpellAdd`; a Goto row is `GotoFile`/`GotoHeading`). Replaces the former
+/// `heading`+`lines` / `spell_add` / `history_ids`+`facet_ts` / `is_setting` /
+/// `hidden` parallel arrays (item 54). Plain data — `Clone`+`PartialEq`+`Eq`,
+/// no rope/undo/syntax machinery — so a row is trivially testable and
+/// serialisable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowMeta {
+    /// No kind-specific payload — the vast majority of rows, every kind.
+    Plain,
+    /// Go-to FILE row: the relative "last edited" label (live only; empty in
+    /// the headless capture path, for determinism). Was `times[i]`.
+    GotoFile { time: String },
+    /// Go-to appended document-HEADING row (the fold that retired the
+    /// standalone Outline picker): the document LINE Enter jumps to. Was
+    /// `heading[i]` (the flag) + `lines[i]` (the line).
+    GotoHeading { line: usize },
+    /// Command palette appended SETTINGS row (the union round): the setting's
+    /// current value rides the row's own `secondary`. Was `is_setting[i]`.
+    CommandSetting,
+    /// Command palette RUNTIME-gated row: exists in the catalog but is hidden
+    /// from selection right now (see `commands::visible_hidden_mask`). Was
+    /// `hidden[i]`.
+    CommandHidden,
+    /// Spell picker's always-terminal "Add '<word>' to dictionary" row. Was
+    /// `spell_add[i]`.
+    SpellAdd,
+    /// History timeline row: the RESTORE id (Enter's accept value) + the
+    /// version's wall-clock stamp (millis, for the Session/Today lenses). Was
+    /// `history_ids[i]` + `facet_ts[i]`.
+    History { id: String, ts: u64 },
+}
+
+/// [`RowMeta`]'s discriminant — the ROSTER comparison key
+/// [`OverlayKind::row_meta_roster`] declares against, and what
+/// [`RowMeta::tag`] maps every variant to. Kept separate from `RowMeta` itself
+/// (rather than matching on `RowMeta` directly in the roster) so a roster is
+/// plain data (`&'static [RowMetaTag]`), comparable with `contains`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // consumed only by OverlayKind::row_meta_roster + overlay::tests today.
+pub enum RowMetaTag {
+    Plain,
+    GotoFile,
+    GotoHeading,
+    CommandSetting,
+    CommandHidden,
+    SpellAdd,
+    History,
+}
+
+impl RowMeta {
+    /// This row's meta TAG. A NO-WILDCARD match — THE EXHAUSTIVENESS WITNESS: a
+    /// future `RowMeta` variant fails to compile here (and therefore fails
+    /// every kind's `row_meta_roster` too) until this mapping accounts for it.
+    #[allow(dead_code)] // consumed only by overlay::tests's exhaustiveness witness + roster sweep today.
+    pub fn tag(&self) -> RowMetaTag {
+        match self {
+            RowMeta::Plain => RowMetaTag::Plain,
+            RowMeta::GotoFile { .. } => RowMetaTag::GotoFile,
+            RowMeta::GotoHeading { .. } => RowMetaTag::GotoHeading,
+            RowMeta::CommandSetting => RowMetaTag::CommandSetting,
+            RowMeta::CommandHidden => RowMetaTag::CommandHidden,
+            RowMeta::SpellAdd => RowMetaTag::SpellAdd,
+            RowMeta::History { .. } => RowMetaTag::History,
+        }
+    }
+}
+
+/// Live overlay state. `rows` is the full candidate list (stable order) — each
+/// [`OverlayRow`] carries its own accept text, secondary column, dir/git
+/// markers, and kind-specific [`RowMeta`]; `items` is the fuzzy-filtered +
+/// ranked VIEW of it (each entry an index into `rows`) the panel shows.
+/// `selected` indexes into `items`. `open`/`recent` mark which row indices get
+/// a ranking bias (open buffer > recently opened > corpus).
 ///
 /// `browse_dir` is only meaningful for `Browse`: the root-relative directory the
 /// current level lists (`None` = the root itself). It is surfaced to the sidecar
@@ -52,17 +154,17 @@ pub struct OverlayState {
     /// the model); only word-motion (Ctrl/Opt-arrow) and typing/backspace
     /// move the caret within it — see `actions/overlay_nav.rs`.
     pub query: TextBox,
-    /// The full unfiltered candidate corpus (stable order), RAW accept values.
-    pub corpus: Vec<String>,
-    /// Parallel to `corpus`: entry is a git repo (gets a marker).
-    pub git: Vec<bool>,
-    /// Parallel to `corpus`: entry is a directory (Browse: Enter descends).
-    pub is_dir: Vec<bool>,
-    /// Corpus indices that are currently OPEN (active file).
+    /// ITEM 54 — the full unfiltered candidate ROWS (stable order): each carries
+    /// its own accept text, secondary column, dir/git markers, and kind-specific
+    /// [`RowMeta`]. Replaces the former `corpus`/`git`/`is_dir`/`bindings`/
+    /// `times`/`lines`/`heading`/`spell_add`/`history_ids`/`facet_ts`/
+    /// `is_setting`/`hidden` parallel arrays.
+    pub rows: Vec<OverlayRow>,
+    /// Row indices that are currently OPEN (active file).
     pub open: Vec<usize>,
-    /// Corpus indices that were recently opened (MRU), not currently open.
+    /// Row indices that were recently opened (MRU), not currently open.
     pub recent: Vec<usize>,
-    /// Filtered + ranked view: each entry is an index into `corpus`.
+    /// Filtered + ranked view: each entry is an index into `rows`.
     pub items: Vec<usize>,
     /// Selected row, indexing into `items`.
     pub selected: usize,
@@ -91,56 +193,15 @@ pub struct OverlayState {
     /// tracking for the rest of the session (the bug this field fixes). Always
     /// `false` for every other kind.
     pub original_caret_was_auto: bool,
-    /// Command palette only: binding LABELS parallel to `corpus` (the current key
-    /// chord for each command, shown dim beside its name). Empty for every other
-    /// kind. Filtered into row order via [`item_bindings`].
-    pub bindings: Vec<String>,
-    /// Go-to (notes) only: a relative "last edited" LABEL parallel to `corpus`
-    /// (e.g. "5m ago"), shown dim beside each file. Empty for every other kind AND
-    /// in the headless capture path (where mtime is never read, for determinism).
-    /// Filtered into row order via [`item_times`].
-    pub times: Vec<String>,
-    /// Go-to's HEADINGS lens only: the document LINE (0-based) each HEADING row jumps
-    /// to, parallel to `corpus`. Enter on a heading row JUMPS the cursor to `lines[i]`
-    /// (the accept value is this line number, not the heading text, because two
-    /// headings can share a title). Empty for every other kind; for a Go-to it is
-    /// padded to the full corpus length — file rows carry an unused `0` (guarded by
-    /// the parallel `heading` flag), heading rows carry their real line.
-    pub lines: Vec<usize>,
-    /// Go-to only: parallel to `corpus`, true for the appended document-HEADING rows
-    /// (the fold that retired the standalone Outline picker), false for the ordinary
-    /// FILE rows. Item 11's unified default: the flat `All` lens keeps heading rows
-    /// IN, mixed with file rows in one fuzzy-ranked list; a REFINEMENT lens other than
-    /// Headings (Recent / This folder) still drops them ([`Self::refilter`]'s gate).
-    /// Also drives the accept split ([`Self::selected_is_heading`]: a heading row
-    /// jumps to `lines[i]`, a file row opens the path) and the SECONDARY-column kind
-    /// hint ([`Self::item_times`]: a heading row's cell reads `"heading"`). EMPTY for
-    /// every other kind AND for a Go-to over a buffer with no headings — every gate
-    /// keyed off it is then inert.
-    pub heading: Vec<bool>,
     /// Spell picker only: the misspelled word's `(line, start_col, end_col)` CHAR
     /// span, so the accept can map it to a buffer char range and replace it with the
     /// chosen suggestion. `None` for every other kind.
     pub spell_target: Option<(usize, usize, usize)>,
-    /// Spell picker only: parallel to `corpus`, `true` for the appended "Add
-    /// '<word>' to dictionary" row (always the LAST corpus entry) and `false` for
-    /// every suggestion row. Drives the accept split ([`Self::selected_is_add_to_dictionary`]:
-    /// the add row emits [`crate::actions::Effect::AddToDictionary`] instead of a
-    /// word replacement) and the refilter EXEMPTION (the add row survives any typed
-    /// query — it acts on the targeted word, not the filter text). EMPTY for every
-    /// other kind, so every gate keyed off it is inert there.
-    pub spell_add: Vec<bool>,
     /// Spell picker only: the misspelled WORD this picker would add to the personal
     /// dictionary — the payload of the "Add to dictionary" row's accept effect, and
     /// the text its row label echoes. `None` for every other kind (and a spell
     /// picker built without a word, which then offers no add row).
     pub add_word: Option<String>,
-    /// History timeline only: the RESTORE key for each version, parallel to `corpus`
-    /// (the row shows a relative timestamp; the id is the opaque handle
-    /// [`crate::history::load`] resolves back to content). Enter on a row emits
-    /// `history_ids[i]`; empty for every other kind AND for an empty history (which
-    /// lists no rows and shows the shared "no history yet" empty-state message).
-    pub history_ids: Vec<String>,
     /// Keybindings menu only: the active CAPTURE sub-state, or `None` while browsing
     /// the command list. Drives the capture flow + the sidecar `capture` block.
     pub capture: Option<Capture>,
@@ -156,11 +217,6 @@ pub struct OverlayState {
     /// facet method is a no-op. GENERIC: the picker's own scheme (keyed by
     /// [`Self::kind`]) supplies the lenses + bucketing — no per-picker type here.
     pub facet_lens: usize,
-    /// HISTORY picker only: each corpus version's wall-clock stamp (millis),
-    /// parallel to `corpus`, so the Session / Today lenses can bucket by time. Empty
-    /// for every other kind (those rows carry no `ts`, so their time-less lenses,
-    /// if any, opt every row out). Set by [`Self::new_history`].
-    pub facet_ts: Vec<u64>,
     /// FACETING pickers with a clock-relative lens (History) only: the REFERENCE
     /// clock (millis) — `Some(now)` live, `None` in the headless capture path (which
     /// makes those lenses inert, the determinism gate). `None` for every other kind.
@@ -223,24 +279,6 @@ pub struct OverlayState {
     /// overlay is built by [`Self::new_keep_name`] — mirrors `rename_edit`/
     /// `link_edit`'s shape exactly). `None` for every other kind.
     pub keep_edit: Option<KeepEdit>,
-    /// THE UNION ROUND: Command palette only — parallel to `corpus`, `true` for the
-    /// appended SETTINGS rows (mirrors Go-to's `heading` flag exactly), `false` for
-    /// the ordinary command rows. Drives the marker glyph ([`Self::display_of`]) and
-    /// the accept dispatch ([`Self::selected_setting_row`]: a settings row routes
-    /// through the SAME `dispatch_settings_row` owner Enter uses inside the Settings
-    /// menu itself, never a second copy). EMPTY for every other kind and for a
-    /// Command palette with no settings attached (`attach_settings_rows` never called).
-    pub is_setting: Vec<bool>,
-    /// RUNTIME-GATED rows (Command palette only, today): parallel to `corpus`,
-    /// `true` for a row that exists in the catalog but is hidden from selection
-    /// right now because a LIVE fact — not the compile-time `Platform` axis —
-    /// says it doesn't apply (see `commands::visible_hidden_mask`; today's one
-    /// case is "Finish file" with no daemon `--wait` client actively waiting).
-    /// `refilter` drops any masked row out of `items` (mirrors the dotfile
-    /// display filter), so `corpus` itself — and every OTHER index into it that
-    /// `commands::visible_action_of`'s row-index math relies on — stays
-    /// untouched; only what's SELECTABLE shrinks. EMPTY for every other kind.
-    pub hidden: Vec<bool>,
     /// DIFF-AS-PREVIEW (History only): whether the keyboard FOCUS sits in the DIFF
     /// PANEL below the picker card (Tab shifts it there; Tab/Esc return it to the
     /// version list). While `true`, ↑/↓ scroll the diff step-wise instead of moving
@@ -280,6 +318,26 @@ impl OverlayState {
         recent: Vec<usize>,
         browse_dir: Option<String>,
     ) -> Self {
+        // ITEM 54: build the typed rows straight from the (corpus, git, is_dir)
+        // triple every caller already gathers — GOTO's file rows are ALWAYS
+        // `GotoFile` (never bare `Plain`; see `OverlayKind::row_meta_roster`),
+        // with an empty `time` until a live [`Self::set_times`] fills it in
+        // (headless capture never calls it, so it stays "" there — the
+        // determinism gate). Every other kind's rows start `Plain`.
+        let rows: Vec<OverlayRow> = corpus
+            .into_iter()
+            .zip(git)
+            .zip(is_dir)
+            .map(|((accept, git), is_dir)| {
+                let mut row = OverlayRow::plain(accept);
+                row.git = git;
+                row.is_dir = is_dir;
+                if kind == OverlayKind::Goto {
+                    row.meta = RowMeta::GotoFile { time: String::new() };
+                }
+                row
+            })
+            .collect();
         let mut s = Self {
             kind,
             // ITEM 45: freeze the alignment ONCE, here at summon — every constructor
@@ -289,9 +347,7 @@ impl OverlayState {
             // value thereafter, never the live world (so previewing holds the card).
             align: crate::render::effective_card_anchor(),
             query: TextBox::new(),
-            corpus,
-            git,
-            is_dir,
+            rows,
             open,
             recent,
             items: Vec::new(),
@@ -301,21 +357,14 @@ impl OverlayState {
             original_theme: None,
             original_caret: None,
             original_caret_was_auto: false,
-            bindings: Vec::new(),
-            times: Vec::new(),
-            lines: Vec::new(),
-            heading: Vec::new(),
             spell_target: None,
-            spell_add: Vec::new(),
             add_word: None,
-            history_ids: Vec::new(),
             capture: None,
             notice: String::new(),
             // Default to the "All" home (strip index 0 = the flat list). A faceting
             // picker LANDS here; ←/→ step into the refinement lenses. Non-faceting
             // kinds ignore it (no scheme).
             facet_lens: 0,
-            facet_ts: Vec::new(),
             facet_now: None,
             facet_session_start: None,
             item_sections: Vec::new(),
@@ -334,13 +383,6 @@ impl OverlayState {
             link_edit: None,
             // No keep-name edit on a fresh summon; `new_keep_name` arms it right after.
             keep_edit: None,
-            // No settings rows attached on a fresh summon; `attach_settings_rows`
-            // (Command palette only) arms it right after.
-            is_setting: Vec::new(),
-            // No runtime-gated rows on a fresh summon; `new_command` sets this
-            // right after (before the refilter below), since it's the only
-            // constructor that ever populates it.
-            hidden: Vec::new(),
             // DIFF-AS-PREVIEW: focus opens on the version LIST, diff at its top.
             diff_focus: false,
             diff_scroll: 0,
@@ -349,11 +391,33 @@ impl OverlayState {
         s
     }
 
-    /// Attach the relative "last edited" labels (parallel to `corpus`) for the
-    /// go-to picker. Set by the LIVE app only; the headless path leaves it empty so
-    /// the capture stays byte-stable.
+    /// The RAW accept strings, in row (corpus) order — the FUZZY-MATCH candidate
+    /// list [`Self::refilter`] ranks against, and a plain-text convenience for
+    /// callers that just want "what's in the corpus" without touching a row's
+    /// other fields.
+    pub fn accepts(&self) -> Vec<&str> {
+        self.rows.iter().map(|r| r.accept.as_str()).collect()
+    }
+
+    /// Set every ROW's SECONDARY column, positionally — the bulk-fill several
+    /// constructors (each look/variant's description, each command's chord,
+    /// each setting's current value, …) use in place of the old flat
+    /// `bindings = …` assignment. Rows past `secondaries`' length (or when
+    /// `secondaries` is shorter) simply keep their existing secondary.
+    pub fn set_secondaries(&mut self, secondaries: Vec<String>) {
+        for (row, s) in self.rows.iter_mut().zip(secondaries) {
+            row.secondary = s;
+        }
+    }
+
+    /// Attach the relative "last edited" labels (parallel to the corpus rows)
+    /// for the go-to picker — each row's [`RowMeta::GotoFile`] time. Set by the
+    /// LIVE app only; the headless path leaves every row's time "" (already the
+    /// default from [`new_marked`]), keeping the capture byte-stable.
     pub fn set_times(&mut self, times: Vec<String>) {
-        self.times = times;
+        for (i, row) in self.rows.iter_mut().enumerate() {
+            row.meta = RowMeta::GotoFile { time: times.get(i).cloned().unwrap_or_default() };
+        }
     }
 
     /// Build the THEME picker: the corpus is the world NAMES (in [`crate::theme::THEMES`]
@@ -391,7 +455,7 @@ impl OverlayState {
 
     /// Build the CARET-STYLE picker: the corpus is the three caret-look LABELS (in
     /// [`crate::caret::CaretMode::ALL`] order — Block / Morph / I-beam), each row's
-    /// `bindings` column carrying that look's one-line description (drawn dim beside
+    /// secondary column carrying that look's one-line description (drawn dim beside
     /// the name, reusing the palette's right column). `active` is the look in effect
     /// when the picker opened, remembered (`original_caret`) so a Cancel reverts the
     /// live preview, and pre-selected so the open frame previews the current look.
@@ -421,7 +485,7 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        s.bindings = descriptions;
+        s.set_secondaries(descriptions);
         s.original_caret = Some(active);
         s.original_caret_was_auto = crate::caret::is_auto();
         // Empty query => corpus order, so the active look sits at its ALL index;
@@ -436,7 +500,7 @@ impl OverlayState {
     }
 
     /// Build the DICTIONARY picker: the corpus is the three variant LABELS (in
-    /// [`crate::spell::DictVariant::ALL`] order), each row's `bindings` column
+    /// [`crate::spell::DictVariant::ALL`] order), each row's secondary column
     /// carrying that variant's one-line description — the SAME shape as
     /// [`new_caret`](Self::new_caret), minus the live-preview/revert bookkeeping
     /// (no `original_*` field: nothing is applied until Enter, so there is
@@ -461,7 +525,7 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        s.bindings = descriptions;
+        s.set_secondaries(descriptions);
         if let Some(active_index) = crate::spell::DictVariant::ALL.iter().position(|&v| v == active) {
             if let Some(pos) = s.items.iter().position(|&i| i == active_index) {
                 s.selected = pos;
@@ -475,7 +539,7 @@ impl OverlayState {
     /// ladder languages' writer-word LABELS (in
     /// [`crate::frontmatter::DEFAULT_CJK_PRIORITY`] order — the canonical DISPLAY
     /// order; this is NOT re-sorted to the live ladder's own order, exactly like
-    /// Dictionary's fixed `ALL` order), each row's `bindings` column carrying its
+    /// Dictionary's fixed `ALL` order), each row's secondary column carrying its
     /// one-line description — the SAME shape as [`new_dictionary`](Self::new_dictionary).
     /// `active` (the language currently at the FRONT of the live ladder)
     /// pre-selects the picker's open frame.
@@ -498,7 +562,7 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        s.bindings = descriptions;
+        s.set_secondaries(descriptions);
         if let Some(active_index) =
             crate::frontmatter::DEFAULT_CJK_PRIORITY.iter().position(|&l| l == active)
         {
@@ -514,8 +578,8 @@ impl OverlayState {
     /// DATES — each format rendered with `today` ([`crate::dateformat::DateFormat::
     /// format`]), so the PRIMARY column shows exactly what an Insert-Date would
     /// type (what-you-see-is-what-inserts) — with the format's human NAME
-    /// ([`crate::dateformat::DateFormat::label`]) as the dim `bindings` secondary
-    /// column, the SAME shape as [`new_dictionary`](Self::new_dictionary) /
+    /// ([`crate::dateformat::DateFormat::label`]) as the dim secondary column, the
+    /// SAME shape as [`new_dictionary`](Self::new_dictionary) /
     /// [`new_cjk_lang`](Self::new_cjk_lang) (no live-preview/revert bookkeeping —
     /// nothing in the document previews on move; the example dates ARE the
     /// preview). `today` is the caller's `today_ymd` (live clock, or the fixed
@@ -543,7 +607,7 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        s.bindings = descriptions;
+        s.set_secondaries(descriptions);
         if let Some(active_index) =
             crate::dateformat::DateFormat::ALL.iter().position(|&f| f == active)
         {
@@ -610,7 +674,7 @@ impl OverlayState {
         );
         // Default to the first real folder so Enter DESCENDS into it right away; the
         // synthetic "." (select-this-folder) sits above it, Up.
-        s.selected = s.items.iter().position(|&i| s.corpus[i] != ".").unwrap_or(0);
+        s.selected = s.items.iter().position(|&i| s.rows[i].accept != ".").unwrap_or(0);
         s.scroll_to_selected();
         s
     }
@@ -618,12 +682,13 @@ impl OverlayState {
     /// Build the COMMAND PALETTE: the corpus is the command NAMES (in
     /// `commands::visible()` order — the platform-filtered view, so a row index maps
     /// back to that filtered corpus, NOT the raw `commands::COMMANDS` catalog; see
-    /// `commands.rs`'s "PLATFORM-SCOPED COMMANDS" section) and `bindings` carries each
-    /// command's current chord label, shown dim beside the name. Fuzzy-filterable like
-    /// the other pickers. `hidden` is the RUNTIME-gated mask parallel to `names`
-    /// (`commands::visible_hidden_mask`, e.g. "Finish file" with no daemon `--wait`
-    /// client waiting) — set BEFORE the initial `refilter` (via `new_marked`) so a
-    /// hidden row never appears even in the unqueried, freshly-opened list.
+    /// `commands.rs`'s "PLATFORM-SCOPED COMMANDS" section) and each row's secondary
+    /// column carries that command's current chord label, shown dim beside the name.
+    /// Fuzzy-filterable like the other pickers. `hidden` is the RUNTIME-gated mask
+    /// parallel to `names` (`commands::visible_hidden_mask`, e.g. "Finish file" with
+    /// no daemon `--wait` client waiting) — applied (as [`RowMeta::CommandHidden`])
+    /// BEFORE the final `refilter` so a hidden row never appears even in the
+    /// unqueried, freshly-opened list.
     pub fn new_command(names: Vec<String>, bindings: Vec<String>, hidden: Vec<bool>) -> Self {
         let n = names.len();
         let mut s = Self::new_marked(
@@ -635,18 +700,22 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        s.bindings = bindings;
-        s.hidden = hidden;
+        s.set_secondaries(bindings);
+        for (row, h) in s.rows.iter_mut().zip(hidden) {
+            if h {
+                row.meta = RowMeta::CommandHidden;
+            }
+        }
         s.refilter();
         s
     }
 
     /// Build the REBIND MENU: the corpus is the command NAMES (in `commands::visible()`
     /// order — same platform-filtered view as the palette, so a row index maps back to
-    /// it, not the raw catalog) and `bindings` carries each command's EFFECTIVE
-    /// chords, shown beside the name. Identical corpus/bindings shape to the palette,
-    /// but `kind = Keybindings`, so Enter starts a CAPTURE rather than running the
-    /// command.
+    /// it, not the raw catalog) and each row's secondary column carries that command's
+    /// EFFECTIVE chords, shown beside the name. Identical corpus/bindings shape to the
+    /// palette, but `kind = Keybindings`, so Enter starts a CAPTURE rather than running
+    /// the command.
     pub fn new_keybindings(names: Vec<String>, bindings: Vec<String>) -> Self {
         let n = names.len();
         let mut s = Self::new_marked(
@@ -658,7 +727,7 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        s.bindings = bindings;
+        s.set_secondaries(bindings);
         s
     }
 
@@ -706,31 +775,30 @@ impl OverlayState {
     /// Attach the current markdown document's HEADINGS to a Go-to overlay — the fold
     /// that RETIRED the standalone Outline picker. Each `(display, line)` heading is
     /// APPENDED after the file rows (display = the title indented by depth, the fuzzy
-    /// corpus; `line` = where Enter jumps), carrying its `heading` flag + jump line in
-    /// the parallel arrays. The file rows stay FIRST (their original corpus order
-    /// tiebreaks an equal fuzzy score), but item 11's UNIFIED DEFAULT means the flat
-    /// `All` home lists them together with the appended heading rows, ranked by one
-    /// fuzzy filter — [`Self::refilter`]'s heading gate only drops heading rows under
-    /// a file-only REFINEMENT lens (Recent / This folder); the Headings lens keeps its
-    /// old job of showing ONLY them, via [`crate::index::goto_bucket`]. An EMPTY
-    /// `headings` list is a clean no-op (the `heading` flag stays empty → every gate
-    /// keyed off it is inert → the Headings lens reads "no headings yet", and `All`
-    /// simply lists the files); a non-markdown buffer never calls this at all.
+    /// corpus; `line` = where Enter jumps) as a fresh [`RowMeta::GotoHeading`] row —
+    /// the file rows stay FIRST (their original corpus order tiebreaks an equal fuzzy
+    /// score) and already carry their own [`RowMeta::GotoFile`] from construction, so
+    /// nothing about them needs touching here. Item 11's UNIFIED DEFAULT means the
+    /// flat `All` home lists them together with the appended heading rows, ranked by
+    /// one fuzzy filter — [`Self::refilter`]'s heading gate only drops heading rows
+    /// under a file-only REFINEMENT lens (Recent / This folder); the Headings lens
+    /// keeps its old job of showing ONLY them, via [`crate::index::goto_bucket`]. An
+    /// EMPTY `headings` list is a clean no-op (no `GotoHeading` row ever appears →
+    /// every gate keyed off it is inert → the Headings lens reads "no headings yet",
+    /// and `All` simply lists the files); a non-markdown buffer never calls this at
+    /// all.
     pub fn attach_headings(&mut self, headings: Vec<(String, usize)>) {
         if headings.is_empty() {
             return;
         }
-        let n = self.corpus.len();
-        // Pad the two heading-parallel arrays over the existing FILE rows first
-        // (files: not a heading, unused line 0), then append one row per heading.
-        self.heading = vec![false; n];
-        self.lines = vec![0; n];
         for (display, line) in headings {
-            self.corpus.push(display);
-            self.git.push(false);
-            self.is_dir.push(false);
-            self.heading.push(true);
-            self.lines.push(line);
+            self.rows.push(OverlayRow {
+                accept: display,
+                secondary: String::new(),
+                is_dir: false,
+                git: false,
+                meta: RowMeta::GotoHeading { line },
+            });
         }
         self.refilter();
     }
@@ -744,23 +812,24 @@ impl OverlayState {
     /// `names`/`values` are [`crate::settings::visible_names`]/
     /// [`crate::settings::visible_value_cells`] (platform-filtered, parallel), the
     /// SAME corpus the Settings menu itself opens with, so a setting reached via the
-    /// palette shows the identical current-value secondary cell — riding the
-    /// EXISTING `bindings` right column (a command shows its chord there, a setting
-    /// its value; never both on the same row). `is_setting` records which rows are
-    /// which, read by [`Self::selected_setting_row`] (the accept dispatch) and
-    /// [`Self::display_of`] (the marker glyph). A no-op when `names` is empty.
+    /// palette shows the identical current-value secondary cell — riding each new
+    /// row's own `secondary` (a command shows its chord there, a setting its value;
+    /// never both on the same row). Each appended row carries
+    /// [`RowMeta::CommandSetting`], read by [`Self::selected_setting_row`] (the
+    /// accept dispatch) and [`Self::display_of`] (the marker glyph). A no-op when
+    /// `names` is empty.
     pub fn attach_settings_rows(&mut self, names: Vec<String>, values: Vec<String>) {
         if names.is_empty() {
             return;
         }
-        let n = self.corpus.len();
-        self.is_setting = vec![false; n];
         for (name, value) in names.into_iter().zip(values) {
-            self.corpus.push(name);
-            self.git.push(false);
-            self.is_dir.push(false);
-            self.is_setting.push(true);
-            self.bindings.push(value);
+            self.rows.push(OverlayRow {
+                accept: name,
+                secondary: value,
+                is_dir: false,
+                git: false,
+                meta: RowMeta::CommandSetting,
+            });
         }
         self.refilter();
     }
@@ -769,60 +838,51 @@ impl OverlayState {
     /// the Command palette's selection is one of the APPENDED settings rows
     /// ([`Self::attach_settings_rows`]) — `None` for an ordinary command row, every
     /// other kind, and a settings row somehow absent from the live
-    /// [`crate::settings::visible_rows`] (never happens in practice; the corpus text
-    /// IS a `visible_rows` name by construction). Looked up by NAME rather than a
-    /// tracked offset, so it can never mis-map regardless of how many commands
+    /// [`crate::settings::visible_rows`] (never happens in practice; the row's accept
+    /// text IS a `visible_rows` name by construction). Looked up by NAME rather than
+    /// a tracked offset, so it can never mis-map regardless of how many commands
     /// precede the settings block.
     pub fn selected_setting_row(&self) -> Option<crate::settings::SettingRow> {
         let ci = self.selected_corpus_index()?;
-        if !self.is_setting.get(ci).copied().unwrap_or(false) {
+        let row = self.rows.get(ci)?;
+        if !matches!(row.meta, RowMeta::CommandSetting) {
             return None;
         }
         crate::settings::visible_rows()
             .into_iter()
-            .find(|r| r.name == self.corpus[ci])
+            .find(|r| r.name == row.accept)
             .copied()
     }
 
-    /// Build the SPELL-SUGGESTION picker: `suggestions` is the spellchecker's
-    /// ordered corrections for the misspelled word (the fuzzy corpus, best first),
-    /// and `target` is that word's `(line, start_col, end_col)` CHAR span — kept so
-    /// the accept can map it to a buffer char range and replace it. The list may be
-    /// empty (the engine had no suggestion); the picker still summons (the word IS
-    /// flagged), and Enter on an empty list is a no-op close.
     /// Build the SPELL-SUGGESTION picker (Cmd-`;`): a compact CONTEXT MENU (item
     /// 64). The corpus is the dictionary's ordered corrections for `word` (the
     /// misspelled text at `target`'s span), TRUNCATED to the top
     /// [`OverlayKind::MAX_SUGGESTIONS`] (ranking/order preserved — a longer list
     /// simply has its tail dropped, never scrolled or elided-with-a-button), plus
     /// ONE appended "Add '<word>' to dictionary" row — the same surface, no new
-    /// chrome class. The add row is flagged in `spell_add` (always the LAST corpus
-    /// entry — [`crate::overlay::nav`]'s refilter keeps it terminal even under a
+    /// chrome class. The add row is flagged [`RowMeta::SpellAdd`] (always the LAST
+    /// row — [`crate::overlay::nav`]'s refilter keeps it terminal even under a
     /// query that out-ranks it) and carries `word` in `add_word` so the accept can
     /// emit [`crate::actions::Effect::AddToDictionary`]; it is present even when
     /// the suggestion list is EMPTY (so a word with no correction can still be
     /// added) — the picker always shows at least the one add row.
     pub fn new_spell(mut suggestions: Vec<String>, target: (usize, usize, usize), word: String) -> Self {
         suggestions.truncate(OverlayKind::MAX_SUGGESTIONS);
-        let n = suggestions.len();
-        // Corpus = (at most MAX_SUGGESTIONS) suggestions ++ the add row;
-        // `spell_add` marks only the last.
-        let mut corpus = suggestions;
-        corpus.push(add_to_dictionary_label(&word));
-        let mut spell_add = vec![false; n];
-        spell_add.push(true);
-        let len = corpus.len();
+        suggestions.push(add_to_dictionary_label(&word));
+        let len = suggestions.len();
         let mut s = Self::new_marked(
             OverlayKind::Spell,
-            corpus,
+            suggestions,
             vec![false; len],
             vec![false; len],
             Vec::new(),
             Vec::new(),
             None,
         );
+        if let Some(last) = s.rows.last_mut() {
+            last.meta = RowMeta::SpellAdd;
+        }
         s.spell_target = Some(target);
-        s.spell_add = spell_add;
         s.add_word = Some(word);
         s
     }
@@ -832,11 +892,11 @@ impl OverlayState {
     /// composes WHEN + WHICH — `"{when} · {which}"`, or the bare `when` for an
     /// empty `which` — so the body-ink cell answers both questions at a glance
     /// (and the fuzzy filter matches commit subjects / edit descriptions for
-    /// free); the faint `"+N −M"` changed-count rides the EXISTING right binding
+    /// free); the faint `"+N −M"` changed-count rides the row's own SECONDARY
     /// column (LABEL size, faint ink — the picker desc-column pattern, zero new
-    /// layout); the opaque restore id rides the parallel `history_ids` (the
-    /// Enter accept value). Flat + transient like the other pickers — it vanishes on
-    /// restore / cancel.
+    /// layout); the opaque restore id + wall-clock stamp ride the row's own
+    /// [`RowMeta::History`] (the Enter accept value + the faceting clock). Flat +
+    /// transient like the other pickers — it vanishes on restore / cancel.
     ///
     /// An EMPTY `rows` builds an empty-corpus picker: it still summons (History always
     /// opens, unlike Outline's no-op-on-empty), and the SHARED empty-state path draws
@@ -846,8 +906,7 @@ impl OverlayState {
     ///
     /// `now` / `session_start` are the REFERENCE clocks the Session / Today lenses
     /// bucket against — `Some` live, `None` in the headless capture path (which makes
-    /// those two lenses inert, the determinism gate). Each row's own stamp rides
-    /// [`crate::history::TimelineRow::timestamp`] into the parallel `facet_ts`.
+    /// those two lenses inert, the determinism gate).
     pub fn new_history(
         rows: Vec<crate::history::TimelineRow>,
         now: Option<u64>,
@@ -855,7 +914,7 @@ impl OverlayState {
     ) -> Self {
         let n = rows.len();
         let mut corpus = Vec::with_capacity(n);
-        let mut diffs = Vec::with_capacity(n);
+        let mut secondaries = Vec::with_capacity(n);
         let mut ids = Vec::with_capacity(n);
         let mut ts = Vec::with_capacity(n);
         for row in rows {
@@ -864,12 +923,12 @@ impl OverlayState {
             // corpus, so typing the name finds it), with the timestamp DEMOTED to
             // the faint secondary column beside the changed-count (`"when ·
             // +N −M"`). Calm, ink/value distinction only — never amber; no new
-            // layout path (the same corpus + bindings columns every row rides).
-            // The redundant "pinned" tag is dropped for a named row — the name
-            // IS the conscious mark. Unnamed rows are byte-identical to before.
+            // layout path (the same secondary column every row rides). The
+            // redundant "pinned" tag is dropped for a named row — the name IS the
+            // conscious mark. Unnamed rows are byte-identical to before.
             if let Some(name) = row.name {
                 corpus.push(name);
-                diffs.push(format!("{} · {}", row.when, row.counts));
+                secondaries.push(format!("{} · {}", row.when, row.counts));
             } else {
                 corpus.push(if row.which.is_empty() {
                     row.when
@@ -878,10 +937,10 @@ impl OverlayState {
                 });
                 // THE CONSCIOUS MARK: a KEPT (pinned) version wears a calm, dim
                 // "pinned" tag in the faint secondary column, ahead of its changed-count
-                // (`"pinned · +N −M"`) — no amber, no new column; it rides the existing
-                // `bindings` right-column the diff-count already uses, so a pin is
+                // (`"pinned · +N −M"`) — no amber, no new column; it rides the same
+                // secondary column the diff-count already uses, so a pin is
                 // findable at a glance AND assertable from the sidecar's `overlay.bindings`.
-                diffs.push(if row.pinned {
+                secondaries.push(if row.pinned {
                     format!("{PIN_TAG} · {}", row.counts)
                 } else {
                     row.counts
@@ -899,9 +958,10 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        s.bindings = diffs; // the faint right column shows each version's changed-count
-        s.history_ids = ids;
-        s.facet_ts = ts;
+        s.set_secondaries(secondaries); // the faint right column shows each version's changed-count
+        for (row, (id, ts)) in s.rows.iter_mut().zip(ids.into_iter().zip(ts)) {
+            row.meta = RowMeta::History { id, ts };
+        }
         s.facet_now = now;
         s.facet_session_start = session_start;
         s
@@ -910,7 +970,7 @@ impl OverlayState {
     /// Build the ASSET CLEANER picker from the caller-scanned [`crate::assets::Orphan`]
     /// list. The corpus is each orphan's root-relative PATH (the accept/trash key +
     /// the fuzzy corpus — typing a folder narrows), the primary cell shows the leaf
-    /// name ([`Self::display_of`]), and the `bindings` secondary column carries the
+    /// name ([`Self::display_of`]), and the row's own secondary column carries the
     /// human size + parent dir ([`crate::assets::secondary_label`]). ALWAYS summons
     /// (like History): an empty list shows the calm "no unused assets" row rather than
     /// silently no-op'ing.
@@ -931,39 +991,26 @@ impl OverlayState {
             Vec::new(),
             None,
         );
-        // The faint right column shows each orphan's size + parent dir. Reuse the
-        // `bindings` column (like History's diff counts) so it rides the shared
-        // rowlayout secondary + surfaces to the sidecar.
-        s.bindings = secondary;
+        // The faint right column shows each orphan's size + parent dir. Rides the
+        // shared rowlayout secondary + surfaces to the sidecar (like History's
+        // diff counts).
+        s.set_secondaries(secondary);
         s
     }
 
-    /// ASSET CLEANER: remove the row whose corpus entry equals `rel` (the file the App
-    /// just trashed), keeping the picker open. Removes the entry from `corpus` + every
-    /// parallel column, re-ranks the remaining rows, and clamps the selection —
-    /// removing by VALUE (not index) so it stays correct regardless of the current
-    /// query/selection. Returns whether a row was removed. The App calls this ONLY
-    /// after a SUCCESSFUL trash, so the list never claims a file is gone that wasn't
-    /// (the determinism gate: the pure core never removes a row — a headless replay's
-    /// `Effect::TrashAsset` is a no-op, so its list stays whole).
+    /// ASSET CLEANER: remove the row whose accept equals `rel` (the file the App
+    /// just trashed), keeping the picker open. Removes it from `rows` by VALUE (not
+    /// index, so it stays correct regardless of the current query/selection),
+    /// re-ranks the remaining rows, and clamps the selection. Returns whether a row
+    /// was removed. The App calls this ONLY after a SUCCESSFUL trash, so the list
+    /// never claims a file is gone that wasn't (the determinism gate: the pure core
+    /// never removes a row — a headless replay's `Effect::TrashAsset` is a no-op, so
+    /// its list stays whole).
     pub fn remove_asset_row(&mut self, rel: &str) -> bool {
-        let Some(ci) = self.corpus.iter().position(|c| c == rel) else {
+        let Some(ci) = self.rows.iter().position(|r| r.accept == rel) else {
             return false;
         };
-        self.corpus.remove(ci);
-        // Keep every corpus-parallel column in lockstep (assets fills only `bindings`;
-        // the rest are all empty/false, but drain uniformly so the method can't drift).
-        for col in [&mut self.git, &mut self.is_dir] {
-            if ci < col.len() {
-                col.remove(ci);
-            }
-        }
-        if ci < self.bindings.len() {
-            self.bindings.remove(ci);
-        }
-        if ci < self.times.len() {
-            self.times.remove(ci);
-        }
+        self.rows.remove(ci);
         // Rebuild `items` (indices shifted) + clamp `selected` against the shorter list.
         self.refilter();
         if self.selected >= self.items.len() {
