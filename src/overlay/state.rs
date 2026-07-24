@@ -70,8 +70,10 @@ pub enum RowMeta {
     /// `heading[i]` (the flag) + `lines[i]` (the line).
     GotoHeading { line: usize },
     /// Command palette appended SETTINGS row (the union round): the setting's
-    /// current value rides the row's own `secondary`. Was `is_setting[i]`.
-    CommandSetting,
+    /// current value rides the row's own `secondary`. `id` is the row's TYPED
+    /// [`crate::settings::SettingId`] (item 55) — the accept dispatch resolves
+    /// through it, never the row's display `accept` text. Was `is_setting[i]`.
+    CommandSetting { id: crate::settings::SettingId },
     /// Command palette RUNTIME-gated row: exists in the catalog but is hidden
     /// from selection right now (see `commands::visible_hidden_mask`). Was
     /// `hidden[i]`.
@@ -112,7 +114,7 @@ impl RowMeta {
             RowMeta::Plain => RowMetaTag::Plain,
             RowMeta::GotoFile { .. } => RowMetaTag::GotoFile,
             RowMeta::GotoHeading { .. } => RowMetaTag::GotoHeading,
-            RowMeta::CommandSetting => RowMetaTag::CommandSetting,
+            RowMeta::CommandSetting { .. } => RowMetaTag::CommandSetting,
             RowMeta::CommandHidden => RowMetaTag::CommandHidden,
             RowMeta::SpellAdd => RowMetaTag::SpellAdd,
             RowMeta::History { .. } => RowMetaTag::History,
@@ -809,26 +811,31 @@ impl OverlayState {
     /// facet lens intermixes commands + settings by fuzzy rank while the File/Edit/
     /// View/Recent lenses (which bucket by `menu_section`/`recent`, neither of which
     /// any setting name matches) naturally exclude them — no bucket code needed.
-    /// `names`/`values` are [`crate::settings::visible_names`]/
-    /// [`crate::settings::visible_value_cells`] (platform-filtered, parallel), the
-    /// SAME corpus the Settings menu itself opens with, so a setting reached via the
-    /// palette shows the identical current-value secondary cell — riding each new
-    /// row's own `secondary` (a command shows its chord there, a setting its value;
-    /// never both on the same row). Each appended row carries
-    /// [`RowMeta::CommandSetting`], read by [`Self::selected_setting_row`] (the
-    /// accept dispatch) and [`Self::display_of`] (the marker glyph). A no-op when
-    /// `names` is empty.
-    pub fn attach_settings_rows(&mut self, names: Vec<String>, values: Vec<String>) {
-        if names.is_empty() {
+    /// `rows` is [`crate::settings::palette_rows`] (platform-filtered + the
+    /// covering-command dedupe, `Vec<&'static SettingRow>`) — the SAME rows the
+    /// Settings menu itself opens with, so a setting reached via the palette
+    /// shows the identical current-value secondary cell; `values` is the
+    /// parallel [`crate::settings::palette_value_cells`]. Each appended row
+    /// rides its own display `name` as `accept` (presentation) and carries the
+    /// row's TYPED [`crate::settings::SettingId`] on
+    /// [`RowMeta::CommandSetting`] (behavior) — read by
+    /// [`Self::selected_setting_row`] (the accept dispatch) and
+    /// [`Self::display_of`] (the marker glyph). A no-op when `rows` is empty.
+    pub fn attach_settings_rows(
+        &mut self,
+        rows: Vec<&'static crate::settings::SettingRow>,
+        values: Vec<String>,
+    ) {
+        if rows.is_empty() {
             return;
         }
-        for (name, value) in names.into_iter().zip(values) {
+        for (row, value) in rows.into_iter().zip(values) {
             self.rows.push(OverlayRow {
-                accept: name,
+                accept: row.name.to_string(),
                 secondary: value,
                 is_dir: false,
                 git: false,
-                meta: RowMeta::CommandSetting,
+                meta: RowMeta::CommandSetting { id: row.id },
             });
         }
         self.refilter();
@@ -836,22 +843,17 @@ impl OverlayState {
 
     /// THE UNION ROUND: the highlighted row's [`crate::settings::SettingRow`], when
     /// the Command palette's selection is one of the APPENDED settings rows
-    /// ([`Self::attach_settings_rows`]) — `None` for an ordinary command row, every
-    /// other kind, and a settings row somehow absent from the live
-    /// [`crate::settings::visible_rows`] (never happens in practice; the row's accept
-    /// text IS a `visible_rows` name by construction). Looked up by NAME rather than
-    /// a tracked offset, so it can never mis-map regardless of how many commands
-    /// precede the settings block.
+    /// ([`Self::attach_settings_rows`]) — `None` for an ordinary command row and
+    /// every other kind. Resolved by the row's own TYPED `id`
+    /// ([`crate::settings::row_of`]) — item 55's fix: this used to look the row up
+    /// by its display NAME, so a relabel could mis-map or drop the row entirely.
     pub fn selected_setting_row(&self) -> Option<crate::settings::SettingRow> {
         let ci = self.selected_corpus_index()?;
         let row = self.rows.get(ci)?;
-        if !matches!(row.meta, RowMeta::CommandSetting) {
+        let RowMeta::CommandSetting { id } = row.meta else {
             return None;
-        }
-        crate::settings::visible_rows()
-            .into_iter()
-            .find(|r| r.name == row.accept)
-            .copied()
+        };
+        Some(crate::settings::row_of(id))
     }
 
     /// Build the SPELL-SUGGESTION picker (Cmd-`;`): a compact CONTEXT MENU (item

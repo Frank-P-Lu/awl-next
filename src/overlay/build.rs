@@ -174,7 +174,7 @@ pub fn build(kind: OverlayKind, ctx: &BuildCtx) -> Option<OverlayState> {
             // theme option???"). A covered row stays fully reachable from the Settings
             // menu itself, which reads `visible_names`/`visible_value_cells` unfiltered.
             ov.attach_settings_rows(
-                crate::settings::palette_names(),
+                crate::settings::palette_rows(),
                 crate::settings::palette_value_cells(&ctx.settings_values),
             );
             Some(ov)

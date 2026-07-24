@@ -425,7 +425,7 @@ impl OverlayState {
         // corpus by `attach_settings_rows`) draws the `§ ` marker glyph before its
         // name — `crate::overlay::row_split` recognizes the SAME prefix constant
         // and mutes it, exactly like a file row's directory prefix.
-        if matches!(row.meta, RowMeta::CommandSetting) {
+        if matches!(row.meta, RowMeta::CommandSetting { .. }) {
             return format!("{}{}", OverlayKind::SETTINGS_MARKER_PREFIX, row.accept);
         }
         // ITEM 11's UNIFIED LIST: a Go-to HEADING row (appended after the file rows
