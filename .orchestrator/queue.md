@@ -12,8 +12,6 @@
 
 ## Ready — shared ownership and performance
 
-55. **Make Settings identity typed; display labels are never behavior keys.** Add a closed setting/target identity to the one registry and carry it through accept/effects while preserving `config.toml` wire keys, validation, consequences, and persistence timing exactly. Verify a no-wildcard roster maps 1:1 to the registry, label changes cannot alter behavior, compatible targets are exhaustive, old config keys round-trip, and both keymap conventions/captures stay green. **DISPATCH-READY — items 10 + 54 landed.**
-
 56. **Move active buffer + buffer-scoped state as one owned slot, then remove the shadow active path.** In sequential phases: (A) move buffer identity, folds/view state, and caches atomically between active state and the registry, retiring manual snapshot/restore ownership; (B) make `Buffer::path` authoritative and remove duplicate `App.file`, retaining separately named metadata only for genuinely different concepts. Do not add a generic session framework or broad live/headless driver. Verify exhaustive A→B→A sentinels, version-zero cache isolation, fresh defaults, and path laws across open/new-note first save/autoname/rename/move/duplicate/close/autosave/history/session restore; native + wasm gates. Decompose `app/files.rs` along the new private ownership boundaries. **DISPATCH after the user-visible wave; high-risk sequential round.**
 
 ## Timed — not blocked
