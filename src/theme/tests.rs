@@ -2551,6 +2551,11 @@ fn personality_assignments_are_exactly_the_decided_table() {
                 // ITEM 65: dormant default (no lava ground — the silent pole's
                 // column stays flat).
                 fold_afford: model::FoldAfford::DEFAULT,
+                // ITEM 70: dormant default — a fractional-alpha halftone dot
+                // is 1-bit-illegal, and the chamfer is Quokka's own separate
+                // personality statement.
+                card_texture: model::CardTexture::DEFAULT,
+                card_shape: model::CardShape::DEFAULT,
             },
             // DAWN ROUND (2026-07-18): Bilby is the LIGHT POLE — the roster
             // decision ("the dark-line-on-light page frame is reserved for a

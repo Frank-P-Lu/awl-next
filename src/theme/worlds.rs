@@ -9,10 +9,11 @@ use super::cjk::{
 };
 use super::color::Srgb;
 use super::model::{
-    AmbientStyle, Backdrop, Background, CardAnchor, CaretBlockStyle, ChipVariant, ChromeFace,
-    DecorativeWash, Elevation, FacetStyle, FoldAfford, Frost, HighlightTexture, ImageReveal, LavaEdge, ListStyle,
-    MotionJuice, PageFrame, PaneSplit, PlacardCorner, PlacardInk, RenderCaps, RoleOverrides,
-    SelectionStyle, SPELL_UNDERLINE_GAP_DEFAULT, Theme, ThemeTags, TitleStyle, WashOverride,
+    AmbientStyle, Backdrop, Background, CardAnchor, CardShape, CardTexture, CaretBlockStyle,
+    ChipVariant, ChromeFace, DecorativeWash, Elevation, FacetStyle, FoldAfford, Frost,
+    HighlightTexture, ImageReveal, LavaEdge, ListStyle, MotionJuice, PageFrame, PaneSplit,
+    PlacardCorner, PlacardInk, RenderCaps, RoleOverrides, SelectionStyle,
+    SPELL_UNDERLINE_GAP_DEFAULT, Theme, ThemeTags, TitleStyle, WashOverride,
 };
 use super::ornament::{
     Ornaments, BULLETS_PLAIN, BULLET_SCALE_ORNAMENT, BULLET_SCALE_PLAIN, LIST_INDENT_SCALE_PLAIN,
@@ -316,10 +317,15 @@ pub const QUOKKA: Theme = Theme {
         tint: Srgb::rgb(0xE0, 0xAE, 0x92),
         edge: false,
     },
-    font: "Fira Sans",
+    // ITEM 70 — Quokka becomes awl's deliberately playful printed-card world:
+    // OFL Sour Gummy (google/fonts ofl/sourgummy; see `docs/fonts.md` +
+    // `assets/fonts/LICENSES.md` for the instance/subset provenance),
+    // replacing Fira Sans as Quokka's Latin display face only. IBM Plex Mono
+    // (code) and the Klee One/LXGW WenKai CJK companions are unchanged below.
+    font: "Sour Gummy",
     // Warm friendly humanist sans → the warm humanist IBM Plex Mono for code.
     mono: "IBM Plex Mono",
-    // Fira Sans' low-contrast humanist strokes blur into body at 1.3x — weight marks the head.
+    // Sour Gummy's real 700 companion (`FONT_THEME_BOLD_FACES`) carries the weight — no blur-into-body risk.
     heading_bold: true,
     cjk: CJK_JA_KLEE,
     zh_hans: CJK_ZH_HANS_KLEE,
@@ -339,7 +345,21 @@ pub const QUOKKA: Theme = Theme {
     role_overrides: RoleOverrides::NONE,
     // LIGHT-WORLD BORDER (composition round item 6) — a crisp rim carries the
     // card edge off the pale ground. DATA, no code path.
-    render_caps: RenderCaps { elevation: Elevation::Bordered, ..RenderCaps::DEFAULT },
+    // ITEM 70 — Quokka ALONE assigns the non-default printed-card caps: a
+    // small rotated dot lattice (18° — mid of the round's 15-20° spec),
+    // strongest at the card's far/right decorative side, rolling off before
+    // the left-aligned content-heavy side (`shaders/selection.wgsl`'s
+    // `halftone_rolloff`); and a crisp 45° chamfer (11px — mid of the
+    // round's 10-12px spec) replacing the small rounded corner on every
+    // eight-edge card boundary. Both taste values are the implementer's
+    // first pick, captured for Fable's veto pass (see the round's own
+    // captures) — not yet a graduated user sign-off.
+    render_caps: RenderCaps {
+        elevation: Elevation::Bordered,
+        card_texture: CardTexture::HalftoneDots { angle_deg: 18.0, cell_px: 8.0, density: 0.30 },
+        card_shape: CardShape::Chamfered { cut_px: 11.0 },
+        ..RenderCaps::DEFAULT
+    },
 };
 
 /// Bombora — the wave standing over a submerged reef: a violet-dark midnight
@@ -1421,6 +1441,13 @@ pub const WAGTAIL: Theme = Theme {
         // doc). Listed explicitly because this literal names every field (no
         // `..DEFAULT` spread).
         fold_afford: FoldAfford::DEFAULT,
+        // ITEM 70: the silent 1-bit pole carries no printed-card material — a
+        // fractional-alpha halftone dot would be exactly the forbidden
+        // intermediate value the 1-bit law bans, and a chamfered card is
+        // Quokka's own separate personality statement. Listed explicitly
+        // because this literal names every field (no `..DEFAULT` spread).
+        card_texture: CardTexture::DEFAULT,
+        card_shape: CardShape::DEFAULT,
     },
 };
 

@@ -356,7 +356,16 @@ impl TextPipeline {
                 // bounded per-plate scrims are prepared below once the just-shaped
                 // plate rects are known. Park every raised-panel quad here so a future
                 // reorder can never leak a pane back beneath the plates.
-                self.prepare_float_panel(device, queue, width, height, None, FloatElevation::Rimmed);
+                self.prepare_float_panel(
+                    device,
+                    queue,
+                    width,
+                    height,
+                    None,
+                    FloatElevation::Rimmed,
+                    0.0,
+                    None,
+                );
                 self.panel_shadow.prepare(device, queue, width, height, &[]);
                 self.panel_border.prepare(device, queue, width, height, &[]);
                 // `panel_card` is DEFERRED to the plate block (the per-plate scrims).
@@ -364,7 +373,9 @@ impl TextPipeline {
             theme::ListBacking::Card if spell => {
                 // PANE world spell popup: elevate on the float primitive — a small
                 // raised card at the misspelled word (UNCHANGED / byte-identical to
-                // before). The flat/room `panel_*` quads stay empty here.
+                // before, except item 70's chamfer/texture — Quokka's "small card
+                // popup"). The flat/room `panel_*` quads stay empty here.
+                let (chamfer_px, texture) = self.card_shape_texture(&[card_rect]);
                 self.prepare_float_panel(
                     device,
                     queue,
@@ -372,6 +383,8 @@ impl TextPipeline {
                     height,
                     Some(card_rect),
                     FloatElevation::Rimmed,
+                    chamfer_px,
+                    texture,
                 );
                 self.panel_card.prepare(device, queue, width, height, &[]);
                 self.panel_shadow.prepare(device, queue, width, height, &[]);

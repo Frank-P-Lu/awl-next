@@ -121,6 +121,21 @@ pub fn fold_afford_tail_ink() -> Srgb {
     t.faint.lerp(t.base_content, t.render_caps.fold_afford.tail_lift.clamp(0.0, 1.0))
 }
 
+/// ITEM 70's PRINTED-CARD dot ink — the ONE owner of the halftone lattice's
+/// color, so [`super::model::CardTexture::HalftoneDots`] can carry only
+/// geometry/intensity, never a raw color (see that variant's own doc). A
+/// subtle print-fleck reading: `muted` (the theme's own established
+/// low-contrast ink rung — the SAME rung a fold chevron or a quiet hint
+/// already draws in) blended a quarter of the way toward the card's own
+/// `base_300` surface step, so the dot never competes with `base_content`
+/// text at full coverage. The ONE consumer:
+/// `render::chrome::mod::prepare_panel_card_elevation`'s Quokka-only
+/// `set_halftone` call.
+pub fn card_texture_ink() -> Srgb {
+    let t = active();
+    t.muted.lerp(t.base_300, 0.25)
+}
+
 /// How far a DARK world's `Faint` placard rung steps up the ink ladder, from
 /// `faint` toward `muted` — the personality-assignment round's DARK-GROUND
 /// CONTRAST correction (the probe gallery's light-world Ghost was

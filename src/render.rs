@@ -517,6 +517,14 @@ pub const FONT_THEME_FACES: &[&[u8]] = &[
     // ofl/bitter. The shared body face of Magpie (stark-paper masthead) and
     // Mopoke (warm cosy dark, queue item 30) — precedented face-sharing.
     include_bytes!("../assets/fonts/Bitter-Regular.ttf"),
+    // Sour Gummy — Quokka's printed-card display face (item 70, registers as
+    // "Sour Gummy"), instanced from the OFL variable master
+    // (google/fonts ofl/sourgummy) at `wght=400 wdth=100`, Latin+punctuation
+    // subset. SIL OFL 1.1, github.com/eifetx/Sour-Gummy-Fonts. See
+    // `assets/fonts/LICENSES.md` for the full provenance + the documented
+    // 21-codepoint upstream gap, and [`FONT_SOURGUMMY_HEAVY_CANDIDATE`] for
+    // the bundled 900 A/B candidate.
+    include_bytes!("../assets/fonts/SourGummy-Regular.ttf"),
 ];
 
 /// BUNDLED BOLD (700) display faces — the WYSIWYG-pivot bold round. awl's bundled
@@ -573,6 +581,12 @@ pub const FONT_THEME_BOLD_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/EBGaramond-Bold.ttf"),
     include_bytes!("../assets/fonts/FiraSans-Bold.ttf"),
     include_bytes!("../assets/fonts/Bitter-Bold.ttf"),
+    // Sour Gummy — the item-70 real 700 companion (registers under the SAME
+    // family "Sour Gummy", subfamily "Bold"), so `**bold**`/Quokka's headings
+    // resolve here with `weight_diff == 0`. See
+    // [`FONT_SOURGUMMY_HEAVY_CANDIDATE`]'s doc for the bundled 900 sibling
+    // and the `AWL_SOURGUMMY_HEAVY_FORCE` A/B knob.
+    include_bytes!("../assets/fonts/SourGummy-Bold.ttf"),
     // Mono display faces — the mono-bolds round. Same-family 700 companions so a
     // `**bold**` span in a mono-display world keeps its grid instead of falling
     // into a foreign proportional sans (see the module doc above).
@@ -626,6 +640,29 @@ pub const FONT_CHROME_FACES: &[&[u8]] = &[
     include_bytes!("../assets/fonts/ArchivoBlack-Regular.ttf"),
     include_bytes!("../assets/fonts/AbrilFatface-Regular.ttf"),
 ];
+
+/// ITEM 70's BUNDLED HEAVY-WEIGHT CANDIDATE — Sour Gummy at `wght=900`
+/// ("Black"), registered under the SAME family "Sour Gummy" as the Regular
+/// ([`FONT_THEME_FACES`]) and the real Bold companion
+/// ([`FONT_THEME_BOLD_FACES`]'s `SourGummy-Bold.ttf`, subfamily "Bold",
+/// `usWeightClass 700`) — the queue item's explicit ask: PRODUCE both a
+/// 700-weight AND a 900-weight real instance (not relabelled weight
+/// metadata) so a human taste pass can pick the heavy companion, rather than
+/// silently deciding in code. Both files share the Regular's exact 335-glyph
+/// coverage (see `assets/fonts/LICENSES.md`).
+///
+/// NORMAL operation (no env set): a plain `Weight::BOLD` (700) request
+/// (`**bold**` / Quokka's `heading_bold`) resolves to the 700 file
+/// (`weight_diff == 0` beats this 900 file's `weight_diff == 200` — the
+/// SAME nearest-weight fallback rule every other bundled Bold companion
+/// relies on) — this face stays bundled + addressable, never selected by
+/// default. `AWL_SOURGUMMY_HEAVY_FORCE=900` (dev-only, mirrors
+/// [`awl_cjk_force`]'s "total no-op unless set" contract — no config key, no
+/// CLI flag) prunes the 700 file from the font DB after load
+/// ([`apply_sourgummy_heavy_force`]), so the SAME `Weight::BOLD` request
+/// falls through to THIS file instead — a true in-app A/B capture of the
+/// heavy candidate, not a synthetic side-by-side image.
+pub const FONT_SOURGUMMY_HEAVY_CANDIDATE: &[u8] = include_bytes!("../assets/fonts/SourGummy-Black.ttf");
 
 /// BUNDLED per-script JAPANESE faces — the "Japanese bundle round" (TASTE-GATED,
 /// see `theme::CJK_MINCHO`/`CJK_GOTHIC`): Noto Serif JP + Noto Sans JP, the
@@ -1361,6 +1398,14 @@ fn build_font_system() -> FontSystem {
         );
     }
 
+    // Register the item-70 bundled Sour Gummy 900 HEAVY CANDIDATE (see its own
+    // doc). Always loaded (so it stays addressable for the A/B knob below);
+    // `apply_sourgummy_heavy_force` runs after every registration and prunes
+    // the 700 file instead when the dev knob asks for it.
+    font_system.db_mut().load_font_source(glyphon::cosmic_text::fontdb::Source::Binary(
+        std::sync::Arc::new(FONT_SOURGUMMY_HEAVY_CANDIDATE.to_vec()),
+    ));
+
     // Register the bundled SYMBOL / ORNAMENT face under its private family name
     // (`SYMBOL_FAMILY`). It is never a display face — the renderer names it only
     // through per-run `AttrsList` family spans over the specific symbol codepoints
@@ -1380,6 +1425,7 @@ fn build_font_system() -> FontSystem {
     // so full-width CJK shapes inline with finite advances. Latin is untouched.
     prune_bad_fallback_faces(&mut font_system);
     apply_cjk_force(&mut font_system);
+    apply_sourgummy_heavy_force(&mut font_system);
     font_system
 }
 
@@ -1462,6 +1508,45 @@ fn apply_cjk_force(font_system: &mut FontSystem) {
         .db()
         .faces()
         .filter(|f| f.families.iter().any(|(name, _)| drop.iter().any(|d| name.eq_ignore_ascii_case(d))))
+        .map(|f| f.id)
+        .collect();
+    let db = font_system.db_mut();
+    for id in bad_ids {
+        db.remove_face(id);
+    }
+}
+
+/// The `AWL_SOURGUMMY_HEAVY_FORCE` dev knob, read ONCE and memoized — mirrors
+/// [`awl_cjk_force`]'s doc exactly (this fn runs inside `build_font_system`
+/// too, once per `TextPipeline`).
+fn awl_sourgummy_heavy_force() -> &'static Option<String> {
+    static ONCE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ONCE.get_or_init(|| std::env::var("AWL_SOURGUMMY_HEAVY_FORCE").ok())
+}
+
+/// DEV-ONLY escape hatch for item 70's 700-vs-900 heavy-candidate gallery
+/// (mirrors [`apply_cjk_force`]'s shape exactly): unset (every normal run,
+/// every default capture) prunes nothing — `Weight::BOLD` resolves to the
+/// 700 [`FONT_THEME_BOLD_FACES`] file by nearest-weight, and the bundled 900
+/// [`FONT_SOURGUMMY_HEAVY_CANDIDATE`] just sits addressable-but-unselected.
+/// `AWL_SOURGUMMY_HEAVY_FORCE=900` removes the 700 "Sour Gummy" face (by
+/// family name + exact weight, so the Regular/400 face is untouched) from the
+/// font DB, so the SAME `Weight::BOLD` request falls through to the 900 file
+/// instead — a real in-app A/B, not a synthetic side-by-side. Not a product
+/// feature (no config key, no CLI flag, undocumented in CAPTURE.md); a total
+/// no-op unless the env var is set.
+fn apply_sourgummy_heavy_force(font_system: &mut FontSystem) {
+    if awl_sourgummy_heavy_force().as_deref() != Some("900") {
+        return;
+    }
+    let bold_weight = glyphon::cosmic_text::fontdb::Weight(700);
+    let bad_ids: Vec<_> = font_system
+        .db()
+        .faces()
+        .filter(|f| {
+            f.weight == bold_weight
+                && f.families.iter().any(|(name, _)| name.eq_ignore_ascii_case("Sour Gummy"))
+        })
         .map(|f| f.id)
         .collect();
     let db = font_system.db_mut();

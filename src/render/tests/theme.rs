@@ -408,7 +408,7 @@ fn mono_world_shapes_uniform_pitch() {
 /// 700 — a subsetting/name-fixup mistake (the exact failure the CJK round guards
 /// against for its faces) that renamed the face or left it at weight 400 would
 /// silently keep the fallback bug. This asserts the font-DB fact directly for all
-/// 14 (including Fira Sans / Bitter, registered but not yet assigned to any world,
+/// 15 (including Fira Sans / Bitter, registered but not yet assigned to any world,
 /// so the resolution tests below can't reach them through a theme switch).
 #[test]
 fn bold_display_faces_register_under_their_family_names_at_weight_700() {
@@ -427,6 +427,7 @@ fn bold_display_faces_register_under_their_family_names_at_weight_700() {
         "EB Garamond",
         "Fira Sans",
         "Bitter",
+        "Sour Gummy",
         // Mono display faces (the mono-bolds round).
         "IBM Plex Mono",
         "JetBrains Mono",
@@ -469,6 +470,7 @@ fn markdown_bold_resolves_to_a_real_bold_face_never_the_mono_fallback() {
         "iA Writer Quattro S",
         "Fraunces 9pt",
         "EB Garamond",
+        "Sour Gummy",
     ];
     let mut checked = 0usize;
     for t in theme::THEMES.iter() {
